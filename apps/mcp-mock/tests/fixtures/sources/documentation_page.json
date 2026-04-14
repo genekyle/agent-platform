@@ -1,0 +1,111 @@
+{
+  "js_capture": {
+    "page_identity": {
+      "title": "CLI - Codex | OpenAI Developers",
+      "url": "https://developers.openai.com/codex/cli"
+    },
+    "frame_state": {
+      "frame_count": 0,
+      "dialog_present": false,
+      "active_element": null
+    },
+    "actionable_elements": [
+      {
+        "uid": "input|id:search|idx:0",
+        "tag": "input",
+        "role": "",
+        "label": "Search the Codex docs",
+        "visible": true,
+        "user_facing": true
+      }
+    ],
+    "regions": [
+      {
+        "uid": "nav|idx:0",
+        "tag": "nav",
+        "role": "navigation",
+        "label": "Docs navigation",
+        "visible": true,
+        "text": "Get started Core concepts Agents"
+      }
+    ],
+    "dom_context": {
+      "headings": [
+        "Get started",
+        "Core concepts"
+      ],
+      "dialogs": [],
+      "landmarks": [
+        {
+          "uid": "main|idx:0",
+          "tag": "main",
+          "role": "main",
+          "label": ""
+        }
+      ]
+    },
+    "js_state": {
+      "ready_state": "complete",
+      "forms_count": 0,
+      "inputs_count": 2,
+      "links_count": 379,
+      "buttons_count": 47
+    }
+  },
+  "accessibility_snapshot": [
+    {
+      "uid": "ax-main",
+      "role": "main",
+      "name": "Codex CLI documentation",
+      "ignored": false
+    }
+  ],
+  "console_entries": [
+    {
+      "level": "warning",
+      "text": "Deprecated heading nesting"
+    },
+    {
+      "level": "info",
+      "text": "ignored"
+    }
+  ],
+  "network_entries": [
+    {
+      "url": "https://developers.openai.com/api/docs",
+      "method": "GET",
+      "status": 200
+    }
+  ],
+  "screenshot_refs": [
+    {
+      "path": "output/observer-screenshots/docs_page.png",
+      "mime_type": "image/png",
+      "label": "page_screenshot",
+      "width": 1440,
+      "height": 900
+    }
+  ],
+  "capture_status": {
+    "js_state": {
+      "status": "success",
+      "tool": "evaluate_script"
+    },
+    "accessibility_snapshot": {
+      "status": "success",
+      "tool": "get_accessibility_tree"
+    },
+    "console": {
+      "status": "success",
+      "tool": "list_console_messages"
+    },
+    "network": {
+      "status": "success",
+      "tool": "list_network_requests"
+    },
+    "screenshot": {
+      "status": "success",
+      "tool": "take_screenshot"
+    }
+  }
+}

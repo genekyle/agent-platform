@@ -1,0 +1,21 @@
+.DS_Store
+.env
+.env.*
+.dev-logs/
+.dev-pids/
+*.log
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+
+# Local app output
+apps/mcp-mock/output/

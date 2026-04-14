@@ -1,0 +1,70 @@
+{
+  "page_identity": {
+    "title": "Access Denied",
+    "url": "https://example.com/blocked"
+  },
+  "frame_state": {
+    "frame_count": 0,
+    "dialog_present": true,
+    "active_element": null
+  },
+  "accessibility_snapshot": [],
+  "actionable_elements": [],
+  "regions": [],
+  "dom_context": {
+    "headings": [
+      "Access Denied"
+    ],
+    "dialogs": [
+      {
+        "uid": "dialog|idx:0",
+        "text": "Access Denied",
+        "visible": true
+      }
+    ],
+    "landmarks": []
+  },
+  "js_state": {
+    "ready_state": "complete",
+    "forms_count": 0,
+    "inputs_count": 0,
+    "links_count": 0,
+    "buttons_count": 1
+  },
+  "console": [
+    {
+      "level": "error",
+      "text": "403 blocked"
+    }
+  ],
+  "network": [
+    {
+      "url": "https://example.com/blocked",
+      "method": "GET",
+      "status": 403
+    }
+  ],
+  "screenshots": [],
+  "capture_status": {
+    "js_state": {
+      "status": "success",
+      "tool": "evaluate_script"
+    },
+    "accessibility_snapshot": {
+      "status": "unavailable",
+      "details": "blocked by site"
+    },
+    "console": {
+      "status": "success",
+      "tool": "list_console_messages"
+    },
+    "network": {
+      "status": "success",
+      "tool": "list_network_requests"
+    },
+    "screenshot": {
+      "status": "unavailable",
+      "details": "screenshot capture disabled"
+    }
+  }
+}

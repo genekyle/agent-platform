@@ -1,0 +1,437 @@
+{
+  "metadata": {
+    "timestamp": "__dynamic__",
+    "source": "fixture",
+    "observer_version": "vision-first-observer-v1",
+    "scenario": "documentation_page"
+  },
+  "acquisition": {
+    "page_identity": {
+      "title": "CLI - Codex | OpenAI Developers",
+      "url": "https://developers.openai.com/codex/cli"
+    },
+    "frame_state": {
+      "frame_count": 0,
+      "dialog_present": false,
+      "active_element": null
+    },
+    "accessibility_snapshot": [
+      {
+        "uid": "ax-main",
+        "role": "main",
+        "name": "Codex CLI documentation",
+        "ignored": false
+      }
+    ],
+    "actionable_elements": [
+      {
+        "uid": "input|id:search|idx:0",
+        "tag": "input",
+        "role": "",
+        "label": "Search the Codex docs",
+        "visible": true,
+        "user_facing": true
+      }
+    ],
+    "regions": [
+      {
+        "uid": "nav|idx:0",
+        "tag": "nav",
+        "role": "navigation",
+        "label": "Docs navigation",
+        "visible": true,
+        "text": "Get started Core concepts Agents"
+      }
+    ],
+    "dom_context": {
+      "headings": [
+        "Get started",
+        "Core concepts"
+      ],
+      "dialogs": [],
+      "landmarks": [
+        {
+          "uid": "main|idx:0",
+          "tag": "main",
+          "role": "main",
+          "label": ""
+        }
+      ]
+    },
+    "js_state": {
+      "ready_state": "complete",
+      "forms_count": 0,
+      "inputs_count": 2,
+      "links_count": 379,
+      "buttons_count": 47
+    },
+    "console": [
+      {
+        "level": "warning",
+        "text": "Deprecated heading nesting"
+      }
+    ],
+    "network": [
+      {
+        "url": "https://developers.openai.com/api/docs",
+        "method": "GET",
+        "status": 200
+      }
+    ],
+    "screenshots": [
+      {
+        "path": "output/observer-screenshots/docs_page.png",
+        "mime_type": "image/png",
+        "label": "page_screenshot",
+        "width": 1440,
+        "height": 900
+      }
+    ],
+    "capture_status": {
+      "js_state": {
+        "status": "success",
+        "tool": "evaluate_script"
+      },
+      "accessibility_snapshot": {
+        "status": "success",
+        "tool": "get_accessibility_tree"
+      },
+      "console": {
+        "status": "success",
+        "tool": "list_console_messages"
+      },
+      "network": {
+        "status": "success",
+        "tool": "list_network_requests"
+      },
+      "screenshot": {
+        "status": "success",
+        "tool": "take_screenshot"
+      }
+    }
+  },
+  "pipeline": {
+    "stage_order": [
+      "screenshot_capture",
+      "scene_interpreter",
+      "region_proposal",
+      "region_scorer",
+      "visual_element_proposal",
+      "grounding",
+      "fusion"
+    ],
+    "config": {
+      "stages": {
+        "screenshot_capture": {
+          "adapter_id": "heuristic"
+        },
+        "scene_interpreter": {
+          "adapter_id": "heuristic"
+        },
+        "region_proposal": {
+          "adapter_id": "heuristic"
+        },
+        "region_scorer": {
+          "adapter_id": "heuristic"
+        },
+        "visual_element_proposal": {
+          "adapter_id": "heuristic"
+        },
+        "grounding": {
+          "adapter_id": "heuristic"
+        },
+        "fusion": {
+          "adapter_id": "heuristic"
+        }
+      }
+    },
+    "stages": {
+      "screenshot_capture": {
+        "adapter_id": "heuristic",
+        "status": "success",
+        "output": {
+          "screenshots": [
+            {
+              "path": "output/observer-screenshots/docs_page.png",
+              "mime_type": "image/png",
+              "label": "page_screenshot",
+              "width": 1440,
+              "height": 900
+            }
+          ],
+          "primary_screenshot": {
+            "path": "output/observer-screenshots/docs_page.png",
+            "mime_type": "image/png",
+            "label": "page_screenshot",
+            "width": 1440,
+            "height": 900
+          }
+        },
+        "diagnostics": {
+          "screenshot_count": 1,
+          "capture_status": {
+            "status": "success",
+            "tool": "take_screenshot"
+          }
+        }
+      },
+      "scene_interpreter": {
+        "adapter_id": "heuristic",
+        "status": "success",
+        "output": {
+          "page_type": "documentation",
+          "primary_goal": "locate_and_interact",
+          "headline": "Get started",
+          "summary_text": "Get started | Core concepts",
+          "visual_context": "screenshot_available"
+        },
+        "diagnostics": {
+          "heading_count": 2,
+          "accessibility_role_count": 1
+        }
+      },
+      "region_proposal": {
+        "adapter_id": "heuristic",
+        "status": "success",
+        "output": [
+          {
+            "region_id": "nav|idx:0",
+            "role": "navigation",
+            "label": "Docs navigation",
+            "visible": true,
+            "summary_text": "Get started Core concepts Agents",
+            "bbox": null,
+            "source": "dom_region_heuristic",
+            "salience": 0.9
+          }
+        ],
+        "diagnostics": {
+          "proposal_count": 1
+        }
+      },
+      "region_scorer": {
+        "adapter_id": "heuristic",
+        "status": "success",
+        "output": [
+          {
+            "region_id": "nav|idx:0",
+            "role": "navigation",
+            "label": "Docs navigation",
+            "visible": true,
+            "summary_text": "Get started Core concepts Agents",
+            "bbox": null,
+            "source": "dom_region_heuristic",
+            "salience": 0.9,
+            "region_type": "navigation",
+            "relevance_score": 0.9,
+            "routing_decision": "background_context_only",
+            "confidence": 0.6,
+            "reason_codes": [
+              "navigation_region",
+              "low_viewport_overlap"
+            ]
+          }
+        ],
+        "diagnostics": {
+          "scored_region_count": 1,
+          "inspect_now_count": 0,
+          "inspect_next_count": 0,
+          "background_context_only_count": 1,
+          "ignore_count": 0
+        }
+      },
+      "visual_element_proposal": {
+        "adapter_id": "heuristic",
+        "status": "success",
+        "output": [
+          {
+            "element_id": "input|id:search|idx:0",
+            "tag": "input",
+            "role": "",
+            "type": "",
+            "label": "Search the Codex docs",
+            "text": "",
+            "placeholder": "",
+            "visible": true,
+            "user_facing": true,
+            "disabled": false,
+            "region_hint": null,
+            "region_id": null,
+            "bbox": null,
+            "source": "dom_actionable_heuristic"
+          }
+        ],
+        "diagnostics": {
+          "proposal_count": 1
+        }
+      },
+      "grounding": {
+        "adapter_id": "heuristic",
+        "status": "success",
+        "output": [
+          {
+            "candidate_id": "candidate:input|id:search|idx:0",
+            "element_id": "input|id:search|idx:0",
+            "region_id": null,
+            "action_type": "type",
+            "target": {
+              "label": "Search the Codex docs",
+              "tag": "input",
+              "role": ""
+            },
+            "grounding": {
+              "bbox": null,
+              "region_hint": null,
+              "screenshot_available": true
+            },
+            "confidence": 0.85,
+            "evidence": {
+              "page_url": "https://developers.openai.com/codex/cli",
+              "nearby_context": null
+            }
+          }
+        ],
+        "diagnostics": {
+          "candidate_count": 1
+        }
+      },
+      "fusion": {
+        "adapter_id": "heuristic",
+        "status": "success",
+        "output": [
+          {
+            "candidate_id": "candidate:input|id:search|idx:0",
+            "element_id": "input|id:search|idx:0",
+            "region_id": null,
+            "action_type": "type",
+            "target": {
+              "label": "Search the Codex docs",
+              "tag": "input",
+              "role": ""
+            },
+            "grounding": {
+              "bbox": null,
+              "region_hint": null,
+              "screenshot_available": true
+            },
+            "confidence": 0.85,
+            "evidence": {
+              "page_url": "https://developers.openai.com/codex/cli",
+              "nearby_context": null
+            },
+            "score": 0.93,
+            "rank": 1
+          }
+        ],
+        "diagnostics": {
+          "ranked_candidate_count": 1
+        }
+      }
+    }
+  },
+  "scene_interpretation": {
+    "page_type": "documentation",
+    "primary_goal": "locate_and_interact",
+    "headline": "Get started",
+    "summary_text": "Get started | Core concepts",
+    "visual_context": "screenshot_available"
+  },
+  "region_proposals": [
+    {
+      "region_id": "nav|idx:0",
+      "role": "navigation",
+      "label": "Docs navigation",
+      "visible": true,
+      "summary_text": "Get started Core concepts Agents",
+      "bbox": null,
+      "source": "dom_region_heuristic",
+      "salience": 0.9
+    }
+  ],
+  "region_scores": [
+    {
+      "region_id": "nav|idx:0",
+      "role": "navigation",
+      "label": "Docs navigation",
+      "visible": true,
+      "summary_text": "Get started Core concepts Agents",
+      "bbox": null,
+      "source": "dom_region_heuristic",
+      "salience": 0.9,
+      "region_type": "navigation",
+      "relevance_score": 0.9,
+      "routing_decision": "background_context_only",
+      "confidence": 0.6,
+      "reason_codes": [
+        "navigation_region",
+        "low_viewport_overlap"
+      ]
+    }
+  ],
+  "visual_element_proposals": [
+    {
+      "element_id": "input|id:search|idx:0",
+      "tag": "input",
+      "role": "",
+      "type": "",
+      "label": "Search the Codex docs",
+      "text": "",
+      "placeholder": "",
+      "visible": true,
+      "user_facing": true,
+      "disabled": false,
+      "region_hint": null,
+      "region_id": null,
+      "bbox": null,
+      "source": "dom_actionable_heuristic"
+    }
+  ],
+  "grounded_candidates": [
+    {
+      "candidate_id": "candidate:input|id:search|idx:0",
+      "element_id": "input|id:search|idx:0",
+      "region_id": null,
+      "action_type": "type",
+      "target": {
+        "label": "Search the Codex docs",
+        "tag": "input",
+        "role": ""
+      },
+      "grounding": {
+        "bbox": null,
+        "region_hint": null,
+        "screenshot_available": true
+      },
+      "confidence": 0.85,
+      "evidence": {
+        "page_url": "https://developers.openai.com/codex/cli",
+        "nearby_context": null
+      }
+    }
+  ],
+  "ranked_candidates": [
+    {
+      "candidate_id": "candidate:input|id:search|idx:0",
+      "element_id": "input|id:search|idx:0",
+      "region_id": null,
+      "action_type": "type",
+      "target": {
+        "label": "Search the Codex docs",
+        "tag": "input",
+        "role": ""
+      },
+      "grounding": {
+        "bbox": null,
+        "region_hint": null,
+        "screenshot_available": true
+      },
+      "confidence": 0.85,
+      "evidence": {
+        "page_url": "https://developers.openai.com/codex/cli",
+        "nearby_context": null
+      },
+      "score": 0.93,
+      "rank": 1
+    }
+  ]
+}
