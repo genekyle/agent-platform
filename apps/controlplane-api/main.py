@@ -31,13 +31,21 @@ from models import (
 )
 from schemas import (
     DomainRead,
+    DomainUpdate,
+    DomainWrite,
     GoalRead,
+    GoalUpdate,
+    GoalWrite,
     RunRead,
     RunCreateResponse,
+    ScenarioUpdate,
     ScenarioRead,
+    ScenarioWrite,
     StepLeaseResponse,
     StepResultIn,
     TaskRead,
+    TaskUpdate,
+    TaskWrite,
     TrainingCaptureRead,
     TrainingSessionCreate,
     TrainingSessionRead,
@@ -45,7 +53,14 @@ from schemas import (
     WorkerHeartbeatResponse,
 )
 from settings import settings
-from training import build_grounding_dataset, merge_training_annotation, read_meta, train_grounding_model, write_meta
+from training import (
+    build_grounding_dataset,
+    compare_training_targets,
+    merge_training_annotation,
+    read_meta,
+    train_grounding_model,
+    write_meta,
+)
 
 app = FastAPI(title="Control Plane API", version="0.0.1")
 
@@ -656,8 +671,50 @@ def get_system_status():
 
 
 @app.get("/api/training/domains", response_model=list[DomainRead])
-def list_training_domains(db: Session = Depends(get_db)):
-    return db.scalars(select(DomainRegistry).order_by(DomainRegistry.display_name.asc())).all()
+def list_training_domains(include_inactive: bool = False, db: Session = Depends(get_db)):
+    stmt = select(DomainRegistry)
+    if not include_inactive:
+        stmt = stmt.where(DomainRegistry.status == "active")
+    return db.scalars(stmt.order_by(DomainRegistry.display_name.asc())).all()
+
+
+@app.post("/api/training/domains", response_model=DomainRead)
+def create_training_domain(body: DomainWrite, db: Session = Depends(get_db)):
+    if db.get(DomainRegistry, body.domain_id):
+        raise HTTPException(status_code=409, detail="Domain already exists")
+    domain = DomainRegistry(**body.model_dump())
+    db.add(domain)
+    db.commit()
+    db.refresh(domain)
+    return domain
+
+
+@app.patch("/api/training/domains/{domain_id}", response_model=DomainRead)
+def update_training_domain(domain_id: str, body: DomainUpdate, db: Session = Depends(get_db)):
+    domain = db.get(DomainRegistry, domain_id)
+    if domain is None:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(domain, key, value)
+    db.commit()
+    db.refresh(domain)
+    return domain
+
+
+@app.delete("/api/training/domains/{domain_id}")
+def archive_training_domain(domain_id: str, db: Session = Depends(get_db)):
+    domain = db.get(DomainRegistry, domain_id)
+    if domain is None:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    domain.status = "archived"
+    for goal in db.scalars(select(GoalRegistry).where(GoalRegistry.domain_id == domain_id)).all():
+        goal.status = "archived"
+    for task in db.scalars(select(TaskRegistry).where(TaskRegistry.domain_id == domain_id)).all():
+        task.status = "archived"
+    for scenario in db.scalars(select(ScenarioRegistry).where(ScenarioRegistry.domain_id == domain_id)).all():
+        scenario.status = "archived"
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/training/goals", response_model=list[GoalRead])
@@ -666,6 +723,46 @@ def list_training_goals(domain_id: Optional[str] = None, db: Session = Depends(g
     if domain_id:
         stmt = stmt.where((GoalRegistry.domain_id == domain_id) | (GoalRegistry.domain_id.is_(None)))
     return db.scalars(stmt.order_by(GoalRegistry.display_name.asc())).all()
+
+
+@app.post("/api/training/goals", response_model=GoalRead)
+def create_training_goal(body: GoalWrite, db: Session = Depends(get_db)):
+    if db.get(GoalRegistry, body.goal_id):
+        raise HTTPException(status_code=409, detail="Goal already exists")
+    if body.domain_id and db.get(DomainRegistry, body.domain_id) is None:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    goal = GoalRegistry(**body.model_dump())
+    db.add(goal)
+    db.commit()
+    db.refresh(goal)
+    return goal
+
+
+@app.patch("/api/training/goals/{goal_id}", response_model=GoalRead)
+def update_training_goal(goal_id: str, body: GoalUpdate, db: Session = Depends(get_db)):
+    goal = db.get(GoalRegistry, goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    patch = body.model_dump(exclude_unset=True)
+    if patch.get("domain_id") and db.get(DomainRegistry, patch["domain_id"]) is None:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    for key, value in patch.items():
+        setattr(goal, key, value)
+    db.commit()
+    db.refresh(goal)
+    return goal
+
+
+@app.delete("/api/training/goals/{goal_id}")
+def archive_training_goal(goal_id: str, db: Session = Depends(get_db)):
+    goal = db.get(GoalRegistry, goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    goal.status = "archived"
+    for scenario in db.scalars(select(ScenarioRegistry).where(ScenarioRegistry.goal_id == goal_id)).all():
+        scenario.status = "archived"
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/training/tasks", response_model=list[TaskRead])
@@ -685,12 +782,101 @@ def list_training_tasks(
     return db.scalars(stmt.order_by(TaskRegistry.display_name.asc())).all()
 
 
+@app.post("/api/training/tasks", response_model=TaskRead)
+def create_training_task(body: TaskWrite, db: Session = Depends(get_db)):
+    if db.get(TaskRegistry, body.task_id):
+        raise HTTPException(status_code=409, detail="Task already exists")
+    _validate_registry_refs(db, domain_id=body.domain_id, goal_id=body.goal_id)
+    task = TaskRegistry(**body.model_dump())
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+@app.patch("/api/training/tasks/{task_id}", response_model=TaskRead)
+def update_training_task(task_id: str, body: TaskUpdate, db: Session = Depends(get_db)):
+    task = db.get(TaskRegistry, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    patch = body.model_dump(exclude_unset=True)
+    _validate_registry_refs(db, domain_id=patch.get("domain_id"), goal_id=patch.get("goal_id"))
+    for key, value in patch.items():
+        setattr(task, key, value)
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+@app.delete("/api/training/tasks/{task_id}")
+def archive_training_task(task_id: str, db: Session = Depends(get_db)):
+    task = db.get(TaskRegistry, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task.status = "archived"
+    for scenario in db.scalars(select(ScenarioRegistry).where(ScenarioRegistry.task_id == task_id)).all():
+        scenario.task_id = None
+    db.commit()
+    return {"ok": True}
+
+
 @app.get("/api/training/scenarios", response_model=list[ScenarioRead])
 def list_training_scenarios(domain_id: Optional[str] = None, db: Session = Depends(get_db)):
     stmt = select(ScenarioRegistry).where(ScenarioRegistry.status == "active")
     if domain_id:
         stmt = stmt.where(ScenarioRegistry.domain_id == domain_id)
     return db.scalars(stmt.order_by(ScenarioRegistry.display_name.asc())).all()
+
+
+def _validate_registry_refs(
+    db: Session,
+    *,
+    domain_id: Optional[str] = None,
+    goal_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> None:
+    if domain_id and db.get(DomainRegistry, domain_id) is None:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    if goal_id and db.get(GoalRegistry, goal_id) is None:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    if task_id and db.get(TaskRegistry, task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+
+@app.post("/api/training/scenarios", response_model=ScenarioRead)
+def create_training_scenario(body: ScenarioWrite, db: Session = Depends(get_db)):
+    if db.get(ScenarioRegistry, body.scenario_id):
+        raise HTTPException(status_code=409, detail="Scenario already exists")
+    _validate_registry_refs(db, domain_id=body.domain_id, goal_id=body.goal_id, task_id=body.task_id)
+    scenario = ScenarioRegistry(**body.model_dump())
+    db.add(scenario)
+    db.commit()
+    db.refresh(scenario)
+    return scenario
+
+
+@app.patch("/api/training/scenarios/{scenario_id}", response_model=ScenarioRead)
+def update_training_scenario(scenario_id: str, body: ScenarioUpdate, db: Session = Depends(get_db)):
+    scenario = db.get(ScenarioRegistry, scenario_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    patch = body.model_dump(exclude_unset=True)
+    _validate_registry_refs(db, domain_id=patch.get("domain_id"), goal_id=patch.get("goal_id"), task_id=patch.get("task_id"))
+    for key, value in patch.items():
+        setattr(scenario, key, value)
+    db.commit()
+    db.refresh(scenario)
+    return scenario
+
+
+@app.delete("/api/training/scenarios/{scenario_id}")
+def archive_training_scenario(scenario_id: str, db: Session = Depends(get_db)):
+    scenario = db.get(ScenarioRegistry, scenario_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    scenario.status = "archived"
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/training/sessions", response_model=list[TrainingSessionRead])
@@ -963,6 +1149,7 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
         "captured_at": utcnow().isoformat(),
         "browser_session_id": session.browser_session_id,
         "domain_id": session.domain_id,
+        "scenario_id": session.scenario_id,
         "goal_id": session.goal_id,
         "task_id": session.task_id,
         "action_type_hint": _session_action_hint(goal),
@@ -1174,6 +1361,9 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
         capture.approved_bbox = merged.get("approved_bbox")
         meta["training_annotation"] = merged
         db.commit()
+    elif body.status in {"draft", "reviewed", "approved", "rejected", "archived"}:
+        capture.review_status = body.status
+        db.commit()
     write_meta(traces_dir, filename, meta)
     return {"ok": True, **meta}
 
@@ -1182,22 +1372,39 @@ class TrainRequest(BaseModel):
     rebuild_dataset: bool = True
 
 
+REVIEWED_CAPTURE_STATUSES = ("reviewed", "approved")
+
+
+def _reviewed_training_captures(db: Session):
+    captures = db.scalars(
+        select(TrainingCapture)
+        .where(TrainingCapture.review_status.in_(REVIEWED_CAPTURE_STATUSES))
+        .order_by(TrainingCapture.captured_at.asc())
+    ).all()
+    for capture in captures:
+        session = db.get(TrainingSession, capture.training_session_id)
+        setattr(capture, "scenario_id", session.scenario_id if session else None)
+    return captures
+
+
 @app.post("/api/training/build-dataset")
 def build_training_dataset(db: Session = Depends(get_db)):
-    captures = db.scalars(
-        select(TrainingCapture).where(TrainingCapture.review_status == "reviewed").order_by(TrainingCapture.captured_at.asc())
-    ).all()
+    captures = _reviewed_training_captures(db)
     manifest = build_grounding_dataset(_artifacts_dir(), captures=captures)
     return {"ok": True, **manifest}
 
 
 @app.post("/api/training/train")
 def train_grounding(body: TrainRequest, db: Session = Depends(get_db)):
-    captures = db.scalars(
-        select(TrainingCapture).where(TrainingCapture.review_status == "reviewed").order_by(TrainingCapture.captured_at.asc())
-    ).all()
+    captures = _reviewed_training_captures(db)
     manifest = build_grounding_dataset(_artifacts_dir(), captures=captures) if body.rebuild_dataset else None
     result = train_grounding_model(_artifacts_dir(), dataset_manifest=manifest)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
     return result
+
+
+@app.get("/api/training/target-comparison")
+def training_target_comparison(db: Session = Depends(get_db)):
+    captures = _reviewed_training_captures(db)
+    return compare_training_targets(_artifacts_dir(), captures=captures)

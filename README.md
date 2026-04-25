@@ -16,7 +16,13 @@ From the repo root:
 make dev
 ```
 
-That starts:
+On first run, `make dev` will also:
+
+- create a repo-local Python virtual environment at `.venv`
+- install the Python service dependencies into that `.venv`
+- install UI dependencies with `npm ci` if `node_modules` is missing
+
+Then it starts:
 
 - Postgres via Docker on `localhost:5433`
 - Redis via Docker on `localhost:6379`
@@ -39,19 +45,24 @@ make doctor
 
 ## First-time setup
 
-UI dependencies:
+One command:
 
 ```bash
-cd apps/controlplane-ui
-npm install
+make setup
 ```
 
-Python dependencies:
+That prepares:
+
+- `.venv` with both Python service requirement sets installed
+- `apps/controlplane-ui/node_modules` via `npm ci`
+
+If you only want the Python environment:
 
 ```bash
-python3 -m pip install -r apps/controlplane-api/requirements.txt
-python3 -m pip install -r apps/mcp-mock/requirements.txt
+make python-setup
 ```
+
+The virtual environment lives at `.venv`, and the dev scripts call `.venv/bin/python` directly, so you do not need to manually activate it for `make dev`.
 
 ## Repo hygiene
 

@@ -46,8 +46,10 @@ export function TrainingSection({
   annotationMessage,
   buildTrainingDataset,
   trainGroundingModel,
+  loadTrainingTargetComparison,
   datasetStatus,
   trainingStatus,
+  targetComparisonStatus,
   onChangeSection,
 }) {
   if (section === "session-setup") {
@@ -55,6 +57,8 @@ export function TrainingSection({
       <CaptureSection
         mode="setup"
         domains={trainingRegistry.domains}
+        goals={trainingRegistry.goals}
+        tasks={trainingRegistry.tasks}
         scenarios={trainingRegistry.scenarios}
         sessionForm={sessionForm}
         setSessionForm={setSessionForm}
@@ -89,6 +93,8 @@ export function TrainingSection({
       <CaptureSection
         mode="capture"
         domains={trainingRegistry.domains}
+        goals={trainingRegistry.goals}
+        tasks={trainingRegistry.tasks}
         scenarios={trainingRegistry.scenarios}
         sessionForm={sessionForm}
         setSessionForm={setSessionForm}
@@ -181,8 +187,10 @@ export function TrainingSection({
       labels={labels}
       buildTrainingDataset={buildTrainingDataset}
       trainGroundingModel={trainGroundingModel}
+      loadTrainingTargetComparison={loadTrainingTargetComparison}
       datasetStatus={datasetStatus}
       trainingStatus={trainingStatus}
+      targetComparisonStatus={targetComparisonStatus}
       onOpenDataset={() => onChangeSection("dataset-browser")}
     />
   );

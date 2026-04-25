@@ -3,6 +3,8 @@ import { useMemo } from "react";
 export function CaptureSection({
   mode,
   domains,
+  goals = [],
+  tasks = [],
   scenarios,
   sessionForm,
   setSessionForm,
@@ -37,6 +39,18 @@ export function CaptureSection({
   const activeScenarios = useMemo(
     () => scenarios.filter((scenario) => scenario.domain_id === sessionForm.domain_id),
     [scenarios, sessionForm.domain_id],
+  );
+  const selectedScenario = useMemo(
+    () => activeScenarios.find((item) => item.scenario_id === sessionForm.scenario_id) ?? null,
+    [activeScenarios, sessionForm.scenario_id],
+  );
+  const selectedScenarioGoal = useMemo(
+    () => goals.find((goal) => goal.goal_id === selectedScenario?.goal_id) ?? null,
+    [goals, selectedScenario],
+  );
+  const selectedScenarioTask = useMemo(
+    () => tasks.find((task) => task.task_id === selectedScenario?.task_id) ?? null,
+    [tasks, selectedScenario],
   );
 
   const selectedTab = useMemo(
@@ -80,11 +94,21 @@ export function CaptureSection({
             </select>
           </div>
 
-          {sessionForm.scenario_id ? (
-            <div className="summary-item">
-              <div className="summary-title">Scenario</div>
-              <div className="summary-text">
-                {activeScenarios.find((item) => item.scenario_id === sessionForm.scenario_id)?.description || "Selected scenario"}
+          {selectedScenario ? (
+            <div className="summary-stack">
+              <div className="summary-item">
+                <div className="summary-title">Scenario</div>
+                <div className="summary-text">
+                  {selectedScenario.description || "Selected scenario"}
+                </div>
+              </div>
+              <div className="summary-item">
+                <div className="summary-title">Training Target</div>
+                <div className="summary-text">
+                  {selectedScenarioGoal?.display_name || selectedScenario.goal_id}
+                  {selectedScenarioTask ? ` · ${selectedScenarioTask.display_name}` : " · no task wrapper"}
+                  {selectedScenario.start_page_state ? ` · starts at ${selectedScenario.start_page_state}` : ""}
+                </div>
               </div>
             </div>
           ) : null}

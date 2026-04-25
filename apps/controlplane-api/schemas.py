@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class StepRead(BaseModel):
@@ -76,6 +76,27 @@ class DomainRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DomainWrite(BaseModel):
+    domain_id: str
+    display_name: str
+    host_patterns: list[str] = Field(default_factory=list)
+    page_states: list[dict] = Field(default_factory=list)
+    capture_defaults: dict = Field(default_factory=dict)
+    validation_expectations: list[dict] = Field(default_factory=list)
+    config_version: str = "v1"
+    status: str = "active"
+
+
+class DomainUpdate(BaseModel):
+    display_name: Optional[str] = None
+    host_patterns: Optional[list[str]] = None
+    page_states: Optional[list[dict]] = None
+    capture_defaults: Optional[dict] = None
+    validation_expectations: Optional[list[dict]] = None
+    config_version: Optional[str] = None
+    status: Optional[str] = None
+
+
 class GoalRead(BaseModel):
     goal_id: str
     domain_id: Optional[str] = None
@@ -84,6 +105,21 @@ class GoalRead(BaseModel):
     status: str
 
     model_config = {"from_attributes": True}
+
+
+class GoalWrite(BaseModel):
+    goal_id: str
+    domain_id: Optional[str] = None
+    display_name: str
+    action_type_hints: list[str] = Field(default_factory=list)
+    status: str = "active"
+
+
+class GoalUpdate(BaseModel):
+    domain_id: Optional[str] = None
+    display_name: Optional[str] = None
+    action_type_hints: Optional[list[str]] = None
+    status: Optional[str] = None
 
 
 class TaskRead(BaseModel):
@@ -95,6 +131,23 @@ class TaskRead(BaseModel):
     status: str
 
     model_config = {"from_attributes": True}
+
+
+class TaskWrite(BaseModel):
+    task_id: str
+    scope_level: str = "domain"
+    domain_id: Optional[str] = None
+    goal_id: Optional[str] = None
+    display_name: str
+    status: str = "active"
+
+
+class TaskUpdate(BaseModel):
+    scope_level: Optional[str] = None
+    domain_id: Optional[str] = None
+    goal_id: Optional[str] = None
+    display_name: Optional[str] = None
+    status: Optional[str] = None
 
 
 class ScenarioRead(BaseModel):
@@ -109,6 +162,29 @@ class ScenarioRead(BaseModel):
     status: str
 
     model_config = {"from_attributes": True}
+
+
+class ScenarioWrite(BaseModel):
+    scenario_id: str
+    domain_id: str
+    goal_id: str
+    task_id: Optional[str] = None
+    display_name: str
+    start_page_state: Optional[str] = None
+    description: Optional[str] = None
+    capture_profile_override: Optional[str] = None
+    status: str = "active"
+
+
+class ScenarioUpdate(BaseModel):
+    domain_id: Optional[str] = None
+    goal_id: Optional[str] = None
+    task_id: Optional[str] = None
+    display_name: Optional[str] = None
+    start_page_state: Optional[str] = None
+    description: Optional[str] = None
+    capture_profile_override: Optional[str] = None
+    status: Optional[str] = None
 
 
 class TrainingSessionCreate(BaseModel):

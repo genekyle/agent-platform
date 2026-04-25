@@ -29,6 +29,7 @@ export default function App() {
   const [runSearch, setRunSearch] = useState("");
 
   const [trainingRegistry, setTrainingRegistry] = useState({ domains: [], goals: [], tasks: [], scenarios: [] });
+  const [registryStatus, setRegistryStatus] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [selectedTrainingSessionId, setSelectedTrainingSessionId] = useState(null);
   const [creatingSession, setCreatingSession] = useState(false);
@@ -48,6 +49,7 @@ export default function App() {
   const [annotationMessage, setAnnotationMessage] = useState(null);
   const [datasetStatus, setDatasetStatus] = useState(null);
   const [trainingStatus, setTrainingStatus] = useState(null);
+  const [targetComparisonStatus, setTargetComparisonStatus] = useState(null);
 
   const [tabs, setTabs] = useState([]);
   const [tabsLoading, setTabsLoading] = useState(false);
@@ -154,6 +156,41 @@ export default function App() {
       setTrainingRegistry({ domains: [], goals: [], tasks: [], scenarios: [] });
     }
   }, []);
+
+  const saveRegistryItem = useCallback(async (resource, payload, id = null) => {
+    setRegistryStatus({ loading: true, message: null, error: null });
+    const target = id ? `${API}/api/training/${resource}/${encodeURIComponent(id)}` : `${API}/api/training/${resource}`;
+    try {
+      const response = await fetch(target, {
+        method: id ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || `Save failed: ${response.status}`);
+      await loadTrainingRegistry();
+      setRegistryStatus({ loading: false, message: "Registry saved.", error: null });
+      return result;
+    } catch (error) {
+      setRegistryStatus({ loading: false, message: null, error: error.message });
+      return null;
+    }
+  }, [loadTrainingRegistry]);
+
+  const archiveRegistryItem = useCallback(async (resource, id) => {
+    setRegistryStatus({ loading: true, message: null, error: null });
+    try {
+      const response = await fetch(`${API}/api/training/${resource}/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || `Archive failed: ${response.status}`);
+      await loadTrainingRegistry();
+      setRegistryStatus({ loading: false, message: "Registry item archived.", error: null });
+      return result;
+    } catch (error) {
+      setRegistryStatus({ loading: false, message: null, error: error.message });
+      return null;
+    }
+  }, [loadTrainingRegistry]);
 
   const loadTrainingSessions = useCallback(async () => {
     try {
@@ -338,6 +375,20 @@ export default function App() {
     }
   }, []);
 
+  const loadTrainingTargetComparison = useCallback(async () => {
+    setTargetComparisonStatus({ loading: true });
+    try {
+      const response = await fetch(`${API}/api/training/target-comparison`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail ? JSON.stringify(payload.detail) : `Comparison failed: ${response.status}`);
+      setTargetComparisonStatus({ loading: false, result: payload, error: null });
+      return payload;
+    } catch (error) {
+      setTargetComparisonStatus({ loading: false, result: null, error: error.message });
+      return null;
+    }
+  }, []);
+
   const trainGroundingModel = useCallback(async () => {
     setTrainingStatus({ loading: true });
     try {
@@ -501,11 +552,12 @@ export default function App() {
     if (activePrimaryView === "training") {
       loadTrainingSessions();
       loadObservations();
+      loadTrainingTargetComparison();
     }
     if (activePrimaryView === "workers") {
       loadObservations();
     }
-  }, [activePrimaryView, loadObservations, loadTrainingRegistry, loadTrainingSessions]);
+  }, [activePrimaryView, loadObservations, loadTrainingRegistry, loadTrainingSessions, loadTrainingTargetComparison]);
 
   useEffect(() => {
     if (activePrimaryView === "training" && activeSectionId === "session-capture" && selectedTrainingSession?.status === "active") {
@@ -588,8 +640,10 @@ export default function App() {
         annotationMessage={annotationMessage}
         buildTrainingDataset={buildTrainingDataset}
         trainGroundingModel={trainGroundingModel}
+        loadTrainingTargetComparison={loadTrainingTargetComparison}
         datasetStatus={datasetStatus}
         trainingStatus={trainingStatus}
+        targetComparisonStatus={targetComparisonStatus}
         onChangeSection={setActiveSection}
       />
     );
@@ -623,7 +677,14 @@ export default function App() {
   } else if (activePrimaryView === "chat") {
     sectionContent = <ChatSection />;
   } else {
-    sectionContent = <DomainsSection registry={trainingRegistry} />;
+    sectionContent = (
+      <DomainsSection
+        registry={trainingRegistry}
+        registryStatus={registryStatus}
+        saveRegistryItem={saveRegistryItem}
+        archiveRegistryItem={archiveRegistryItem}
+      />
+    );
   }
 
   return (

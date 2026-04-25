@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: dev dev-stop infra-up infra-down chrome doctor
+.PHONY: dev dev-stop infra-up infra-down chrome doctor setup python-setup ui-setup
 
 dev:
 	./scripts/dev-up.sh
@@ -20,3 +20,11 @@ chrome:
 
 doctor:
 	./scripts/dev-doctor.sh
+
+setup: python-setup ui-setup
+
+python-setup:
+	./scripts/bootstrap-python.sh
+
+ui-setup:
+	cd apps/controlplane-ui && npm ci

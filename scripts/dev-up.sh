@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/.dev-logs"
 PID_DIR="$ROOT_DIR/.dev-pids"
+VENV_DIR="$ROOT_DIR/.venv"
+VENV_PYTHON="$VENV_DIR/bin/python"
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
@@ -19,17 +21,23 @@ require_cmd python3
 require_cmd npm
 require_cmd curl
 
-if [[ ! -d "$ROOT_DIR/apps/controlplane-ui/node_modules" ]]; then
-  echo "UI dependencies are not installed. Run: cd apps/controlplane-ui && npm install" >&2
-  exit 1
+if [[ ! -x "$VENV_PYTHON" ]]; then
+  echo "Repo virtual environment is missing; bootstrapping it now..."
 fi
 
-if ! python3 -c "import fastapi, uvicorn, sqlalchemy, psycopg, pydantic_settings, httpx" >/dev/null 2>&1; then
+"$ROOT_DIR/scripts/bootstrap-python.sh"
+
+if [[ ! -d "$ROOT_DIR/apps/controlplane-ui/node_modules" ]]; then
+  echo "UI dependencies are missing; installing with npm ci..."
+  (cd "$ROOT_DIR/apps/controlplane-ui" && npm ci)
+fi
+
+if ! "$VENV_PYTHON" -c "import fastapi, uvicorn, sqlalchemy, psycopg, pydantic_settings, httpx" >/dev/null 2>&1; then
   echo "Control Plane API dependencies are missing. Run: python3 -m pip install -r apps/controlplane-api/requirements.txt" >&2
   exit 1
 fi
 
-if ! python3 -c "import fastapi, uvicorn, httpx" >/dev/null 2>&1; then
+if ! "$VENV_PYTHON" -c "import fastapi, uvicorn, httpx" >/dev/null 2>&1; then
   echo "Capture server dependencies are missing. Run: python3 -m pip install -r apps/mcp-mock/requirements.txt" >&2
   exit 1
 fi
@@ -66,12 +74,12 @@ start_service() {
 start_service \
   "controlplane-api" \
   "$ROOT_DIR/apps/controlplane-api" \
-  python3 -m uvicorn main:app --host 0.0.0.0 --port 8081 --reload
+  "$VENV_PYTHON" -m uvicorn main:app --host 0.0.0.0 --port 8081 --reload
 
 start_service \
   "capture-server" \
   "$ROOT_DIR/apps/mcp-mock" \
-  python3 -m uvicorn app.main_server:app --host 0.0.0.0 --port 8082 --reload
+  "$VENV_PYTHON" -m uvicorn app.main_server:app --host 0.0.0.0 --port 8082 --reload
 
 start_service \
   "controlplane-ui" \
@@ -107,6 +115,7 @@ Control API:     http://localhost:8081/health
 Capture API:     http://localhost:8082/health
 Postgres:        localhost:5433
 Redis:           localhost:6379
+Python venv:     $VENV_DIR
 
 Chrome is no longer started globally during dev boot.
 Start a training session in the UI to provision a dedicated Chrome profile and debug port on demand.

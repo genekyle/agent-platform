@@ -2048,8 +2048,133 @@ input[type="checkbox"] {
   margin-top: 8px;
 }
 
+/* Domain registry configuration */
+.domain-config-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.domain-list-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.registry-sidebar-header,
+.registry-editor-heading,
+.registry-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.registry-sidebar-header {
+  color: #526070;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.domain-editor-panel {
+  min-width: 0;
+}
+
+.registry-editor-heading {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.registry-editor-heading h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.registry-editor-heading p {
+  margin: 4px 0 0;
+  color: #526070;
+  font-size: 13px;
+}
+
+.registry-metrics {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.registry-metrics span {
+  padding: 5px 8px;
+  border: 1px solid #d6dde8;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.domain-form-grid,
+.scenario-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.crud-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+
+.crud-form-row > .form-input,
+.crud-form-row > .form-select {
+  flex: 1 1 160px;
+}
+
+.crud-form-row > button {
+  flex: 0 0 auto;
+}
+
+.task-form-row > .form-input:first-child {
+  flex-basis: 220px;
+}
+
+.scenario-form-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.scenario-description-input {
+  grid-column: span 2;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #526070;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .bbox-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .domain-config-layout,
+  .domain-form-grid,
+  .scenario-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .registry-editor-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .scenario-description-input {
+    grid-column: auto;
   }
 }

@@ -3,13 +3,52 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 
 DATASET_VERSION = "grounding_v1"
+
+TRAINING_TARGETS = [
+    {
+        "target_id": "element_grounding",
+        "label": "Element grounding",
+        "description": "Select the correct DOM/visual candidate for a scenario goal.",
+        "scores": {
+            "label_cost": 3,
+            "model_simplicity": 3,
+            "app_usefulness": 5,
+            "evaluation_clarity": 5,
+            "automation_compounding": 5,
+        },
+    },
+    {
+        "target_id": "action_classification",
+        "label": "Action classification",
+        "description": "Predict the intended action type from page and session context.",
+        "scores": {
+            "label_cost": 4,
+            "model_simplicity": 4,
+            "app_usefulness": 3,
+            "evaluation_clarity": 4,
+            "automation_compounding": 3,
+        },
+    },
+    {
+        "target_id": "scenario_classification",
+        "label": "Scenario/page-state classification",
+        "description": "Identify which scenario or page state a capture belongs to.",
+        "scores": {
+            "label_cost": 5,
+            "model_simplicity": 5,
+            "app_usefulness": 3,
+            "evaluation_clarity": 4,
+            "automation_compounding": 3,
+        },
+    },
+]
 
 
 def utcnow_iso() -> str:
@@ -131,6 +170,8 @@ def build_grounding_dataset(artifacts_root: Path, *, captures: list[Any]) -> dic
         "included_records": included,
         "skipped_records": skipped,
         "path": str(dataset_path),
+        "scenario_counts": dict(sorted(Counter(record["training_context"].get("scenario_id") or "unknown" for record in records).items())),
+        "review_status_filter": ["reviewed", "approved"],
     }
     (dataset_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
@@ -156,9 +197,11 @@ def train_grounding_model(artifacts_root: Path, *, dataset_manifest: Optional[di
         eval_records = []
 
     weights = train_weight_map(train_records)
-    predictions = [predict_record(record, weights) for record in eval_records or train_records]
+    evaluation_records = eval_records or train_records
+    predictions = [predict_record(record, weights) for record in evaluation_records]
     accuracy = sum(1 for prediction in predictions if prediction["correct_target"]) / len(predictions)
     mean_iou = sum(prediction["bbox_iou"] for prediction in predictions) / len(predictions)
+    per_scenario = evaluate_predictions_by_scenario(evaluation_records, predictions)
 
     model_dir = artifacts_root / "models" / f"{utcnow_iso().replace(':', '-')}__grounding_linear_v1"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -171,9 +214,11 @@ def train_grounding_model(artifacts_root: Path, *, dataset_manifest: Optional[di
     }
     metrics = {
         "train_count": len(train_records),
-        "eval_count": len(eval_records) if eval_records else len(train_records),
+        "eval_count": len(evaluation_records),
         "target_accuracy": round(accuracy, 4),
         "mean_bbox_iou": round(mean_iou, 4),
+        "mean_candidate_rank": round(sum(prediction["target_rank"] for prediction in predictions) / len(predictions), 2),
+        "per_scenario": per_scenario,
     }
 
     (model_dir / "model.json").write_text(json.dumps(model_artifact, indent=2), encoding="utf-8")
@@ -200,7 +245,11 @@ def _build_dataset_record(capture: Any, artifact: dict[str, Any]) -> Optional[di
         return None
 
     acquisition = artifact.get("acquisition") or {}
+    metadata = artifact.get("metadata") or {}
+    training_metadata = acquisition.get("training_metadata") or {}
     screenshot = (capture.screenshot_refs or acquisition.get("screenshots") or [{}])[0]
+    scenario_id = getattr(capture, "scenario_id", None) or training_metadata.get("scenario_id") or metadata.get("scenario")
+    page_state = training_metadata.get("page_state") or metadata.get("page_state") or metadata.get("scenario")
 
     return {
         "version": DATASET_VERSION,
@@ -209,12 +258,22 @@ def _build_dataset_record(capture: Any, artifact: dict[str, Any]) -> Optional[di
         "page": {"url": capture.url, "title": capture.title},
         "training_context": {
             "domain_id": capture.domain_id,
+            "scenario_id": scenario_id,
             "goal_id": capture.goal_id,
             "task_id": capture.task_id,
             "browser_session_id": capture.browser_session_id,
             "action_type_hint": capture.action_type_hint,
             "capture_profile": capture.capture_profile,
             "notes": capture.notes,
+            "page_state": page_state,
+            "viewport": {
+                "width": capture.viewport_width,
+                "height": capture.viewport_height,
+                "device_scale_factor": capture.device_scale_factor,
+                "scroll_x": capture.scroll_x,
+                "scroll_y": capture.scroll_y,
+                "tab_id": capture.tab_id,
+            },
         },
         "screenshot": {
             "path": screenshot.get("path") or screenshot.get("image_path"),
@@ -332,14 +391,118 @@ def predict_record(record: dict[str, Any], weights: dict[str, float]) -> dict[st
     predicted_candidate = scored_candidates[0][1]
     predicted_bbox = predicted_candidate.get("bbox")
     target_bbox = record["approved_bbox"]
+    target_candidate_id = record["approved_target_candidate_id"]
+    target_rank = next(
+        (index + 1 for index, (_, candidate) in enumerate(scored_candidates) if candidate["candidate_id"] == target_candidate_id),
+        len(scored_candidates) + 1,
+    )
 
     return {
         "artifact_filename": record["artifact_filename"],
+        "scenario_id": record["training_context"].get("scenario_id") or "unknown",
         "predicted_candidate_id": predicted_candidate["candidate_id"],
-        "target_candidate_id": record["approved_target_candidate_id"],
-        "correct_target": predicted_candidate["candidate_id"] == record["approved_target_candidate_id"],
+        "target_candidate_id": target_candidate_id,
+        "correct_target": predicted_candidate["candidate_id"] == target_candidate_id,
+        "target_rank": target_rank,
         "bbox_iou": round(_bbox_iou(predicted_bbox, target_bbox), 4),
     }
+
+
+def evaluate_predictions_by_scenario(records: list[dict[str, Any]], predictions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for prediction in predictions:
+        grouped[prediction.get("scenario_id") or "unknown"].append(prediction)
+
+    records_by_scenario = Counter(record["training_context"].get("scenario_id") or "unknown" for record in records)
+    result: dict[str, dict[str, Any]] = {}
+    for scenario_id, scenario_predictions in sorted(grouped.items()):
+        count = len(scenario_predictions)
+        result[scenario_id] = {
+            "record_count": records_by_scenario[scenario_id],
+            "grounding_accuracy": round(sum(1 for item in scenario_predictions if item["correct_target"]) / count, 4),
+            "mean_bbox_iou": round(sum(item["bbox_iou"] for item in scenario_predictions) / count, 4),
+            "mean_candidate_rank": round(sum(item["target_rank"] for item in scenario_predictions) / count, 2),
+        }
+    return result
+
+
+def compare_training_targets(artifacts_root: Path, *, captures: list[Any]) -> dict[str, Any]:
+    scenario_counts: Counter[str] = Counter()
+    reviewed_count = 0
+    labeled_count = 0
+    total_candidates = 0
+    rejected_count = 0
+    missing_artifacts = 0
+    page_states: Counter[str] = Counter()
+
+    for capture in captures:
+        trace_path = artifacts_root / "observer-traces" / capture.artifact_filename
+        artifact: dict[str, Any] = {}
+        if trace_path.exists():
+            try:
+                artifact = json.loads(trace_path.read_text())
+            except Exception:
+                artifact = {}
+        else:
+            missing_artifacts += 1
+
+        acquisition = artifact.get("acquisition") or {}
+        metadata = artifact.get("metadata") or {}
+        training_metadata = acquisition.get("training_metadata") or {}
+        scenario_id = getattr(capture, "scenario_id", None) or training_metadata.get("scenario_id") or metadata.get("scenario") or "unknown"
+        page_state = training_metadata.get("page_state") or metadata.get("page_state") or metadata.get("scenario") or "unknown"
+
+        scenario_counts[scenario_id] += 1
+        page_states[page_state] += 1
+        total_candidates += int(getattr(capture, "candidate_count", 0) or len(artifact.get("ranked_candidates") or []))
+        rejected_count += len(getattr(capture, "rejected_candidate_ids", []) or [])
+        if getattr(capture, "review_status", None) in {"reviewed", "approved"}:
+            reviewed_count += 1
+        if getattr(capture, "positive_candidate_id", None):
+            labeled_count += 1
+
+    target_rows = []
+    for target in TRAINING_TARGETS:
+        score_values = target["scores"]
+        weighted_score = round(sum(score_values.values()) / len(score_values), 2)
+        readiness = _target_readiness(target["target_id"], captures, reviewed_count, labeled_count, len(scenario_counts))
+        target_rows.append({
+            **target,
+            "weighted_score": weighted_score,
+            "readiness": readiness,
+        })
+
+    target_rows.sort(key=lambda row: (row["readiness"]["ready"], row["weighted_score"]), reverse=True)
+
+    return {
+        "recommended_target": "element_grounding",
+        "recommendation_reason": "Element grounding has the clearest direct payoff for browser automation and can be evaluated from the same reviewed capture labels.",
+        "capture_summary": {
+            "capture_count": len(captures),
+            "reviewed_count": reviewed_count,
+            "labeled_count": labeled_count,
+            "scenario_count": len(scenario_counts),
+            "total_candidates": total_candidates,
+            "rejected_candidate_count": rejected_count,
+            "missing_artifact_count": missing_artifacts,
+            "scenario_counts": dict(sorted(scenario_counts.items())),
+            "page_state_counts": dict(sorted(page_states.items())),
+        },
+        "targets": target_rows,
+    }
+
+
+def _target_readiness(target_id: str, captures: list[Any], reviewed_count: int, labeled_count: int, scenario_count: int) -> dict[str, Any]:
+    if target_id == "element_grounding":
+        ready = labeled_count > 0
+        blocker = None if ready else "Needs reviewed captures with an approved candidate."
+    elif target_id == "action_classification":
+        ready = reviewed_count > 0
+        blocker = None if ready else "Needs reviewed captures with action hints from scenario goals."
+    else:
+        ready = scenario_count > 1 and len(captures) > 1
+        blocker = None if ready else "Needs captures spread across multiple scenarios or page states."
+    return {"ready": ready, "blocker": blocker}
 
 
 def _bbox_iou(predicted: Optional[dict], target: Optional[dict]) -> float:

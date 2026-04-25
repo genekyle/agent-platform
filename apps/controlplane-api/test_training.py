@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from training import build_grounding_dataset, merge_training_annotation, train_grounding_model
+from training import build_grounding_dataset, compare_training_targets, merge_training_annotation, train_grounding_model
 
 
 @dataclass
@@ -25,6 +25,7 @@ class FakeCapture:
     tab_id: str
     browser_session_id: str
     domain_id: str
+    scenario_id: str
     goal_id: str
     task_id: str | None
     action_type_hint: str
@@ -119,6 +120,7 @@ def test_build_dataset_and_train_model(tmp_path: Path):
         tab_id="tab-1",
         browser_session_id="training-session-1",
         domain_id="indeed_jobs",
+        scenario_id="indeed_search_results_open_job_posting",
         goal_id="search_jobs",
         task_id=None,
         action_type_hint="click",
@@ -129,9 +131,20 @@ def test_build_dataset_and_train_model(tmp_path: Path):
 
     manifest = build_grounding_dataset(tmp_path, captures=[capture])
     assert manifest["record_count"] == 1
+    assert manifest["scenario_counts"] == {"indeed_search_results_open_job_posting": 1}
     assert Path(manifest["path"]).exists()
 
     training_result = train_grounding_model(tmp_path, dataset_manifest=manifest)
     assert training_result["ok"] is True
     assert training_result["metrics"]["target_accuracy"] >= 0.0
+    assert "indeed_search_results_open_job_posting" in training_result["metrics"]["per_scenario"]
     assert Path(training_result["model_dir"]).exists()
+
+    comparison = compare_training_targets(tmp_path, captures=[capture])
+    assert comparison["recommended_target"] == "element_grounding"
+    assert comparison["capture_summary"]["scenario_counts"] == {"indeed_search_results_open_job_posting": 1}
+    assert comparison["targets"][0]["target_id"] in {
+        "element_grounding",
+        "action_classification",
+        "scenario_classification",
+    }

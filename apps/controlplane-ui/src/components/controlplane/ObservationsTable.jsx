@@ -16,6 +16,7 @@ export function ObservationsTable({
 }) {
   const [obsSelection, setObsSelection] = useState(new Set());
   const [obsGroupFilter, setObsGroupFilter] = useState("");
+  const [obsScenarioFilter, setObsScenarioFilter] = useState("");
   const [obsStatusFilter, setObsStatusFilter] = useState("");
   const [obsSearch, setObsSearch] = useState("");
 
@@ -25,6 +26,10 @@ export function ObservationsTable({
   );
   const customLabels = useMemo(
     () => [...new Set(observations.map((item) => item.label).filter(Boolean))],
+    [observations],
+  );
+  const scenarios = useMemo(
+    () => [...new Set(observations.map((item) => item.scenario_id || item.scenario).filter(Boolean))],
     [observations],
   );
   const statusCounts = useMemo(() => {
@@ -41,6 +46,7 @@ export function ObservationsTable({
     return observations.filter((observation) => {
       if (obsStatusFilter && (observation.status || "new") !== obsStatusFilter) return false;
       if (obsGroupFilter && observation.group !== obsGroupFilter) return false;
+      if (obsScenarioFilter && (observation.scenario_id || observation.scenario) !== obsScenarioFilter) return false;
       if (!query) return true;
       const haystack = [
         observation.filename,
@@ -56,7 +62,7 @@ export function ObservationsTable({
         .toLowerCase();
       return haystack.includes(query);
     });
-  }, [observations, obsGroupFilter, obsSearch, obsStatusFilter]);
+  }, [observations, obsGroupFilter, obsScenarioFilter, obsSearch, obsStatusFilter]);
 
   return (
     <section className="panel obs-list-view">
@@ -95,6 +101,14 @@ export function ObservationsTable({
               <option value="">All groups</option>
               {groups.map((group) => (
                 <option key={group} value={group}>{group}</option>
+              ))}
+            </select>
+          )}
+          {scenarios.length > 0 && (
+            <select className="obs-group-dropdown form-select" value={obsScenarioFilter} onChange={(event) => setObsScenarioFilter(event.target.value)}>
+              <option value="">All scenarios</option>
+              {scenarios.map((scenario) => (
+                <option key={scenario} value={scenario}>{scenario}</option>
               ))}
             </select>
           )}
@@ -173,10 +187,10 @@ export function ObservationsTable({
                       value={observation.status || "new"}
                       onChange={(event) => updateObsMeta(observation.filename, { status: event.target.value })}
                     >
-                      <option value="new">New</option>
+                      <option value="draft">Draft</option>
                       <option value="reviewed">Reviewed</option>
-                      <option value="exported">Exported</option>
-                      <option value="training">Training</option>
+                      <option value="approved">Approved</option>
+                      <option value="rejected">Rejected</option>
                       <option value="archived">Archived</option>
                     </select>
                   </td>
@@ -184,7 +198,7 @@ export function ObservationsTable({
                     <div className="obs-page-title">{observation.page_title || "Untitled"}</div>
                     <div className="obs-page-url">{observation.page_url || observation.filename}</div>
                   </td>
-                  <td><span className="obs-scenario-tag">{observation.scenario ?? "live_capture"}</span></td>
+                  <td><span className="obs-scenario-tag">{observation.scenario_id || observation.scenario || "live_capture"}</span></td>
                   <td>
                     <span className="inline-badge ok">{observation.candidate_count}</span>
                     {observation.has_screenshot && <span className="inline-badge screenshot-badge" title="Has screenshot">img</span>}

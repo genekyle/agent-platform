@@ -6,43 +6,114 @@ export function TrainingExportSection({
   labels,
   buildTrainingDataset,
   trainGroundingModel,
+  loadTrainingTargetComparison,
   datasetStatus,
   trainingStatus,
+  targetComparisonStatus,
   onOpenDataset,
 }) {
-  if (!selectedObs) {
-    return (
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <h2>Export / Model Prep</h2>
-            <p>Select an artifact in Dataset Browser before exporting labels or preparing model data.</p>
-          </div>
-        </div>
-
-        <div className="empty-state">
-          No artifact selected. Choose a record in Dataset Browser, then return here to export reviewed labels.
-        </div>
-        <button className="primary-btn" onClick={onOpenDataset}>Open Dataset Browser</button>
-      </section>
-    );
-  }
-
-  const candidates = selectedObs.ranked_candidates ?? [];
+  const candidates = selectedObs?.ranked_candidates ?? [];
   const labeledCount = candidates.filter((candidate) => labels[candidate.candidate_id]).length;
   const approvedCount = candidates.filter((candidate) => labels[candidate.candidate_id] === "approve").length;
   const rejectedCount = candidates.filter((candidate) => labels[candidate.candidate_id] === "reject").length;
+  const comparison = targetComparisonStatus?.result;
+  const summary = comparison?.capture_summary;
+  const perScenario = trainingStatus?.result?.metrics?.per_scenario ?? {};
 
   return (
     <div className="section-stack">
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>Export Labels</h2>
-            <p>Prepare reviewed labels from the currently selected training artifact.</p>
+            <h2>Training Target Comparison</h2>
+            <p>Compare near-term model targets against the reviewed scenario-specific captures.</p>
           </div>
         </div>
 
+        <div className="detail-actions">
+          <button
+            className="secondary-btn"
+            disabled={targetComparisonStatus?.loading}
+            onClick={loadTrainingTargetComparison}
+          >
+            {targetComparisonStatus?.loading ? "Refreshing..." : "Refresh Comparison"}
+          </button>
+        </div>
+
+        {targetComparisonStatus?.error ? (
+          <div className="annotation-message error">{targetComparisonStatus.error}</div>
+        ) : null}
+
+        {comparison ? (
+          <>
+            <div className="stats-grid compact-stats-grid">
+              <div className="stat-card">
+                <div className="stat-label">Reviewed</div>
+                <div className="stat-value small-stat-value">{summary?.reviewed_count ?? 0}</div>
+                <div className="stat-footnote">Records eligible for datasets</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Scenarios</div>
+                <div className="stat-value small-stat-value">{summary?.scenario_count ?? 0}</div>
+                <div className="stat-footnote">Scenario coverage</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Candidates</div>
+                <div className="stat-value small-stat-value">{summary?.total_candidates ?? 0}</div>
+                <div className="stat-footnote">Candidate labels to learn from</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Recommendation</div>
+                <div className="stat-value small-stat-value">Grounding</div>
+                <div className="stat-footnote">Current leading target</div>
+              </div>
+            </div>
+
+            <div className="table-wrap">
+              <table className="runs-table">
+                <thead>
+                  <tr>
+                    <th>Target</th>
+                    <th>Ready</th>
+                    <th>Score</th>
+                    <th>Usefulness</th>
+                    <th>Eval</th>
+                    <th>Blocker</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparison.targets.map((target) => (
+                    <tr key={target.target_id}>
+                      <td>
+                        <div className="obs-page-title">{target.label}</div>
+                        <div className="obs-page-url">{target.description}</div>
+                      </td>
+                      <td>{target.readiness.ready ? "Yes" : "No"}</td>
+                      <td>{target.weighted_score}</td>
+                      <td>{target.scores.app_usefulness}/5</td>
+                      <td>{target.scores.evaluation_clarity}/5</td>
+                      <td>{target.readiness.blocker ?? "Ready for baseline"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state">No comparison loaded yet.</div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Label Engine Staging</h2>
+            <p>Keep the labeling loop focused on browser grounding data and scenario evaluation.</p>
+          </div>
+        </div>
+
+        {selectedObs ? (
+          <>
         <div className="stats-grid compact-stats-grid">
           <div className="stat-card">
             <div className="stat-label">Candidates</div>
@@ -83,6 +154,15 @@ export function TrainingExportSection({
             <span className="detail-value">{fmt(selectedObs?.metadata?.timestamp)}</span>
           </div>
         </div>
+          </>
+        ) : (
+          <>
+            <div className="empty-state">
+              No artifact selected. Choose a record in Dataset Browser, then return here to inspect its label readiness.
+            </div>
+            <button className="primary-btn" onClick={onOpenDataset}>Open Dataset Browser</button>
+          </>
+        )}
 
         <div className="detail-actions">
           <button
@@ -116,7 +196,7 @@ export function TrainingExportSection({
           <div className="summary-item training-status-card">
             <div className="summary-title">Latest training run</div>
             <div className="summary-text">
-              accuracy {trainingStatus.result.metrics?.target_accuracy ?? "-"}, mean IoU {trainingStatus.result.metrics?.mean_bbox_iou ?? "-"}.
+              accuracy {trainingStatus.result.metrics?.target_accuracy ?? "-"}, mean IoU {trainingStatus.result.metrics?.mean_bbox_iou ?? "-"}, mean rank {trainingStatus.result.metrics?.mean_candidate_rank ?? "-"}.
             </div>
           </div>
         ) : null}
@@ -128,25 +208,52 @@ export function TrainingExportSection({
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>Model Prep Staging</h2>
-            <p>This area is reserved for dataset assembly, split generation, and model prep steps.</p>
+            <h2>Scenario Benchmark</h2>
+            <p>Evaluate experiments by scenario so broad averages do not hide weak workflows.</p>
           </div>
         </div>
 
-        <div className="summary-stack">
-          <div className="summary-item">
-            <div className="summary-title">Current state</div>
-            <div className="summary-text">
-              IA is now aligned: training artifacts are selected in Dataset Browser, reviewed in Review / Label, and exported here.
+        {Object.keys(perScenario).length > 0 ? (
+          <div className="table-wrap">
+            <table className="runs-table">
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Records</th>
+                  <th>Grounding Accuracy</th>
+                  <th>Mean IoU</th>
+                  <th>Mean Rank</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(perScenario).map(([scenarioId, metrics]) => (
+                  <tr key={scenarioId}>
+                    <td className="mono">{scenarioId}</td>
+                    <td>{metrics.record_count}</td>
+                    <td>{metrics.grounding_accuracy}</td>
+                    <td>{metrics.mean_bbox_iou}</td>
+                    <td>{metrics.mean_candidate_rank}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="summary-stack">
+            <div className="summary-item">
+              <div className="summary-title">Evaluation gate</div>
+              <div className="summary-text">
+                Save reviewed labels, build the grounding dataset, then train the baseline to populate scenario metrics.
+              </div>
+            </div>
+            <div className="summary-item">
+              <div className="summary-title">Labeling engine direction</div>
+              <div className="summary-text">
+                Screenshot overlays, candidate approval, bbox correction, scenario filters, and reviewed-only exports are the foundation for the Label Studio-like engine.
+              </div>
             </div>
           </div>
-          <div className="summary-item">
-            <div className="summary-title">Next implementation step</div>
-            <div className="summary-text">
-              Add persisted review annotations and batch dataset export once the workflow is stable.
-            </div>
-          </div>
-        </div>
+        )}
       </section>
     </div>
   );

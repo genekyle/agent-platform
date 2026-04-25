@@ -107,12 +107,12 @@ export const CONTROL_PLANE_NAV = {
   domains: {
     label: "Domains",
     title: "Domains",
-    subtitle: "Read-only registry visibility for domains, goals, and scoped tasks used by training sessions.",
+    subtitle: "Configure domains, goals, tasks, and scenarios used by training sessions.",
     sections: [
       {
         id: "registry",
         label: "Registry",
-        subtitle: "Controlled training domains, allowed goals, and scoped task catalog.",
+        subtitle: "CRUD configuration for training domains, allowed goals, scoped tasks, and scenarios.",
       },
     ],
   },
