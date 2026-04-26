@@ -343,8 +343,26 @@ def _capture_metadata_from_artifact(
     }
 
 
+def _migrate_schema() -> None:
+    """Add columns that were added after initial table creation."""
+    additions = [
+        ("domain_registry", "page_states", "JSON NOT NULL DEFAULT '[]'"),
+        ("domain_registry", "capture_defaults", "JSON NOT NULL DEFAULT '{}'"),
+        ("domain_registry", "validation_expectations", "JSON NOT NULL DEFAULT '[]'"),
+        ("domain_registry", "config_version", "VARCHAR(50) NOT NULL DEFAULT 'v1'"),
+    ]
+    with engine.connect() as conn:
+        for table, col, definition in additions:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {definition}"))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+
+
 @app.on_event("startup")
 def on_startup():
+    _migrate_schema()
     Base.metadata.create_all(bind=engine)
     with Session(engine) as db:
         seed_training_registry(db)

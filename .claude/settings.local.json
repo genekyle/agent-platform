@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(curl -s -X POST http://localhost:8081/api/training/domains -H 'Content-Type: application/json' -d '{\"domain_id\":\"test_domain\",\"display_name\":\"Test Domain\",\"host_patterns\":[\"test.com\"],\"page_states\":[{\"page_state_id\":\"home\",\"display_name\":\"Home\"}],\"capture_defaults\":{},\"validation_expectations\":[],\"config_version\":\"v1\",\"status\":\"active\"}')",
+      "Bash(curl -s -X DELETE http://localhost:8081/api/training/domains/test_domain)"
     ]
   }
 }
