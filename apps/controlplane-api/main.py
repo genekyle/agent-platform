@@ -30,6 +30,7 @@ from models import (
     Worker,
 )
 from schemas import (
+    CaptureAnnotationPatch,
     DomainRead,
     DomainUpdate,
     DomainWrite,
@@ -55,6 +56,7 @@ from schemas import (
 from settings import settings
 from training import (
     build_grounding_dataset,
+    build_vision_dataset,
     compare_training_targets,
     merge_training_annotation,
     read_meta,
@@ -315,6 +317,7 @@ def _capture_metadata_from_artifact(
     artifact: dict,
     session: TrainingSession,
     goal: GoalRegistry,
+    scenario: Optional[ScenarioRegistry],
     tab_id: str,
 ) -> dict:
     acquisition = artifact.get("acquisition") or {}
@@ -340,16 +343,38 @@ def _capture_metadata_from_artifact(
         "notes": training_metadata.get("notes") or session.notes,
         "capture_profile": training_metadata.get("capture_profile") or session.capture_profile,
         "screenshot_refs": screenshots,
+        # Vision training — propagated from the session's scenario at capture time
+        "scenario_id": session.scenario_id,
+        "element_query": scenario.element_query if scenario else None,
     }
 
 
 def _migrate_schema() -> None:
     """Add columns that were added after initial table creation."""
     additions = [
+        # domain_registry extended fields (v1)
         ("domain_registry", "page_states", "JSON NOT NULL DEFAULT '[]'"),
         ("domain_registry", "capture_defaults", "JSON NOT NULL DEFAULT '{}'"),
         ("domain_registry", "validation_expectations", "JSON NOT NULL DEFAULT '[]'"),
         ("domain_registry", "config_version", "VARCHAR(50) NOT NULL DEFAULT 'v1'"),
+        # scenario_registry vision training fields (v2)
+        ("scenario_registry", "element_query", "VARCHAR(500)"),
+        ("scenario_registry", "expected_outcome_state", "VARCHAR(100)"),
+        ("scenario_registry", "difficulty", "VARCHAR(50)"),
+        ("scenario_registry", "is_eval_only", "BOOLEAN NOT NULL DEFAULT false"),
+        # training_captures vision training fields (v2)
+        ("training_captures", "scenario_id", "VARCHAR(120)"),
+        ("training_captures", "element_query", "VARCHAR(500)"),
+        ("training_captures", "observed_page_state", "VARCHAR(100)"),
+        ("training_captures", "post_action_state", "VARCHAR(100)"),
+        # goal_registry training config fields (v2)
+        ("goal_registry", "description", "TEXT"),
+        ("goal_registry", "typical_element_types", "JSON NOT NULL DEFAULT '[]'"),
+        ("goal_registry", "success_criteria", "VARCHAR(500)"),
+        # task_registry training config fields (v2)
+        ("task_registry", "description", "TEXT"),
+        ("task_registry", "estimated_steps", "VARCHAR(50)"),
+        ("task_registry", "is_repeatable", "BOOLEAN NOT NULL DEFAULT true"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -1162,6 +1187,7 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
     goal = db.get(GoalRegistry, session.goal_id)
     if goal is None:
         raise HTTPException(status_code=400, detail="Training session goal is missing")
+    scenario = db.get(ScenarioRegistry, session.scenario_id) if session.scenario_id else None
 
     training_metadata = {
         "captured_at": utcnow().isoformat(),
@@ -1174,6 +1200,8 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
         "notes": session.notes,
         "capture_profile": session.capture_profile,
         "tab_id": body.tab_id,
+        # Vision training context — sent to capture server so it can embed the query
+        "element_query": scenario.element_query if scenario else None,
     }
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -1204,6 +1232,7 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
                         artifact=artifact,
                         session=session,
                         goal=goal,
+                        scenario=scenario,
                         tab_id=body.tab_id,
                     ),
                 )
@@ -1350,6 +1379,9 @@ class UpdateMetaRequest(BaseModel):
     status: Optional[str] = None
     label: Optional[str] = None
     training_annotation: Optional[dict] = None
+    # Vision annotation fields (shorthand — can also be sent inside training_annotation)
+    observed_page_state: Optional[str] = None
+    post_action_state: Optional[str] = None
 
 
 @app.patch("/api/observations/{filename}")
@@ -1370,6 +1402,7 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
                 meta.pop(key, None)
             else:
                 meta[key] = val
+
     if body.training_annotation is not None:
         merged = merge_training_annotation(_training_annotation_from_capture(capture), body.training_annotation)
         capture.review_status = merged["review_status"]
@@ -1382,6 +1415,18 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
     elif body.status in {"draft", "reviewed", "approved", "rejected", "archived"}:
         capture.review_status = body.status
         db.commit()
+
+    # Vision annotation fields — persisted directly on the capture row
+    vision_dirty = False
+    if body.observed_page_state is not None:
+        capture.observed_page_state = body.observed_page_state or None
+        vision_dirty = True
+    if body.post_action_state is not None:
+        capture.post_action_state = body.post_action_state or None
+        vision_dirty = True
+    if vision_dirty:
+        db.commit()
+
     write_meta(traces_dir, filename, meta)
     return {"ok": True, **meta}
 
@@ -1394,21 +1439,25 @@ REVIEWED_CAPTURE_STATUSES = ("reviewed", "approved")
 
 
 def _reviewed_training_captures(db: Session):
-    captures = db.scalars(
+    return db.scalars(
         select(TrainingCapture)
         .where(TrainingCapture.review_status.in_(REVIEWED_CAPTURE_STATUSES))
         .order_by(TrainingCapture.captured_at.asc())
     ).all()
-    for capture in captures:
-        session = db.get(TrainingSession, capture.training_session_id)
-        setattr(capture, "scenario_id", session.scenario_id if session else None)
-    return captures
 
 
 @app.post("/api/training/build-dataset")
 def build_training_dataset(db: Session = Depends(get_db)):
     captures = _reviewed_training_captures(db)
     manifest = build_grounding_dataset(_artifacts_dir(), captures=captures)
+    return {"ok": True, **manifest}
+
+
+@app.post("/api/training/build-vision-dataset")
+def build_vision_training_dataset(db: Session = Depends(get_db)):
+    """Build a vision-grounding dataset: (screenshot, element_query) → bbox pairs."""
+    captures = _reviewed_training_captures(db)
+    manifest = build_vision_dataset(_artifacts_dir(), captures=captures)
     return {"ok": True, **manifest}
 
 

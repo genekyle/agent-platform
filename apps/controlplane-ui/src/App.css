@@ -2477,6 +2477,137 @@ input[type="checkbox"] {
   color: #1d4ed8;
 }
 
+.scenario-tag.outcome {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+/* Scenario item name row with badges */
+.scenario-item-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scenario-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.eval-badge {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.difficulty-easy   { background: #dcfce7; color: #15803d; }
+.difficulty-medium { background: #fef9c3; color: #854d0e; }
+.difficulty-hard   { background: #fee2e2; color: #b91c1c; }
+
+/* Element query display */
+.scenario-query-preview {
+  font-size: 12px;
+  color: #1d4ed8;
+  font-style: italic;
+  margin-top: 3px;
+}
+
+.scenario-query-missing {
+  font-size: 11px;
+  color: #d97706;
+  margin-top: 3px;
+}
+
+/* Vision training form section */
+.scenario-vision-section {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scenario-vision-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scenario-vision-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #1d4ed8;
+}
+
+.scenario-vision-desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.scenario-query-label { display: flex; flex-direction: column; gap: 4px; }
+
+.field-required {
+  font-size: 10px;
+  font-weight: 600;
+  color: #d97706;
+  background: #fef3c7;
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.scenario-query-input {
+  font-size: 13px;
+  border-color: #e2e8f0;
+  transition: border-color 0.15s;
+}
+
+.scenario-query-input.has-value  { border-color: #a5b4fc; background: #fafbff; }
+.scenario-query-input.needs-value { border-color: #fde68a; }
+
+.scenario-vision-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.scenario-eval-only-label { display: flex; flex-direction: column; gap: 6px; }
+
+.eval-only-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.eval-only-check-label {
+  font-size: 13px;
+  color: #334155;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+
+.scenario-query-warning {
+  font-size: 12px;
+  color: #d97706;
+  align-self: center;
+}
+
 .scenario-item-actions {
   display: flex;
   align-items: center;
@@ -2519,6 +2650,248 @@ input[type="checkbox"] {
 }
 
 .page-state-remove { flex: 0 0 auto; }
+
+/* ── Config form panel (Goals / Tasks expanded form) ─────── */
+.tab-entity-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config-form-panel {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.config-form-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.config-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-section-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  margin-bottom: 2px;
+}
+
+.config-training-section {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 14px;
+}
+
+.config-section-label.training { color: #1d4ed8; }
+
+.config-form-actions {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+}
+
+/* 3-col grid */
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+/* Field hint */
+.field-hint {
+  display: block;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* ── Registry card list (replaces tables for Goals/Tasks) ── */
+.registry-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.registry-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  transition: border-color 0.1s;
+}
+
+.registry-card:hover { border-color: #cbd5e1; }
+
+.registry-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.registry-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.registry-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.registry-card-id {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.registry-card-desc {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.registry-card-meta-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.registry-meta-item {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.registry-meta-item.success-item { color: #15803d; }
+
+.registry-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Element type badge (on goals) */
+.element-type-badge {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: monospace;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* Task-specific badges */
+.scope-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.steps-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: #fef9c3;
+  color: #854d0e;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.once-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: #fee2e2;
+  color: #b91c1c;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.repeatable-label { grid-column: span 2; }
+
+/* ── Page States card layout ─────────────────────────────── */
+.page-state-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.page-state-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.page-state-add-card {
+  border-style: dashed;
+  background: #fafbff;
+}
+
+.page-state-card-header {
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.page-state-card-id-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.page-state-id-input {
+  flex: 0 0 190px;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.page-state-name-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.page-state-card-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Responsive additions */
+@media (max-width: 900px) {
+  .form-grid-3 { grid-template-columns: 1fr; }
+  .repeatable-label { grid-column: auto; }
+}
 
 /* Capture tab */
 .shot-type-group {

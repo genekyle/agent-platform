@@ -9,44 +9,67 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+# Legacy structural dataset — kept for backwards compatibility with existing reviews
 DATASET_VERSION = "grounding_v1"
 
+# Vision grounding dataset — the primary target format going forward
+VISION_DATASET_VERSION = "grounding_vision_v1"
+
+# The three models this platform is building toward.
+# Ordered by the training pipeline dependency: grounding feeds state classification,
+# both feed task outcome determination.
 TRAINING_TARGETS = [
     {
-        "target_id": "element_grounding",
-        "label": "Element grounding",
-        "description": "Select the correct DOM/visual candidate for a scenario goal.",
-        "scores": {
-            "label_cost": 3,
-            "model_simplicity": 3,
-            "app_usefulness": 5,
-            "evaluation_clarity": 5,
-            "automation_compounding": 5,
-        },
+        "target_id": "vision_element_grounding",
+        "label": "Vision element grounding",
+        "description": (
+            "Given a screenshot and a natural-language element query "
+            "(e.g. 'click the Apply Now button'), predict the bounding box "
+            "of the target element. Primary model — feeds all downstream tasks."
+        ),
+        "stage": "primary",
+        "inputs": ["screenshot", "element_query"],
+        "output": "bbox",
+        "requires": ["element_query on scenario", "approved_bbox on capture"],
     },
     {
-        "target_id": "action_classification",
-        "label": "Action classification",
-        "description": "Predict the intended action type from page and session context.",
-        "scores": {
-            "label_cost": 4,
-            "model_simplicity": 4,
-            "app_usefulness": 3,
-            "evaluation_clarity": 4,
-            "automation_compounding": 3,
-        },
+        "target_id": "page_state_classifier",
+        "label": "Page state classifier",
+        "description": (
+            "Given a screenshot and domain context, identify which named page state "
+            "is shown (e.g. 'search_results', 'login_wall'). Enables the agent to "
+            "know where it is before deciding what to do."
+        ),
+        "stage": "primary",
+        "inputs": ["screenshot", "domain_id"],
+        "output": "page_state_id",
+        "requires": ["observed_page_state annotation on capture"],
     },
     {
-        "target_id": "scenario_classification",
-        "label": "Scenario/page-state classification",
-        "description": "Identify which scenario or page state a capture belongs to.",
-        "scores": {
-            "label_cost": 5,
-            "model_simplicity": 5,
-            "app_usefulness": 3,
-            "evaluation_clarity": 4,
-            "automation_compounding": 3,
-        },
+        "target_id": "state_transition",
+        "label": "State transition model",
+        "description": (
+            "Given a (page_state_before, action, element_grounding) triple, predict "
+            "the resulting page state. Enables look-ahead planning and task-progress "
+            "estimation without executing the action."
+        ),
+        "stage": "secondary",
+        "inputs": ["page_state_before", "element_query", "approved_bbox"],
+        "output": "page_state_after",
+        "requires": ["observed_page_state + post_action_state annotation on capture"],
+    },
+    {
+        "target_id": "task_outcome",
+        "label": "Task outcome classifier",
+        "description": (
+            "Given a sequence of (state, action) pairs from a training session, "
+            "classify whether the overall task succeeded, failed, or is in progress. "
+            "Built on top of vision grounding and state classification."
+        ),
+        "stage": "tertiary",
+        "inputs": ["session_trace"],
+        "output": "outcome_label",
+        "requires": ["full session traces with state and action annotations"],
     },
 ]
 
@@ -175,6 +198,157 @@ def build_grounding_dataset(artifacts_root: Path, *, captures: list[Any]) -> dic
     }
     (dataset_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
+
+
+def build_vision_dataset(artifacts_root: Path, *, captures: list[Any]) -> dict[str, Any]:
+    """Build a vision-grounding dataset for end-to-end vision model training.
+
+    Each JSONL record contains:
+      - query          : natural-language element description (from scenario.element_query)
+      - screenshot     : {path, width, height, shot_type}
+      - bbox           : approved ground-truth bounding box {x, y, width, height}
+      - bbox_normalized: bbox values divided by screenshot dimensions (0-1 range for model input)
+      - page_state     : observed_page_state annotation (if set by annotator)
+      - post_action_state: state the agent lands on after this interaction (if annotated)
+      - context        : {domain_id, scenario_id, goal_id, task_id, action_type_hint, difficulty}
+      - split          : "train" | "eval"
+
+    Only captures that have BOTH element_query AND approved_bbox are included —
+    those are the minimum requirements for vision model supervision.
+    """
+    datasets_dir = artifacts_root / "datasets"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+
+    records: list[dict[str, Any]] = []
+    included = skipped_no_query = skipped_no_bbox = skipped_no_artifact = 0
+
+    for capture in captures:
+        # Skip captures without the vision training requirements
+        if not capture.element_query:
+            skipped_no_query += 1
+            continue
+        if not capture.approved_bbox:
+            skipped_no_bbox += 1
+            continue
+
+        trace_path = artifacts_root / "observer-traces" / capture.artifact_filename
+        if not trace_path.exists():
+            skipped_no_artifact += 1
+            continue
+
+        try:
+            artifact = json.loads(trace_path.read_text())
+        except Exception:
+            skipped_no_artifact += 1
+            continue
+
+        record = _build_vision_record(capture, artifact)
+        if record is not None:
+            records.append(record)
+            included += 1
+
+    dataset_id = f"{utcnow_iso().replace(':', '-')}__{VISION_DATASET_VERSION}"
+    dataset_dir = datasets_dir / dataset_id
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset_path = dataset_dir / "vision_grounding_dataset.jsonl"
+    with dataset_path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record) + "\n")
+
+    scenario_counts = dict(sorted(Counter(
+        r["context"].get("scenario_id") or "unknown" for r in records
+    ).items()))
+
+    state_annotation_count = sum(1 for r in records if r.get("page_state"))
+    transition_annotation_count = sum(1 for r in records if r.get("post_action_state"))
+
+    manifest = {
+        "dataset_id": dataset_id,
+        "version": VISION_DATASET_VERSION,
+        "created_at": utcnow_iso(),
+        "record_count": len(records),
+        "included": included,
+        "skipped_no_query": skipped_no_query,
+        "skipped_no_bbox": skipped_no_bbox,
+        "skipped_no_artifact": skipped_no_artifact,
+        "state_annotation_coverage": f"{state_annotation_count}/{len(records)}",
+        "transition_annotation_coverage": f"{transition_annotation_count}/{len(records)}",
+        "path": str(dataset_path),
+        "scenario_counts": scenario_counts,
+        "training_target": "vision_element_grounding",
+        "review_status_filter": ["reviewed", "approved"],
+    }
+    (dataset_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def _build_vision_record(capture: Any, artifact: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Build a single vision training record from a reviewed capture."""
+    acquisition = artifact.get("acquisition") or {}
+    screenshots = acquisition.get("screenshots") or []
+    screenshot = (capture.screenshot_refs or screenshots or [{}])[0]
+
+    bbox = capture.approved_bbox
+    if not isinstance(bbox, dict):
+        return None
+
+    # Normalize bbox to [0, 1] range relative to screenshot dimensions
+    sw = screenshot.get("width") or capture.viewport_width or 0
+    sh = screenshot.get("height") or capture.viewport_height or 0
+    bbox_normalized: Optional[dict[str, float]] = None
+    if sw and sh:
+        bbox_normalized = {
+            "x": round(float(bbox.get("x", 0)) / sw, 6),
+            "y": round(float(bbox.get("y", 0)) / sh, 6),
+            "w": round(float(bbox.get("width", 0)) / sw, 6),
+            "h": round(float(bbox.get("height", 0)) / sh, 6),
+        }
+
+    return {
+        "version": VISION_DATASET_VERSION,
+        "artifact_filename": capture.artifact_filename,
+        "timestamp": capture.captured_at.isoformat() if hasattr(capture.captured_at, "isoformat") else str(capture.captured_at),
+        # The natural-language prompt the vision model receives at inference
+        "query": capture.element_query,
+        "screenshot": {
+            "path": screenshot.get("path") or screenshot.get("image_path"),
+            "width": sw or None,
+            "height": sh or None,
+            "shot_type": screenshot.get("shot_type", "viewport"),
+        },
+        # Ground truth
+        "bbox": {
+            "x": float(bbox.get("x", 0)),
+            "y": float(bbox.get("y", 0)),
+            "width": float(bbox.get("width", 0)),
+            "height": float(bbox.get("height", 0)),
+        },
+        "bbox_normalized": bbox_normalized,
+        # State annotation (set by human annotator during review)
+        "page_state": capture.observed_page_state,
+        "post_action_state": capture.post_action_state,
+        # Training context for stratification and filtering
+        "context": {
+            "domain_id": capture.domain_id,
+            "scenario_id": capture.scenario_id,
+            "goal_id": capture.goal_id,
+            "task_id": capture.task_id,
+            "action_type_hint": capture.action_type_hint,
+            "capture_profile": capture.capture_profile,
+            "url": capture.url,
+            "title": capture.title,
+            "viewport": {
+                "width": capture.viewport_width,
+                "height": capture.viewport_height,
+                "device_scale_factor": capture.device_scale_factor,
+                "scroll_x": capture.scroll_x,
+                "scroll_y": capture.scroll_y,
+            },
+        },
+        "split": _stable_split(capture.artifact_filename),
+        "review_status": capture.review_status,
+    }
 
 
 def train_grounding_model(artifacts_root: Path, *, dataset_manifest: Optional[dict[str, Any]] = None) -> dict[str, Any]:

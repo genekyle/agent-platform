@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Float, String, DateTime, ForeignKey, Integer
+from sqlalchemy import JSON, Float, String, DateTime, ForeignKey, Integer, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db import Base
 
@@ -77,6 +77,14 @@ class GoalRegistry(Base):
     action_type_hints: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(50), default="active")
 
+    # Training configuration
+    # Semantic description of what completing this goal means for the agent
+    description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # HTML/ARIA element types typically involved — feeds the grounding model as a prior
+    typical_element_types: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Human-readable description of what a successful outcome looks like
+    success_criteria: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
     domain: Mapped[Optional["DomainRegistry"]] = relationship()
 
 
@@ -89,6 +97,14 @@ class TaskRegistry(Base):
     goal_id: Mapped[Optional[str]] = mapped_column(ForeignKey("goal_registry.goal_id"), nullable=True, index=True)
     display_name: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(50), default="active")
+
+    # Training configuration
+    # Step-by-step description of what this task flow involves
+    description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Rough number of interactions in this task: "1-3" | "4-10" | "10+"
+    estimated_steps: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Whether this task can be run multiple times in a single training session
+    is_repeatable: Mapped[bool] = mapped_column(Boolean, default=True)
 
     domain: Mapped[Optional["DomainRegistry"]] = relationship()
     goal: Mapped[Optional["GoalRegistry"]] = relationship()
@@ -106,6 +122,16 @@ class ScenarioRegistry(Base):
     description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     capture_profile_override: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active")
+
+    # Vision training fields
+    # Natural-language prompt the vision model receives at inference: "click the Apply Now button"
+    element_query: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Expected page state after the action completes (for transition labeling)
+    expected_outcome_state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Relative training difficulty for curriculum learning: easy | medium | hard
+    difficulty: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Held-out scenarios are never included in training builds — only in eval benchmarks
+    is_eval_only: Mapped[bool] = mapped_column(Boolean, default=False)
 
     domain: Mapped["DomainRegistry"] = relationship()
     goal: Mapped["GoalRegistry"] = relationship()
@@ -174,5 +200,14 @@ class TrainingCapture(Base):
     capture_profile: Mapped[str] = mapped_column(String(100), default="viewport")
     screenshot_refs: Mapped[list[dict]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    # Vision training fields — populated at capture time from the session's scenario
+    scenario_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    # The NL query the vision model receives: copied from scenario.element_query at capture time
+    element_query: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Annotator-set: which page state is shown in this screenshot
+    observed_page_state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Annotator-set: what page state the agent lands on after this interaction
+    post_action_state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     training_session: Mapped["TrainingSession"] = relationship(back_populates="captures")

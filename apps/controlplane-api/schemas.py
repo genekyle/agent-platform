@@ -103,6 +103,9 @@ class GoalRead(BaseModel):
     display_name: str
     action_type_hints: list[str]
     status: str
+    description: Optional[str] = None
+    typical_element_types: list[str] = Field(default_factory=list)
+    success_criteria: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -113,6 +116,9 @@ class GoalWrite(BaseModel):
     display_name: str
     action_type_hints: list[str] = Field(default_factory=list)
     status: str = "active"
+    description: Optional[str] = None
+    typical_element_types: list[str] = Field(default_factory=list)
+    success_criteria: Optional[str] = None
 
 
 class GoalUpdate(BaseModel):
@@ -120,6 +126,9 @@ class GoalUpdate(BaseModel):
     display_name: Optional[str] = None
     action_type_hints: Optional[list[str]] = None
     status: Optional[str] = None
+    description: Optional[str] = None
+    typical_element_types: Optional[list[str]] = None
+    success_criteria: Optional[str] = None
 
 
 class TaskRead(BaseModel):
@@ -129,6 +138,9 @@ class TaskRead(BaseModel):
     goal_id: Optional[str] = None
     display_name: str
     status: str
+    description: Optional[str] = None
+    estimated_steps: Optional[str] = None
+    is_repeatable: bool = True
 
     model_config = {"from_attributes": True}
 
@@ -140,6 +152,9 @@ class TaskWrite(BaseModel):
     goal_id: Optional[str] = None
     display_name: str
     status: str = "active"
+    description: Optional[str] = None
+    estimated_steps: Optional[str] = None
+    is_repeatable: bool = True
 
 
 class TaskUpdate(BaseModel):
@@ -148,6 +163,9 @@ class TaskUpdate(BaseModel):
     goal_id: Optional[str] = None
     display_name: Optional[str] = None
     status: Optional[str] = None
+    description: Optional[str] = None
+    estimated_steps: Optional[str] = None
+    is_repeatable: Optional[bool] = None
 
 
 class ScenarioRead(BaseModel):
@@ -160,6 +178,11 @@ class ScenarioRead(BaseModel):
     description: Optional[str] = None
     capture_profile_override: Optional[str] = None
     status: str
+    # Vision training fields
+    element_query: Optional[str] = None
+    expected_outcome_state: Optional[str] = None
+    difficulty: Optional[str] = None
+    is_eval_only: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -174,6 +197,11 @@ class ScenarioWrite(BaseModel):
     description: Optional[str] = None
     capture_profile_override: Optional[str] = None
     status: str = "active"
+    # Vision training fields
+    element_query: Optional[str] = None
+    expected_outcome_state: Optional[str] = None
+    difficulty: Optional[str] = None
+    is_eval_only: bool = False
 
 
 class ScenarioUpdate(BaseModel):
@@ -185,6 +213,11 @@ class ScenarioUpdate(BaseModel):
     description: Optional[str] = None
     capture_profile_override: Optional[str] = None
     status: Optional[str] = None
+    # Vision training fields
+    element_query: Optional[str] = None
+    expected_outcome_state: Optional[str] = None
+    difficulty: Optional[str] = None
+    is_eval_only: Optional[bool] = None
 
 
 class TrainingSessionCreate(BaseModel):
@@ -243,5 +276,23 @@ class TrainingCaptureRead(BaseModel):
     capture_profile: str
     screenshot_refs: list[dict]
     created_at: datetime
+    # Vision training fields
+    scenario_id: Optional[str] = None
+    element_query: Optional[str] = None
+    observed_page_state: Optional[str] = None
+    post_action_state: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class CaptureAnnotationPatch(BaseModel):
+    """Fields an annotator can set during capture review."""
+    review_status: Optional[str] = None
+    positive_candidate_id: Optional[str] = None
+    rejected_candidate_ids: Optional[list[str]] = None
+    candidate_labels: Optional[dict] = None
+    approved_bbox: Optional[dict] = None
+    notes: Optional[str] = None
+    # Vision annotation fields
+    observed_page_state: Optional[str] = None   # which page state is shown in this screenshot
+    post_action_state: Optional[str] = None     # what state results from this interaction
