@@ -4,6 +4,7 @@ import { ChatSection } from "./components/controlplane/ChatSection";
 import { CONTROL_PLANE_NAV, DEFAULT_SECTION_VIEW } from "./components/controlplane/navigation";
 import { DomainsSection } from "./components/controlplane/DomainsSection";
 import { HomeSection } from "./components/controlplane/HomeSection";
+import { ModelsSection } from "./components/controlplane/ModelsSection";
 import { SystemSection } from "./components/controlplane/SystemSection";
 import { TrainingSection } from "./components/controlplane/TrainingSection";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
@@ -39,6 +40,7 @@ export default function App() {
     scenario_id: "",
     notes: "",
   });
+  const [sessionFormError, setSessionFormError] = useState(null);
 
   const [observations, setObservations] = useState({ loading: false, data: [], error: null });
   const [selectedObsFilename, setSelectedObsFilename] = useState(null);
@@ -66,7 +68,7 @@ export default function App() {
   const currentNav = CONTROL_PLANE_NAV[activePrimaryView];
   const activeSectionId = activeSecondaryViewByPrimary[activePrimaryView] ?? currentNav.sections[0]?.id;
   const activeSection = currentNav.sections.find((section) => section.id === activeSectionId) ?? currentNav.sections[0];
-  const canEnterSecondary = ["training", "system", "workers", "domains"].includes(activePrimaryView);
+  const canEnterSecondary = ["training", "system", "workers", "domains", "models"].includes(activePrimaryView);
   const selectedTrainingSession = useMemo(
     () => sessions.find((session) => session.id === selectedTrainingSessionId) ?? null,
     [sessions, selectedTrainingSessionId],
@@ -78,7 +80,7 @@ export default function App() {
 
   const openPrimaryView = useCallback((view) => {
     setActivePrimaryView(view);
-    if (view === "training" || view === "system" || view === "workers" || view === "domains") {
+    if (view === "training" || view === "system" || view === "workers" || view === "domains" || view === "models") {
       setSidebarLevel("secondary");
       return;
     }
@@ -409,6 +411,7 @@ export default function App() {
 
   const createTrainingSession = useCallback(async () => {
     setCreatingSession(true);
+    setSessionFormError(null);
     try {
       const response = await fetch(`${API}/api/training/sessions`, {
         method: "POST",
@@ -419,13 +422,25 @@ export default function App() {
           notes: sessionForm.notes || null,
         }),
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.detail || `Create failed: ${response.status}`);
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        // empty / non-JSON response (e.g. 5xx with no body)
+      }
+      if (!response.ok) {
+        const detail = payload?.detail
+          ? typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail)
+          : `Create failed: HTTP ${response.status}`;
+        throw new Error(detail);
+      }
       await loadTrainingSessions();
       setSelectedTrainingSessionId(payload.id);
       setActivePrimaryView("training");
       setSidebarLevel("secondary");
       setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "session-capture" }));
+    } catch (error) {
+      setSessionFormError(error.message || String(error));
     } finally {
       setCreatingSession(false);
     }
@@ -604,6 +619,7 @@ export default function App() {
         setSessionForm={setSessionForm}
         createTrainingSession={createTrainingSession}
         creatingSession={creatingSession}
+        sessionFormError={sessionFormError}
         sessions={sessions}
         selectedTrainingSessionId={selectedTrainingSessionId}
         setSelectedTrainingSessionId={setSelectedTrainingSessionId}
@@ -676,6 +692,8 @@ export default function App() {
     );
   } else if (activePrimaryView === "chat") {
     sectionContent = <ChatSection />;
+  } else if (activePrimaryView === "models") {
+    sectionContent = <ModelsSection section={activeSectionId} />;
   } else {
     sectionContent = (
       <DomainsSection

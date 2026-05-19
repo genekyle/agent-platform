@@ -10,6 +10,7 @@ export function TrainingSection({
   setSessionForm,
   createTrainingSession,
   creatingSession,
+  sessionFormError,
   sessions,
   selectedTrainingSessionId,
   setSelectedTrainingSessionId,
@@ -64,6 +65,7 @@ export function TrainingSection({
         setSessionForm={setSessionForm}
         createTrainingSession={createTrainingSession}
         creatingSession={creatingSession}
+        sessionFormError={sessionFormError}
         sessions={sessions}
         selectedTrainingSessionId={selectedTrainingSessionId}
         setSelectedTrainingSessionId={setSelectedTrainingSessionId}

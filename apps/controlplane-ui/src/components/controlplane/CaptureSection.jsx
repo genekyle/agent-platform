@@ -10,6 +10,7 @@ export function CaptureSection({
   setSessionForm,
   createTrainingSession,
   creatingSession,
+  sessionFormError,
   sessions,
   selectedTrainingSessionId,
   setSelectedTrainingSessionId,
@@ -59,77 +60,150 @@ export function CaptureSection({
   );
 
   if (mode === "setup") {
+    const selectedDomain = domains.find((domain) => domain.domain_id === sessionForm.domain_id) ?? null;
+    const scenarioCountByDomain = scenarios.reduce((accumulator, scenario) => {
+      accumulator[scenario.domain_id] = (accumulator[scenario.domain_id] || 0) + 1;
+      return accumulator;
+    }, {});
+    const goalById = Object.fromEntries(goals.map((goal) => [goal.goal_id, goal]));
+    const taskById = Object.fromEntries(tasks.map((task) => [task.task_id, task]));
+
     return (
       <div className="section-stack">
         <section className="panel">
           <div className="panel-header">
             <div>
               <h2>Start Training Session</h2>
-              <p>Create a structured session first. Domain and goal are mandatory; task is optional.</p>
+              <p>
+                {!selectedDomain
+                  ? "Step 1 of 2 — choose the domain you're training on."
+                  : "Step 2 of 2 — choose the scenario to capture."}
+              </p>
             </div>
+            {selectedDomain ? (
+              <button
+                className="ghost-btn small-btn"
+                onClick={() => setSessionForm((current) => ({ ...current, domain_id: "", scenario_id: "" }))}
+              >
+                ← Change domain
+              </button>
+            ) : null}
           </div>
 
-          <div className="capture-task-grid">
-            <select
-              className="form-select"
-              value={sessionForm.domain_id}
-              onChange={(event) => setSessionForm((current) => ({ ...current, domain_id: event.target.value, scenario_id: "" }))}
-            >
-              <option value="">Select domain</option>
-              {domains.map((domain) => (
-                <option key={domain.domain_id} value={domain.domain_id}>{domain.display_name}</option>
-              ))}
-            </select>
-
-            <select
-              className="form-select"
-              value={sessionForm.scenario_id}
-              onChange={(event) => setSessionForm((current) => ({ ...current, scenario_id: event.target.value }))}
-              disabled={!sessionForm.domain_id}
-            >
-              <option value="">Select scenario</option>
-              {activeScenarios.map((scenario) => (
-                <option key={scenario.scenario_id} value={scenario.scenario_id}>{scenario.display_name}</option>
-              ))}
-            </select>
-          </div>
-
-          {selectedScenario ? (
-            <div className="summary-stack">
-              <div className="summary-item">
-                <div className="summary-title">Scenario</div>
-                <div className="summary-text">
-                  {selectedScenario.description || "Selected scenario"}
-                </div>
+          {!selectedDomain ? (
+            domains.length === 0 ? (
+              <div className="empty-state">
+                No domains configured. Add one in the Domains tab first.
               </div>
-              <div className="summary-item">
-                <div className="summary-title">Training Target</div>
-                <div className="summary-text">
-                  {selectedScenarioGoal?.display_name || selectedScenario.goal_id}
-                  {selectedScenarioTask ? ` · ${selectedScenarioTask.display_name}` : " · no task wrapper"}
-                  {selectedScenario.start_page_state ? ` · starts at ${selectedScenario.start_page_state}` : ""}
-                </div>
+            ) : (
+              <div className="domain-card-grid">
+                {domains.map((domain) => (
+                  <button
+                    key={domain.domain_id}
+                    className="domain-card"
+                    onClick={() => setSessionForm((current) => ({ ...current, domain_id: domain.domain_id, scenario_id: "" }))}
+                  >
+                    <div className="domain-card-name">{domain.display_name}</div>
+                    <div className="domain-card-meta">
+                      <span className="chip">{scenarioCountByDomain[domain.domain_id] || 0} scenario{scenarioCountByDomain[domain.domain_id] === 1 ? "" : "s"}</span>
+                      {domain.capture_defaults?.profile ? (
+                        <span className="chip muted">{domain.capture_defaults.profile}</span>
+                      ) : null}
+                    </div>
+                  </button>
+                ))}
               </div>
-            </div>
-          ) : null}
+            )
+          ) : (
+            <>
+              <div className="step-context">
+                <span className="step-context-label">Domain</span>
+                <span className="step-context-value">{selectedDomain.display_name}</span>
+              </div>
 
-          <textarea
-            className="form-input"
-            rows="3"
-            placeholder="Operator notes for this session"
-            value={sessionForm.notes}
-            onChange={(event) => setSessionForm((current) => ({ ...current, notes: event.target.value }))}
-          />
+              {activeScenarios.length === 0 ? (
+                <div className="empty-state">
+                  No scenarios configured for this domain. Add one in the Domains tab first.
+                </div>
+              ) : (
+                <div className="scenario-card-list">
+                  {activeScenarios.map((scenario) => {
+                    const isActive = scenario.scenario_id === sessionForm.scenario_id;
+                    const scenarioGoal = goalById[scenario.goal_id];
+                    const scenarioTask = scenario.task_id ? taskById[scenario.task_id] : null;
+                    return (
+                      <button
+                        key={scenario.scenario_id}
+                        className={`scenario-card ${isActive ? "active" : ""}`}
+                        onClick={() => setSessionForm((current) => ({ ...current, scenario_id: scenario.scenario_id }))}
+                      >
+                        <div className="scenario-card-header">
+                          <div className="scenario-card-name">{scenario.display_name}</div>
+                          {isActive ? <span className="scenario-card-checkmark">✓</span> : null}
+                        </div>
 
-          <div className="detail-actions">
-            <button
-              className="primary-btn"
-              onClick={createTrainingSession}
-              disabled={!sessionForm.domain_id || !sessionForm.scenario_id || creatingSession}
-            >
-              {creatingSession ? "Creating..." : "Create Training Session"}
-            </button>
-          </div>
+                        <div className="scenario-card-chips">
+                          <span className="chip strong">Goal · {scenarioGoal?.display_name || scenario.goal_id}</span>
+                          {scenarioTask ? (
+                            <span className="chip">Task · {scenarioTask.display_name}</span>
+                          ) : (
+                            <span className="chip muted">no task wrapper</span>
+                          )}
+                          {scenario.difficulty ? <span className="chip muted">{scenario.difficulty}</span> : null}
+                          {scenario.is_eval_only ? <span className="chip warn">eval only</span> : null}
+                        </div>
+
+                        {scenario.element_query ? (
+                          <div className="scenario-card-query">
+                            <span className="scenario-card-query-label">Element query</span>
+                            <span className="scenario-card-query-text">"{scenario.element_query}"</span>
+                          </div>
+                        ) : (
+                          <div className="scenario-card-query missing">
+                            <span className="scenario-card-query-label">Element query</span>
+                            <span className="scenario-card-query-text">— not set; the model has nothing to ground</span>
+                          </div>
+                        )}
+
+                        {scenario.description ? (
+                          <div className="scenario-card-description">{scenario.description}</div>
+                        ) : null}
+
+                        {scenario.start_page_state ? (
+                          <div className="scenario-card-footer">starts at: {scenario.start_page_state}</div>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <textarea
+                className="form-input"
+                rows="3"
+                placeholder="Operator notes for this session (optional)"
+                value={sessionForm.notes}
+                onChange={(event) => setSessionForm((current) => ({ ...current, notes: event.target.value }))}
+                style={{ marginTop: 16 }}
+              />
+
+              <div className="detail-actions">
+                <button
+                  className="primary-btn"
+                  onClick={createTrainingSession}
+                  disabled={!sessionForm.domain_id || !sessionForm.scenario_id || creatingSession}
+                >
+                  {creatingSession ? "Creating..." : "Create Training Session"}
+                </button>
+              </div>
+
+              {sessionFormError ? (
+                <div className="form-error-banner">
+                  <strong>Create failed:</strong> {sessionFormError}
+                </div>
+              ) : null}
+            </>
+          )}
         </section>
 
         <section className="panel">
