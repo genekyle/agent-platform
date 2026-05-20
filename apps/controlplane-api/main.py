@@ -309,6 +309,11 @@ def _training_annotation_from_capture(capture: TrainingCapture) -> dict:
         "candidate_labels": capture.candidate_labels or {},
         "approved_bbox": capture.approved_bbox,
         "browser_session_id": capture.browser_session_id,
+        # Vision-grounding context — surfaced so the labeler UI can show the prompt
+        "element_query": capture.element_query,
+        "scenario_id": capture.scenario_id,
+        "observed_page_state": capture.observed_page_state,
+        "post_action_state": capture.post_action_state,
     }
 
 

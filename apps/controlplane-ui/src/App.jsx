@@ -346,7 +346,8 @@ export default function App() {
             candidate_labels: labels,
             positive_candidate_id: positiveCandidateId,
             rejected_candidate_ids: rejectedCandidateIds,
-            approved_bbox: positiveCandidateId ? bboxOverride : null,
+            // A manually drawn bbox can stand alone — no positive candidate required.
+            approved_bbox: bboxOverride,
           },
         }),
       });

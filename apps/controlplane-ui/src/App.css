@@ -1282,6 +1282,61 @@ input[type="checkbox"] {
   pointer-events: none;
 }
 
+/* Drawing mode: the SVG itself receives pointer events so click+drag works
+   across blank screenshot regions (not just over existing candidate rects). */
+.obs-overlay.is-drawing {
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* Labeling toolbar above the screenshot in training mode. */
+.dd-draw-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: #f8fbff;
+  border: 1px solid #e5edf6;
+  border-radius: 10px;
+}
+
+.dd-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dd-prompt-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.dd-prompt-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dd-prompt-missing {
+  font-weight: 500;
+  color: #b45309;
+  font-style: italic;
+}
+
+.dd-draw-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .obs-no-screenshot {
   padding: 40px;
   text-align: center;

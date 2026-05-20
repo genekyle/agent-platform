@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fmt, resolveBbox, screenshotFilename } from "./utils";
 
 const API = import.meta.env.VITE_API_BASE_URL;
@@ -21,6 +21,9 @@ export function ObservationDetail({
   const [expandedStages, setExpandedStages] = useState({});
   const [imgSize, setImgSize] = useState({ natW: 0, natH: 0 });
   const [selectedCandidateId, setSelectedCandidateId] = useState(null);
+  const [drawMode, setDrawMode] = useState(false);
+  const [drawingRect, setDrawingRect] = useState(null);
+  const svgRef = useRef(null);
 
   useEffect(() => {
     setActiveTab(mode === "training" ? "screenshot" : "overview");
@@ -28,6 +31,8 @@ export function ObservationDetail({
     setExpandedStages({});
     setImgSize({ natW: 0, natH: 0 });
     setSelectedCandidateId(null);
+    setDrawMode(false);
+    setDrawingRect(null);
   }, [mode, selectedObsFilename]);
 
   if (selectedObs?._error) {
@@ -46,6 +51,78 @@ export function ObservationDetail({
   const channels = ["js_state", "accessibility_snapshot", "console", "network", "screenshot"];
   const labeledCount = candidates.filter((candidate) => labels[candidate.candidate_id]).length;
   const approvedCandidateId = candidates.find((candidate) => labels[candidate.candidate_id] === "approve")?.candidate_id ?? null;
+
+  // Vision-grounding prompt — what the model will be asked at inference time.
+  // Surfaced into the labeler so the annotator knows what to draw a box around.
+  const trainingAnnotation = selectedObs?.meta?.training_annotation ?? {};
+  const elementQuery = trainingAnnotation.element_query
+    ?? selectedObs?.acquisition?.training_metadata?.element_query
+    ?? null;
+
+  // Has any drawable label — drives Save button + bbox field enable state.
+  const hasLabel = Boolean(approvedCandidateId || bboxOverride);
+
+  // Map a pointer event to image-space (natural-pixel) coordinates.
+  // The SVG uses viewBox = 0 0 natW natH with preserveAspectRatio="none",
+  // so we scale by the rendered bounding rect.
+  const eventToImageCoords = useCallback((event) => {
+    const svg = svgRef.current;
+    if (!svg || !imgSize.natW || !imgSize.natH) return null;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const x = ((event.clientX - rect.left) / rect.width) * imgSize.natW;
+    const y = ((event.clientY - rect.top) / rect.height) * imgSize.natH;
+    return {
+      x: Math.max(0, Math.min(imgSize.natW, x)),
+      y: Math.max(0, Math.min(imgSize.natH, y)),
+    };
+  }, [imgSize]);
+
+  const handleDrawPointerDown = useCallback((event) => {
+    if (!drawMode) return;
+    const point = eventToImageCoords(event);
+    if (!point) return;
+    event.preventDefault();
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
+    setDrawingRect({ startX: point.x, startY: point.y, x: point.x, y: point.y, width: 0, height: 0 });
+  }, [drawMode, eventToImageCoords]);
+
+  const handleDrawPointerMove = useCallback((event) => {
+    if (!drawMode || !drawingRect) return;
+    const point = eventToImageCoords(event);
+    if (!point) return;
+    setDrawingRect((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        x: Math.min(current.startX, point.x),
+        y: Math.min(current.startY, point.y),
+        width: Math.abs(point.x - current.startX),
+        height: Math.abs(point.y - current.startY),
+      };
+    });
+  }, [drawMode, drawingRect, eventToImageCoords]);
+
+  const handleDrawPointerUp = useCallback((event) => {
+    if (!drawMode || !drawingRect) return;
+    // Minimum size in image pixels — discard accidental taps.
+    const MIN_DIM = 4;
+    if (drawingRect.width >= MIN_DIM && drawingRect.height >= MIN_DIM) {
+      setBboxOverride?.({
+        x: drawingRect.x,
+        y: drawingRect.y,
+        width: drawingRect.width,
+        height: drawingRect.height,
+      });
+    }
+    setDrawingRect(null);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+  }, [drawMode, drawingRect, setBboxOverride]);
+
+  const clearDrawnBox = useCallback(() => {
+    setBboxOverride?.(null);
+    setDrawingRect(null);
+  }, [setBboxOverride]);
 
   const tabs = useMemo(() => {
     const baseTabs = [
@@ -143,6 +220,31 @@ export function ObservationDetail({
 
         {activeTab === "screenshot" && (
           <div className="dd-screenshot-wrap">
+            {mode === "training" && fileName ? (
+              <div className="dd-draw-toolbar">
+                <div className="dd-prompt">
+                  <span className="dd-prompt-label">Target prompt</span>
+                  <span className="dd-prompt-value">
+                    {elementQuery
+                      ? elementQuery
+                      : <em className="dd-prompt-missing">No element_query on the scenario — set one in Domains before labeling.</em>}
+                  </span>
+                </div>
+                <div className="dd-draw-actions">
+                  <button
+                    className={drawMode ? "primary-btn" : "ghost-btn"}
+                    onClick={() => setDrawMode((current) => !current)}
+                    disabled={!imgSize.natW}
+                  >
+                    {drawMode ? "Drawing… click & drag on screenshot" : "Draw bounding box"}
+                  </button>
+                  {bboxOverride ? (
+                    <button className="ghost-btn" onClick={clearDrawnBox}>Clear box</button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             {fileName ? (
               <div className="dd-viewport">
                 <img
@@ -155,7 +257,16 @@ export function ObservationDetail({
                   }}
                 />
                 {imgSize.natW > 0 && (
-                  <svg className="obs-overlay" viewBox={`0 0 ${imgSize.natW} ${imgSize.natH}`} preserveAspectRatio="none">
+                  <svg
+                    ref={svgRef}
+                    className={`obs-overlay${drawMode ? " is-drawing" : ""}`}
+                    viewBox={`0 0 ${imgSize.natW} ${imgSize.natH}`}
+                    preserveAspectRatio="none"
+                    onPointerDown={handleDrawPointerDown}
+                    onPointerMove={handleDrawPointerMove}
+                    onPointerUp={handleDrawPointerUp}
+                    onPointerCancel={handleDrawPointerUp}
+                  >
                     {candidates.map((candidate) => {
                       const bbox = resolveBbox(candidate, acquisition);
                       if (!bbox) return null;
@@ -181,11 +292,45 @@ export function ObservationDetail({
                           stroke={stroke}
                           strokeWidth={isSelected ? 2.5 : 1.5}
                           rx={3}
-                          style={{ cursor: "pointer" }}
-                          onClick={() => setSelectedCandidateId(isSelected ? null : candidate.candidate_id)}
+                          // While drawing, candidates must not intercept pointer events.
+                          style={{ cursor: drawMode ? "crosshair" : "pointer", pointerEvents: drawMode ? "none" : "auto" }}
+                          onClick={() => !drawMode && setSelectedCandidateId(isSelected ? null : candidate.candidate_id)}
                         />
                       );
                     })}
+
+                    {/* Persisted manual / approved bbox — distinct gold-on-dark style */}
+                    {bboxOverride && !drawingRect ? (
+                      <rect
+                        x={bboxOverride.x}
+                        y={bboxOverride.y}
+                        width={bboxOverride.width}
+                        height={bboxOverride.height}
+                        fill="#facc15"
+                        fillOpacity={0.12}
+                        stroke="#facc15"
+                        strokeWidth={2.5}
+                        rx={3}
+                        style={{ pointerEvents: "none" }}
+                      />
+                    ) : null}
+
+                    {/* In-progress rect being drawn */}
+                    {drawingRect ? (
+                      <rect
+                        x={drawingRect.x}
+                        y={drawingRect.y}
+                        width={drawingRect.width}
+                        height={drawingRect.height}
+                        fill="#facc15"
+                        fillOpacity={0.18}
+                        stroke="#facc15"
+                        strokeWidth={2}
+                        strokeDasharray="6 4"
+                        rx={2}
+                        style={{ pointerEvents: "none" }}
+                      />
+                    ) : null}
                   </svg>
                 )}
               </div>
@@ -294,7 +439,13 @@ export function ObservationDetail({
               <div className="dd-card-title">Training Annotation</div>
               <div className="dd-row">
                 <span className="detail-key">Approved target</span>
-                <span>{approvedCandidateId ?? "Not selected"}</span>
+                <span>
+                  {approvedCandidateId
+                    ? approvedCandidateId
+                    : bboxOverride
+                      ? "Manual (drawn bbox)"
+                      : "Not selected"}
+                </span>
               </div>
               <div className="bbox-grid">
                 {["x", "y", "width", "height"].map((key) => (
@@ -309,7 +460,7 @@ export function ObservationDetail({
                         ...(current ?? { x: 0, y: 0, width: 0, height: 0 }),
                         [key]: Number(event.target.value),
                       }))}
-                      disabled={!approvedCandidateId}
+                      disabled={!hasLabel}
                     />
                   </label>
                 ))}
@@ -323,7 +474,7 @@ export function ObservationDetail({
                 <button
                   className="primary-btn"
                   onClick={onSaveAnnotation}
-                  disabled={!approvedCandidateId || annotationSaving}
+                  disabled={!hasLabel || annotationSaving}
                 >
                   {annotationSaving ? "Saving..." : "Save Review"}
                 </button>

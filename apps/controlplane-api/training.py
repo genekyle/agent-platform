@@ -128,7 +128,11 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
     else:
         bbox = None
 
-    review_status = "reviewed" if positive_candidate_id else "draft"
+    # A manually-drawn bbox is a valid label for vision_element_grounding even
+    # without an observer-derived positive candidate — it still satisfies the
+    # (screenshot, query) -> bbox supervision the primary model needs.
+    has_label = bool(positive_candidate_id) or bbox is not None
+    review_status = "reviewed" if has_label else "draft"
 
     return {
         "version": DATASET_VERSION,
@@ -144,7 +148,7 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
         "rejected_candidate_ids": rejected_ids,
         "candidate_labels": labels,
         "approved_bbox": bbox,
-        "reviewed_at": utcnow_iso() if positive_candidate_id else merged.get("reviewed_at"),
+        "reviewed_at": utcnow_iso() if has_label else merged.get("reviewed_at"),
         "updated_at": utcnow_iso(),
     }
 
