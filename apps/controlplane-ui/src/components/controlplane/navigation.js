@@ -116,6 +116,28 @@ export const CONTROL_PLANE_NAV = {
       },
     ],
   },
+  models: {
+    label: "Models",
+    title: "Models",
+    subtitle: "Registered models for each training target, eval runs, and per-scenario metrics.",
+    sections: [
+      {
+        id: "registry",
+        label: "Registry",
+        subtitle: "Models registered against each training target with their last-eval summary.",
+      },
+      {
+        id: "eval-runs",
+        label: "Eval Runs",
+        subtitle: "Recent eval runs across all models, ordered by recency.",
+      },
+      {
+        id: "run-detail",
+        label: "Run Detail",
+        subtitle: "Per-scenario metrics and a sample of predictions for one selected eval run.",
+      },
+    ],
+  },
 };
 
 export const DEFAULT_SECTION_VIEW = Object.fromEntries(

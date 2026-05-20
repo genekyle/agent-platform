@@ -3007,3 +3007,211 @@ input[type="checkbox"] {
 
   .domain-tab-bar { padding-bottom: 0; }
 }
+
+/* === Session Setup — two-step card flow ============================= */
+
+.domain-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.domain-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  background: #fafcff;
+  border: 1px solid #e5edf6;
+  border-radius: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.domain-card:hover {
+  border-color: #93b8f2;
+  background: #f3f8ff;
+  transform: translateY(-1px);
+}
+
+.domain-card-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #142033;
+}
+
+.domain-card-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.step-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f0f6ff;
+  border: 1px solid #d6e6fb;
+  border-radius: 999px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.step-context-label {
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.step-context-value {
+  color: #142033;
+  font-weight: 600;
+}
+
+.scenario-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scenario-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  background: #fafcff;
+  border: 1px solid #e5edf6;
+  border-radius: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.scenario-card:hover {
+  border-color: #93b8f2;
+  background: #f3f8ff;
+}
+
+.scenario-card.active {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.scenario-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.scenario-card-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #142033;
+}
+
+.scenario-card-checkmark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #16a34a;
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.scenario-card-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scenario-card-query {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid #e5edf6;
+  border-radius: 8px;
+}
+
+.scenario-card-query.missing {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.scenario-card-query-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.scenario-card-query-text {
+  font-size: 13px;
+  color: #142033;
+  font-style: italic;
+}
+
+.scenario-card-query.missing .scenario-card-query-text {
+  color: #92400e;
+  font-style: normal;
+}
+
+.scenario-card-description {
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.scenario-card-footer {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  background: #eef4fc;
+  color: #1e3a8a;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chip.strong {
+  background: #1e3a8a;
+  color: white;
+}
+
+.chip.muted {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.chip.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.form-error-banner {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
