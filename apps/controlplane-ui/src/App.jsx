@@ -47,6 +47,9 @@ export default function App() {
   const [selectedObs, setSelectedObs] = useState(null);
   const [labels, setLabels] = useState({});
   const [bboxOverride, setBboxOverride] = useState(null);
+  // Annotator-created candidates for the current observation — surfaced into the
+  // Candidates tab and the link picker after a draw. Persisted via the same PATCH.
+  const [manualCandidates, setManualCandidates] = useState([]);
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [annotationMessage, setAnnotationMessage] = useState(null);
   const [datasetStatus, setDatasetStatus] = useState(null);
@@ -305,6 +308,7 @@ export default function App() {
     setSelectedObs(null);
     setLabels({});
     setBboxOverride(null);
+    setManualCandidates([]);
     setAnnotationMessage(null);
     try {
       const response = await fetch(`${API}/api/observations/${encodeURIComponent(filename)}`);
@@ -316,6 +320,7 @@ export default function App() {
       const restoredPositive = annotation?.positive_candidate_id;
       const positiveCandidate = (payload?.ranked_candidates ?? []).find((candidate) => candidate.candidate_id === restoredPositive);
       setBboxOverride(annotation?.approved_bbox ?? (positiveCandidate ? resolveBbox(positiveCandidate, payload?.acquisition) : null));
+      setManualCandidates(Array.isArray(annotation?.manual_candidates) ? annotation.manual_candidates : []);
       setSelectedObs(payload);
     } catch (error) {
       setSelectedObs({ _error: error.message });
@@ -327,6 +332,7 @@ export default function App() {
     setSelectedObsFilename(null);
     setLabels({});
     setBboxOverride(null);
+    setManualCandidates([]);
     setAnnotationMessage(null);
   }, []);
 
@@ -350,6 +356,7 @@ export default function App() {
             rejected_candidate_ids: rejectedCandidateIds,
             // A manually drawn bbox can stand alone — no positive candidate required.
             approved_bbox: bboxOverride,
+            manual_candidates: manualCandidates,
           },
         }),
       });
@@ -362,7 +369,7 @@ export default function App() {
     } finally {
       setAnnotationSaving(false);
     }
-  }, [bboxOverride, labels, loadObservation, loadObservations, selectedObsFilename]);
+  }, [bboxOverride, labels, manualCandidates, loadObservation, loadObservations, selectedObsFilename]);
 
   const buildTrainingDataset = useCallback(async () => {
     setDatasetStatus({ loading: true });
@@ -652,6 +659,8 @@ export default function App() {
         setLabels={setLabels}
         bboxOverride={bboxOverride}
         setBboxOverride={setBboxOverride}
+        manualCandidates={manualCandidates}
+        setManualCandidates={setManualCandidates}
         saveTrainingAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

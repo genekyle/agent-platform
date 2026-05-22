@@ -210,4 +210,11 @@ class TrainingCapture(Base):
     # Annotator-set: what page state the agent lands on after this interaction
     post_action_state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    # Annotator-created candidates that the observer did not detect (e.g. SVG/image
+    # elements like the Google logo). Each entry: {candidate_id, bbox, name, role, created_at}.
+    # candidate_id is prefixed "manual-..." so it never collides with observer candidate IDs.
+    # Used downstream by state_transition / task_outcome models when the bbox alone isn't
+    # enough — preserves element identity even without a DOM selector.
+    manual_candidates: Mapped[list[dict]] = mapped_column(JSON, default=list)
+
     training_session: Mapped["TrainingSession"] = relationship(back_populates="captures")

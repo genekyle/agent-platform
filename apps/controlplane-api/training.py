@@ -128,6 +128,36 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
     else:
         bbox = None
 
+    # Annotator-created candidates — each entry must have a candidate_id prefixed
+    # "manual-...", a bbox dict, and optionally name/role. Bad entries are dropped
+    # so a malformed PATCH can't poison the row.
+    manual_candidates_raw = merged.get("manual_candidates") or []
+    manual_candidates: list[dict[str, Any]] = []
+    if isinstance(manual_candidates_raw, list):
+        for entry in manual_candidates_raw:
+            if not isinstance(entry, dict):
+                continue
+            candidate_id = entry.get("candidate_id")
+            if not candidate_id or not str(candidate_id).startswith("manual-"):
+                continue
+            entry_bbox = entry.get("bbox")
+            if isinstance(entry_bbox, dict):
+                entry_bbox = {
+                    "x": float(entry_bbox.get("x", 0)),
+                    "y": float(entry_bbox.get("y", 0)),
+                    "width": float(entry_bbox.get("width", 0)),
+                    "height": float(entry_bbox.get("height", 0)),
+                }
+            else:
+                entry_bbox = None
+            manual_candidates.append({
+                "candidate_id": str(candidate_id),
+                "bbox": entry_bbox,
+                "name": str(entry.get("name") or "").strip(),
+                "role": str(entry.get("role") or "").strip(),
+                "created_at": entry.get("created_at") or utcnow_iso(),
+            })
+
     # A manually-drawn bbox is a valid label for vision_element_grounding even
     # without an observer-derived positive candidate — it still satisfies the
     # (screenshot, query) -> bbox supervision the primary model needs.
@@ -148,6 +178,7 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
         "rejected_candidate_ids": rejected_ids,
         "candidate_labels": labels,
         "approved_bbox": bbox,
+        "manual_candidates": manual_candidates,
         "reviewed_at": utcnow_iso() if has_label else merged.get("reviewed_at"),
         "updated_at": utcnow_iso(),
     }

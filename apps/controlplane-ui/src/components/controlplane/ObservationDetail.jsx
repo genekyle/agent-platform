@@ -3,6 +3,29 @@ import { fmt, resolveBbox, screenshotFilename } from "./utils";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
+// Roles offered when the annotator labels a brand-new element the observer missed.
+// Kept short on purpose — these feed forward into the state_transition model.
+const MANUAL_ROLE_OPTIONS = ["button", "link", "input", "image", "text", "container", "other"];
+
+// IoU between two rects in image-pixel space (used to sort the link picker so the
+// most-overlapping observer candidate floats to the top).
+function rectIoU(a, b) {
+  if (!a || !b) return 0;
+  const ax2 = a.x + a.width;
+  const ay2 = a.y + a.height;
+  const bx2 = b.x + b.width;
+  const by2 = b.y + b.height;
+  const ix1 = Math.max(a.x, b.x);
+  const iy1 = Math.max(a.y, b.y);
+  const ix2 = Math.min(ax2, bx2);
+  const iy2 = Math.min(ay2, by2);
+  const iw = Math.max(0, ix2 - ix1);
+  const ih = Math.max(0, iy2 - iy1);
+  const inter = iw * ih;
+  const union = a.width * a.height + b.width * b.height - inter;
+  return union > 0 ? inter / union : 0;
+}
+
 export function ObservationDetail({
   mode,
   selectedObs,
@@ -11,6 +34,8 @@ export function ObservationDetail({
   setLabels,
   bboxOverride,
   setBboxOverride,
+  manualCandidates,
+  setManualCandidates,
   onSaveAnnotation,
   annotationSaving,
   annotationMessage,
@@ -23,6 +48,13 @@ export function ObservationDetail({
   const [selectedCandidateId, setSelectedCandidateId] = useState(null);
   const [drawMode, setDrawMode] = useState(false);
   const [drawingRect, setDrawingRect] = useState(null);
+  // The just-finished draw waiting on the user to link it (to a candidate or a manual element).
+  const [pendingDraw, setPendingDraw] = useState(null);
+  // The user's link choice form state.
+  const [linkChoice, setLinkChoice] = useState({ type: "manual", candidateId: null, name: "", role: "button" });
+  // Per-source visibility toggles for the screenshot overlay (does NOT hide from the
+  // Candidates tab list or the link picker — those stay complete for labeling).
+  const [visibleSources, setVisibleSources] = useState({ observer: true, vision: true, manual: true });
   const svgRef = useRef(null);
 
   useEffect(() => {
@@ -33,6 +65,9 @@ export function ObservationDetail({
     setSelectedCandidateId(null);
     setDrawMode(false);
     setDrawingRect(null);
+    setPendingDraw(null);
+    setLinkChoice({ type: "manual", candidateId: null, name: "", role: "button" });
+    setVisibleSources({ observer: true, vision: true, manual: true });
   }, [mode, selectedObsFilename]);
 
   if (selectedObs?._error) {
@@ -41,6 +76,10 @@ export function ObservationDetail({
 
   const acquisition = selectedObs?.acquisition ?? {};
   const candidates = selectedObs?.ranked_candidates ?? [];
+  // Vision-proposed candidates from OmniParser sidecar. Empty until the async
+  // backfill writes them — the labeler handles that gracefully.
+  const visionCandidates = selectedObs?.vision_candidates ?? [];
+  const visionMeta = selectedObs?.vision_candidates_meta ?? null;
   const stages = selectedObs?.pipeline?.stages ?? {};
   const stageOrder = selectedObs?.pipeline?.stage_order ?? [];
   const sceneInterpretation = selectedObs?.scene_interpretation ?? {};
@@ -79,13 +118,13 @@ export function ObservationDetail({
   }, [imgSize]);
 
   const handleDrawPointerDown = useCallback((event) => {
-    if (!drawMode) return;
+    if (!drawMode || pendingDraw) return;
     const point = eventToImageCoords(event);
     if (!point) return;
     event.preventDefault();
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
     setDrawingRect({ startX: point.x, startY: point.y, x: point.x, y: point.y, width: 0, height: 0 });
-  }, [drawMode, eventToImageCoords]);
+  }, [drawMode, pendingDraw, eventToImageCoords]);
 
   const handleDrawPointerMove = useCallback((event) => {
     if (!drawMode || !drawingRect) return;
@@ -105,19 +144,111 @@ export function ObservationDetail({
 
   const handleDrawPointerUp = useCallback((event) => {
     if (!drawMode || !drawingRect) return;
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
     // Minimum size in image pixels — discard accidental taps.
     const MIN_DIM = 4;
     if (drawingRect.width >= MIN_DIM && drawingRect.height >= MIN_DIM) {
-      setBboxOverride?.({
+      const finalRect = {
         x: drawingRect.x,
         y: drawingRect.y,
         width: drawingRect.width,
         height: drawingRect.height,
+      };
+      // Open the link picker — the user must say what this box represents.
+      // Pre-select the highest-IoU candidate (observer or vision) as a default.
+      const observerRanked = (candidates ?? [])
+        .map((candidate) => ({ source: "candidate", candidate, iou: rectIoU(finalRect, resolveBbox(candidate, acquisition)) }))
+        .filter((entry) => entry.iou > 0);
+      const visionRanked = (visionCandidates ?? [])
+        .map((candidate) => ({ source: "vision", candidate, iou: rectIoU(finalRect, candidate.bbox) }))
+        .filter((entry) => entry.iou > 0);
+      const ranked = [...observerRanked, ...visionRanked].sort((a, b) => b.iou - a.iou);
+      const best = ranked[0] ?? null;
+      setLinkChoice({
+        type: best ? best.source : "manual",
+        candidateId: best?.candidate?.candidate_id ?? null,
+        name: "",
+        role: "button",
       });
+      setPendingDraw(finalRect);
     }
     setDrawingRect(null);
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-  }, [drawMode, drawingRect, setBboxOverride]);
+  }, [drawMode, drawingRect, candidates, visionCandidates, acquisition]);
+
+  // Commit the linked draw — writes either to an existing candidate's approve label
+  // or creates a new manual_candidates entry. Either way, bboxOverride = drawn rect.
+  const handleConfirmLink = useCallback(() => {
+    if (!pendingDraw) return;
+    if ((linkChoice.type === "candidate" || linkChoice.type === "vision") && linkChoice.candidateId) {
+      // Approving an existing observer or vision candidate, with the drawn rect as the refined bbox.
+      setLabels?.((current) => {
+        const next = { ...current };
+        for (const [id, value] of Object.entries(next)) {
+          if (value === "approve") next[id] = null;
+        }
+        next[linkChoice.candidateId] = "approve";
+        return next;
+      });
+      setBboxOverride?.(pendingDraw);
+    } else {
+      // Creating a brand-new manual candidate the observer didn't surface.
+      const name = (linkChoice.name || "").trim();
+      const role = (linkChoice.role || "other").trim();
+      const newId = `manual-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const newEntry = {
+        candidate_id: newId,
+        bbox: pendingDraw,
+        name,
+        role,
+        created_at: new Date().toISOString(),
+      };
+      setManualCandidates?.((current) => [...(current ?? []), newEntry]);
+      setLabels?.((current) => {
+        const next = { ...current };
+        for (const [id, value] of Object.entries(next)) {
+          if (value === "approve") next[id] = null;
+        }
+        next[newId] = "approve";
+        return next;
+      });
+      setBboxOverride?.(pendingDraw);
+    }
+    setPendingDraw(null);
+    setDrawMode(false);
+  }, [pendingDraw, linkChoice, setLabels, setBboxOverride, setManualCandidates]);
+
+  const handleCancelLink = useCallback(() => {
+    setPendingDraw(null);
+    setLinkChoice({ type: "manual", candidateId: null, name: "", role: "button" });
+  }, []);
+
+  // Candidates ranked by IoU against the pending draw — used to surface the best
+  // observer matches at the top of the picker (degenerates to detector order when no draw).
+  const candidatesByOverlap = useMemo(() => {
+    if (!pendingDraw) return candidates;
+    return [...candidates]
+      .map((candidate) => ({
+        candidate,
+        iou: rectIoU(pendingDraw, resolveBbox(candidate, acquisition) ?? { x: 0, y: 0, width: 0, height: 0 }),
+      }))
+      .sort((a, b) => b.iou - a.iou)
+      .map((entry) => ({ ...entry.candidate, _iou: entry.iou }));
+  }, [pendingDraw, candidates, acquisition]);
+
+  // Same idea for vision-proposed candidates — sorted by IoU against the draw,
+  // ungated by detector order (we don't have a "rank" for these).
+  const visionCandidatesByOverlap = useMemo(() => {
+    if (!pendingDraw) {
+      return [...visionCandidates].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+    }
+    return [...visionCandidates]
+      .map((candidate) => ({
+        candidate,
+        iou: rectIoU(pendingDraw, candidate.bbox ?? { x: 0, y: 0, width: 0, height: 0 }),
+      }))
+      .sort((a, b) => b.iou - a.iou)
+      .map((entry) => ({ ...entry.candidate, _iou: entry.iou }));
+  }, [pendingDraw, visionCandidates]);
 
   const clearDrawnBox = useCallback(() => {
     setBboxOverride?.(null);
@@ -234,14 +365,46 @@ export function ObservationDetail({
                   <button
                     className={drawMode ? "primary-btn" : "ghost-btn"}
                     onClick={() => setDrawMode((current) => !current)}
-                    disabled={!imgSize.natW}
+                    disabled={!imgSize.natW || Boolean(pendingDraw)}
                   >
                     {drawMode ? "Drawing… click & drag on screenshot" : "Draw bounding box"}
                   </button>
-                  {bboxOverride ? (
+                  {bboxOverride && !pendingDraw ? (
                     <button className="ghost-btn" onClick={clearDrawnBox}>Clear box</button>
                   ) : null}
                 </div>
+              </div>
+            ) : null}
+
+            {/* Per-source visibility toggles — overlay only. Candidates tab and link
+                picker stay complete so labeling isn't disrupted. */}
+            {mode === "training" && fileName ? (
+              <div className="dd-source-filters">
+                <span className="dd-source-filters-label">Show on screenshot:</span>
+                <button
+                  type="button"
+                  className={`dd-source-pill source-observer${visibleSources.observer ? " active" : ""}`}
+                  onClick={() => setVisibleSources((current) => ({ ...current, observer: !current.observer }))}
+                  title="Observer / DOM heuristic candidates (blue)"
+                >
+                  Observer ({candidates.length})
+                </button>
+                <button
+                  type="button"
+                  className={`dd-source-pill source-vision${visibleSources.vision ? " active" : ""}`}
+                  onClick={() => setVisibleSources((current) => ({ ...current, vision: !current.vision }))}
+                  title="Vision-proposed candidates (cyan, OmniParser)"
+                >
+                  Vision ({visionCandidates.length})
+                </button>
+                <button
+                  type="button"
+                  className={`dd-source-pill source-manual${visibleSources.manual ? " active" : ""}`}
+                  onClick={() => setVisibleSources((current) => ({ ...current, manual: !current.manual }))}
+                  title="Manual / annotator-created elements (purple)"
+                >
+                  Manual ({(manualCandidates ?? []).length})
+                </button>
               </div>
             ) : null}
 
@@ -267,7 +430,7 @@ export function ObservationDetail({
                     onPointerUp={handleDrawPointerUp}
                     onPointerCancel={handleDrawPointerUp}
                   >
-                    {candidates.map((candidate) => {
+                    {visibleSources.observer && candidates.map((candidate) => {
                       const bbox = resolveBbox(candidate, acquisition);
                       if (!bbox) return null;
                       const label = labels[candidate.candidate_id];
@@ -299,8 +462,60 @@ export function ObservationDetail({
                       );
                     })}
 
+                    {/* Vision-proposed candidates (OmniParser) — cyan dashed to distinguish from observer-blue */}
+                    {visibleSources.vision && visionCandidates.map((vision) => {
+                      if (!vision?.bbox) return null;
+                      const isApproved = labels[vision.candidate_id] === "approve";
+                      const isSelected = selectedCandidateId === vision.candidate_id;
+                      const stroke = isApproved ? "#16a34a" : "#06b6d4";
+                      return (
+                        <rect
+                          key={vision.candidate_id}
+                          x={vision.bbox.x}
+                          y={vision.bbox.y}
+                          width={vision.bbox.width}
+                          height={vision.bbox.height}
+                          fill={stroke}
+                          fillOpacity={isSelected ? 0.18 : 0.06}
+                          stroke={stroke}
+                          strokeWidth={isSelected ? 2.5 : 1.6}
+                          strokeDasharray={isApproved ? "" : "3 2"}
+                          rx={3}
+                          style={{ cursor: drawMode ? "crosshair" : "pointer", pointerEvents: drawMode ? "none" : "auto" }}
+                          onClick={() => !drawMode && setSelectedCandidateId(
+                            isSelected ? null : vision.candidate_id,
+                          )}
+                        />
+                      );
+                    })}
+
+                    {/* Manual candidates the annotator created — purple to distinguish from observer */}
+                    {visibleSources.manual && (manualCandidates ?? []).map((manual) => {
+                      if (!manual?.bbox) return null;
+                      const isApproved = labels[manual.candidate_id] === "approve";
+                      return (
+                        <rect
+                          key={manual.candidate_id}
+                          x={manual.bbox.x}
+                          y={manual.bbox.y}
+                          width={manual.bbox.width}
+                          height={manual.bbox.height}
+                          fill={isApproved ? "#16a34a" : "#a855f7"}
+                          fillOpacity={isApproved ? 0.10 : 0.08}
+                          stroke={isApproved ? "#16a34a" : "#a855f7"}
+                          strokeWidth={1.8}
+                          strokeDasharray={isApproved ? "" : "4 3"}
+                          rx={3}
+                          style={{ cursor: drawMode ? "crosshair" : "pointer", pointerEvents: drawMode ? "none" : "auto" }}
+                          onClick={() => !drawMode && setSelectedCandidateId(
+                            selectedCandidateId === manual.candidate_id ? null : manual.candidate_id,
+                          )}
+                        />
+                      );
+                    })}
+
                     {/* Persisted manual / approved bbox — distinct gold-on-dark style */}
-                    {bboxOverride && !drawingRect ? (
+                    {bboxOverride && !drawingRect && !pendingDraw ? (
                       <rect
                         x={bboxOverride.x}
                         y={bboxOverride.y}
@@ -310,6 +525,23 @@ export function ObservationDetail({
                         fillOpacity={0.12}
                         stroke="#facc15"
                         strokeWidth={2.5}
+                        rx={3}
+                        style={{ pointerEvents: "none" }}
+                      />
+                    ) : null}
+
+                    {/* Pending draw waiting for link — same gold, pulsing-feel dashed border */}
+                    {pendingDraw ? (
+                      <rect
+                        x={pendingDraw.x}
+                        y={pendingDraw.y}
+                        width={pendingDraw.width}
+                        height={pendingDraw.height}
+                        fill="#facc15"
+                        fillOpacity={0.16}
+                        stroke="#facc15"
+                        strokeWidth={2.5}
+                        strokeDasharray="5 3"
                         rx={3}
                         style={{ pointerEvents: "none" }}
                       />
@@ -338,14 +570,168 @@ export function ObservationDetail({
               <div className="empty-state">No screenshot in this artifact.</div>
             )}
 
-            {selectedCandidateId && (() => {
-              const candidate = candidates.find((item) => item.candidate_id === selectedCandidateId);
-              if (!candidate) return null;
-              return (
-                <div className="dd-bbox-info">
-                  <strong>#{candidate.rank}</strong> {candidate.target?.label || candidate.element_id} — {candidate.action_type} — score {(candidate.score ?? 0).toFixed(2)}
+            {/* Link picker — appears after a draw finishes, blocks further drawing until resolved */}
+            {pendingDraw ? (
+              <div className="dd-link-picker">
+                <div className="dd-link-picker-header">
+                  <strong>Link this bounding box to an element</strong>
+                  <span className="dd-link-picker-sub">
+                    {pendingDraw.width.toFixed(0)}×{pendingDraw.height.toFixed(0)} at ({pendingDraw.x.toFixed(0)}, {pendingDraw.y.toFixed(0)})
+                  </span>
                 </div>
-              );
+
+                <div className="dd-link-picker-body">
+                  <div className="dd-link-section">
+                    <div className="dd-link-section-title">Existing observer candidate</div>
+                    {candidatesByOverlap.length === 0 ? (
+                      <div className="dd-link-empty">No observer candidates on this capture.</div>
+                    ) : (
+                      <div className="dd-link-list">
+                        {candidatesByOverlap.slice(0, 8).map((candidate) => {
+                          const isSelected = linkChoice.type === "candidate" && linkChoice.candidateId === candidate.candidate_id;
+                          const label = candidate.target?.label || candidate.target?.tag || candidate.element_id;
+                          return (
+                            <button
+                              key={candidate.candidate_id}
+                              type="button"
+                              className={`dd-link-row${isSelected ? " selected" : ""}`}
+                              onClick={() => setLinkChoice({
+                                type: "candidate",
+                                candidateId: candidate.candidate_id,
+                                name: "",
+                                role: "button",
+                              })}
+                            >
+                              <span className="dd-link-rank">#{candidate.rank}</span>
+                              <span className="dd-link-label">{label}</span>
+                              <span className="dd-link-meta mono">{candidate.action_type}</span>
+                              <span className="dd-link-iou">IoU {(candidate._iou ?? 0).toFixed(2)}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="dd-link-section">
+                    <div className="dd-link-section-title">
+                      Vision-proposed candidate
+                      {visionMeta?.version ? <span className="dd-link-meta"> · {visionMeta.version}</span> : null}
+                    </div>
+                    {visionCandidatesByOverlap.length === 0 ? (
+                      <div className="dd-link-empty">No vision proposals on this capture yet. Backfill may still be running.</div>
+                    ) : (
+                      <div className="dd-link-list">
+                        {visionCandidatesByOverlap.slice(0, 8).map((vision) => {
+                          const isSelected = linkChoice.type === "vision" && linkChoice.candidateId === vision.candidate_id;
+                          return (
+                            <button
+                              key={vision.candidate_id}
+                              type="button"
+                              className={`dd-link-row dd-link-row-vision${isSelected ? " selected" : ""}`}
+                              onClick={() => setLinkChoice({
+                                type: "vision",
+                                candidateId: vision.candidate_id,
+                                name: "",
+                                role: "button",
+                              })}
+                            >
+                              <span className="dd-link-rank dd-vision-badge">V</span>
+                              <span className="dd-link-label mono">{vision.candidate_id}</span>
+                              <span className="dd-link-meta">conf {(vision.confidence ?? 0).toFixed(2)}</span>
+                              <span className="dd-link-iou">{pendingDraw ? `IoU ${(vision._iou ?? 0).toFixed(2)}` : ""}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="dd-link-section">
+                    <div className="dd-link-section-title">Or, this is a new element neither saw</div>
+                    <button
+                      type="button"
+                      className={`dd-link-row dd-link-manual${linkChoice.type === "manual" ? " selected" : ""}`}
+                      onClick={() => setLinkChoice((current) => ({ ...current, type: "manual", candidateId: null }))}
+                    >
+                      Create new manual element
+                    </button>
+                    {linkChoice.type === "manual" ? (
+                      <div className="dd-link-manual-form">
+                        <label className="dd-link-field">
+                          <span className="dd-link-field-label">Name</span>
+                          <input
+                            className="form-input"
+                            type="text"
+                            placeholder="e.g. Google logo, Sign in button"
+                            value={linkChoice.name}
+                            onChange={(event) => setLinkChoice((current) => ({ ...current, name: event.target.value }))}
+                            autoFocus
+                          />
+                        </label>
+                        <label className="dd-link-field">
+                          <span className="dd-link-field-label">Role</span>
+                          <select
+                            className="form-input"
+                            value={linkChoice.role}
+                            onChange={(event) => setLinkChoice((current) => ({ ...current, role: event.target.value }))}
+                          >
+                            {MANUAL_ROLE_OPTIONS.map((role) => (
+                              <option key={role} value={role}>{role}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="dd-link-picker-actions">
+                  <button className="ghost-btn" onClick={handleCancelLink}>Cancel</button>
+                  <button
+                    className="primary-btn"
+                    onClick={handleConfirmLink}
+                    disabled={linkChoice.type === "candidate" && !linkChoice.candidateId}
+                  >
+                    Confirm link
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {selectedCandidateId && (() => {
+              // Look across all three candidate sources so clicking any rect surfaces its info.
+              const observer = candidates.find((item) => item.candidate_id === selectedCandidateId);
+              if (observer) {
+                return (
+                  <div className="dd-bbox-info">
+                    <strong>#{observer.rank}</strong> {observer.target?.label || observer.element_id} — {observer.action_type} — score {(observer.score ?? 0).toFixed(2)}
+                  </div>
+                );
+              }
+              const vision = visionCandidates.find((item) => item.candidate_id === selectedCandidateId);
+              if (vision) {
+                const w = Math.round(vision.bbox?.width ?? 0);
+                const h = Math.round(vision.bbox?.height ?? 0);
+                return (
+                  <div className="dd-bbox-info">
+                    <span className="dd-vision-badge">V</span>{" "}
+                    <span className="mono">{vision.candidate_id}</span> — conf {(vision.confidence ?? 0).toFixed(2)} — {w}×{h} — {visionMeta?.version ?? "omniparser"}
+                  </div>
+                );
+              }
+              const manual = (manualCandidates ?? []).find((item) => item.candidate_id === selectedCandidateId);
+              if (manual) {
+                const w = Math.round(manual.bbox?.width ?? 0);
+                const h = Math.round(manual.bbox?.height ?? 0);
+                return (
+                  <div className="dd-bbox-info">
+                    <span className="dd-manual-badge">M</span>{" "}
+                    <strong>{manual.name || "(unnamed)"}</strong> — role {manual.role || "other"} — {w}×{h}
+                  </div>
+                );
+              }
+              return null;
             })()}
           </div>
         )}
@@ -547,6 +933,145 @@ export function ObservationDetail({
                 );
               })}
             </div>
+
+            {visionCandidates.length > 0 ? (
+              <>
+                <div className="obs-candidates-header">
+                  Vision Candidates ({visionCandidates.length}) — {visionMeta?.version ?? "omniparser"}
+                </div>
+                <div className="obs-candidate-list">
+                  {visionCandidates.map((vision) => {
+                    const isSelected = selectedCandidateId === vision.candidate_id;
+                    const label = labels[vision.candidate_id];
+                    return (
+                      <div
+                        key={vision.candidate_id}
+                        className={`obs-candidate-item${isSelected ? " selected" : ""}${label ? ` ${label}` : ""}`}
+                        onClick={() => setSelectedCandidateId(isSelected ? null : vision.candidate_id)}
+                      >
+                        <div className="obs-candidate-rank dd-vision-badge">V</div>
+                        <div className="obs-candidate-body">
+                          <div className="obs-candidate-label mono">{vision.candidate_id}</div>
+                          <div className="obs-candidate-meta">
+                            <span>conf {(vision.confidence ?? 0).toFixed(2)}</span>
+                            <span className="mono">{vision.bbox ? `${Math.round(vision.bbox.width)}×${Math.round(vision.bbox.height)}` : "no bbox"}</span>
+                          </div>
+                        </div>
+                        <div className="obs-label-btns">
+                          <button
+                            className={`obs-label-btn approve${label === "approve" ? " active" : ""}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setLabels((current) => {
+                                const next = { ...current };
+                                for (const [id, value] of Object.entries(next)) {
+                                  if (value === "approve") next[id] = null;
+                                }
+                                if (label === "approve") {
+                                  next[vision.candidate_id] = null;
+                                } else {
+                                  next[vision.candidate_id] = "approve";
+                                }
+                                return next;
+                              });
+                              if (label !== "approve" && vision.bbox) {
+                                setBboxOverride?.(vision.bbox);
+                              }
+                            }}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            className={`obs-label-btn reject${label === "reject" ? " active" : ""}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setLabels((current) => ({
+                                ...current,
+                                [vision.candidate_id]: label === "reject" ? null : "reject",
+                              }));
+                            }}
+                          >
+                            ✗
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
+
+            {(manualCandidates?.length ?? 0) > 0 ? (
+              <>
+                <div className="obs-candidates-header">
+                  Manual Elements ({manualCandidates.length}) — annotator-created
+                </div>
+                <div className="obs-candidate-list">
+                  {manualCandidates.map((manual) => {
+                    const isSelected = selectedCandidateId === manual.candidate_id;
+                    const label = labels[manual.candidate_id];
+                    return (
+                      <div
+                        key={manual.candidate_id}
+                        className={`obs-candidate-item${isSelected ? " selected" : ""}${label ? ` ${label}` : ""}`}
+                        onClick={() => setSelectedCandidateId(isSelected ? null : manual.candidate_id)}
+                      >
+                        <div className="obs-candidate-rank dd-manual-badge">M</div>
+                        <div className="obs-candidate-body">
+                          <div className="obs-candidate-label">{manual.name || "(unnamed)"}</div>
+                          <div className="obs-candidate-meta">
+                            <span className="mono">{manual.role || "other"}</span>
+                            <span className="mono table-cell-small">{manual.candidate_id}</span>
+                          </div>
+                        </div>
+                        <div className="obs-label-btns">
+                          <button
+                            className={`obs-label-btn approve${label === "approve" ? " active" : ""}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setLabels((current) => {
+                                const next = { ...current };
+                                for (const [id, value] of Object.entries(next)) {
+                                  if (value === "approve") next[id] = null;
+                                }
+                                if (label === "approve") {
+                                  next[manual.candidate_id] = null;
+                                } else {
+                                  next[manual.candidate_id] = "approve";
+                                }
+                                return next;
+                              });
+                              if (label !== "approve" && manual.bbox) {
+                                setBboxOverride?.(manual.bbox);
+                              }
+                            }}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            className="obs-label-btn reject"
+                            title="Delete this manual element"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setManualCandidates?.((current) =>
+                                (current ?? []).filter((entry) => entry.candidate_id !== manual.candidate_id),
+                              );
+                              setLabels((current) => {
+                                const next = { ...current };
+                                delete next[manual.candidate_id];
+                                return next;
+                              });
+                            }}
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
           </div>
         )}
       </div>

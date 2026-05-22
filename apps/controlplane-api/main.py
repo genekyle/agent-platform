@@ -314,6 +314,8 @@ def _training_annotation_from_capture(capture: TrainingCapture) -> dict:
         "scenario_id": capture.scenario_id,
         "observed_page_state": capture.observed_page_state,
         "post_action_state": capture.post_action_state,
+        # Annotator-created candidates (rendered in Candidates tab alongside observer ones).
+        "manual_candidates": capture.manual_candidates or [],
     }
 
 
@@ -372,6 +374,8 @@ def _migrate_schema() -> None:
         ("training_captures", "element_query", "VARCHAR(500)"),
         ("training_captures", "observed_page_state", "VARCHAR(100)"),
         ("training_captures", "post_action_state", "VARCHAR(100)"),
+        # training_captures annotator-created candidates (v3)
+        ("training_captures", "manual_candidates", "JSON NOT NULL DEFAULT '[]'"),
         # goal_registry training config fields (v2)
         ("goal_registry", "description", "TEXT"),
         ("goal_registry", "typical_element_types", "JSON NOT NULL DEFAULT '[]'"),
@@ -1273,15 +1277,36 @@ def get_observation_screenshot(filename: str):
 
 @app.get("/api/observations/{filename}")
 def get_observation(filename: str, db: Session = Depends(get_db)):
-    path = _artifacts_dir() / "observer-traces" / filename
+    traces_dir = _artifacts_dir() / "observer-traces"
+    path = traces_dir / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="Observation not found")
     data = json.loads(path.read_text())
     capture = db.scalar(select(TrainingCapture).where(TrainingCapture.artifact_filename == filename))
-    meta = read_meta(_artifacts_dir() / "observer-traces", filename)
+    meta = read_meta(traces_dir, filename)
     if capture is not None:
         meta["training_annotation"] = _training_annotation_from_capture(capture)
     data["meta"] = meta
+
+    # Vision-proposed candidates (OmniParser sidecar). Absent if the async
+    # backfill hasn't run yet — callers should render whatever's present
+    # without assuming the field exists.
+    vision_sidecar_path = traces_dir / f"{filename}.vision.json"
+    if vision_sidecar_path.exists():
+        try:
+            sidecar = json.loads(vision_sidecar_path.read_text())
+            data["vision_candidates"] = sidecar.get("proposals", [])
+            data["vision_candidates_meta"] = {
+                "version": sidecar.get("version"),
+                "generated_at": sidecar.get("generated_at"),
+                "proposal_count": sidecar.get("proposal_count", 0),
+            }
+        except Exception:
+            # A malformed sidecar shouldn't break the whole GET — just skip it.
+            data["vision_candidates"] = []
+    else:
+        data["vision_candidates"] = []
+
     return data
 
 
@@ -1415,6 +1440,7 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
         capture.rejected_candidate_ids = merged.get("rejected_candidate_ids") or []
         capture.candidate_labels = merged.get("candidate_labels") or {}
         capture.approved_bbox = merged.get("approved_bbox")
+        capture.manual_candidates = merged.get("manual_candidates") or []
         meta["training_annotation"] = merged
         db.commit()
     elif body.status in {"draft", "reviewed", "approved", "rejected", "archived"}:

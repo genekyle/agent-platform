@@ -1337,6 +1337,243 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
+/* Link picker — appears below the screenshot after a draw, before commit. */
+.dd-link-picker {
+  margin-top: 14px;
+  padding: 16px;
+  background: #fffbeb;
+  border: 1.5px solid #facc15;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dd-link-picker-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.dd-link-picker-header strong {
+  font-size: 14px;
+  color: #111827;
+}
+
+.dd-link-picker-sub {
+  font-size: 12px;
+  color: #6b7280;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.dd-link-picker-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .dd-link-picker-body { grid-template-columns: 1fr; }
+}
+
+.dd-link-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dd-link-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.dd-link-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.dd-link-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #111827;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 120ms, background 120ms;
+  font: inherit;
+}
+
+.dd-link-row:hover {
+  border-color: #d1d5db;
+  background: #f9fafb;
+}
+
+.dd-link-row.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.dd-link-rank {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.dd-link-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dd-link-meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.dd-link-iou {
+  font-size: 11px;
+  color: #4b5563;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.dd-link-empty {
+  font-size: 12px;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.dd-link-manual {
+  grid-template-columns: 1fr;
+  font-weight: 600;
+}
+
+.dd-link-manual-form {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.dd-link-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dd-link-field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.dd-link-picker-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.dd-manual-badge {
+  background: #a855f7;
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dd-vision-badge {
+  background: #06b6d4;
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.dd-link-row-vision {
+  /* same grid as observer rows, just a distinct accent when selected */
+}
+
+.dd-link-row-vision.selected {
+  border-color: #06b6d4;
+  background: #ecfeff;
+}
+
+/* Source-filter pills — sit just under the draw toolbar, control overlay visibility */
+.dd-source-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: #f8fbff;
+  border: 1px solid #e5edf6;
+  border-radius: 10px;
+}
+
+.dd-source-filters-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  margin-right: 4px;
+}
+
+.dd-source-pill {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  background: #f3f4f6;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+  font-family: inherit;
+}
+
+.dd-source-pill:hover {
+  background: #e5e7eb;
+}
+
+.dd-source-pill.source-observer.active {
+  background: #eff6ff;
+  border-color: #2f6feb;
+  color: #1e3a8a;
+}
+
+.dd-source-pill.source-vision.active {
+  background: #ecfeff;
+  border-color: #06b6d4;
+  color: #155e75;
+}
+
+.dd-source-pill.source-manual.active {
+  background: #faf5ff;
+  border-color: #a855f7;
+  color: #6b21a8;
+}
+
 .obs-no-screenshot {
   padding: 40px;
   text-align: center;

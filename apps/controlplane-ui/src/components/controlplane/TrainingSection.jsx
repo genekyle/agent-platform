@@ -42,6 +42,8 @@ export function TrainingSection({
   setLabels,
   bboxOverride,
   setBboxOverride,
+  manualCandidates,
+  setManualCandidates,
   saveTrainingAnnotation,
   annotationSaving,
   annotationMessage,
@@ -175,6 +177,8 @@ export function TrainingSection({
         setLabels={setLabels}
         bboxOverride={bboxOverride}
         setBboxOverride={setBboxOverride}
+        manualCandidates={manualCandidates}
+        setManualCandidates={setManualCandidates}
         onSaveAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}
