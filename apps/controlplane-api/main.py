@@ -244,6 +244,82 @@ def _session_action_hint(goal: GoalRegistry) -> str:
     return str((goal.action_type_hints or ["any"])[0])
 
 
+# Chrome launch flags that suppress browser-chrome popovers (save password,
+# translate, notifications, sync, autofill, infobars). These prompts get rendered
+# above the page surface and are missed by Page.captureScreenshot — so leaving
+# them on means a model can't see what the user sees. For v0 (vision_element_grounding,
+# which only needs page content), blocking them is the right tradeoff. The OS-level
+# capture path stays open for the day we need to train on browser-chrome interactions.
+_TRAINING_CHROME_FLAGS = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-features=Translate,PasswordManagerOnboarding,AutofillEnableAccountWalletStorage,AutofillServerCommunication",
+    "--disable-save-password-bubble",
+    "--disable-translate",
+    "--disable-notifications",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--disable-infobars",
+    "--disable-prompt-on-repost",
+    "--no-pings",
+    "--password-store=basic",  # don't talk to macOS Keychain
+]
+
+
+def _deep_merge_dict(base: dict, overlay: dict) -> dict:
+    """Recursive dict merge — overlay keys win, nested dicts merge instead of replace."""
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge_dict(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _seed_training_chrome_prefs(profile_dir: Path) -> None:
+    """Write the prefs that disable the same interruptions as the launch flags.
+
+    Launch flags + Preferences are redundant on purpose — some interruptions
+    respect one path but not the other across Chrome versions. Belt and suspenders.
+
+    Chrome reads Preferences once at launch, so this must run before subprocess.Popen.
+    """
+    default_dir = profile_dir / "Default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    prefs_path = default_dir / "Preferences"
+
+    prefs_overlay = {
+        "credentials_enable_service": False,
+        "credentials_enable_autosignin": False,
+        "profile": {
+            "password_manager_enabled": False,
+            "default_content_setting_values": {
+                "notifications": 2,  # 2 = block
+                "geolocation": 2,
+            },
+        },
+        "translate": {"enabled": False},
+        "translate_blocked_languages": ["*"],
+        "autofill": {
+            "profile_enabled": False,
+            "credit_card_enabled": False,
+        },
+        "browser": {
+            "show_update_promotion_info_bar": False,
+        },
+    }
+
+    existing: dict = {}
+    if prefs_path.exists():
+        try:
+            existing = json.loads(prefs_path.read_text())
+        except Exception:
+            existing = {}
+    merged = _deep_merge_dict(existing, prefs_overlay)
+    prefs_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+
+
 def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSession:
     if session.status == "active" and session.chrome_process_pid:
         return session
@@ -251,13 +327,13 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
     port = _next_training_port(db)
     profile_dir = _training_profiles_root() / f"training-session-{session.id}"
     profile_dir.mkdir(parents=True, exist_ok=True)
+    _seed_training_chrome_prefs(profile_dir)
     process = subprocess.Popen(
         [
             _resolve_chrome_binary(),
             f"--remote-debugging-port={port}",
             f"--user-data-dir={profile_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
+            *_TRAINING_CHROME_FLAGS,
             "about:blank",
         ],
         stdout=subprocess.DEVNULL,
@@ -316,6 +392,8 @@ def _training_annotation_from_capture(capture: TrainingCapture) -> dict:
         "post_action_state": capture.post_action_state,
         # Annotator-created candidates (rendered in Candidates tab alongside observer ones).
         "manual_candidates": capture.manual_candidates or [],
+        # Interaction-layer payload — paired with action_type_hint and approved_bbox.
+        "action_text": capture.action_text,
     }
 
 
@@ -376,6 +454,8 @@ def _migrate_schema() -> None:
         ("training_captures", "post_action_state", "VARCHAR(100)"),
         # training_captures annotator-created candidates (v3)
         ("training_captures", "manual_candidates", "JSON NOT NULL DEFAULT '[]'"),
+        # training_captures interaction-layer payload (v4)
+        ("training_captures", "action_text", "VARCHAR(1000)"),
         # goal_registry training config fields (v2)
         ("goal_registry", "description", "TEXT"),
         ("goal_registry", "typical_element_types", "JSON NOT NULL DEFAULT '[]'"),
@@ -986,6 +1066,100 @@ def stop_training_session(session_id: int, db: Session = Depends(get_db)):
     return session
 
 
+@app.delete("/api/training/sessions/{session_id}")
+def delete_training_session(session_id: int, db: Session = Depends(get_db)):
+    """Wipe one training session and everything it owns.
+
+    Cascades to: captures (via SQLAlchemy relationship), artifact JSONs,
+    screenshot PNGs, .meta.json sidecars, .vision.json sidecars. Stops any
+    active Chrome process for this session first.
+
+    Registry rows (domains, goals, tasks, scenarios) are NOT touched —
+    those are configuration, not session data.
+    """
+    session = db.get(TrainingSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+
+    # Stop Chrome before tearing down the DB row that holds its PID
+    _stop_training_chrome(session)
+
+    # Snapshot artifact filenames before the cascade-delete removes the rows
+    artifact_filenames = [capture.artifact_filename for capture in session.captures]
+    capture_count = len(artifact_filenames)
+
+    db.delete(session)
+    db.commit()
+
+    deleted_files = 0
+    for filename in artifact_filenames:
+        if _delete_observation_files(filename):
+            deleted_files += 1
+
+    return {
+        "ok": True,
+        "deleted_session_id": session_id,
+        "deleted_captures": capture_count,
+        "deleted_files": deleted_files,
+    }
+
+
+@app.post("/api/training/reset")
+def reset_training_data(db: Session = Depends(get_db)):
+    """Clean-slate operation: wipe ALL training sessions and ALL capture artifacts.
+
+    Preserves: registry (domains, goals, tasks, scenarios). Chrome profile
+    directories on disk are left in place — they're cheap and re-used by id.
+
+    Stops any active Chrome processes first. Also sweeps any orphaned
+    .vision.json sidecars whose parent artifact is already gone.
+    """
+    sessions = db.scalars(select(TrainingSession)).all()
+
+    artifact_filenames: list[str] = []
+    for session in sessions:
+        _stop_training_chrome(session)
+        artifact_filenames.extend(capture.artifact_filename for capture in session.captures)
+
+    session_count = len(sessions)
+    for session in sessions:
+        db.delete(session)
+    db.commit()
+
+    deleted_files = 0
+    for filename in artifact_filenames:
+        if _delete_observation_files(filename):
+            deleted_files += 1
+
+    # Sweep orphans — any leftover trace/sidecar files in the dir that aren't
+    # tied to a tracked artifact (e.g. from crashed captures pre-this-cleanup).
+    traces_dir = _artifacts_dir() / "observer-traces"
+    screenshots_dir = _artifacts_dir() / "observer-screenshots"
+    orphan_files = 0
+    if traces_dir.exists():
+        for path in traces_dir.iterdir():
+            try:
+                path.unlink()
+                orphan_files += 1
+            except Exception:
+                pass
+    if screenshots_dir.exists():
+        for path in screenshots_dir.iterdir():
+            try:
+                path.unlink()
+                orphan_files += 1
+            except Exception:
+                pass
+
+    return {
+        "ok": True,
+        "deleted_sessions": session_count,
+        "deleted_captures": len(artifact_filenames),
+        "deleted_files": deleted_files,
+        "swept_orphans": orphan_files,
+    }
+
+
 @app.get("/api/training/sessions/{session_id}/tabs")
 async def list_training_session_tabs(session_id: int, db: Session = Depends(get_db)):
     session = db.get(TrainingSession, session_id)
@@ -1372,6 +1546,11 @@ def _delete_observation_files(filename: str) -> bool:
     if meta_path.exists():
         meta_path.unlink()
 
+    # Delete vision-proposer sidecar (written by mcp-mock async backfill)
+    vision_path = traces_dir / f"{filename}.vision.json"
+    if vision_path.exists():
+        vision_path.unlink()
+
     trace_path.unlink()
     return True
 
@@ -1412,6 +1591,12 @@ class UpdateMetaRequest(BaseModel):
     # Vision annotation fields (shorthand — can also be sent inside training_annotation)
     observed_page_state: Optional[str] = None
     post_action_state: Optional[str] = None
+    # Per-capture interaction-layer overrides — let the annotator refine the
+    # default that was inherited from the scenario at capture time. Important
+    # for multi-step flows where one scenario covers several different actions.
+    element_query: Optional[str] = None
+    action_type: Optional[str] = None
+    action_text: Optional[str] = None
 
 
 @app.patch("/api/observations/{filename}")
@@ -1456,6 +1641,21 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
         capture.post_action_state = body.post_action_state or None
         vision_dirty = True
     if vision_dirty:
+        db.commit()
+
+    # Interaction-layer overrides — annotator-set per capture for multi-step flows.
+    # Empty string is treated as "clear back to scenario default" by storing NULL.
+    interaction_dirty = False
+    if body.element_query is not None:
+        capture.element_query = body.element_query or None
+        interaction_dirty = True
+    if body.action_type is not None:
+        capture.action_type_hint = body.action_type or "any"
+        interaction_dirty = True
+    if body.action_text is not None:
+        capture.action_text = body.action_text or None
+        interaction_dirty = True
+    if interaction_dirty:
         db.commit()
 
     write_meta(traces_dir, filename, meta)

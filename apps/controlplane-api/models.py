@@ -217,4 +217,10 @@ class TrainingCapture(Base):
     # enough — preserves element identity even without a DOM selector.
     manual_candidates: Mapped[list[dict]] = mapped_column(JSON, default=list)
 
+    # Interaction-layer payload — for "type" actions, the literal text the agent should
+    # enter at this step (e.g. "user@example.com" for an email field). NULL for click/scroll
+    # actions which don't carry a text payload. Combined with action_type_hint and approved_bbox,
+    # this gives a complete (state, action, target, payload) tuple per capture.
+    action_text: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+
     training_session: Mapped["TrainingSession"] = relationship(back_populates="captures")

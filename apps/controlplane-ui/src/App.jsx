@@ -50,6 +50,20 @@ export default function App() {
   // Annotator-created candidates for the current observation — surfaced into the
   // Candidates tab and the link picker after a draw. Persisted via the same PATCH.
   const [manualCandidates, setManualCandidates] = useState([]);
+  // Per-capture interaction-layer overrides — annotator-set, default-loaded from scenario.
+  // element_query: the step intent ("type the user's email")
+  // action_type: click | type | scroll | select | wait
+  // action_text: literal payload for "type" actions
+  // observed_page_state: free-text label of which named state this screenshot shows
+  //   (feeds the page_state_classifier model; "out_of_domain" marks bad/wrong-page captures)
+  // post_action_state: state the agent lands on AFTER this action (feeds state_transition model)
+  const [interactionEdits, setInteractionEdits] = useState({
+    element_query: "",
+    action_type: "any",
+    action_text: "",
+    observed_page_state: "",
+    post_action_state: "",
+  });
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [annotationMessage, setAnnotationMessage] = useState(null);
   const [datasetStatus, setDatasetStatus] = useState(null);
@@ -309,6 +323,7 @@ export default function App() {
     setLabels({});
     setBboxOverride(null);
     setManualCandidates([]);
+    setInteractionEdits({ element_query: "", action_type: "any", action_text: "", observed_page_state: "", post_action_state: "" });
     setAnnotationMessage(null);
     try {
       const response = await fetch(`${API}/api/observations/${encodeURIComponent(filename)}`);
@@ -321,6 +336,13 @@ export default function App() {
       const positiveCandidate = (payload?.ranked_candidates ?? []).find((candidate) => candidate.candidate_id === restoredPositive);
       setBboxOverride(annotation?.approved_bbox ?? (positiveCandidate ? resolveBbox(positiveCandidate, payload?.acquisition) : null));
       setManualCandidates(Array.isArray(annotation?.manual_candidates) ? annotation.manual_candidates : []);
+      setInteractionEdits({
+        element_query: annotation?.element_query ?? "",
+        action_type: annotation?.action_type_hint ?? "any",
+        action_text: annotation?.action_text ?? "",
+        observed_page_state: annotation?.observed_page_state ?? "",
+        post_action_state: annotation?.post_action_state ?? "",
+      });
       setSelectedObs(payload);
     } catch (error) {
       setSelectedObs({ _error: error.message });
@@ -333,6 +355,7 @@ export default function App() {
     setLabels({});
     setBboxOverride(null);
     setManualCandidates([]);
+    setInteractionEdits({ element_query: "", action_type: "any", action_text: "", observed_page_state: "", post_action_state: "" });
     setAnnotationMessage(null);
   }, []);
 
@@ -358,6 +381,15 @@ export default function App() {
             approved_bbox: bboxOverride,
             manual_candidates: manualCandidates,
           },
+          // Interaction-layer overrides go alongside training_annotation in the same PATCH.
+          // Empty string clears the override back to scenario-inherited default (server stores NULL).
+          element_query: interactionEdits.element_query,
+          action_type: interactionEdits.action_type,
+          action_text: interactionEdits.action_text,
+          // Page-state labels — feed the future page_state_classifier and state_transition models.
+          // Free text now; taxonomy formalizes later from observed patterns.
+          observed_page_state: interactionEdits.observed_page_state,
+          post_action_state: interactionEdits.post_action_state,
         }),
       });
       if (!response.ok) throw new Error(`Failed to save review: ${response.status}`);
@@ -369,7 +401,7 @@ export default function App() {
     } finally {
       setAnnotationSaving(false);
     }
-  }, [bboxOverride, labels, manualCandidates, loadObservation, loadObservations, selectedObsFilename]);
+  }, [bboxOverride, labels, manualCandidates, interactionEdits, loadObservation, loadObservations, selectedObsFilename]);
 
   const buildTrainingDataset = useCallback(async () => {
     setDatasetStatus({ loading: true });
@@ -487,6 +519,68 @@ export default function App() {
       setSessionActionLoading(false);
     }
   }, [loadTrainingSessions, selectedTrainingSessionId]);
+
+  const deleteTrainingSession = useCallback(async (sessionId) => {
+    if (!sessionId) return;
+    const confirmed = window.confirm(
+      `Delete session ${sessionId} and all its captured artifacts?\n\nThis stops Chrome, removes the session row, and deletes every artifact JSON, screenshot, and sidecar tied to it. Registry stays intact. Cannot be undone.`,
+    );
+    if (!confirmed) return;
+    try {
+      const response = await fetch(`${API}/api/training/sessions/${sessionId}`, { method: "DELETE" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || `Delete failed: ${response.status}`);
+      // Clear selection if we just deleted what was selected
+      if (selectedTrainingSessionId === sessionId) {
+        setSelectedTrainingSessionId(null);
+        setTabs([]);
+        setSelectedTabId(null);
+        clearSelectedObservation();
+      }
+      await loadTrainingSessions();
+      await loadObservations();
+    } catch (error) {
+      setTabsWarning(error.message);
+    }
+  }, [clearSelectedObservation, loadObservations, loadTrainingSessions, selectedTrainingSessionId]);
+
+  const resetAllTrainingData = useCallback(async () => {
+    const confirmed = window.confirm(
+      "Reset ALL training data?\n\n" +
+      "This will:\n" +
+      "  • Stop any active training Chrome processes\n" +
+      "  • Delete every training session\n" +
+      "  • Delete every capture (artifact JSONs, screenshots, .meta.json, .vision.json)\n\n" +
+      "This will NOT delete:\n" +
+      "  • Domains, goals, tasks, scenarios (your registry stays)\n" +
+      "  • Chrome profile directories on disk\n\n" +
+      "Cannot be undone. Continue?",
+    );
+    if (!confirmed) return;
+    // Second confirmation because this is genuinely destructive
+    const reallyConfirmed = window.confirm("Really? Type-deleting-Marketplace-progress level destructive. Last chance.");
+    if (!reallyConfirmed) return;
+    try {
+      const response = await fetch(`${API}/api/training/reset`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || `Reset failed: ${response.status}`);
+      setSelectedTrainingSessionId(null);
+      setTabs([]);
+      setSelectedTabId(null);
+      clearSelectedObservation();
+      await loadTrainingSessions();
+      await loadObservations();
+      window.alert(
+        `Reset complete.\n\n` +
+        `Sessions deleted: ${payload.deleted_sessions}\n` +
+        `Captures deleted: ${payload.deleted_captures}\n` +
+        `Files deleted: ${payload.deleted_files}\n` +
+        `Orphans swept: ${payload.swept_orphans}`,
+      );
+    } catch (error) {
+      window.alert(`Reset failed: ${error.message}`);
+    }
+  }, [clearSelectedObservation, loadObservations, loadTrainingSessions]);
 
   const openTrainingObservation = useCallback(async (filename) => {
     setActivePrimaryView("training");
@@ -633,6 +727,8 @@ export default function App() {
         setSelectedTrainingSessionId={setSelectedTrainingSessionId}
         startTrainingSession={startTrainingSession}
         stopTrainingSession={stopTrainingSession}
+        deleteTrainingSession={deleteTrainingSession}
+        resetAllTrainingData={resetAllTrainingData}
         sessionActionLoading={sessionActionLoading}
         tabs={tabs}
         tabsLoading={tabsLoading}
@@ -661,6 +757,8 @@ export default function App() {
         setBboxOverride={setBboxOverride}
         manualCandidates={manualCandidates}
         setManualCandidates={setManualCandidates}
+        interactionEdits={interactionEdits}
+        setInteractionEdits={setInteractionEdits}
         saveTrainingAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

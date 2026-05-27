@@ -1574,6 +1574,144 @@ input[type="checkbox"] {
   color: #6b21a8;
 }
 
+/* Action panel — per-capture interaction-layer fields (element_query, action_type, action_text). */
+.dd-action-panel {
+  margin-top: 14px;
+  padding: 14px 16px;
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dd-action-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.dd-action-panel-header strong {
+  font-size: 14px;
+  color: #111827;
+}
+
+.dd-action-panel-sub {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.dd-action-panel-body {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr);
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .dd-action-panel-body { grid-template-columns: 1fr; }
+}
+
+.dd-action-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dd-action-field-wide {
+  grid-column: span 1;
+}
+
+.dd-action-field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.dd-action-panel-hint {
+  font-size: 11px;
+  color: #6b7280;
+  font-style: italic;
+}
+
+.dd-action-panel-hint code {
+  font-family: ui-monospace, Menlo, monospace;
+  background: #eef2ff;
+  color: #4338ca;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+
+.dd-action-state-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .dd-action-state-row { grid-template-columns: 1fr; }
+}
+
+.dd-action-optional {
+  color: #9ca3af;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Session list row with delete button beside the selectable label */
+.recent-capture-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.recent-capture-item-grow {
+  flex: 1;
+  margin-bottom: 0 !important;
+}
+
+.session-delete-btn {
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #6b7280;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+.session-delete-btn:hover {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+/* Danger button — used for the Reset all training data action */
+.danger-btn {
+  padding: 8px 16px;
+  background: #ffffff;
+  color: #dc2626;
+  border: 1.5px solid #fecaca;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+
+.danger-btn:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
 .obs-no-screenshot {
   padding: 40px;
   text-align: center;

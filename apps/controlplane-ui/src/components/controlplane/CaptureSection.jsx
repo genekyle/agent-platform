@@ -16,6 +16,7 @@ export function CaptureSection({
   setSelectedTrainingSessionId,
   startTrainingSession,
   stopTrainingSession,
+  deleteTrainingSession,
   sessionActionLoading,
   tabs,
   tabsLoading,
@@ -219,16 +220,29 @@ export function CaptureSection({
           ) : (
             <div className="recent-capture-list">
               {sessions.map((session) => (
-                <button
+                <div
                   key={session.id}
-                  className={`recent-capture-item ${selectedTrainingSessionId === session.id ? "active" : ""}`}
-                  onClick={() => setSelectedTrainingSessionId(session.id)}
+                  className={`recent-capture-row${selectedTrainingSessionId === session.id ? " active" : ""}`}
                 >
-                  <span className="recent-capture-title">session-{session.id} · {session.domain_id} / {session.scenario_id}</span>
-                  <span className="recent-capture-meta">
-                    {session.status} · {session.capture_profile} · {session.chrome_debug_port ?? "no-port"}
-                  </span>
-                </button>
+                  <button
+                    className={`recent-capture-item recent-capture-item-grow ${selectedTrainingSessionId === session.id ? "active" : ""}`}
+                    onClick={() => setSelectedTrainingSessionId(session.id)}
+                  >
+                    <span className="recent-capture-title">session-{session.id} · {session.domain_id} / {session.scenario_id}</span>
+                    <span className="recent-capture-meta">
+                      {session.status} · {session.capture_profile} · {session.chrome_debug_port ?? "no-port"}
+                    </span>
+                  </button>
+                  {deleteTrainingSession ? (
+                    <button
+                      className="session-delete-btn"
+                      title={`Delete session ${session.id} and all its captures`}
+                      onClick={() => deleteTrainingSession(session.id)}
+                    >
+                      🗑
+                    </button>
+                  ) : null}
+                </div>
               ))}
             </div>
           )}

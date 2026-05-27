@@ -7,6 +7,10 @@ const API = import.meta.env.VITE_API_BASE_URL;
 // Kept short on purpose — these feed forward into the state_transition model.
 const MANUAL_ROLE_OPTIONS = ["button", "link", "input", "image", "text", "container", "other"];
 
+// Action types the agent can perform at a labeled bbox. "any" is the legacy default
+// from the goal — once an annotator labels a capture they should pick something specific.
+const ACTION_TYPE_OPTIONS = ["click", "type", "scroll", "select", "wait", "any"];
+
 // IoU between two rects in image-pixel space (used to sort the link picker so the
 // most-overlapping observer candidate floats to the top).
 function rectIoU(a, b) {
@@ -36,6 +40,8 @@ export function ObservationDetail({
   setBboxOverride,
   manualCandidates,
   setManualCandidates,
+  interactionEdits,
+  setInteractionEdits,
   onSaveAnnotation,
   annotationSaving,
   annotationMessage,
@@ -570,6 +576,106 @@ export function ObservationDetail({
               <div className="empty-state">No screenshot in this artifact.</div>
             )}
 
+            {/* Action panel — per-capture interaction layer. Sits below the screenshot so
+                the annotator labels (location → identity → action) as a single mental motion. */}
+            {mode === "training" && fileName ? (
+              <div className="dd-action-panel">
+                <div className="dd-action-panel-header">
+                  <strong>Action at this step</strong>
+                  <span className="dd-action-panel-sub">What the agent does once the bbox is grounded</span>
+                </div>
+                <div className="dd-action-panel-body">
+                  <label className="dd-action-field dd-action-field-wide">
+                    <span className="dd-action-field-label">Step intent (element_query)</span>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder={elementQuery || "e.g. type the user's email, click the Sign In button"}
+                      value={interactionEdits?.element_query ?? ""}
+                      onChange={(event) => setInteractionEdits?.((current) => ({
+                        ...(current ?? {}),
+                        element_query: event.target.value,
+                      }))}
+                    />
+                  </label>
+                  <label className="dd-action-field">
+                    <span className="dd-action-field-label">Action type</span>
+                    <select
+                      className="form-input"
+                      value={interactionEdits?.action_type ?? "any"}
+                      onChange={(event) => setInteractionEdits?.((current) => ({
+                        ...(current ?? {}),
+                        action_type: event.target.value,
+                      }))}
+                    >
+                      {ACTION_TYPE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {interactionEdits?.action_type === "type" ? (
+                    <label className="dd-action-field dd-action-field-wide">
+                      <span className="dd-action-field-label">Text to type</span>
+                      <input
+                        className="form-input"
+                        type="text"
+                        placeholder="literal value to enter at this step"
+                        value={interactionEdits?.action_text ?? ""}
+                        onChange={(event) => setInteractionEdits?.((current) => ({
+                          ...(current ?? {}),
+                          action_text: event.target.value,
+                        }))}
+                      />
+                    </label>
+                  ) : null}
+                </div>
+
+                {/* Page-state labels — separate row, optional, feeds future state-classifier
+                    and state-transition models. Free text on purpose: don't formalize taxonomies
+                    until 30+ labels exist and patterns are visible. */}
+                <div className="dd-action-state-row">
+                  <label className="dd-action-field">
+                    <span className="dd-action-field-label">
+                      Observed page state <span className="dd-action-optional">(optional)</span>
+                    </span>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder="e.g. login_landing, logged_in_home, out_of_domain"
+                      value={interactionEdits?.observed_page_state ?? ""}
+                      onChange={(event) => setInteractionEdits?.((current) => ({
+                        ...(current ?? {}),
+                        observed_page_state: event.target.value,
+                      }))}
+                    />
+                  </label>
+                  <label className="dd-action-field">
+                    <span className="dd-action-field-label">
+                      Post-action state <span className="dd-action-optional">(optional)</span>
+                    </span>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder="state the agent lands on AFTER this action"
+                      value={interactionEdits?.post_action_state ?? ""}
+                      onChange={(event) => setInteractionEdits?.((current) => ({
+                        ...(current ?? {}),
+                        post_action_state: event.target.value,
+                      }))}
+                    />
+                  </label>
+                </div>
+
+                <div className="dd-action-panel-hint">
+                  Saved alongside the bbox when you hit Save Review.
+                  Top row overrides the scenario-level defaults for this capture (use for multi-step flows).
+                  Bottom row tags the page state — use <code>out_of_domain</code> for wrong-tab captures
+                  (e.g. session opened on YouTube instead of Marketplace). Optional, but tagging from
+                  day 1 saves re-labeling later.
+                </div>
+              </div>
+            ) : null}
+
             {/* Link picker — appears after a draw finishes, blocks further drawing until resolved */}
             {pendingDraw ? (
               <div className="dd-link-picker">
@@ -624,6 +730,9 @@ export function ObservationDetail({
                       <div className="dd-link-list">
                         {visionCandidatesByOverlap.slice(0, 8).map((vision) => {
                           const isSelected = linkChoice.type === "vision" && linkChoice.candidateId === vision.candidate_id;
+                          // Prefer the model's caption as the human-readable label;
+                          // fall back to the id when caption is missing (older captures).
+                          const primary = vision.caption?.trim() || vision.candidate_id;
                           return (
                             <button
                               key={vision.candidate_id}
@@ -637,7 +746,7 @@ export function ObservationDetail({
                               })}
                             >
                               <span className="dd-link-rank dd-vision-badge">V</span>
-                              <span className="dd-link-label mono">{vision.candidate_id}</span>
+                              <span className="dd-link-label">{primary}</span>
                               <span className="dd-link-meta">conf {(vision.confidence ?? 0).toFixed(2)}</span>
                               <span className="dd-link-iou">{pendingDraw ? `IoU ${(vision._iou ?? 0).toFixed(2)}` : ""}</span>
                             </button>
@@ -713,10 +822,12 @@ export function ObservationDetail({
               if (vision) {
                 const w = Math.round(vision.bbox?.width ?? 0);
                 const h = Math.round(vision.bbox?.height ?? 0);
+                const cap = vision.caption?.trim();
                 return (
                   <div className="dd-bbox-info">
                     <span className="dd-vision-badge">V</span>{" "}
-                    <span className="mono">{vision.candidate_id}</span> — conf {(vision.confidence ?? 0).toFixed(2)} — {w}×{h} — {visionMeta?.version ?? "omniparser"}
+                    {cap ? <strong>"{cap}"</strong> : <span className="mono">{vision.candidate_id}</span>}
+                    {" "}— conf {(vision.confidence ?? 0).toFixed(2)} — {w}×{h} — {visionMeta?.version ?? "omniparser"}
                   </div>
                 );
               }
@@ -951,10 +1062,13 @@ export function ObservationDetail({
                       >
                         <div className="obs-candidate-rank dd-vision-badge">V</div>
                         <div className="obs-candidate-body">
-                          <div className="obs-candidate-label mono">{vision.candidate_id}</div>
+                          <div className="obs-candidate-label">
+                            {vision.caption?.trim() || <span className="mono">{vision.candidate_id}</span>}
+                          </div>
                           <div className="obs-candidate-meta">
                             <span>conf {(vision.confidence ?? 0).toFixed(2)}</span>
                             <span className="mono">{vision.bbox ? `${Math.round(vision.bbox.width)}×${Math.round(vision.bbox.height)}` : "no bbox"}</span>
+                            <span className="mono table-cell-small">{vision.candidate_id}</span>
                           </div>
                         </div>
                         <div className="obs-label-btns">

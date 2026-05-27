@@ -12,6 +12,7 @@ export function ObservationsTable({
   updateObsMeta,
   deleteObservation,
   bulkDeleteObservations,
+  resetAllTrainingData,
   emptyMessage,
 }) {
   const [obsSelection, setObsSelection] = useState(new Set());
@@ -71,6 +72,15 @@ export function ObservationsTable({
           <h2>{title}</h2>
           <p>{subtitle}</p>
         </div>
+        {resetAllTrainingData ? (
+          <button
+            className="danger-btn"
+            onClick={resetAllTrainingData}
+            title="Wipe all sessions and captures. Registry (domains/goals/etc.) is preserved."
+          >
+            Reset all training data
+          </button>
+        ) : null}
       </div>
 
       <div className="obs-toolbar">

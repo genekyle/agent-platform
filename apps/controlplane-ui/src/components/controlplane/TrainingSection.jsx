@@ -16,6 +16,8 @@ export function TrainingSection({
   setSelectedTrainingSessionId,
   startTrainingSession,
   stopTrainingSession,
+  deleteTrainingSession,
+  resetAllTrainingData,
   sessionActionLoading,
   tabs,
   tabsLoading,
@@ -44,6 +46,8 @@ export function TrainingSection({
   setBboxOverride,
   manualCandidates,
   setManualCandidates,
+  interactionEdits,
+  setInteractionEdits,
   saveTrainingAnnotation,
   annotationSaving,
   annotationMessage,
@@ -73,6 +77,7 @@ export function TrainingSection({
         setSelectedTrainingSessionId={setSelectedTrainingSessionId}
         startTrainingSession={startTrainingSession}
         stopTrainingSession={stopTrainingSession}
+        deleteTrainingSession={deleteTrainingSession}
         sessionActionLoading={sessionActionLoading}
         tabs={tabs}
         tabsLoading={tabsLoading}
@@ -109,6 +114,7 @@ export function TrainingSection({
         setSelectedTrainingSessionId={setSelectedTrainingSessionId}
         startTrainingSession={startTrainingSession}
         stopTrainingSession={stopTrainingSession}
+        deleteTrainingSession={deleteTrainingSession}
         sessionActionLoading={sessionActionLoading}
         tabs={tabs}
         tabsLoading={tabsLoading}
@@ -142,6 +148,7 @@ export function TrainingSection({
         updateObsMeta={updateObsMeta}
         deleteObservation={deleteObservation}
         bulkDeleteObservations={bulkDeleteObservations}
+        resetAllTrainingData={resetAllTrainingData}
         emptyMessage="No artifacts yet. Use Capture to create one."
       />
     );
@@ -179,6 +186,8 @@ export function TrainingSection({
         setBboxOverride={setBboxOverride}
         manualCandidates={manualCandidates}
         setManualCandidates={setManualCandidates}
+        interactionEdits={interactionEdits}
+        setInteractionEdits={setInteractionEdits}
         onSaveAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}
