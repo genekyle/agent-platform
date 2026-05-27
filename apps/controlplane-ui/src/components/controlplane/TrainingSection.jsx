@@ -48,6 +48,8 @@ export function TrainingSection({
   setManualCandidates,
   interactionEdits,
   setInteractionEdits,
+  pageStateOptions,
+  onCreatePageState,
   saveTrainingAnnotation,
   annotationSaving,
   annotationMessage,
@@ -188,6 +190,8 @@ export function TrainingSection({
         setManualCandidates={setManualCandidates}
         interactionEdits={interactionEdits}
         setInteractionEdits={setInteractionEdits}
+        pageStateOptions={pageStateOptions}
+        onCreatePageState={onCreatePageState}
         onSaveAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

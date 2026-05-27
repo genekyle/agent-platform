@@ -7,9 +7,27 @@ const API = import.meta.env.VITE_API_BASE_URL;
 // Kept short on purpose — these feed forward into the state_transition model.
 const MANUAL_ROLE_OPTIONS = ["button", "link", "input", "image", "text", "container", "other"];
 
-// Action types the agent can perform at a labeled bbox. "any" is the legacy default
-// from the goal — once an annotator labels a capture they should pick something specific.
-const ACTION_TYPE_OPTIONS = ["click", "type", "scroll", "select", "wait", "any"];
+const ACTION_TYPES = [
+  { id: "click", label: "Click" },
+  { id: "type", label: "Type" },
+  { id: "select", label: "Select" },
+  { id: "scroll", label: "Scroll" },
+  { id: "navigate", label: "Navigate" },
+  { id: "wait", label: "Wait" },
+  { id: "press", label: "Key" },
+  { id: "any", label: "Any" },
+];
+
+const ACTION_VALUE_LABELS = {
+  type: "Text to Type",
+  select: "Option to Select",
+  scroll: "Scroll Direction / Amount",
+  navigate: "URL or Destination",
+  press: "Key / Shortcut",
+  wait: "Wait Condition",
+  click: "Optional Payload",
+  any: "Optional Payload",
+};
 
 // IoU between two rects in image-pixel space (used to sort the link picker so the
 // most-overlapping observer candidate floats to the top).
@@ -42,6 +60,8 @@ export function ObservationDetail({
   setManualCandidates,
   interactionEdits,
   setInteractionEdits,
+  pageStateOptions = [],
+  onCreatePageState,
   onSaveAnnotation,
   annotationSaving,
   annotationMessage,
@@ -61,6 +81,9 @@ export function ObservationDetail({
   // Per-source visibility toggles for the screenshot overlay (does NOT hide from the
   // Candidates tab list or the link picker — those stay complete for labeling).
   const [visibleSources, setVisibleSources] = useState({ observer: true, vision: true, manual: true });
+  const [newPageStateName, setNewPageStateName] = useState("");
+  const [addingStateTarget, setAddingStateTarget] = useState(null);
+  const [pageStateError, setPageStateError] = useState(null);
   const svgRef = useRef(null);
 
   useEffect(() => {
@@ -74,6 +97,9 @@ export function ObservationDetail({
     setPendingDraw(null);
     setLinkChoice({ type: "manual", candidateId: null, name: "", role: "button" });
     setVisibleSources({ observer: true, vision: true, manual: true });
+    setNewPageStateName("");
+    setAddingStateTarget(null);
+    setPageStateError(null);
   }, [mode, selectedObsFilename]);
 
   if (selectedObs?._error) {
@@ -103,9 +129,104 @@ export function ObservationDetail({
   const elementQuery = trainingAnnotation.element_query
     ?? selectedObs?.acquisition?.training_metadata?.element_query
     ?? null;
+  const currentActionType = interactionEdits?.action_type || "any";
+  const actionValueLabel = ACTION_VALUE_LABELS[currentActionType] ?? "Action Payload";
 
   // Has any drawable label — drives Save button + bbox field enable state.
   const hasLabel = Boolean(approvedCandidateId || bboxOverride);
+
+  const updateInteractionEdit = useCallback((field, value) => {
+    setInteractionEdits?.((current) => ({
+      ...(current ?? {}),
+      [field]: value,
+    }));
+  }, [setInteractionEdits]);
+
+  const selectPageState = useCallback((field, value) => {
+    updateInteractionEdit(field, value);
+    setAddingStateTarget(null);
+    setPageStateError(null);
+  }, [updateInteractionEdit]);
+
+  const addPageState = useCallback(async (field) => {
+    if (!onCreatePageState) return;
+    setPageStateError(null);
+    try {
+      const created = await onCreatePageState(newPageStateName);
+      if (created?.page_state_id) {
+        updateInteractionEdit(field, created.page_state_id);
+        setNewPageStateName("");
+        setAddingStateTarget(null);
+      }
+    } catch (error) {
+      setPageStateError(error.message || String(error));
+    }
+  }, [newPageStateName, onCreatePageState, updateInteractionEdit]);
+
+  const renderPageStatePicker = (field, title, helper) => {
+    const selected = interactionEdits?.[field] ?? "";
+    const isAdding = addingStateTarget === field;
+    return (
+      <div className="dd-state-picker">
+        <div className="dd-state-picker-header">
+          <div>
+            <span className="dd-action-label">{title}</span>
+            <span className="dd-state-helper">{helper}</span>
+          </div>
+          <button
+            type="button"
+            className="ghost-btn dd-mini-btn"
+            onClick={() => {
+              setAddingStateTarget(isAdding ? null : field);
+              setPageStateError(null);
+            }}
+          >
+            {isAdding ? "Cancel" : "Add State"}
+          </button>
+        </div>
+        <div className="dd-state-chip-row">
+          <button
+            type="button"
+            className={`dd-state-chip${selected === "" ? " selected" : ""}`}
+            onClick={() => selectPageState(field, "")}
+          >
+            Not set
+          </button>
+          {pageStateOptions.map((state) => (
+            <button
+              key={`${field}-${state.page_state_id}`}
+              type="button"
+              className={`dd-state-chip${selected === state.page_state_id ? " selected" : ""}`}
+              onClick={() => selectPageState(field, state.page_state_id)}
+              title={state.page_state_id}
+            >
+              {state.display_name}
+            </button>
+          ))}
+        </div>
+        {isAdding ? (
+          <div className="dd-state-add-row">
+            <input
+              className="form-input"
+              value={newPageStateName}
+              placeholder="e.g. YouTube Home, Marketplace Login Landing"
+              onChange={(event) => setNewPageStateName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addPageState(field);
+                }
+              }}
+              autoFocus
+            />
+            <button className="primary-btn" type="button" onClick={() => addPageState(field)}>
+              Add & Select
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   // Map a pointer event to image-space (natural-pixel) coordinates.
   // The SVG uses viewBox = 0 0 natW natH with preserveAspectRatio="none",
@@ -576,103 +697,77 @@ export function ObservationDetail({
               <div className="empty-state">No screenshot in this artifact.</div>
             )}
 
-            {/* Action panel — per-capture interaction layer. Sits below the screenshot so
-                the annotator labels (location → identity → action) as a single mental motion. */}
             {mode === "training" && fileName ? (
               <div className="dd-action-panel">
                 <div className="dd-action-panel-header">
-                  <strong>Action at this step</strong>
-                  <span className="dd-action-panel-sub">What the agent does once the bbox is grounded</span>
-                </div>
-                <div className="dd-action-panel-body">
-                  <label className="dd-action-field dd-action-field-wide">
-                    <span className="dd-action-field-label">Step intent (element_query)</span>
-                    <input
-                      className="form-input"
-                      type="text"
-                      placeholder={elementQuery || "e.g. type the user's email, click the Sign In button"}
-                      value={interactionEdits?.element_query ?? ""}
-                      onChange={(event) => setInteractionEdits?.((current) => ({
-                        ...(current ?? {}),
-                        element_query: event.target.value,
-                      }))}
-                    />
-                  </label>
-                  <label className="dd-action-field">
-                    <span className="dd-action-field-label">Action type</span>
-                    <select
-                      className="form-input"
-                      value={interactionEdits?.action_type ?? "any"}
-                      onChange={(event) => setInteractionEdits?.((current) => ({
-                        ...(current ?? {}),
-                        action_type: event.target.value,
-                      }))}
-                    >
-                      {ACTION_TYPE_OPTIONS.map((option) => (
-                        <option key={option} value={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-                  {interactionEdits?.action_type === "type" ? (
-                    <label className="dd-action-field dd-action-field-wide">
-                      <span className="dd-action-field-label">Text to type</span>
-                      <input
-                        className="form-input"
-                        type="text"
-                        placeholder="literal value to enter at this step"
-                        value={interactionEdits?.action_text ?? ""}
-                        onChange={(event) => setInteractionEdits?.((current) => ({
-                          ...(current ?? {}),
-                          action_text: event.target.value,
-                        }))}
-                      />
-                    </label>
-                  ) : null}
+                  <div>
+                    <h3>Step Label</h3>
+                    <p>Describe the screen, choose the action, and pick the state labels from the registry.</p>
+                  </div>
+                  <button
+                    className="primary-btn"
+                    type="button"
+                    onClick={onSaveAnnotation}
+                    disabled={annotationSaving}
+                  >
+                    {annotationSaving ? "Saving..." : "Save Step Label"}
+                  </button>
                 </div>
 
-                {/* Page-state labels — separate row, optional, feeds future state-classifier
-                    and state-transition models. Free text on purpose: don't formalize taxonomies
-                    until 30+ labels exist and patterns are visible. */}
-                <div className="dd-action-state-row">
-                  <label className="dd-action-field">
-                    <span className="dd-action-field-label">
-                      Observed page state <span className="dd-action-optional">(optional)</span>
-                    </span>
-                    <input
-                      className="form-input"
-                      type="text"
-                      placeholder="e.g. login_landing, logged_in_home, out_of_domain"
-                      value={interactionEdits?.observed_page_state ?? ""}
-                      onChange={(event) => setInteractionEdits?.((current) => ({
-                        ...(current ?? {}),
-                        observed_page_state: event.target.value,
-                      }))}
-                    />
-                  </label>
-                  <label className="dd-action-field">
-                    <span className="dd-action-field-label">
-                      Post-action state <span className="dd-action-optional">(optional)</span>
-                    </span>
-                    <input
-                      className="form-input"
-                      type="text"
-                      placeholder="state the agent lands on AFTER this action"
-                      value={interactionEdits?.post_action_state ?? ""}
-                      onChange={(event) => setInteractionEdits?.((current) => ({
-                        ...(current ?? {}),
-                        post_action_state: event.target.value,
-                      }))}
-                    />
-                  </label>
+                <label className="dd-action-field dd-action-field-full">
+                  <span className="dd-action-label">Next Step Instruction</span>
+                  <textarea
+                    className="form-input dd-action-textarea"
+                    rows="2"
+                    value={interactionEdits?.element_query ?? ""}
+                    placeholder={elementQuery || "e.g. click the Sign In button, type the user's email address"}
+                    onChange={(event) => updateInteractionEdit("element_query", event.target.value)}
+                  />
+                </label>
+
+                <div className="dd-action-type-row">
+                  <span className="dd-action-label">Action Type</span>
+                  <div className="dd-action-type-buttons">
+                    {ACTION_TYPES.map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        className={`dd-action-type-btn${currentActionType === action.id ? " selected" : ""}`}
+                        onClick={() => updateInteractionEdit("action_type", action.id)}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="dd-action-panel-hint">
-                  Saved alongside the bbox when you hit Save Review.
-                  Top row overrides the scenario-level defaults for this capture (use for multi-step flows).
-                  Bottom row tags the page state — use <code>out_of_domain</code> for wrong-tab captures
-                  (e.g. session opened on YouTube instead of Marketplace). Optional, but tagging from
-                  day 1 saves re-labeling later.
+                <label className="dd-action-field dd-action-field-full">
+                  <span className="dd-action-label">{actionValueLabel}</span>
+                  <input
+                    className="form-input"
+                    value={interactionEdits?.action_text ?? ""}
+                    placeholder={
+                      currentActionType === "type"
+                        ? "literal text to type, e.g. user@example.com"
+                        : "optional detail for this action"
+                    }
+                    onChange={(event) => updateInteractionEdit("action_text", event.target.value)}
+                  />
+                </label>
+
+                <div className="dd-state-grid">
+                  {renderPageStatePicker(
+                    "observed_page_state",
+                    "Current Page State",
+                    "What is visible before the action?",
+                  )}
+                  {renderPageStatePicker(
+                    "post_action_state",
+                    "Expected Next State",
+                    "Where should the agent land after the action?",
+                  )}
                 </div>
+                {pageStateError ? <div className="annotation-message error">{pageStateError}</div> : null}
               </div>
             ) : null}
 

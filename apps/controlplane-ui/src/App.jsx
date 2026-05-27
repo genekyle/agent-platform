@@ -12,6 +12,29 @@ import { WorkersSection } from "./components/controlplane/WorkersSection";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
+const EMPTY_INTERACTION_EDITS = {
+  element_query: "",
+  action_type: "any",
+  action_text: "",
+  observed_page_state: "",
+  post_action_state: "",
+};
+
+const GLOBAL_PAGE_STATES = [
+  { page_state_id: "out_of_domain", display_name: "Out of Domain" },
+  { page_state_id: "unknown", display_name: "Unknown / Unclassified" },
+  { page_state_id: "blocked", display_name: "Blocked / Needs Human" },
+];
+
+function slugify(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 100);
+}
+
 const mockWorkers = [
   { id: "worker-01", name: "Seat-01", domain: "Marketplace", status: "Busy", seat: "VM-01" },
   { id: "worker-02", name: "Seat-02", domain: "Jobs", status: "Idle", seat: "VM-02" },
@@ -50,20 +73,7 @@ export default function App() {
   // Annotator-created candidates for the current observation — surfaced into the
   // Candidates tab and the link picker after a draw. Persisted via the same PATCH.
   const [manualCandidates, setManualCandidates] = useState([]);
-  // Per-capture interaction-layer overrides — annotator-set, default-loaded from scenario.
-  // element_query: the step intent ("type the user's email")
-  // action_type: click | type | scroll | select | wait
-  // action_text: literal payload for "type" actions
-  // observed_page_state: free-text label of which named state this screenshot shows
-  //   (feeds the page_state_classifier model; "out_of_domain" marks bad/wrong-page captures)
-  // post_action_state: state the agent lands on AFTER this action (feeds state_transition model)
-  const [interactionEdits, setInteractionEdits] = useState({
-    element_query: "",
-    action_type: "any",
-    action_text: "",
-    observed_page_state: "",
-    post_action_state: "",
-  });
+  const [interactionEdits, setInteractionEdits] = useState(EMPTY_INTERACTION_EDITS);
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [annotationMessage, setAnnotationMessage] = useState(null);
   const [datasetStatus, setDatasetStatus] = useState(null);
@@ -90,6 +100,30 @@ export default function App() {
     () => sessions.find((session) => session.id === selectedTrainingSessionId) ?? null,
     [sessions, selectedTrainingSessionId],
   );
+  const selectedObservationAnnotation = selectedObs?.meta?.training_annotation ?? null;
+  const selectedObservationDomainId = selectedObservationAnnotation?.domain_id
+    ?? selectedObs?.acquisition?.training_metadata?.domain_id
+    ?? selectedObs?.metadata?.domain_id
+    ?? selectedTrainingSession?.domain_id
+    ?? null;
+  const selectedObservationDomain = useMemo(
+    () => trainingRegistry.domains.find((domain) => domain.domain_id === selectedObservationDomainId) ?? null,
+    [trainingRegistry.domains, selectedObservationDomainId],
+  );
+  const pageStateOptions = useMemo(() => {
+    const seen = new Set();
+    return [...GLOBAL_PAGE_STATES, ...(selectedObservationDomain?.page_states ?? [])]
+      .filter((state) => {
+        const id = state?.page_state_id;
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
+      .map((state) => ({
+        page_state_id: state.page_state_id,
+        display_name: state.display_name || state.page_state_id,
+      }));
+  }, [selectedObservationDomain]);
 
   const setActiveSection = useCallback((sectionId) => {
     setActiveSecondaryViewByPrimary((current) => ({ ...current, [activePrimaryView]: sectionId }));
@@ -211,6 +245,28 @@ export default function App() {
     }
   }, [loadTrainingRegistry]);
 
+  const createPageStateFromLabeler = useCallback(async (displayName) => {
+    if (!selectedObservationDomain) {
+      throw new Error("This capture is not attached to a known domain.");
+    }
+    const cleanName = String(displayName || "").trim();
+    const pageStateId = slugify(cleanName);
+    if (!cleanName || !pageStateId) {
+      throw new Error("Enter a page state name first.");
+    }
+    const existing = (selectedObservationDomain.page_states ?? []).find(
+      (state) => state.page_state_id === pageStateId,
+    );
+    if (existing) return existing;
+
+    const nextState = { page_state_id: pageStateId, display_name: cleanName };
+    await saveRegistryItem("domains", {
+      page_states: [...(selectedObservationDomain.page_states ?? []), nextState],
+    }, selectedObservationDomain.domain_id);
+    await loadTrainingRegistry();
+    return nextState;
+  }, [loadTrainingRegistry, saveRegistryItem, selectedObservationDomain]);
+
   const loadTrainingSessions = useCallback(async () => {
     try {
       const response = await fetch(`${API}/api/training/sessions`);
@@ -323,7 +379,7 @@ export default function App() {
     setLabels({});
     setBboxOverride(null);
     setManualCandidates([]);
-    setInteractionEdits({ element_query: "", action_type: "any", action_text: "", observed_page_state: "", post_action_state: "" });
+    setInteractionEdits(EMPTY_INTERACTION_EDITS);
     setAnnotationMessage(null);
     try {
       const response = await fetch(`${API}/api/observations/${encodeURIComponent(filename)}`);
@@ -337,7 +393,7 @@ export default function App() {
       setBboxOverride(annotation?.approved_bbox ?? (positiveCandidate ? resolveBbox(positiveCandidate, payload?.acquisition) : null));
       setManualCandidates(Array.isArray(annotation?.manual_candidates) ? annotation.manual_candidates : []);
       setInteractionEdits({
-        element_query: annotation?.element_query ?? "",
+        element_query: annotation?.element_query ?? payload?.acquisition?.training_metadata?.element_query ?? "",
         action_type: annotation?.action_type_hint ?? "any",
         action_text: annotation?.action_text ?? "",
         observed_page_state: annotation?.observed_page_state ?? "",
@@ -355,7 +411,7 @@ export default function App() {
     setLabels({});
     setBboxOverride(null);
     setManualCandidates([]);
-    setInteractionEdits({ element_query: "", action_type: "any", action_text: "", observed_page_state: "", post_action_state: "" });
+    setInteractionEdits(EMPTY_INTERACTION_EDITS);
     setAnnotationMessage(null);
   }, []);
 
@@ -380,6 +436,11 @@ export default function App() {
             // A manually drawn bbox can stand alone — no positive candidate required.
             approved_bbox: bboxOverride,
             manual_candidates: manualCandidates,
+            element_query: interactionEdits.element_query,
+            action_type_hint: interactionEdits.action_type,
+            action_text: interactionEdits.action_text,
+            observed_page_state: interactionEdits.observed_page_state,
+            post_action_state: interactionEdits.post_action_state,
           },
           // Interaction-layer overrides go alongside training_annotation in the same PATCH.
           // Empty string clears the override back to scenario-inherited default (server stores NULL).
@@ -759,6 +820,8 @@ export default function App() {
         setManualCandidates={setManualCandidates}
         interactionEdits={interactionEdits}
         setInteractionEdits={setInteractionEdits}
+        pageStateOptions={pageStateOptions}
+        onCreatePageState={createPageStateFromLabeler}
         saveTrainingAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

@@ -1574,76 +1574,151 @@ input[type="checkbox"] {
   color: #6b21a8;
 }
 
-/* Action panel — per-capture interaction-layer fields (element_query, action_type, action_text). */
+/* Action panel — per-capture interaction-layer labels. */
 .dd-action-panel {
   margin-top: 14px;
   padding: 14px 16px;
-  background: #fafafa;
-  border: 1px solid #e5e7eb;
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
   border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  gap: 12px;
 }
 
 .dd-action-panel-header {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
   justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 1px solid #e5edf6;
+  padding-bottom: 10px;
 }
 
-.dd-action-panel-header strong {
-  font-size: 14px;
+.dd-action-panel-header h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
   color: #111827;
 }
 
-.dd-action-panel-sub {
+.dd-action-panel-header p {
+  margin: 0;
   font-size: 12px;
+  line-height: 1.35;
   color: #6b7280;
-}
-
-.dd-action-panel-body {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr);
-  gap: 10px;
-}
-
-@media (max-width: 900px) {
-  .dd-action-panel-body { grid-template-columns: 1fr; }
 }
 
 .dd-action-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  gap: 6px;
 }
 
-.dd-action-field-wide {
-  grid-column: span 1;
+.dd-action-field-full {
+  width: 100%;
 }
 
-.dd-action-field-label {
+.dd-action-label {
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  font-weight: 800;
   color: #6b7280;
 }
 
-.dd-action-panel-hint {
+.dd-action-textarea {
+  min-height: 58px;
+  resize: vertical;
+  line-height: 1.35;
+}
+
+.dd-action-type-row {
+  display: grid;
+  gap: 8px;
+}
+
+.dd-action-type-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dd-action-type-btn,
+.dd-state-chip {
+  border: 1px solid #d8e2f0;
+  background: #ffffff;
+  color: #334155;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.dd-action-type-btn:hover,
+.dd-state-chip:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.dd-action-type-btn.selected,
+.dd-state-chip.selected {
+  border-color: #2563eb;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.dd-state-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dd-state-picker {
+  border: 1px solid #e5edf6;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.dd-state-picker-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dd-state-helper {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.dd-state-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.dd-state-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.dd-mini-btn {
+  padding: 6px 8px;
   font-size: 11px;
-  color: #6b7280;
-  font-style: italic;
+  white-space: nowrap;
 }
 
-.dd-action-panel-hint code {
-  font-family: ui-monospace, Menlo, monospace;
-  background: #eef2ff;
-  color: #4338ca;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 10.5px;
+@media (max-width: 900px) {
+  .dd-state-grid,
+  .dd-state-add-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dd-action-state-row {
