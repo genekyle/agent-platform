@@ -92,6 +92,10 @@ class PageStateRegistry(Base):
         ForeignKey("scenario_registry.scenario_id"), nullable=True, index=True,
     )
     category: Mapped[str] = mapped_column(String(60), default="general", index=True)
+    # Agent-lifecycle phase: unauthenticated | authenticated | neutral. Goal-scoped
+    # states inherit it from their goal; domain-wide states (homepage, navigation)
+    # declare it directly. Nullable = not yet classified.
+    stage: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -109,25 +109,28 @@ export default function App() {
   const [pageStateOptions, setPageStateOptions] = useState([]);
   const loadPageStateOptions = useCallback(async () => {
     try {
-      const params = new URLSearchParams();
-      if (selectedObservationDomainId) params.set("domain_id", selectedObservationDomainId);
-      if (selectedObservationGoalId) params.set("goal_id", selectedObservationGoalId);
-      if (selectedObservationScenarioId) params.set("scenario_id", selectedObservationScenarioId);
-      const r = await fetch(`${API}/api/training/page-states?${params.toString()}`);
+      // Fetch ALL states (no domain filter): the folder-nav picker needs every
+      // domain so you can navigate out of your home domain into the others. The
+      // picker centers on the capture's domain/objective itself via annotation.
+      const r = await fetch(`${API}/api/training/page-states`);
       if (!r.ok) throw new Error();
       const rows = await r.json();
       // Normalize to what the picker expects (keep page_state_id alias for back-compat).
+      // domain_id/goal_id/scenario_id are REQUIRED for folder classification.
       setPageStateOptions(rows.map((s) => ({
         page_state_id: s.state_id,
         state_id: s.state_id,
         display_name: s.display_name || s.state_id,
         scope: s.scope,
+        domain_id: s.domain_id,
+        goal_id: s.goal_id,
+        scenario_id: s.scenario_id,
         category: s.category || "general",
       })));
     } catch {
       setPageStateOptions([]);
     }
-  }, [selectedObservationDomainId, selectedObservationGoalId, selectedObservationScenarioId]);
+  }, []);
 
   useEffect(() => { loadPageStateOptions(); }, [loadPageStateOptions]);
 

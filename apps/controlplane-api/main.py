@@ -261,6 +261,19 @@ def backfill_goal_stages(db: Session) -> None:
     db.commit()
 
 
+def backfill_page_state_stages(db: Session) -> None:
+    """Goal/scenario-scoped states inherit their goal's stage when unset
+    (one-time, non-destructive — only fills NULL stage)."""
+    goals = {g.goal_id: g for g in db.scalars(select(GoalRegistry)).all()}
+    changed = False
+    for s in db.scalars(select(PageStateRegistry).where(PageStateRegistry.stage.is_(None))).all():
+        if s.scope in ("goal", "scenario") and s.goal_id in goals:
+            s.stage = goals[s.goal_id].stage or "neutral"
+            changed = True
+    if changed:
+        db.commit()
+
+
 def seed_page_states(db: Session) -> None:
     """Idempotently ensure the global states exist, and migrate any legacy
     per-domain page_states (the old JSON blob) into the registry as scope=domain
@@ -546,6 +559,8 @@ def _migrate_schema() -> None:
         ("goal_registry", "stage", "VARCHAR(30) NOT NULL DEFAULT 'neutral'"),
         # page_state_registry objective(goal) scope (v5)
         ("page_state_registry", "goal_id", "VARCHAR(100)"),
+        # page_state_registry agent-stage (v6)
+        ("page_state_registry", "stage", "VARCHAR(30)"),
         # task_registry training config fields (v2)
         ("task_registry", "description", "TEXT"),
         ("task_registry", "estimated_steps", "VARCHAR(50)"),
@@ -569,6 +584,7 @@ def on_startup():
         seed_page_states(db)
         seed_actions(db)
         backfill_goal_stages(db)
+        backfill_page_state_stages(db)
 
 
 @app.get("/health")
@@ -1111,6 +1127,7 @@ def _page_state_dict(s: PageStateRegistry) -> dict:
         "goal_id": s.goal_id,
         "scenario_id": s.scenario_id,
         "category": s.category or "general",
+        "stage": s.stage,
         "description": s.description,
         "status": s.status,
     }
@@ -1123,6 +1140,7 @@ class PageStateWrite(BaseModel):
     goal_id: Optional[str] = None
     scenario_id: Optional[str] = None
     category: str = "general"
+    stage: Optional[str] = None  # unauthenticated | authenticated | neutral
     description: Optional[str] = None
     state_id: Optional[str] = None  # optional explicit slug; else derived from display_name
 
@@ -1134,6 +1152,7 @@ class PageStateUpdate(BaseModel):
     goal_id: Optional[str] = None
     scenario_id: Optional[str] = None
     category: Optional[str] = None
+    stage: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
 
@@ -1205,6 +1224,7 @@ def create_page_state(body: PageStateWrite, db: Session = Depends(get_db)):
         goal_id=body.goal_id if body.scope in ("goal", "scenario") else None,
         scenario_id=body.scenario_id if body.scope == "scenario" else None,
         category=(body.category or "general").strip() or "general",
+        stage=(body.stage or None),
         description=body.description,
         status="active",
     )
@@ -1219,7 +1239,7 @@ def update_page_state(state_id: str, body: PageStateUpdate, db: Session = Depend
     row = db.get(PageStateRegistry, state_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Page state not found")
-    for field in ("display_name", "scope", "domain_id", "goal_id", "scenario_id", "category", "description", "status"):
+    for field in ("display_name", "scope", "domain_id", "goal_id", "scenario_id", "category", "stage", "description", "status"):
         val = getattr(body, field)
         if val is not None:
             setattr(row, field, val)

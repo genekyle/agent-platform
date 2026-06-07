@@ -250,39 +250,56 @@ export function ObservationDetail({
     return d?.display_name || d?.label || id;
   }, [domains]);
 
-  // Folder index: relevance rings centered on a capture. Root ▸ Domain ▸ Objective ▸ chips.
-  // Each domain owns its own state set (domain-wide + per-objective). Global states sit
-  // beside the domains at the root. The picker opens already inside the capture's own
-  // objective folder and lets you navigate OUT to reach other domains / global.
+  // Folder index: relevance rings centered on a capture, matching the canonical
+  // taxonomy Domain ▸ Stage ▸ Objective ▸ states. Each domain splits into lifecycle
+  // stages (unauthenticated / authenticated / neutral); each stage holds objective
+  // sub-folders (goal-scoped states) plus stage-wide domain states (homepage, nav).
+  // Global states sit beside the domains at the root.
   const sortCat = (m) =>
     [...m.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([cat, list]) => [cat, list.sort((a, b) => a.display_name.localeCompare(b.display_name))]);
+  // Effective stage of a state: explicit field, else inherit from its goal, else neutral.
+  const stageOf = (s) =>
+    s.stage || ((s.scope === "goal" || s.scope === "scenario") && goalById.get(s.goal_id)?.stage) || "neutral";
   const folderIndex = useMemo(() => {
-    const domainsMap = new Map(); // domainId -> { domainWide:Map, objectives:Map(goalId->{label,stage,byCat:Map}) }
+    // domainId -> Map(stage -> { objectives:Map(goalId->{label,byCat}), stageWide:Map(cat->[]) })
+    const domainsMap = new Map();
     const globalByCat = new Map();
-    const ensureDomain = (id) => {
-      if (!domainsMap.has(id)) domainsMap.set(id, { domainWide: new Map(), objectives: new Map() });
-      return domainsMap.get(id);
-    };
     const push = (m, cat, s) => { if (!m.has(cat)) m.set(cat, []); m.get(cat).push(s); };
+    const ensureStage = (domId, stage) => {
+      if (!domainsMap.has(domId)) domainsMap.set(domId, new Map());
+      const stages = domainsMap.get(domId);
+      if (!stages.has(stage)) stages.set(stage, { objectives: new Map(), stageWide: new Map() });
+      return stages.get(stage);
+    };
     for (const s of pageStateOptions) {
       const cat = s.category || "general";
-      if ((s.scope === "goal" || s.scope === "scenario") && s.goal_id) {
-        const dom = ensureDomain(s.domain_id || goalById.get(s.goal_id)?.domain_id || "_unscoped");
-        if (!dom.objectives.has(s.goal_id)) {
-          const g = goalById.get(s.goal_id);
-          dom.objectives.set(s.goal_id, { label: g?.display_name || s.goal_id, stage: g?.stage || "neutral", byCat: new Map() });
-        }
-        push(dom.objectives.get(s.goal_id).byCat, cat, s);
-      } else if (s.scope === "domain" && s.domain_id) {
-        push(ensureDomain(s.domain_id).domainWide, cat, s);
-      } else {
+      if (s.scope === "global" || (!s.domain_id && !s.goal_id)) {
         push(globalByCat, cat, s);
+        continue;
+      }
+      const domId = s.domain_id || goalById.get(s.goal_id)?.domain_id || "_unscoped";
+      const st = ensureStage(domId, stageOf(s));
+      if ((s.scope === "goal" || s.scope === "scenario") && s.goal_id) {
+        if (!st.objectives.has(s.goal_id)) {
+          const g = goalById.get(s.goal_id);
+          st.objectives.set(s.goal_id, { label: g?.display_name || s.goal_id, byCat: new Map() });
+        }
+        push(st.objectives.get(s.goal_id).byCat, cat, s);
+      } else {
+        push(st.stageWide, cat, s);
       }
     }
     return { domainsMap, globalByCat };
   }, [pageStateOptions, goalById]);
+
+  const STAGE_ORDER = ["unauthenticated", "authenticated", "neutral"];
+  const STAGE_LABEL = { unauthenticated: "Unauthenticated", authenticated: "Authenticated", neutral: "Unstaged" };
+  const countStage = (st) =>
+    [...st.objectives.values()].reduce((n, o) => n + [...o.byCat.values()].reduce((k, l) => k + l.length, 0), 0)
+    + [...st.stageWide.values()].reduce((n, l) => n + l.length, 0);
+  const countDomain = (stages) => [...stages.values()].reduce((n, st) => n + countStage(st), 0);
 
   // Known category names (from existing states + a few defaults) — powers the
   // combobox so you can pick an existing category or type a brand-new one ("Login").
@@ -302,9 +319,11 @@ export function ObservationDetail({
     const { domainsMap, globalByCat } = folderIndex;
 
     // Where this field's picker is currently pointed. Default = the capture's home
-    // folder: its own objective if known, else its domain, else the root.
+    // folder: its own objective (inside that objective's stage) if known, else its
+    // domain, else the root.
+    const homeStage = captureGoalId ? (goalById.get(captureGoalId)?.stage || "neutral") : null;
     const homeNav = captureGoalId
-      ? { level: "objective", domainId: captureDomainId, goalId: captureGoalId }
+      ? { level: "objective", domainId: captureDomainId, stage: homeStage, goalId: captureGoalId }
       : captureDomainId
         ? { level: "domain", domainId: captureDomainId }
         : { level: "root" };
@@ -338,73 +357,88 @@ export function ObservationDetail({
         </div>
       ));
 
-    // Breadcrumb: All domains › <Domain> › <Objective>. Each crumb pops you outward.
+    // Breadcrumb: All domains › <Domain> › <Stage> › <Objective>. Each crumb pops out.
     const crumbs = [{ label: "All domains", nav: { level: "root" } }];
-    if (nav.level !== "root" && nav.domainId) {
+    if (["domain", "stage", "objective"].includes(nav.level) && nav.domainId) {
       crumbs.push({ label: domainLabelOf(nav.domainId), nav: { level: "domain", domainId: nav.domainId } });
+    }
+    if (["stage", "objective"].includes(nav.level) && nav.stage) {
+      crumbs.push({ label: STAGE_LABEL[nav.stage] || nav.stage, nav: { level: "stage", domainId: nav.domainId, stage: nav.stage } });
     }
     if (nav.level === "objective" && nav.goalId) {
       crumbs.push({ label: goalById.get(nav.goalId)?.display_name || nav.goalId, nav });
     }
 
+    const folder = (key, cls, icon, name, count, onClick, badge) => (
+      <button key={key} type="button" className={`dd-state-folder ${cls}`} onClick={onClick}>
+        <span className="dd-state-folder-icon">{icon}</span>
+        <span className="dd-state-folder-name">{name}{badge ? <span className="dd-state-home-badge">{badge}</span> : null}</span>
+        <span className="dd-state-folder-count">{count}</span>
+      </button>
+    );
+
     const renderBody = () => {
+      // Objective: the leaf — category blocks of that objective's states.
       if (nav.level === "objective") {
-        const obj = domainsMap.get(nav.domainId)?.objectives.get(nav.goalId);
+        const obj = domainsMap.get(nav.domainId)?.get(nav.stage)?.objectives.get(nav.goalId);
         const blocks = obj ? catBlocks(obj.byCat) : [];
         return blocks.length
           ? <div className="dd-state-folder-body">{blocks}</div>
           : <div className="dd-state-empty">No states for this objective yet — add one below, or pop up a level.</div>;
       }
-      if (nav.level === "domain") {
-        const dom = domainsMap.get(nav.domainId);
-        const objEntries = dom ? [...dom.objectives.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)) : [];
+      // Stage: objective sub-folders + stage-wide domain states.
+      if (nav.level === "stage") {
+        const st = domainsMap.get(nav.domainId)?.get(nav.stage);
+        const objEntries = st ? [...st.objectives.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)) : [];
         return (
           <div className="dd-state-folder-body">
             {objEntries.length ? (
               <div className="dd-state-folder-grid">
-                {objEntries.map(([gid, o]) => {
-                  const count = [...o.byCat.values()].reduce((n, l) => n + l.length, 0);
-                  return (
-                    <button key={`${field}-objf-${gid}`} type="button" className={`dd-state-folder stage-${o.stage}`}
-                      onClick={() => setNav({ level: "objective", domainId: nav.domainId, goalId: gid })}>
-                      <span className="dd-state-folder-icon">📁</span>
-                      <span className="dd-state-folder-name">{o.label}</span>
-                      <span className="dd-state-folder-count">{count}</span>
-                    </button>
-                  );
-                })}
+                {objEntries.map(([gid, o]) =>
+                  folder(`${field}-objf-${gid}`, `stage-${nav.stage}`, "📁", o.label,
+                    [...o.byCat.values()].reduce((n, l) => n + l.length, 0),
+                    () => setNav({ level: "objective", domainId: nav.domainId, stage: nav.stage, goalId: gid })))}
               </div>
             ) : null}
-            {dom && dom.domainWide.size ? (
+            {st && st.stageWide.size ? (
               <div className="dd-state-domainwide">
-                <div className="dd-state-section-label">Domain-wide states</div>
-                {catBlocks(dom.domainWide)}
+                <div className="dd-state-section-label">{STAGE_LABEL[nav.stage]} · domain-wide states</div>
+                {catBlocks(st.stageWide)}
               </div>
             ) : null}
-            {!objEntries.length && !(dom && dom.domainWide.size) ? (
-              <div className="dd-state-empty">No states in this domain yet.</div>
+            {!objEntries.length && !(st && st.stageWide.size) ? (
+              <div className="dd-state-empty">No states in this stage yet.</div>
             ) : null}
           </div>
         );
       }
-      // root: domain folders + Global folder
+      // Domain: stage folders.
+      if (nav.level === "domain") {
+        const stages = domainsMap.get(nav.domainId);
+        const stageEntries = stages
+          ? [...stages.entries()].sort((a, b) => STAGE_ORDER.indexOf(a[0]) - STAGE_ORDER.indexOf(b[0]))
+          : [];
+        return stageEntries.length ? (
+          <div className="dd-state-folder-body">
+            <div className="dd-state-folder-grid">
+              {stageEntries.map(([stage, st]) =>
+                folder(`${field}-stagef-${stage}`, `stage-${stage}`, "🗂",
+                  STAGE_LABEL[stage] || stage, countStage(st),
+                  () => setNav({ level: "stage", domainId: nav.domainId, stage })))}
+            </div>
+          </div>
+        ) : <div className="dd-state-empty">No states in this domain yet.</div>;
+      }
+      // Root: domain folders + Global section.
       const domEntries = [...domainsMap.entries()].sort((a, b) => domainLabelOf(a[0]).localeCompare(domainLabelOf(b[0])));
       return (
         <div className="dd-state-folder-body">
           <div className="dd-state-folder-grid">
-            {domEntries.map(([did, dom]) => {
-              const count = [...dom.domainWide.values()].reduce((n, l) => n + l.length, 0)
-                + [...dom.objectives.values()].reduce((n, o) => n + [...o.byCat.values()].reduce((k, l) => k + l.length, 0), 0);
-              return (
-                <button key={`${field}-domf-${did}`} type="button"
-                  className={`dd-state-folder${did === captureDomainId ? " is-home" : ""}`}
-                  onClick={() => setNav({ level: "domain", domainId: did })}>
-                  <span className="dd-state-folder-icon">📂</span>
-                  <span className="dd-state-folder-name">{domainLabelOf(did)}{did === captureDomainId ? " ·home" : ""}</span>
-                  <span className="dd-state-folder-count">{count}</span>
-                </button>
-              );
-            })}
+            {domEntries.map(([did, stages]) =>
+              folder(`${field}-domf-${did}`, did === captureDomainId ? "is-home" : "", "📂",
+                domainLabelOf(did), countDomain(stages),
+                () => setNav({ level: "domain", domainId: did }),
+                did === captureDomainId ? "home" : null))}
           </div>
           {globalByCat.size ? (
             <div className="dd-state-domainwide">
