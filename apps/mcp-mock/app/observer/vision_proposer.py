@@ -31,11 +31,25 @@ Output shape — drops straight into the labeler alongside observer and manual:
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+# Offline-by-default: use cached model weights only and never phone home to HuggingFace
+# (which otherwise makes a small network call per model load to re-validate the cache).
+# The weights are already downloaded; this just stops the recurring chatter — important
+# on metered/hotspot connections. On a FRESH machine that needs to fetch weights once,
+# run with AGENT_MODEL_DOWNLOAD=1 to allow the download. Must be set before any HF import.
+if os.environ.get("AGENT_MODEL_DOWNLOAD") != "1":
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+logger = logging.getLogger("mcp-mock.vision_proposer")
 
 
 OMNI_REPO = "microsoft/OmniParser-v2.0"
@@ -47,15 +61,31 @@ MODEL_VERSION = "omniparser-v2.0/icon_detect+icon_caption"
 
 # Detector tuning
 INFERENCE_IMGSZ = 1280
-DEFAULT_CONF_THRESHOLD = 0.05
+# Confidence floor for keeping a detection. OmniParser's README uses 0.05 for
+# maximum recall, but that floods a labeling tool with noise (49 boxes on a page
+# with ~10 real elements) and balloons captioning cost. 0.30 keeps salient
+# interactive elements (buttons, fields, icons) while dropping faint edges/padding.
+# Empirically on a Google homepage: 0.05->49, 0.30->18, 0.40->11.
+DEFAULT_CONF_THRESHOLD = 0.30
 
-# Captioner tuning
+# Hard cap on candidates per screenshot, applied after sorting by confidence.
+# Safety valve for dense pages (e.g. a Marketplace listing feed) so captioning
+# stays bounded and the labeler doesn't get an unusable wall of boxes. The
+# annotator labels one element per capture, so the top-N by confidence is plenty.
+MAX_CANDIDATES = 30
+
+# Captioner tuning — captioning (Florence-2) is the dominant cost, and on MPS it's
+# highly variable (a 30-crop page can take minutes under memory pressure). Captions are
+# only annotator scaffolding (they never train the grounding model), so we trade caption
+# quality for speed aggressively:
 CAPTION_PROMPT = "<CAPTION>"
-CAPTION_MAX_NEW_TOKENS = 20
-CAPTION_NUM_BEAMS = 3
-# Batch size for caption generation. Tuned for MPS / 16-32 GB unified memory;
-# adjust down if OOM on smaller machines, up if you have lots of headroom.
+CAPTION_MAX_NEW_TOKENS = 16
+CAPTION_NUM_BEAMS = 1          # greedy decode — ~3x faster than beam search=3
 CAPTION_BATCH_SIZE = 8
+# Only caption the top-N highest-confidence detections. Boxes for ALL kept candidates
+# still appear (up to MAX_CANDIDATES); lower-confidence ones just show their id instead
+# of a caption. This bounds the slow step regardless of how many buttons are on screen.
+CAPTION_TOP_N = 12
 
 
 @dataclass
@@ -197,21 +227,31 @@ def propose_candidates(
     conf: float = DEFAULT_CONF_THRESHOLD,
     handle: Optional[ProposerHandle] = None,
     include_captions: bool = True,
+    stats: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Run the proposer (detection + captioning) on one screenshot.
 
     Returns an empty list if the screenshot doesn't exist or nothing is detected.
-    Set `include_captions=False` to skip the slower Florence-2 step — useful when
-    you only need bboxes (debugging, perf testing).
+    Set `include_captions=False` to skip the slower Florence-2 step.
+
+    Pass a `stats` dict to receive a per-phase timing/observability breakdown
+    (load/detect/caption ms, counts, device) — the caller can persist it so the
+    annotator can SEE what each capture's proposal cost and where time went.
     """
     path = Path(screenshot_path)
     if not path.exists():
         return []
 
+    overall_start = time.perf_counter()
+
+    # Time the (possibly cold) model load separately — first call pays download/load.
+    load_start = time.perf_counter()
     if handle is None:
         handle = load_proposer()
+    load_ms = int((time.perf_counter() - load_start) * 1000)
 
-    # Step 1: detection
+    # Phase 1: detection
+    detect_start = time.perf_counter()
     results = handle.detector.predict(
         str(path),
         conf=conf,
@@ -219,32 +259,62 @@ def propose_candidates(
         device=handle.device,
         verbose=False,
     )
-    if not results:
-        return []
-    boxes = results[0].boxes
-    if boxes is None or len(boxes) == 0:
+    detect_ms = int((time.perf_counter() - detect_start) * 1000)
+
+    boxes = results[0].boxes if results else None
+    raw_count = len(boxes) if boxes is not None else 0
+    if not raw_count:
+        if stats is not None:
+            stats.update({"device": handle.device, "load_ms": load_ms, "detect_ms": detect_ms,
+                          "raw_detections": 0, "kept": 0, "captioned": 0, "caption_ms": 0,
+                          "total_ms": int((time.perf_counter() - overall_start) * 1000)})
         return []
 
     xyxy = boxes.xyxy.cpu().numpy().tolist()
-    confs = boxes.conf.cpu().numpy().tolist()
+    confs_all = boxes.conf.cpu().numpy().tolist()
 
-    # Build crops + bbox dicts in one pass (same order — used to align captions back)
+    # Sort by confidence and cap at MAX_CANDIDATES before any crop/caption work.
+    ranked = sorted(zip(xyxy, confs_all), key=lambda pair: pair[1], reverse=True)[:MAX_CANDIDATES]
+
     from PIL import Image
     img = Image.open(path).convert("RGB")
 
     crops: list[Any] = []
     bbox_dicts: list[dict[str, float]] = []
-    for (x1, y1, x2, y2), confidence in zip(xyxy, confs):
+    confs: list[float] = []
+    for (x1, y1, x2, y2), confidence in ranked:
         bbox_dicts.append({
-            "x": float(x1),
-            "y": float(y1),
-            "width": float(x2 - x1),
-            "height": float(y2 - y1),
+            "x": float(x1), "y": float(y1),
+            "width": float(x2 - x1), "height": float(y2 - y1),
         })
+        confs.append(confidence)
         crops.append(img.crop((int(x1), int(y1), int(x2), int(y2))))
 
-    # Step 2: captioning (batched)
-    captions = _generate_captions_batched(handle, crops) if include_captions else [""] * len(crops)
+    # Phase 2: captioning — only the top CAPTION_TOP_N crops (the slow step). The rest
+    # keep their boxes but get no caption, bounding cost regardless of page density.
+    caption_start = time.perf_counter()
+    captioned_n = 0
+    if include_captions and crops:
+        top_caps = _generate_captions_batched(handle, crops[:CAPTION_TOP_N])
+        captions = top_caps + [""] * (len(crops) - len(top_caps))
+        captioned_n = len(top_caps)
+    else:
+        captions = [""] * len(crops)
+    caption_ms = int((time.perf_counter() - caption_start) * 1000)
+    total_ms = int((time.perf_counter() - overall_start) * 1000)
+
+    if stats is not None:
+        stats.update({
+            "device": handle.device, "load_ms": load_ms, "detect_ms": detect_ms,
+            "caption_ms": caption_ms, "total_ms": total_ms,
+            "raw_detections": raw_count, "kept": len(crops), "captioned": captioned_n,
+        })
+    logger.info(
+        "proposer timing: device=%s load=%dms detect=%dms caption=%dms total=%dms "
+        "(raw=%d kept=%d captioned=%d)",
+        handle.device, load_ms, detect_ms, caption_ms, total_ms,
+        raw_count, len(crops), captioned_n,
+    )
 
     now = datetime.now(timezone.utc).isoformat()
     out: list[dict[str, Any]] = []

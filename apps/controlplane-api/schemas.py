@@ -103,6 +103,7 @@ class GoalRead(BaseModel):
     display_name: str
     action_type_hints: list[str]
     status: str
+    stage: str = "neutral"
     description: Optional[str] = None
     typical_element_types: list[str] = Field(default_factory=list)
     success_criteria: Optional[str] = None
@@ -116,6 +117,7 @@ class GoalWrite(BaseModel):
     display_name: str
     action_type_hints: list[str] = Field(default_factory=list)
     status: str = "active"
+    stage: str = "neutral"
     description: Optional[str] = None
     typical_element_types: list[str] = Field(default_factory=list)
     success_criteria: Optional[str] = None
@@ -126,6 +128,7 @@ class GoalUpdate(BaseModel):
     display_name: Optional[str] = None
     action_type_hints: Optional[list[str]] = None
     status: Optional[str] = None
+    stage: Optional[str] = None
     description: Optional[str] = None
     typical_element_types: Optional[list[str]] = None
     success_criteria: Optional[str] = None

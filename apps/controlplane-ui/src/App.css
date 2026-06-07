@@ -1437,6 +1437,18 @@ input[type="checkbox"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* Position/size sub-line on each candidate row — the only way to tell apart
+   two same-label elements (e.g. two "input"s differ only by y-position). */
+.dd-link-pos {
+  font-size: 10px;
+  color: #9ca3af;
+  font-weight: 400;
 }
 
 .dd-link-meta {
@@ -1574,6 +1586,84 @@ input[type="checkbox"] {
   color: #6b21a8;
 }
 
+.dd-vision-reload {
+  margin-left: 4px;
+}
+
+.dd-vision-pending {
+  font-size: 11px;
+  color: #9ca3af;
+  font-style: italic;
+  align-self: center;
+}
+
+.dd-vision-timing {
+  font-size: 11px;
+  color: #6b7280;
+  align-self: center;
+  margin-left: auto;
+  cursor: help;
+}
+
+/* Current-selection banner — persistent indicator of what's labeled on this capture. */
+.dd-selection-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  font-size: 13px;
+}
+
+.dd-selection-banner.has-selection {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.dd-selection-check {
+  font-weight: 700;
+  color: #15803d;
+}
+
+.dd-selection-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+}
+
+.dd-selection-badge.source-observer { background: #2f6feb; }
+.dd-selection-badge.source-vision   { background: #06b6d4; }
+.dd-selection-badge.source-manual   { background: #a855f7; }
+.dd-selection-badge.source-drawn    { background: #facc15; color: #78350f; }
+.dd-selection-badge.source-unknown  { background: #6b7280; }
+
+.dd-selection-label {
+  font-weight: 600;
+  color: #111827;
+}
+
+.dd-selection-box {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.dd-selection-clear {
+  margin-left: auto;
+}
+
+.dd-selection-empty {
+  color: #9ca3af;
+  font-style: italic;
+}
+
 /* Action panel — per-capture interaction-layer labels. */
 .dd-action-panel {
   margin-top: 14px;
@@ -1666,6 +1756,44 @@ input[type="checkbox"] {
   color: #1d4ed8;
 }
 
+/* Add-action affordance + no-payload note */
+.dd-action-add-btn { border-style: dashed; color: #2563eb; }
+.dd-action-add { display: inline-flex; align-items: center; gap: 6px; }
+.dd-action-add-input { width: 160px; padding: 5px 8px; font-size: 12px; font-weight: 500; }
+.dd-action-error { display: block; margin-top: 6px; font-size: 11px; color: #b91c1c; }
+.dd-action-nopayload { font-size: 12px; color: #94a3b8; font-style: italic; padding: 2px 0; }
+
+/* Single stepped state picker */
+.dd-state-stepper { display: flex; flex-direction: column; gap: 10px; }
+.dd-state-steps { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+.dd-state-step-wrap { display: flex; align-items: center; gap: 8px; }
+.dd-state-step-arrow { color: #cbd5e1; font-weight: 700; }
+.dd-state-step {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  border: 1px solid #e5e7eb; border-radius: 10px; background: #fff;
+  padding: 7px 12px; cursor: pointer; font: inherit; min-width: 150px; text-align: left;
+  transition: border-color 120ms, background 120ms;
+}
+.dd-state-step:hover { border-color: #cbd5e1; background: #f8fafc; }
+.dd-state-step.active { border-color: #2563eb; background: #eff6ff; }
+.dd-state-step.filled .dd-state-step-val { color: #15803d; font-weight: 600; }
+.dd-state-step-num {
+  display: none;
+}
+.dd-state-step-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; }
+.dd-state-step-val { font-size: 13px; color: #94a3b8; }
+
+/* Breadcrumb in the artifact detail topbar */
+.obs-breadcrumb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.obs-crumb { color: #94a3b8; }
+.obs-crumb-link {
+  border: none; background: transparent; cursor: pointer; font: inherit;
+  color: #2563eb; font-weight: 600; padding: 0;
+}
+.obs-crumb-link:hover { text-decoration: underline; }
+.obs-crumb-sep { color: #d1d5db; }
+.obs-crumb-current { color: #334155; font-weight: 600; }
+
 .dd-state-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1701,9 +1829,78 @@ input[type="checkbox"] {
   gap: 7px;
 }
 
+/* Grouped picker: category sections + scope tags on chips */
+.dd-state-notset-row { margin-bottom: 8px; }
+.dd-state-cat { margin-bottom: 8px; }
+.dd-state-cat-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: #94a3b8; margin-bottom: 4px;
+}
+
+/* Drill-down picker: current selection, search, category tiles, back */
+.dd-state-current { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.dd-state-current-empty { font-size: 12px; color: #9ca3af; font-style: italic; }
+.dd-state-search { margin-bottom: 8px; font-size: 13px; padding: 6px 10px; }
+.dd-state-results { margin-bottom: 4px; }
+
+.dd-state-empty { font-size: 12px; color: #9ca3af; font-style: italic; padding: 4px 0; }
+
+/* Folder navigation: breadcrumb + folder grid + chips (relevance rings) */
+.dd-state-crumbs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  margin-bottom: 8px; padding: 6px 8px; background: #f8fafc;
+  border: 1px solid #eef2f7; border-radius: 8px;
+}
+.dd-state-crumb-wrap { display: inline-flex; align-items: center; }
+.dd-state-crumb-sep { color: #cbd5e1; margin: 0 4px; }
+.dd-state-crumb-link {
+  border: none; background: transparent; cursor: pointer; font: inherit;
+  color: #2563eb; font-size: 12px; font-weight: 600; padding: 0;
+}
+.dd-state-crumb-link:hover { text-decoration: underline; }
+.dd-state-crumb-current { font-size: 12px; font-weight: 700; color: #1f2937; }
+
+.dd-state-folder-body { display: flex; flex-direction: column; gap: 10px; }
+.dd-state-folder-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;
+}
+.dd-state-folder {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 10px; background: #fff;
+  cursor: pointer; font: inherit; text-align: left;
+  transition: border-color 120ms, background 120ms;
+}
+.dd-state-folder:hover { border-color: #cbd5e1; background: #f8fafc; }
+.dd-state-folder.is-home { border-color: #2563eb; background: #eff6ff; }
+.dd-state-folder.stage-unauthenticated { border-left: 3px solid #f59e0b; }
+.dd-state-folder.stage-authenticated { border-left: 3px solid #10b981; }
+.dd-state-folder.stage-neutral { border-left: 3px solid #94a3b8; }
+.dd-state-folder-icon { font-size: 15px; }
+.dd-state-folder-name { flex: 1; font-weight: 600; color: #334155; font-size: 13px; }
+.dd-state-folder-count {
+  font-size: 11px; font-weight: 700; color: #64748b;
+  background: #eef2f7; border-radius: 999px; padding: 1px 8px; min-width: 22px; text-align: center;
+}
+
+.dd-state-domainwide { border-top: 1px dashed #eef2f7; padding-top: 8px; }
+.dd-state-section-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: #94a3b8; margin-bottom: 6px;
+}
+.dd-state-cat-block { margin-bottom: 6px; }
+.dd-state-cat-block .dd-state-cat-label { margin-bottom: 4px; }
+.dd-state-scope-tag {
+  display: inline-block; margin-left: 6px; font-size: 9px; font-weight: 700;
+  width: 14px; height: 14px; line-height: 14px; text-align: center; border-radius: 4px;
+  background: rgba(0,0,0,0.06); color: #64748b;
+}
+.dd-state-chip.scope-domain .dd-state-scope-tag { background: #dbeafe; color: #1e40af; }
+.dd-state-chip.scope-scenario .dd-state-scope-tag { background: #f3e8ff; color: #6b21a8; }
+.dd-state-chip.scope-global .dd-state-scope-tag { background: #e2e8f0; color: #475569; }
+
 .dd-state-add-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -2151,6 +2348,163 @@ input[type="checkbox"] {
 
 .obs-toolbar-actions { display: flex; gap: 6px; margin-left: auto; }
 
+/* ===== Page States manager ===== */
+.ps-create {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 12px; border: 1px solid #eef0f3; border-radius: 12px; background: #fcfcfd;
+}
+.ps-create-name { flex: 1; min-width: 220px; }
+.ps-cat-badge {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: #475569; background: #eef2f7; border-radius: 6px; padding: 2px 8px;
+}
+.ps-state-row { padding-left: 50px; gap: 10px; }
+.ps-state-name { font-weight: 500; color: #334155; }
+.ps-state-id { font-size: 11px; color: #94a3b8; }
+.ps-state-row .ds-mini-action { margin-left: auto; }
+
+/* ===== Dataset Browser tree (Scenario ▸ Session ▸ Captures) — minimal outline style ===== */
+.ds-tree { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+
+.ds-folder {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font: inherit;
+  transition: background 120ms;
+}
+
+/* Outline icons: stroke only, no fill — modern line aesthetic */
+.ds-ico {
+  width: 16px; height: 16px; flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ds-chevron {
+  width: 13px; height: 13px;
+  color: #9ca3af;
+  transition: transform 140ms ease;
+}
+.ds-chevron.open { transform: rotate(90deg); }
+.ds-ico-folder { color: #64748b; }
+.ds-ico-layers { color: #94a3b8; }
+
+.ds-folder-name { font-weight: 600; color: #111827; letter-spacing: -0.01em; }
+.ds-folder-meta { margin-left: auto; font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+.ds-reviewed { color: #16a34a; font-weight: 600; }
+
+/* Cards: hairline borders, near-white fills, no heavy gray blocks */
+.ds-scenario { border: 1px solid #eef0f3; border-radius: 12px; overflow: hidden; background: #fff; }
+.ds-scenario-header { background: #fff; }
+.ds-scenario-header:hover { background: #f8fafc; }
+
+.ds-session { border-top: 1px solid #f3f4f6; }
+.ds-session-header { padding-left: 30px; background: #fcfcfd; }
+.ds-session-header:hover { background: #f6f8fa; }
+.ds-session-task { color: #94a3b8; font-weight: 400; }
+
+/* Stage level (Unauthenticated / Authenticated) — under domain */
+.ds-stage { border-top: 1px solid #f3f4f6; }
+.ds-stage-header { padding-left: 28px; background: #fcfcfd; }
+.ds-stage-header:hover { background: #f6f8fa; }
+.ds-stage-header.stage-unauthenticated .ds-folder-name { color: #b45309; }
+.ds-stage-header.stage-authenticated .ds-folder-name { color: #15803d; }
+.ds-stage-header .ds-ico { color: #cbd5e1; }
+
+/* Objective (goal) level — under stage */
+.ds-objective { border-top: 1px solid #f6f7f9; }
+.ds-objective-header { padding-left: 48px; background: #fff; }
+.ds-objective-header:hover { background: #f8fafc; }
+
+/* Group level (category, or flat session/action bucket) — under objective */
+.ds-group { border-top: 1px solid #f8f9fb; }
+.ds-group-header { padding-left: 68px; background: #fff; }
+.ds-group-header:hover { background: #f8fafc; }
+
+/* State level — under category (only in nested "State" group mode) */
+.ds-statelevel-header { padding-left: 88px; background: #fff; }
+.ds-statelevel-header:hover { background: #f8fafc; }
+.ds-statelevel-header .ds-group-name { font-weight: 500; color: #475569; }
+.ds-group-name {
+  font-weight: 600; color: #475569; text-transform: capitalize;
+  font-size: 13px; letter-spacing: -0.01em;
+}
+
+/* Group-by toggle in the toolbar */
+.ds-groupby-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+.ds-groupby { display: inline-flex; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+.ds-groupby-btn {
+  border: none; background: #fff; cursor: pointer; font: inherit; font-size: 12px;
+  padding: 4px 12px; color: #64748b; border-right: 1px solid #e5e7eb;
+}
+.ds-groupby-btn:last-child { border-right: none; }
+.ds-groupby-btn:hover { background: #f8fafc; }
+.ds-groupby-btn.active { background: #2563eb; color: #fff; }
+
+.ds-captures { display: flex; flex-direction: column; padding: 2px 0 8px 0; }
+
+.ds-capture {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px 6px 86px;
+  transition: background 100ms;
+}
+.ds-capture:hover { background: #f8fafc; }
+.ds-capture.multi-selected { background: #eff6ff; }
+.ds-capture.just-captured { background: #fffbeb; }
+
+/* Status as a hollow ring by default, filled when meaningful — quieter, more minimal */
+.ds-dot {
+  width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0;
+  background: transparent; border: 1.5px solid #cbd5e1;
+}
+.ds-dot.status-reviewed, .ds-dot.status-approved { background: #16a34a; border-color: #16a34a; }
+.ds-dot.status-draft { background: transparent; border-color: #f59e0b; }
+.ds-dot.status-rejected { background: #dc2626; border-color: #dc2626; }
+.ds-dot.status-archived { background: #cbd5e1; border-color: #cbd5e1; }
+
+.ds-capture-title {
+  border: none; background: transparent; cursor: pointer; font: inherit;
+  color: #334155; text-align: left; padding: 2px 0; flex-shrink: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ds-capture-title:hover { color: #1d4ed8; }
+.ds-title-input { flex: 1; max-width: 360px; padding: 3px 8px; font-size: 13px; }
+
+/* Badges: outline pills, not filled blocks */
+.ds-capture-badges { display: flex; gap: 5px; margin-left: 8px; }
+.ds-mini-badge {
+  font-size: 10px; padding: 1px 7px; border-radius: 999px;
+  background: transparent; border: 1px solid #e2e8f0; color: #64748b; font-weight: 500;
+}
+.ds-mini-badge.bbox { border-color: #fde68a; color: #b45309; }
+.ds-mini-badge.shot { border-color: #bae6fd; color: #0369a1; }
+
+.ds-capture-date {
+  margin-left: auto;
+  font-size: 11px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ds-capture-status { font-size: 11px; padding: 2px 6px; }
+.ds-mini-action {
+  padding: 2px 8px; font-size: 12px; flex-shrink: 0;
+  color: #94a3b8;
+}
+.ds-mini-action:hover { color: #334155; }
+
 .obs-table {
   width: 100%;
   border-collapse: separate;
@@ -2201,7 +2555,12 @@ input[type="checkbox"] {
   cursor: pointer;
 }
 .status-select.status-new { border-color: #86efac; color: #166534; }
-.status-select.status-reviewed { border-color: #93c5fd; color: #1e40af; }
+/* Reviewed/approved are the "done" states — fill them so labeled rows read at a glance
+   while grinding through a batch. Draft stays muted so unfinished rows stand out by contrast. */
+.status-select.status-reviewed { border-color: #16a34a; color: #14532d; background: #dcfce7; font-weight: 600; }
+.status-select.status-approved { border-color: #16a34a; color: #14532d; background: #bbf7d0; font-weight: 600; }
+.status-select.status-draft { border-color: #fcd34d; color: #92400e; background: #fffbeb; }
+.status-select.status-rejected { border-color: #fca5a5; color: #991b1b; background: #fef2f2; }
 .status-select.status-exported { border-color: #93c5fd; color: #1e40af; }
 .status-select.status-training { border-color: #c4b5fd; color: #6b21a8; }
 .status-select.status-archived { border-color: #d1d5db; color: #6b7280; }
@@ -2434,6 +2793,12 @@ input[type="checkbox"] {
   background: #fee2e2;
   color: #991b1b;
   border: 1px solid #fca5a5;
+}
+
+.annotation-message.warning {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fcd34d;
 }
 
 .training-status-card {

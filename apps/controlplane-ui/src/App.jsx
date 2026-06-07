@@ -7,6 +7,7 @@ import { HomeSection } from "./components/controlplane/HomeSection";
 import { ModelsSection } from "./components/controlplane/ModelsSection";
 import { SystemSection } from "./components/controlplane/SystemSection";
 import { TrainingSection } from "./components/controlplane/TrainingSection";
+import { PageStatesSection } from "./components/controlplane/PageStatesSection";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 
@@ -19,21 +20,6 @@ const EMPTY_INTERACTION_EDITS = {
   observed_page_state: "",
   post_action_state: "",
 };
-
-const GLOBAL_PAGE_STATES = [
-  { page_state_id: "out_of_domain", display_name: "Out of Domain" },
-  { page_state_id: "unknown", display_name: "Unknown / Unclassified" },
-  { page_state_id: "blocked", display_name: "Blocked / Needs Human" },
-];
-
-function slugify(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 100);
-}
 
 const mockWorkers = [
   { id: "worker-01", name: "Seat-01", domain: "Marketplace", status: "Busy", seat: "VM-01" },
@@ -110,20 +96,40 @@ export default function App() {
     () => trainingRegistry.domains.find((domain) => domain.domain_id === selectedObservationDomainId) ?? null,
     [trainingRegistry.domains, selectedObservationDomainId],
   );
-  const pageStateOptions = useMemo(() => {
-    const seen = new Set();
-    return [...GLOBAL_PAGE_STATES, ...(selectedObservationDomain?.page_states ?? [])]
-      .filter((state) => {
-        const id = state?.page_state_id;
-        if (!id || seen.has(id)) return false;
-        seen.add(id);
-        return true;
-      })
-      .map((state) => ({
-        page_state_id: state.page_state_id,
-        display_name: state.display_name || state.page_state_id,
-      }));
-  }, [selectedObservationDomain]);
+  const selectedObservationScenarioId = selectedObservationAnnotation?.scenario_id
+    ?? selectedTrainingSession?.scenario_id
+    ?? null;
+  const selectedObservationGoalId = selectedObservationAnnotation?.goal_id
+    ?? selectedTrainingSession?.goal_id
+    ?? null;
+
+  // Page states relevant to the selected capture (global + its domain + its objective/goal
+  // + its scenario), fetched from the PageStateRegistry. Each carries scope + category so
+  // the picker can group them.
+  const [pageStateOptions, setPageStateOptions] = useState([]);
+  const loadPageStateOptions = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (selectedObservationDomainId) params.set("domain_id", selectedObservationDomainId);
+      if (selectedObservationGoalId) params.set("goal_id", selectedObservationGoalId);
+      if (selectedObservationScenarioId) params.set("scenario_id", selectedObservationScenarioId);
+      const r = await fetch(`${API}/api/training/page-states?${params.toString()}`);
+      if (!r.ok) throw new Error();
+      const rows = await r.json();
+      // Normalize to what the picker expects (keep page_state_id alias for back-compat).
+      setPageStateOptions(rows.map((s) => ({
+        page_state_id: s.state_id,
+        state_id: s.state_id,
+        display_name: s.display_name || s.state_id,
+        scope: s.scope,
+        category: s.category || "general",
+      })));
+    } catch {
+      setPageStateOptions([]);
+    }
+  }, [selectedObservationDomainId, selectedObservationGoalId, selectedObservationScenarioId]);
+
+  useEffect(() => { loadPageStateOptions(); }, [loadPageStateOptions]);
 
   const setActiveSection = useCallback((sectionId) => {
     setActiveSecondaryViewByPrimary((current) => ({ ...current, [activePrimaryView]: sectionId }));
@@ -245,27 +251,33 @@ export default function App() {
     }
   }, [loadTrainingRegistry]);
 
-  const createPageStateFromLabeler = useCallback(async (displayName) => {
-    if (!selectedObservationDomain) {
-      throw new Error("This capture is not attached to a known domain.");
-    }
+  // Inline-create a page state from the labeler. Defaults to domain scope when the
+  // capture has a domain (most states are domain-specific); falls back to global.
+  // category is chosen in the picker. Writes to the PageStateRegistry and refreshes options.
+  const createPageStateFromLabeler = useCallback(async (displayName, opts = {}) => {
     const cleanName = String(displayName || "").trim();
-    const pageStateId = slugify(cleanName);
-    if (!cleanName || !pageStateId) {
-      throw new Error("Enter a page state name first.");
-    }
-    const existing = (selectedObservationDomain.page_states ?? []).find(
-      (state) => state.page_state_id === pageStateId,
+    if (!cleanName) throw new Error("Enter a page state name first.");
+    // Default scope: the objective (goal) if we know it — Login-specific states belong
+    // to the Login objective — else fall back to domain, then global.
+    const scope = opts.scope || (
+      selectedObservationGoalId ? "goal" : selectedObservationDomainId ? "domain" : "global"
     );
-    if (existing) return existing;
-
-    const nextState = { page_state_id: pageStateId, display_name: cleanName };
-    await saveRegistryItem("domains", {
-      page_states: [...(selectedObservationDomain.page_states ?? []), nextState],
-    }, selectedObservationDomain.domain_id);
-    await loadTrainingRegistry();
-    return nextState;
-  }, [loadTrainingRegistry, saveRegistryItem, selectedObservationDomain]);
+    const body = {
+      display_name: cleanName,
+      scope,
+      category: opts.category || "general",
+      domain_id: scope === "global" ? null : selectedObservationDomainId,
+      goal_id: (scope === "goal" || scope === "scenario") ? selectedObservationGoalId : null,
+      scenario_id: scope === "scenario" ? selectedObservationScenarioId : null,
+    };
+    const r = await fetch(`${API}/api/training/page-states`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const payload = await r.json();
+    if (!r.ok) throw new Error(payload.detail || "Failed to create state");
+    await loadPageStateOptions();
+    return { page_state_id: payload.state_id, state_id: payload.state_id, display_name: payload.display_name };
+  }, [selectedObservationDomainId, selectedObservationGoalId, selectedObservationScenarioId, loadPageStateOptions]);
 
   const loadTrainingSessions = useCallback(async () => {
     try {
@@ -316,6 +328,55 @@ export default function App() {
       setObservations({ loading: false, data: [], error: error.message });
     }
   }, []);
+
+  // Map of state_id -> {display_name, category} for the WHOLE registry, so the
+  // Dataset Browser can label state-groups and titles ("login_wall" -> "Login Wall",
+  // category "Login") regardless of which capture's domain is selected.
+  const [stateMeta, setStateMeta] = useState({});
+  const loadStateMeta = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/training/page-states`);
+      if (!r.ok) return;
+      const rows = await r.json();
+      const map = {};
+      for (const s of rows) map[s.state_id] = { display_name: s.display_name, category: s.category };
+      setStateMeta(map);
+    } catch { /* best-effort */ }
+  }, []);
+
+  // Domain + objective(goal) lookup maps for the dataset browser hierarchy
+  // (Domain ▸ Stage ▸ Objective ▸ …). Derived from the already-loaded registry — no fetch.
+  const domainMeta = useMemo(() => {
+    const m = {};
+    for (const d of trainingRegistry.domains) m[d.domain_id] = { display_name: d.display_name || d.domain_id };
+    return m;
+  }, [trainingRegistry.domains]);
+  const goalMeta = useMemo(() => {
+    const m = {};
+    for (const g of trainingRegistry.goals) m[g.goal_id] = { display_name: g.display_name || g.goal_id, stage: g.stage || "neutral" };
+    return m;
+  }, [trainingRegistry.goals]);
+
+  // Action vocabulary (registry-driven, user-extensible). Replaces the hardcoded list.
+  const [actionOptions, setActionOptions] = useState([]);
+  const loadActions = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/training/actions`);
+      if (!r.ok) return;
+      setActionOptions(await r.json());
+    } catch { /* best-effort */ }
+  }, []);
+  const createAction = useCallback(async (label) => {
+    const clean = String(label || "").trim();
+    if (!clean) throw new Error("Enter an action name.");
+    const r = await fetch(`${API}/api/training/actions`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: clean }),
+    });
+    const payload = await r.json();
+    if (!r.ok) throw new Error(payload.detail || "Failed to create action");
+    await loadActions();
+    return payload;
+  }, [loadActions]);
 
   const deleteObservation = useCallback(async (filename) => {
     try {
@@ -405,6 +466,38 @@ export default function App() {
     }
   }, []);
 
+  // Surgical re-fetch that updates ONLY the vision candidates (and observer/elements
+  // if the artifact changed) without touching labels/bbox/interactionEdits. Used to
+  // pick up async-backfilled vision proposals that land seconds after capture, so the
+  // annotator doesn't have to full-page-refresh and lose in-progress edits.
+  const refreshVisionCandidates = useCallback(async (filename) => {
+    if (!filename) return 0;
+    try {
+      const response = await fetch(`${API}/api/observations/${encodeURIComponent(filename)}`);
+      if (!response.ok) return 0;
+      const payload = await response.json();
+      const vc = Array.isArray(payload?.vision_candidates) ? payload.vision_candidates : [];
+      setSelectedObs((current) => {
+        // Only patch if it's still the same observation on screen.
+        if (!current || current._error) return current;
+        // CRITICAL: bail out with the SAME object reference when the candidate count
+        // hasn't changed. Returning a new object every poll tick re-renders the whole
+        // detail view and makes the screenshot overlay flicker/disappear. React skips
+        // the re-render entirely when we return the identical reference.
+        const prevCount = current.vision_candidates?.length ?? 0;
+        if (vc.length === prevCount) return current;
+        return {
+          ...current,
+          vision_candidates: vc,
+          vision_candidates_meta: payload?.vision_candidates_meta ?? current.vision_candidates_meta,
+        };
+      });
+      return vc.length;
+    } catch {
+      return 0;
+    }
+  }, []);
+
   const clearSelectedObservation = useCallback(() => {
     setSelectedObs(null);
     setSelectedObsFilename(null);
@@ -454,9 +547,21 @@ export default function App() {
         }),
       });
       if (!response.ok) throw new Error(`Failed to save review: ${response.status}`);
+      const result = await response.json().catch(() => null);
+      const savedStatus = result?.training_annotation?.review_status;
       await loadObservation(selectedObsFilename);
       await loadObservations();
-      setAnnotationMessage({ type: "success", text: "Review saved." });
+      // Tell the annotator the OUTCOME, not just "saved". A capture only counts as
+      // reviewed once it has a bbox or a page-state label — otherwise it silently
+      // stays draft and would be excluded from dataset builds. Make that explicit.
+      if (savedStatus === "reviewed" || savedStatus === "approved") {
+        setAnnotationMessage({ type: "success", text: "Saved — marked Reviewed ✓" });
+      } else {
+        setAnnotationMessage({
+          type: "warning",
+          text: "Saved as Draft. Add a bounding box OR pick a Current Page State to mark it Reviewed (Draft captures are excluded from dataset export).",
+        });
+      }
     } catch (error) {
       setAnnotationMessage({ type: "error", text: error.message });
     } finally {
@@ -731,17 +836,41 @@ export default function App() {
       loadTrainingSessions();
       loadObservations();
       loadTrainingTargetComparison();
+      loadStateMeta();
+      loadActions();
     }
     if (activePrimaryView === "workers") {
       loadObservations();
     }
-  }, [activePrimaryView, loadObservations, loadTrainingRegistry, loadTrainingSessions, loadTrainingTargetComparison]);
+  }, [activePrimaryView, loadObservations, loadTrainingRegistry, loadTrainingSessions, loadTrainingTargetComparison, loadStateMeta, loadActions]);
 
   useEffect(() => {
     if (activePrimaryView === "training" && activeSectionId === "session-capture" && selectedTrainingSession?.status === "active") {
       loadTabs();
     }
   }, [activePrimaryView, activeSectionId, loadTabs, selectedTrainingSession]);
+
+  // Auto-poll for async-backfilled vision candidates. After a capture, the proposer
+  // runs in the background and writes the vision sidecar ~15s+ later. While an
+  // observation with a screenshot but zero vision candidates is on screen, poll the
+  // surgical refresh every 5s (up to ~24 tries / 2 min, covering the captioning
+  // variance we measured) until candidates appear. Stops as soon as they do.
+  // Depend on PRIMITIVES, not the whole selectedObs object, so the interval isn't
+  // torn down and recreated on every unrelated re-render. The effect only re-runs
+  // when the filename changes, the screenshot appears, or the count crosses 0->N.
+  const selectedHasScreenshot = Boolean(selectedObs && !selectedObs._error
+    && (selectedObs.acquisition?.screenshots?.length || selectedObs.acquisition?.screenshot));
+  const selectedVisionCount = selectedObs?.vision_candidates?.length ?? 0;
+  useEffect(() => {
+    if (!selectedObsFilename || !selectedHasScreenshot || selectedVisionCount > 0) return undefined;
+    let tries = 0;
+    const timer = setInterval(async () => {
+      tries += 1;
+      const found = await refreshVisionCandidates(selectedObsFilename);
+      if (found > 0 || tries >= 24) clearInterval(timer);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [selectedObsFilename, selectedHasScreenshot, selectedVisionCount, refreshVisionCandidates]);
 
   const activeRuns = runs.data.filter((run) => String(run.status || "").toLowerCase().includes("running")).length;
   const blockedRuns = runs.data.filter((run) => String(run.status || "").toLowerCase().includes("blocked")).length;
@@ -773,6 +902,8 @@ export default function App() {
     );
   } else if (activePrimaryView === "system") {
     sectionContent = <SystemSection section={activeSectionId} systemStatus={systemStatus} loadSystemStatus={loadSystemStatus} />;
+  } else if (activePrimaryView === "training" && activeSectionId === "page-states") {
+    sectionContent = <PageStatesSection registry={trainingRegistry} />;
   } else if (activePrimaryView === "training") {
     sectionContent = (
       <TrainingSection
@@ -804,6 +935,9 @@ export default function App() {
         captureElapsed={captureElapsed}
         captureSuccess={captureSuccess}
         observations={observations}
+        stateMeta={stateMeta}
+        domainMeta={domainMeta}
+        goalMeta={goalMeta}
         loadObservations={loadObservations}
         updateObsMeta={updateObsMeta}
         deleteObservation={deleteObservation}
@@ -822,6 +956,9 @@ export default function App() {
         setInteractionEdits={setInteractionEdits}
         pageStateOptions={pageStateOptions}
         onCreatePageState={createPageStateFromLabeler}
+        actionOptions={actionOptions}
+        onCreateAction={createAction}
+        onRefreshVision={refreshVisionCandidates}
         saveTrainingAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

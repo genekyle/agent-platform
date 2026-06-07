@@ -48,13 +48,15 @@ def _screenshot_filename_from_artifact(artifact: dict) -> Optional[str]:
     return shots[0].get("filename")
 
 
-def _write_vision_sidecar(artifact_filename: str, screenshot_filename: str, proposals: list[dict]) -> Path:
+def _write_vision_sidecar(artifact_filename: str, screenshot_filename: str, proposals: list[dict],
+                          timing: dict | None = None) -> Path:
     sidecar = {
         "version": MODEL_VERSION,
         "artifact_filename": artifact_filename,
         "screenshot_filename": screenshot_filename,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "proposal_count": len(proposals),
+        "timing": timing or {},
         "proposals": proposals,
     }
     path = _vision_sidecar_path(artifact_filename)
@@ -71,11 +73,12 @@ def _backfill_vision_candidates(artifact_filename: str, screenshot_filename: str
     """
     try:
         screenshot_path = SCREENSHOTS_DIR / screenshot_filename
-        proposals = propose_candidates(screenshot_path)
-        sidecar_path = _write_vision_sidecar(artifact_filename, screenshot_filename, proposals)
+        timing: dict = {}
+        proposals = propose_candidates(screenshot_path, stats=timing)
+        sidecar_path = _write_vision_sidecar(artifact_filename, screenshot_filename, proposals, timing)
         logger.info(
-            "vision backfill ok: %s -> %d proposals (%s)",
-            artifact_filename, len(proposals), sidecar_path.name,
+            "vision backfill ok: %s -> %d proposals in %dms (%s)",
+            artifact_filename, len(proposals), timing.get("total_ms", 0), sidecar_path.name,
         )
     except Exception:
         logger.exception("vision backfill failed for %s", artifact_filename)
@@ -166,11 +169,13 @@ def proposer_backfill_one(artifact_filename: str):
     if not screenshot_path.exists():
         raise HTTPException(status_code=404, detail=f"Screenshot file missing: {screenshot_filename}")
 
-    proposals = propose_candidates(screenshot_path)
-    sidecar_path = _write_vision_sidecar(artifact_filename, screenshot_filename, proposals)
+    timing: dict = {}
+    proposals = propose_candidates(screenshot_path, stats=timing)
+    sidecar_path = _write_vision_sidecar(artifact_filename, screenshot_filename, proposals, timing)
     return {
         "artifact_filename": artifact_filename,
         "screenshot_filename": screenshot_filename,
         "sidecar_path": str(sidecar_path),
         "proposal_count": len(proposals),
+        "timing": timing,
     }

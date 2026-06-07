@@ -32,6 +32,9 @@ export function TrainingSection({
   captureElapsed,
   captureSuccess,
   observations,
+  stateMeta,
+  domainMeta,
+  goalMeta,
   loadObservations,
   updateObsMeta,
   deleteObservation,
@@ -50,6 +53,9 @@ export function TrainingSection({
   setInteractionEdits,
   pageStateOptions,
   onCreatePageState,
+  actionOptions,
+  onCreateAction,
+  onRefreshVision,
   saveTrainingAnnotation,
   annotationSaving,
   annotationMessage,
@@ -140,6 +146,9 @@ export function TrainingSection({
     return (
       <ObservationsTable
         observations={observations.data}
+        stateMeta={stateMeta}
+        domainMeta={domainMeta}
+        goalMeta={goalMeta}
         title="Dataset Browser"
         subtitle="Browse, curate, and select captured artifacts for review."
         loading={observations.loading}
@@ -180,6 +189,7 @@ export function TrainingSection({
     return (
       <ObservationDetail
         mode="training"
+        onBack={() => onChangeSection("dataset-browser")}
         selectedObs={selectedObs}
         selectedObsFilename={selectedObsFilename}
         labels={labels}
@@ -191,7 +201,12 @@ export function TrainingSection({
         interactionEdits={interactionEdits}
         setInteractionEdits={setInteractionEdits}
         pageStateOptions={pageStateOptions}
+        goals={trainingRegistry.goals}
+        domains={trainingRegistry.domains}
         onCreatePageState={onCreatePageState}
+        actionOptions={actionOptions}
+        onCreateAction={onCreateAction}
+        onRefreshVision={onRefreshVision}
         onSaveAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

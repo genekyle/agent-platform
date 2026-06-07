@@ -7,27 +7,14 @@ const API = import.meta.env.VITE_API_BASE_URL;
 // Kept short on purpose — these feed forward into the state_transition model.
 const MANUAL_ROLE_OPTIONS = ["button", "link", "input", "image", "text", "container", "other"];
 
-const ACTION_TYPES = [
-  { id: "click", label: "Click" },
-  { id: "type", label: "Type" },
-  { id: "select", label: "Select" },
-  { id: "scroll", label: "Scroll" },
-  { id: "navigate", label: "Navigate" },
-  { id: "wait", label: "Wait" },
-  { id: "press", label: "Key" },
-  { id: "any", label: "Any" },
+// Fallback action list used only if the registry hasn't loaded yet. The real list
+// comes from the action registry via the actionOptions prop (user-extensible).
+const FALLBACK_ACTIONS = [
+  { action_id: "click", label: "Click", value_label: "Optional Payload" },
+  { action_id: "type", label: "Type", value_label: "Text to Type" },
+  { action_id: "clear", label: "Clear", value_label: null },
+  { action_id: "any", label: "Any", value_label: "Optional Payload" },
 ];
-
-const ACTION_VALUE_LABELS = {
-  type: "Text to Type",
-  select: "Option to Select",
-  scroll: "Scroll Direction / Amount",
-  navigate: "URL or Destination",
-  press: "Key / Shortcut",
-  wait: "Wait Condition",
-  click: "Optional Payload",
-  any: "Optional Payload",
-};
 
 // IoU between two rects in image-pixel space (used to sort the link picker so the
 // most-overlapping observer candidate floats to the top).
@@ -61,12 +48,20 @@ export function ObservationDetail({
   interactionEdits,
   setInteractionEdits,
   pageStateOptions = [],
+  goals = [],
+  domains = [],
   onCreatePageState,
+  actionOptions = [],
+  onCreateAction,
+  onRefreshVision,
   onSaveAnnotation,
   annotationSaving,
   annotationMessage,
   onBack,
 }) {
+  const [addingAction, setAddingAction] = useState(false);
+  const [newActionName, setNewActionName] = useState("");
+  const [actionError, setActionError] = useState(null);
   const [activeTab, setActiveTab] = useState(mode === "training" ? "screenshot" : "overview");
   const [elementSearch, setElementSearch] = useState("");
   const [expandedStages, setExpandedStages] = useState({});
@@ -81,25 +76,70 @@ export function ObservationDetail({
   // Per-source visibility toggles for the screenshot overlay (does NOT hide from the
   // Candidates tab list or the link picker — those stay complete for labeling).
   const [visibleSources, setVisibleSources] = useState({ observer: true, vision: true, manual: true });
+  // Candidate the cursor is hovering in the link picker — highlighted on the screenshot
+  // so the annotator can instantly see which box a row refers to (disambiguates same-label
+  // candidates like two "input"s). Forced visible regardless of source toggles.
+  const [hoveredCandidateId, setHoveredCandidateId] = useState(null);
   const [newPageStateName, setNewPageStateName] = useState("");
+  const [newPageStateCategory, setNewPageStateCategory] = useState("Login");
+  // Single stepped state picker: only one of {observed, post_action} is active/rendered
+  // at a time (no double-rendering the whole drill-down). Selecting current auto-advances.
+  const [activeStateField, setActiveStateField] = useState("observed_page_state");
+  // Per-field drill-down + search UI state for the state picker (keyed by field
+  // so the observed/post pickers don't interfere with each other).
+  const [searchByField, setSearchByField] = useState({});
+  // Folder navigation per field: { level: 'root'|'domain'|'objective', domainId, goalId }.
+  // Undefined ⇒ fall back to the capture's home folder (computed in the picker).
+  const [navByField, setNavByField] = useState({});
   const [addingStateTarget, setAddingStateTarget] = useState(null);
   const [pageStateError, setPageStateError] = useState(null);
   const svgRef = useRef(null);
+  const imgRef = useRef(null);
+
+  const fileNameForSync = screenshotFilename(selectedObs);
+
+  // Single source of truth for the screenshot's natural dimensions: read straight
+  // off the <img> DOM node. Called from the callback ref (fires on mount), onLoad
+  // (uncached loads), and a filename-keyed effect with a rAF retry (cached races).
+  // Only updates state when the value actually changes, so it never churns renders.
+  const measureImg = useCallback((el) => {
+    if (!el || !el.complete || !el.naturalWidth) return false;
+    setImgSize((current) => (
+      current.natW === el.naturalWidth && current.natH === el.naturalHeight
+        ? current
+        : { natW: el.naturalWidth, natH: el.naturalHeight }
+    ));
+    return true;
+  }, []);
+
+  useEffect(() => {
+    let raf = 0;
+    if (!measureImg(imgRef.current)) {
+      raf = requestAnimationFrame(() => measureImg(imgRef.current));
+    }
+    return () => { if (raf) cancelAnimationFrame(raf); };
+  }, [fileNameForSync, measureImg]);
 
   useEffect(() => {
     setActiveTab(mode === "training" ? "screenshot" : "overview");
     setElementSearch("");
     setExpandedStages({});
-    setImgSize({ natW: 0, natH: 0 });
+    // NOTE: do NOT reset imgSize to {0,0} here. Doing so runs AFTER the image's
+    // ref/onLoad has already measured the new screenshot, clobbering it back to zero
+    // and hiding the overlay until some unrelated re-render. The <img> (remounted via
+    // key per screenshot) is the sole driver of imgSize now.
     setSelectedCandidateId(null);
     setDrawMode(false);
     setDrawingRect(null);
     setPendingDraw(null);
     setLinkChoice({ type: "manual", candidateId: null, name: "", role: "button" });
     setVisibleSources({ observer: true, vision: true, manual: true });
+    setActiveStateField("observed_page_state");
     setNewPageStateName("");
     setAddingStateTarget(null);
     setPageStateError(null);
+    setNavByField({});   // new capture → reopen each picker in its home folder
+    setSearchByField({});
   }, [mode, selectedObsFilename]);
 
   if (selectedObs?._error) {
@@ -126,14 +166,48 @@ export function ObservationDetail({
   // Vision-grounding prompt — what the model will be asked at inference time.
   // Surfaced into the labeler so the annotator knows what to draw a box around.
   const trainingAnnotation = selectedObs?.meta?.training_annotation ?? {};
+  // This capture's "home" context — the picker opens already inside this objective folder.
+  const captureDomainId = trainingAnnotation?.domain_id || null;
+  const captureGoalId = trainingAnnotation?.goal_id || null;
   const elementQuery = trainingAnnotation.element_query
     ?? selectedObs?.acquisition?.training_metadata?.element_query
     ?? null;
   const currentActionType = interactionEdits?.action_type || "any";
-  const actionValueLabel = ACTION_VALUE_LABELS[currentActionType] ?? "Action Payload";
+  // Action list comes from the registry (user-extensible); fall back to a minimal
+  // built-in set only until the fetch lands.
+  const actionList = (actionOptions && actionOptions.length) ? actionOptions : FALLBACK_ACTIONS;
+  const actionValueLabel = actionList.find((a) => a.action_id === currentActionType)?.value_label ?? "Action Payload";
+  // "clear" (and any action with no value_label) has no payload field.
+  const actionHasPayload = Boolean(actionValueLabel);
 
   // Has any drawable label — drives Save button + bbox field enable state.
   const hasLabel = Boolean(approvedCandidateId || bboxOverride);
+
+  // Resolve the current approved selection across ALL sources (observer / vision /
+  // manual) so the annotator can SEE what's saved on this capture — which element,
+  // its caption/label, and where. Without this the gold box is anonymous and you
+  // can't tell what you picked or whether to change it.
+  const approvedSelection = useMemo(() => {
+    const approvedId = Object.keys(labels).find((id) => labels[id] === "approve") ?? null;
+    if (approvedId) {
+      const obs = candidates.find((c) => c.candidate_id === approvedId);
+      if (obs) {
+        return { source: "observer", id: approvedId, label: obs.target?.label || obs.target?.tag || obs.element_id };
+      }
+      const vis = visionCandidates.find((v) => v.candidate_id === approvedId);
+      if (vis) {
+        return { source: "vision", id: approvedId, label: vis.caption?.trim() || approvedId };
+      }
+      const man = (manualCandidates ?? []).find((m) => m.candidate_id === approvedId);
+      if (man) {
+        return { source: "manual", id: approvedId, label: man.name || "(unnamed manual element)" };
+      }
+      return { source: "unknown", id: approvedId, label: approvedId };
+    }
+    // A drawn box with no linked candidate (pure manual draw).
+    if (bboxOverride) return { source: "drawn", id: null, label: "Drawn box (no element link)" };
+    return null;
+  }, [labels, candidates, visionCandidates, manualCandidates, bboxOverride]);
 
   const updateInteractionEdit = useCallback((field, value) => {
     setInteractionEdits?.((current) => ({
@@ -146,13 +220,16 @@ export function ObservationDetail({
     updateInteractionEdit(field, value);
     setAddingStateTarget(null);
     setPageStateError(null);
+    // Step-through: choosing the CURRENT state advances the single window to the
+    // EXPECTED-next step (fresh screen), instead of showing both pickers at once.
+    if (field === "observed_page_state") setActiveStateField("post_action_state");
   }, [updateInteractionEdit]);
 
   const addPageState = useCallback(async (field) => {
     if (!onCreatePageState) return;
     setPageStateError(null);
     try {
-      const created = await onCreatePageState(newPageStateName);
+      const created = await onCreatePageState(newPageStateName, { category: newPageStateCategory });
       if (created?.page_state_id) {
         updateInteractionEdit(field, created.page_state_id);
         setNewPageStateName("");
@@ -161,11 +238,184 @@ export function ObservationDetail({
     } catch (error) {
       setPageStateError(error.message || String(error));
     }
-  }, [newPageStateName, onCreatePageState, updateInteractionEdit]);
+  }, [newPageStateName, newPageStateCategory, onCreatePageState, updateInteractionEdit]);
+
+  const goalById = useMemo(() => {
+    const m = new Map();
+    for (const g of goals || []) m.set(g.goal_id, g);
+    return m;
+  }, [goals]);
+  const domainLabelOf = useCallback((id) => {
+    const d = (domains || []).find((x) => (x.domain_id || x.id) === id);
+    return d?.display_name || d?.label || id;
+  }, [domains]);
+
+  // Folder index: relevance rings centered on a capture. Root ▸ Domain ▸ Objective ▸ chips.
+  // Each domain owns its own state set (domain-wide + per-objective). Global states sit
+  // beside the domains at the root. The picker opens already inside the capture's own
+  // objective folder and lets you navigate OUT to reach other domains / global.
+  const sortCat = (m) =>
+    [...m.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([cat, list]) => [cat, list.sort((a, b) => a.display_name.localeCompare(b.display_name))]);
+  const folderIndex = useMemo(() => {
+    const domainsMap = new Map(); // domainId -> { domainWide:Map, objectives:Map(goalId->{label,stage,byCat:Map}) }
+    const globalByCat = new Map();
+    const ensureDomain = (id) => {
+      if (!domainsMap.has(id)) domainsMap.set(id, { domainWide: new Map(), objectives: new Map() });
+      return domainsMap.get(id);
+    };
+    const push = (m, cat, s) => { if (!m.has(cat)) m.set(cat, []); m.get(cat).push(s); };
+    for (const s of pageStateOptions) {
+      const cat = s.category || "general";
+      if ((s.scope === "goal" || s.scope === "scenario") && s.goal_id) {
+        const dom = ensureDomain(s.domain_id || goalById.get(s.goal_id)?.domain_id || "_unscoped");
+        if (!dom.objectives.has(s.goal_id)) {
+          const g = goalById.get(s.goal_id);
+          dom.objectives.set(s.goal_id, { label: g?.display_name || s.goal_id, stage: g?.stage || "neutral", byCat: new Map() });
+        }
+        push(dom.objectives.get(s.goal_id).byCat, cat, s);
+      } else if (s.scope === "domain" && s.domain_id) {
+        push(ensureDomain(s.domain_id).domainWide, cat, s);
+      } else {
+        push(globalByCat, cat, s);
+      }
+    }
+    return { domainsMap, globalByCat };
+  }, [pageStateOptions, goalById]);
+
+  // Known category names (from existing states + a few defaults) — powers the
+  // combobox so you can pick an existing category or type a brand-new one ("Login").
+  const knownCategories = useMemo(() => {
+    const set = new Set(["Login", "Navigation", "Content", "Error", "Checkout", "General"]);
+    for (const s of pageStateOptions) if (s.category) set.add(s.category);
+    return [...set];
+  }, [pageStateOptions]);
 
   const renderPageStatePicker = (field, title, helper) => {
     const selected = interactionEdits?.[field] ?? "";
+    const selectedState = pageStateOptions.find((s) => s.page_state_id === selected) || null;
     const isAdding = addingStateTarget === field;
+    const search = (searchByField[field] || "").trim().toLowerCase();
+    const setSearch = (v) => setSearchByField((m) => ({ ...m, [field]: v }));
+
+    const { domainsMap, globalByCat } = folderIndex;
+
+    // Where this field's picker is currently pointed. Default = the capture's home
+    // folder: its own objective if known, else its domain, else the root.
+    const homeNav = captureGoalId
+      ? { level: "objective", domainId: captureDomainId, goalId: captureGoalId }
+      : captureDomainId
+        ? { level: "domain", domainId: captureDomainId }
+        : { level: "root" };
+    const nav = navByField[field] || homeNav;
+    const setNav = (n) => setNavByField((m) => ({ ...m, [field]: n }));
+
+    // Search bypasses folders entirely — flat matching states (the quick escape hatch).
+    const searchMatches = search
+      ? pageStateOptions.filter((s) =>
+          [s.display_name, s.state_id, s.category].filter(Boolean).join(" ").toLowerCase().includes(search))
+      : [];
+
+    const chip = (state) => (
+      <button
+        key={`${field}-${state.page_state_id}`}
+        type="button"
+        className={`dd-state-chip scope-${state.scope || "global"}${selected === state.page_state_id ? " selected" : ""}`}
+        onClick={() => { selectPageState(field, state.page_state_id); setSearch(""); }}
+        title={`${state.state_id} · ${state.scope}`}
+      >
+        {state.display_name}
+        <span className="dd-state-scope-tag">{(state.scope || "global")[0].toUpperCase()}</span>
+      </button>
+    );
+
+    const catBlocks = (byCat) =>
+      sortCat(byCat).map(([cat, list]) => (
+        <div key={`${field}-cat-${cat}`} className="dd-state-cat-block">
+          <div className="dd-state-cat-label">{cat}</div>
+          <div className="dd-state-chip-row">{list.map(chip)}</div>
+        </div>
+      ));
+
+    // Breadcrumb: All domains › <Domain> › <Objective>. Each crumb pops you outward.
+    const crumbs = [{ label: "All domains", nav: { level: "root" } }];
+    if (nav.level !== "root" && nav.domainId) {
+      crumbs.push({ label: domainLabelOf(nav.domainId), nav: { level: "domain", domainId: nav.domainId } });
+    }
+    if (nav.level === "objective" && nav.goalId) {
+      crumbs.push({ label: goalById.get(nav.goalId)?.display_name || nav.goalId, nav });
+    }
+
+    const renderBody = () => {
+      if (nav.level === "objective") {
+        const obj = domainsMap.get(nav.domainId)?.objectives.get(nav.goalId);
+        const blocks = obj ? catBlocks(obj.byCat) : [];
+        return blocks.length
+          ? <div className="dd-state-folder-body">{blocks}</div>
+          : <div className="dd-state-empty">No states for this objective yet — add one below, or pop up a level.</div>;
+      }
+      if (nav.level === "domain") {
+        const dom = domainsMap.get(nav.domainId);
+        const objEntries = dom ? [...dom.objectives.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)) : [];
+        return (
+          <div className="dd-state-folder-body">
+            {objEntries.length ? (
+              <div className="dd-state-folder-grid">
+                {objEntries.map(([gid, o]) => {
+                  const count = [...o.byCat.values()].reduce((n, l) => n + l.length, 0);
+                  return (
+                    <button key={`${field}-objf-${gid}`} type="button" className={`dd-state-folder stage-${o.stage}`}
+                      onClick={() => setNav({ level: "objective", domainId: nav.domainId, goalId: gid })}>
+                      <span className="dd-state-folder-icon">📁</span>
+                      <span className="dd-state-folder-name">{o.label}</span>
+                      <span className="dd-state-folder-count">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {dom && dom.domainWide.size ? (
+              <div className="dd-state-domainwide">
+                <div className="dd-state-section-label">Domain-wide states</div>
+                {catBlocks(dom.domainWide)}
+              </div>
+            ) : null}
+            {!objEntries.length && !(dom && dom.domainWide.size) ? (
+              <div className="dd-state-empty">No states in this domain yet.</div>
+            ) : null}
+          </div>
+        );
+      }
+      // root: domain folders + Global folder
+      const domEntries = [...domainsMap.entries()].sort((a, b) => domainLabelOf(a[0]).localeCompare(domainLabelOf(b[0])));
+      return (
+        <div className="dd-state-folder-body">
+          <div className="dd-state-folder-grid">
+            {domEntries.map(([did, dom]) => {
+              const count = [...dom.domainWide.values()].reduce((n, l) => n + l.length, 0)
+                + [...dom.objectives.values()].reduce((n, o) => n + [...o.byCat.values()].reduce((k, l) => k + l.length, 0), 0);
+              return (
+                <button key={`${field}-domf-${did}`} type="button"
+                  className={`dd-state-folder${did === captureDomainId ? " is-home" : ""}`}
+                  onClick={() => setNav({ level: "domain", domainId: did })}>
+                  <span className="dd-state-folder-icon">📂</span>
+                  <span className="dd-state-folder-name">{domainLabelOf(did)}{did === captureDomainId ? " ·home" : ""}</span>
+                  <span className="dd-state-folder-count">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          {globalByCat.size ? (
+            <div className="dd-state-domainwide">
+              <div className="dd-state-section-label">Global states (every domain)</div>
+              {catBlocks(globalByCat)}
+            </div>
+          ) : null}
+        </div>
+      );
+    };
+
     return (
       <div className="dd-state-picker">
         <div className="dd-state-picker-header">
@@ -176,52 +426,81 @@ export function ObservationDetail({
           <button
             type="button"
             className="ghost-btn dd-mini-btn"
-            onClick={() => {
-              setAddingStateTarget(isAdding ? null : field);
-              setPageStateError(null);
-            }}
+            onClick={() => { setAddingStateTarget(isAdding ? null : field); setPageStateError(null); }}
           >
-            {isAdding ? "Cancel" : "Add State"}
+            {isAdding ? "Cancel" : "+ New state"}
           </button>
         </div>
-        <div className="dd-state-chip-row">
-          <button
-            type="button"
-            className={`dd-state-chip${selected === "" ? " selected" : ""}`}
-            onClick={() => selectPageState(field, "")}
-          >
-            Not set
-          </button>
-          {pageStateOptions.map((state) => (
-            <button
-              key={`${field}-${state.page_state_id}`}
-              type="button"
-              className={`dd-state-chip${selected === state.page_state_id ? " selected" : ""}`}
-              onClick={() => selectPageState(field, state.page_state_id)}
-              title={state.page_state_id}
-            >
-              {state.display_name}
-            </button>
-          ))}
+
+        {/* Current selection + clear */}
+        <div className="dd-state-current">
+          {selectedState ? (
+            <span className={`dd-state-chip selected scope-${selectedState.scope || "global"}`}>
+              {selectedState.display_name}
+              <span className="dd-state-scope-tag">{(selectedState.scope || "global")[0].toUpperCase()}</span>
+            </span>
+          ) : (
+            <span className="dd-state-current-empty">Not set</span>
+          )}
+          {selected ? (
+            <button type="button" className="ghost-btn dd-mini-btn" onClick={() => selectPageState(field, "")}>Clear</button>
+          ) : null}
         </div>
+
+        {/* Quick search — jumps past the folders entirely */}
+        <input
+          className="form-input dd-state-search"
+          placeholder="Search all states…"
+          value={searchByField[field] || ""}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+
+        {search ? (
+          <div className="dd-state-chip-row dd-state-results">
+            {searchMatches.length === 0
+              ? <div className="dd-state-empty">No states match “{searchByField[field]}”.</div>
+              : searchMatches.map(chip)}
+          </div>
+        ) : (
+          <>
+            {/* Breadcrumb — click any crumb to pop outward */}
+            <nav className="dd-state-crumbs" aria-label="State folders">
+              {crumbs.map((c, i) => (
+                <span key={`${field}-crumb-${i}`} className="dd-state-crumb-wrap">
+                  {i > 0 ? <span className="dd-state-crumb-sep">›</span> : null}
+                  {i < crumbs.length - 1 ? (
+                    <button type="button" className="dd-state-crumb-link" onClick={() => setNav(c.nav)}>{c.label}</button>
+                  ) : (
+                    <span className="dd-state-crumb-current">{c.label}</span>
+                  )}
+                </span>
+              ))}
+            </nav>
+            {renderBody()}
+          </>
+        )}
+
         {isAdding ? (
           <div className="dd-state-add-row">
             <input
               className="form-input"
               value={newPageStateName}
-              placeholder="e.g. YouTube Home, Marketplace Login Landing"
+              placeholder="New state name (e.g. Email Entered)"
               onChange={(event) => setNewPageStateName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  addPageState(field);
-                }
-              }}
+              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addPageState(field); } }}
               autoFocus
             />
-            <button className="primary-btn" type="button" onClick={() => addPageState(field)}>
-              Add & Select
-            </button>
+            <input
+              className="form-input"
+              list="dd-known-categories"
+              value={newPageStateCategory}
+              placeholder="Category"
+              onChange={(e) => setNewPageStateCategory(e.target.value)}
+            />
+            <datalist id="dd-known-categories">
+              {knownCategories.map((c) => <option key={c} value={c} />)}
+            </datalist>
+            <button className="primary-btn" type="button" onClick={() => addPageState(field)}>Add &amp; select</button>
           </div>
         ) : null}
       </div>
@@ -342,11 +621,13 @@ export function ObservationDetail({
     }
     setPendingDraw(null);
     setDrawMode(false);
+    setHoveredCandidateId(null);
   }, [pendingDraw, linkChoice, setLabels, setBboxOverride, setManualCandidates]);
 
   const handleCancelLink = useCallback(() => {
     setPendingDraw(null);
     setLinkChoice({ type: "manual", candidateId: null, name: "", role: "button" });
+    setHoveredCandidateId(null);
   }, []);
 
   // Candidates ranked by IoU against the pending draw — used to surface the best
@@ -382,6 +663,45 @@ export function ObservationDetail({
     setDrawingRect(null);
   }, [setBboxOverride]);
 
+  // Approve a candidate directly by clicking its box on the screenshot (or toggle it
+  // off if already approved). This is the fast path the selection banner promises —
+  // no draw required. Sets the approved label AND the approved_bbox to that candidate's
+  // box, clearing any prior approval (single-target). Pass the candidate's bbox.
+  const toggleApproveCandidate = useCallback((candidateId, bbox) => {
+    const wasApproved = labels?.[candidateId] === "approve";
+    setLabels?.((current) => {
+      const next = { ...current };
+      for (const [id, v] of Object.entries(next)) {
+        if (v === "approve") next[id] = null;
+      }
+      if (!wasApproved) next[candidateId] = "approve";
+      return next;
+    });
+    if (wasApproved) {
+      setBboxOverride?.(null);
+    } else if (bbox) {
+      setBboxOverride?.({
+        x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height,
+      });
+    }
+    setSelectedCandidateId(candidateId);
+  }, [labels, setLabels, setBboxOverride]);
+
+  // Full reset of the current target: clears the drawn/approved box AND un-approves
+  // whatever candidate was selected, so "re-pick" truly starts fresh. (clearDrawnBox
+  // alone only drops the box, leaving an approved candidate label behind.)
+  const clearSelection = useCallback(() => {
+    setBboxOverride?.(null);
+    setDrawingRect(null);
+    setLabels?.((current) => {
+      const next = { ...current };
+      for (const [id, value] of Object.entries(next)) {
+        if (value === "approve") next[id] = null;
+      }
+      return next;
+    });
+  }, [setBboxOverride, setLabels]);
+
   const tabs = useMemo(() => {
     const baseTabs = [
       { id: "overview", label: "Overview" },
@@ -408,8 +728,21 @@ export function ObservationDetail({
   return (
     <section className="panel obs-detail-view">
       <div className="obs-detail-topbar">
-        {onBack ? <button className="ghost-btn" onClick={onBack}>Back to list</button> : null}
-        <span className="obs-detail-filename">{selectedObsFilename}</span>
+        {onBack ? (
+          <nav className="obs-breadcrumb" aria-label="Breadcrumb">
+            <button type="button" className="obs-crumb obs-crumb-link" onClick={onBack}>‹ Dataset Browser</button>
+            {trainingAnnotation?.scenario_id ? (
+              <><span className="obs-crumb-sep">/</span><span className="obs-crumb">{trainingAnnotation.scenario_id}</span></>
+            ) : null}
+            {trainingAnnotation?.observed_page_state ? (
+              <><span className="obs-crumb-sep">/</span><span className="obs-crumb">{pageStateOptions.find((s) => s.page_state_id === trainingAnnotation.observed_page_state)?.display_name || trainingAnnotation.observed_page_state}</span></>
+            ) : null}
+            <span className="obs-crumb-sep">/</span>
+            <span className="obs-crumb obs-crumb-current">{trainingAnnotation?.element_query?.slice(0, 40) || selectedObsFilename}</span>
+          </nav>
+        ) : (
+          <span className="obs-detail-filename">{selectedObsFilename}</span>
+        )}
       </div>
 
       <div className="dd-panel">
@@ -532,19 +865,69 @@ export function ObservationDetail({
                 >
                   Manual ({(manualCandidates ?? []).length})
                 </button>
+                {onRefreshVision ? (
+                  <button
+                    type="button"
+                    className="ghost-btn dd-mini-btn dd-vision-reload"
+                    onClick={() => onRefreshVision(selectedObsFilename)}
+                    title="Re-fetch vision proposals (they backfill a few seconds after capture)"
+                  >
+                    ↻ Vision
+                  </button>
+                ) : null}
+                {visionCandidates.length === 0 ? (
+                  <span className="dd-vision-pending">vision proposals backfilling…</span>
+                ) : null}
+                {visionMeta?.timing?.total_ms ? (
+                  <span
+                    className="dd-vision-timing mono"
+                    title={`device ${visionMeta.timing.device} · load ${visionMeta.timing.load_ms}ms · detect ${visionMeta.timing.detect_ms}ms · caption ${visionMeta.timing.caption_ms}ms · raw ${visionMeta.timing.raw_detections} → kept ${visionMeta.timing.kept}, captioned ${visionMeta.timing.captioned}`}
+                  >
+                    ⏱ {(visionMeta.timing.total_ms / 1000).toFixed(1)}s
+                    {" "}(detect {(visionMeta.timing.detect_ms / 1000).toFixed(1)}s · caption {(visionMeta.timing.caption_ms / 1000).toFixed(1)}s)
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Current selection banner — shows WHAT is currently labeled on this capture
+                (which element + source) so the annotator can see their choice and decide
+                whether to change it. Persists after save (restored from the annotation). */}
+            {mode === "training" && fileName ? (
+              <div className={`dd-selection-banner${approvedSelection ? " has-selection" : ""}`}>
+                {approvedSelection ? (
+                  <>
+                    <span className="dd-selection-check">✓ Target:</span>
+                    <span className={`dd-selection-badge source-${approvedSelection.source}`}>
+                      {approvedSelection.source}
+                    </span>
+                    <span className="dd-selection-label">{approvedSelection.label}</span>
+                    {bboxOverride ? (
+                      <span className="dd-selection-box mono">
+                        box {Math.round(bboxOverride.width)}×{Math.round(bboxOverride.height)} @{Math.round(bboxOverride.x)},{Math.round(bboxOverride.y)}
+                      </span>
+                    ) : null}
+                    <button className="ghost-btn dd-mini-btn dd-selection-clear" onClick={clearSelection}>
+                      Clear / re-pick
+                    </button>
+                  </>
+                ) : (
+                  <span className="dd-selection-empty">
+                    No target selected yet — approve a candidate (click its box or a picker row) or draw one.
+                  </span>
+                )}
               </div>
             ) : null}
 
             {fileName ? (
               <div className="dd-viewport">
                 <img
+                  key={fileName}
+                  ref={(el) => { imgRef.current = el; measureImg(el); }}
                   className="obs-screenshot"
                   src={`${API}/api/observations/screenshots/${fileName}`}
                   alt="Page screenshot"
-                  onLoad={(event) => {
-                    const element = event.currentTarget;
-                    setImgSize({ natW: element.naturalWidth, natH: element.naturalHeight });
-                  }}
+                  onLoad={(event) => measureImg(event.currentTarget)}
                 />
                 {imgSize.natW > 0 && (
                   <svg
@@ -584,7 +967,7 @@ export function ObservationDetail({
                           rx={3}
                           // While drawing, candidates must not intercept pointer events.
                           style={{ cursor: drawMode ? "crosshair" : "pointer", pointerEvents: drawMode ? "none" : "auto" }}
-                          onClick={() => !drawMode && setSelectedCandidateId(isSelected ? null : candidate.candidate_id)}
+                          onClick={() => !drawMode && toggleApproveCandidate(candidate.candidate_id, bbox)}
                         />
                       );
                     })}
@@ -609,9 +992,7 @@ export function ObservationDetail({
                           strokeDasharray={isApproved ? "" : "3 2"}
                           rx={3}
                           style={{ cursor: drawMode ? "crosshair" : "pointer", pointerEvents: drawMode ? "none" : "auto" }}
-                          onClick={() => !drawMode && setSelectedCandidateId(
-                            isSelected ? null : vision.candidate_id,
-                          )}
+                          onClick={() => !drawMode && toggleApproveCandidate(vision.candidate_id, vision.bbox)}
                         />
                       );
                     })}
@@ -634,9 +1015,7 @@ export function ObservationDetail({
                           strokeDasharray={isApproved ? "" : "4 3"}
                           rx={3}
                           style={{ cursor: drawMode ? "crosshair" : "pointer", pointerEvents: drawMode ? "none" : "auto" }}
-                          onClick={() => !drawMode && setSelectedCandidateId(
-                            selectedCandidateId === manual.candidate_id ? null : manual.candidate_id,
-                          )}
+                          onClick={() => !drawMode && toggleApproveCandidate(manual.candidate_id, manual.bbox)}
                         />
                       );
                     })}
@@ -690,6 +1069,32 @@ export function ObservationDetail({
                         style={{ pointerEvents: "none" }}
                       />
                     ) : null}
+
+                    {/* Hover highlight — lights up the box for whichever picker row the
+                        cursor is on, so the annotator can see which element a row maps to.
+                        Looks across observer + vision; forced visible ignoring source toggles. */}
+                    {(() => {
+                      if (!hoveredCandidateId) return null;
+                      const obs = candidates.find((c) => c.candidate_id === hoveredCandidateId);
+                      const hb = obs
+                        ? resolveBbox(obs, acquisition)
+                        : visionCandidates.find((v) => v.candidate_id === hoveredCandidateId)?.bbox;
+                      if (!hb) return null;
+                      return (
+                        <rect
+                          x={hb.x}
+                          y={hb.y}
+                          width={hb.width}
+                          height={hb.height}
+                          fill="#f59e0b"
+                          fillOpacity={0.25}
+                          stroke="#f59e0b"
+                          strokeWidth={3}
+                          rx={3}
+                          style={{ pointerEvents: "none" }}
+                        />
+                      );
+                    })()}
                   </svg>
                 )}
               </div>
@@ -728,45 +1133,103 @@ export function ObservationDetail({
                 <div className="dd-action-type-row">
                   <span className="dd-action-label">Action Type</span>
                   <div className="dd-action-type-buttons">
-                    {ACTION_TYPES.map((action) => (
+                    {actionList.map((action) => (
                       <button
-                        key={action.id}
+                        key={action.action_id}
                         type="button"
-                        className={`dd-action-type-btn${currentActionType === action.id ? " selected" : ""}`}
-                        onClick={() => updateInteractionEdit("action_type", action.id)}
+                        className={`dd-action-type-btn${currentActionType === action.action_id ? " selected" : ""}`}
+                        onClick={() => updateInteractionEdit("action_type", action.action_id)}
                       >
                         {action.label}
                       </button>
                     ))}
+                    {onCreateAction ? (
+                      addingAction ? (
+                        <span className="dd-action-add">
+                          <input
+                            className="form-input dd-action-add-input"
+                            autoFocus
+                            value={newActionName}
+                            placeholder="New action (e.g. Hover)"
+                            onChange={(e) => setNewActionName(e.target.value)}
+                            onKeyDown={async (e) => {
+                              if (e.key === "Escape") { setAddingAction(false); setNewActionName(""); setActionError(null); }
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                try {
+                                  const created = await onCreateAction(newActionName);
+                                  if (created?.action_id) updateInteractionEdit("action_type", created.action_id);
+                                  setAddingAction(false); setNewActionName(""); setActionError(null);
+                                } catch (err) { setActionError(err.message || String(err)); }
+                              }
+                            }}
+                          />
+                          <button type="button" className="ghost-btn dd-mini-btn" onClick={() => { setAddingAction(false); setNewActionName(""); setActionError(null); }}>Cancel</button>
+                        </span>
+                      ) : (
+                        <button type="button" className="dd-action-type-btn dd-action-add-btn" onClick={() => setAddingAction(true)}>+ Add</button>
+                      )
+                    ) : null}
                   </div>
+                  {actionError ? <span className="dd-action-error">{actionError}</span> : null}
                 </div>
 
-                <label className="dd-action-field dd-action-field-full">
-                  <span className="dd-action-label">{actionValueLabel}</span>
-                  <input
-                    className="form-input"
-                    value={interactionEdits?.action_text ?? ""}
-                    placeholder={
-                      currentActionType === "type"
-                        ? "literal text to type, e.g. user@example.com"
-                        : "optional detail for this action"
-                    }
-                    onChange={(event) => updateInteractionEdit("action_text", event.target.value)}
-                  />
-                </label>
+                {actionHasPayload ? (
+                  <label className="dd-action-field dd-action-field-full">
+                    <span className="dd-action-label">{actionValueLabel}</span>
+                    <input
+                      className="form-input"
+                      value={interactionEdits?.action_text ?? ""}
+                      placeholder={
+                        currentActionType === "type"
+                          ? "literal text to type, e.g. user@example.com"
+                          : "optional detail for this action"
+                      }
+                      onChange={(event) => updateInteractionEdit("action_text", event.target.value)}
+                    />
+                  </label>
+                ) : (
+                  <div className="dd-action-nopayload">No payload needed for “{actionList.find((a) => a.action_id === currentActionType)?.label || currentActionType}”.</div>
+                )}
 
-                <div className="dd-state-grid">
-                  {renderPageStatePicker(
-                    "observed_page_state",
-                    "Current Page State",
-                    "What is visible before the action?",
-                  )}
-                  {renderPageStatePicker(
-                    "post_action_state",
-                    "Expected Next State",
-                    "Where should the agent land after the action?",
-                  )}
-                </div>
+                {/* Single stepped state picker — only the active step's drill-down is
+                    rendered (no double-load). Picking the current state auto-advances to expected. */}
+                {(() => {
+                  const labelFor = (field) => {
+                    const v = interactionEdits?.[field];
+                    if (!v) return null;
+                    return pageStateOptions.find((s) => s.page_state_id === v)?.display_name || v;
+                  };
+                  const steps = [
+                    { field: "observed_page_state", n: 1, name: "Current", title: "Current Page State", helper: "What is visible before the action?" },
+                    { field: "post_action_state", n: 2, name: "Expected next", title: "Expected Next State", helper: "Where should the agent land after the action?" },
+                  ];
+                  const active = steps.find((s) => s.field === activeStateField) || steps[0];
+                  return (
+                    <div className="dd-state-stepper">
+                      <div className="dd-state-steps">
+                        {steps.map((s, i) => {
+                          const val = labelFor(s.field);
+                          return (
+                            <span key={s.field} className="dd-state-step-wrap">
+                              {i > 0 ? <span className="dd-state-step-arrow">→</span> : null}
+                              <button
+                                type="button"
+                                className={`dd-state-step${activeStateField === s.field ? " active" : ""}${val ? " filled" : ""}`}
+                                onClick={() => setActiveStateField(s.field)}
+                              >
+                                <span className="dd-state-step-num">{s.n}</span>
+                                <span className="dd-state-step-label">{s.name}</span>
+                                <span className="dd-state-step-val">{val || "choose…"}</span>
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {renderPageStatePicker(active.field, active.title, active.helper)}
+                    </div>
+                  );
+                })()}
                 {pageStateError ? <div className="annotation-message error">{pageStateError}</div> : null}
               </div>
             ) : null}
@@ -791,6 +1254,11 @@ export function ObservationDetail({
                         {candidatesByOverlap.slice(0, 8).map((candidate) => {
                           const isSelected = linkChoice.type === "candidate" && linkChoice.candidateId === candidate.candidate_id;
                           const label = candidate.target?.label || candidate.target?.tag || candidate.element_id;
+                          const role = candidate.target?.role;
+                          // Two same-label elements (e.g. both "input") are only told apart
+                          // by position — show where each sits so the annotator can pick right.
+                          const cb = resolveBbox(candidate, acquisition);
+                          const pos = cb ? `@${Math.round(cb.x)},${Math.round(cb.y)} · ${Math.round(cb.width)}×${Math.round(cb.height)}` : "no box";
                           return (
                             <button
                               key={candidate.candidate_id}
@@ -802,9 +1270,14 @@ export function ObservationDetail({
                                 name: "",
                                 role: "button",
                               })}
+                              onMouseEnter={() => setHoveredCandidateId(candidate.candidate_id)}
+                              onMouseLeave={() => setHoveredCandidateId(null)}
                             >
                               <span className="dd-link-rank">#{candidate.rank}</span>
-                              <span className="dd-link-label">{label}</span>
+                              <span className="dd-link-label">
+                                {label}{role ? ` · ${role}` : ""}
+                                <span className="dd-link-pos mono">{pos}</span>
+                              </span>
                               <span className="dd-link-meta mono">{candidate.action_type}</span>
                               <span className="dd-link-iou">IoU {(candidate._iou ?? 0).toFixed(2)}</span>
                             </button>
@@ -839,9 +1312,16 @@ export function ObservationDetail({
                                 name: "",
                                 role: "button",
                               })}
+                              onMouseEnter={() => setHoveredCandidateId(vision.candidate_id)}
+                              onMouseLeave={() => setHoveredCandidateId(null)}
                             >
                               <span className="dd-link-rank dd-vision-badge">V</span>
-                              <span className="dd-link-label">{primary}</span>
+                              <span className="dd-link-label">
+                                {primary}
+                                <span className="dd-link-pos mono">
+                                  {vision.bbox ? `@${Math.round(vision.bbox.x)},${Math.round(vision.bbox.y)} · ${Math.round(vision.bbox.width)}×${Math.round(vision.bbox.height)}` : ""}
+                                </span>
+                              </span>
                               <span className="dd-link-meta">conf {(vision.confidence ?? 0).toFixed(2)}</span>
                               <span className="dd-link-iou">{pendingDraw ? `IoU ${(vision._iou ?? 0).toFixed(2)}` : ""}</span>
                             </button>

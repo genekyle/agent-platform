@@ -37,6 +37,11 @@ export const CONTROL_PLANE_NAV = {
         subtitle: "Browse captured artifacts, curate metadata, and select records for review.",
       },
       {
+        id: "page-states",
+        label: "Page States",
+        subtitle: "Organize the state taxonomy: global, per-domain, and per-scenario states by category.",
+      },
+      {
         id: "review-label",
         label: "Review / Label",
         subtitle: "Inspect the screenshot, proposals, and candidate set for one selected artifact.",

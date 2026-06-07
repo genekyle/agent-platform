@@ -19,8 +19,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from db import Base, engine, get_db
 from models import (
+    ActionRegistry,
     DomainRegistry,
     GoalRegistry,
+    PageStateRegistry,
     Run,
     Step,
     TaskRegistry,
@@ -205,6 +207,86 @@ def seed_training_registry(db: Session) -> None:
         db.add(TaskRegistry(status="active", **payload))
     for payload in REGISTRY_SEED["scenarios"]:
         db.add(ScenarioRegistry(status="active", **payload))
+    db.commit()
+
+
+def _slugify(value: str) -> str:
+    import re
+    s = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return s.strip("_")
+
+
+# Global states that apply to any capture regardless of domain/scenario.
+_GLOBAL_PAGE_STATES = [
+    {"state_id": "out_of_domain", "display_name": "Out of Domain", "category": "navigation"},
+    {"state_id": "unknown", "display_name": "Unknown / Unclassified", "category": "navigation"},
+    {"state_id": "blocked", "display_name": "Blocked / Needs Human", "category": "error"},
+]
+
+
+# Built-in action vocabulary. action_id matches what TrainingCapture.action_type_hint
+# already stores (keep ids stable!). "clear" is new. value_label names the payload field.
+_BUILTIN_ACTIONS = [
+    {"action_id": "click", "label": "Click", "value_label": "Optional Payload", "sort_order": 10},
+    {"action_id": "type", "label": "Type", "value_label": "Text to Type", "sort_order": 20},
+    {"action_id": "clear", "label": "Clear", "value_label": None, "sort_order": 30},
+    {"action_id": "select", "label": "Select", "value_label": "Option to Select", "sort_order": 40},
+    {"action_id": "scroll", "label": "Scroll", "value_label": "Scroll Direction / Amount", "sort_order": 50},
+    {"action_id": "navigate", "label": "Navigate", "value_label": "URL or Destination", "sort_order": 60},
+    {"action_id": "wait", "label": "Wait", "value_label": "Wait Condition", "sort_order": 70},
+    {"action_id": "press", "label": "Key", "value_label": "Key / Shortcut", "sort_order": 80},
+    {"action_id": "any", "label": "Any", "value_label": "Optional Payload", "sort_order": 90},
+]
+
+
+def seed_actions(db: Session) -> None:
+    """Idempotently ensure built-in actions exist (incl. the new 'clear')."""
+    existing = set(db.scalars(select(ActionRegistry.action_id)).all())
+    for payload in _BUILTIN_ACTIONS:
+        if payload["action_id"] not in existing:
+            db.add(ActionRegistry(is_builtin=True, status="active", **payload))
+    db.commit()
+
+
+# Heuristic backfill for the new goal.stage: login/signup/auth objectives are the
+# unauthenticated bridge; everything else is authenticated. Annotators can override.
+_UNAUTH_GOAL_HINTS = ("log_in", "login", "sign_in", "signin", "sign_up", "signup", "register", "reset_password", "forgot")
+
+
+def backfill_goal_stages(db: Session) -> None:
+    """Set stage on goals that are still 'neutral' (one-time, non-destructive)."""
+    for goal in db.scalars(select(GoalRegistry).where(GoalRegistry.stage == "neutral")).all():
+        gid = (goal.goal_id or "").lower()
+        goal.stage = "unauthenticated" if any(h in gid for h in _UNAUTH_GOAL_HINTS) else "authenticated"
+    db.commit()
+
+
+def seed_page_states(db: Session) -> None:
+    """Idempotently ensure the global states exist, and migrate any legacy
+    per-domain page_states (the old JSON blob) into the registry as scope=domain
+    rows. Safe to run on every startup — only inserts what's missing."""
+    existing_ids = set(db.scalars(select(PageStateRegistry.state_id)).all())
+
+    for payload in _GLOBAL_PAGE_STATES:
+        if payload["state_id"] not in existing_ids:
+            db.add(PageStateRegistry(scope="global", status="active", **payload))
+            existing_ids.add(payload["state_id"])
+
+    # Migrate legacy domain.page_states JSON → scope=domain registry rows.
+    for domain in db.scalars(select(DomainRegistry)).all():
+        for ps in (domain.page_states or []):
+            sid = ps.get("page_state_id") or _slugify(ps.get("display_name", ""))
+            if not sid or sid in existing_ids:
+                continue
+            db.add(PageStateRegistry(
+                state_id=sid,
+                display_name=ps.get("display_name") or sid,
+                scope="domain",
+                domain_id=domain.domain_id,
+                category=ps.get("category") or "general",
+                status="active",
+            ))
+            existing_ids.add(sid)
     db.commit()
 
 
@@ -460,6 +542,10 @@ def _migrate_schema() -> None:
         ("goal_registry", "description", "TEXT"),
         ("goal_registry", "typical_element_types", "JSON NOT NULL DEFAULT '[]'"),
         ("goal_registry", "success_criteria", "VARCHAR(500)"),
+        # goal_registry agent-stage (v5)
+        ("goal_registry", "stage", "VARCHAR(30) NOT NULL DEFAULT 'neutral'"),
+        # page_state_registry objective(goal) scope (v5)
+        ("page_state_registry", "goal_id", "VARCHAR(100)"),
         # task_registry training config fields (v2)
         ("task_registry", "description", "TEXT"),
         ("task_registry", "estimated_steps", "VARCHAR(50)"),
@@ -480,6 +566,9 @@ def on_startup():
     Base.metadata.create_all(bind=engine)
     with Session(engine) as db:
         seed_training_registry(db)
+        seed_page_states(db)
+        seed_actions(db)
+        backfill_goal_stages(db)
 
 
 @app.get("/health")
@@ -1011,6 +1100,211 @@ def archive_training_scenario(scenario_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+# ===== Page state registry (scoped: global / domain / scenario, + category) =====
+
+def _page_state_dict(s: PageStateRegistry) -> dict:
+    return {
+        "state_id": s.state_id,
+        "display_name": s.display_name,
+        "scope": s.scope,
+        "domain_id": s.domain_id,
+        "goal_id": s.goal_id,
+        "scenario_id": s.scenario_id,
+        "category": s.category or "general",
+        "description": s.description,
+        "status": s.status,
+    }
+
+
+class PageStateWrite(BaseModel):
+    display_name: str
+    scope: str = "global"  # global | domain | goal | scenario
+    domain_id: Optional[str] = None
+    goal_id: Optional[str] = None
+    scenario_id: Optional[str] = None
+    category: str = "general"
+    description: Optional[str] = None
+    state_id: Optional[str] = None  # optional explicit slug; else derived from display_name
+
+
+class PageStateUpdate(BaseModel):
+    display_name: Optional[str] = None
+    scope: Optional[str] = None
+    domain_id: Optional[str] = None
+    goal_id: Optional[str] = None
+    scenario_id: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+
+
+@app.get("/api/training/page-states")
+def list_page_states(
+    scope: Optional[str] = None,
+    domain_id: Optional[str] = None,
+    goal_id: Optional[str] = None,
+    scenario_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """List page states. With no filters → all active states (for the manager).
+    With context filters → the states RELEVANT to a capture: all global + that
+    domain's + that objective(goal)'s + that scenario's states."""
+    stmt = select(PageStateRegistry).where(PageStateRegistry.status == "active")
+    rows = db.scalars(stmt).all()
+
+    context = domain_id is not None or goal_id is not None or scenario_id is not None
+
+    def relevant(s: PageStateRegistry) -> bool:
+        if scope and s.scope != scope:
+            return False
+        if not context:
+            return True
+        if s.scope == "global":
+            return True
+        if s.scope == "domain":
+            return domain_id is not None and s.domain_id == domain_id
+        if s.scope == "goal":
+            return goal_id is not None and s.goal_id == goal_id
+        if s.scope == "scenario":
+            return scenario_id is not None and s.scenario_id == scenario_id
+        return False
+
+    result = [_page_state_dict(s) for s in rows if relevant(s)]
+    result.sort(key=lambda d: (d["scope"], d["category"], d["display_name"]))
+    return result
+
+
+@app.post("/api/training/page-states")
+def create_page_state(body: PageStateWrite, db: Session = Depends(get_db)):
+    name = (body.display_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="display_name is required")
+    state_id = (body.state_id or _slugify(name)).strip()
+    if not state_id:
+        raise HTTPException(status_code=400, detail="Could not derive a state id from the name")
+    if body.scope not in ("global", "domain", "goal", "scenario"):
+        raise HTTPException(status_code=400, detail="scope must be global|domain|goal|scenario")
+    if body.scope == "domain" and not body.domain_id:
+        raise HTTPException(status_code=400, detail="domain scope requires domain_id")
+    if body.scope == "goal" and not body.goal_id:
+        raise HTTPException(status_code=400, detail="goal scope requires goal_id")
+    if body.scope == "scenario" and not body.scenario_id:
+        raise HTTPException(status_code=400, detail="scenario scope requires scenario_id")
+
+    existing = db.get(PageStateRegistry, state_id)
+    if existing is not None:
+        # Idempotent-ish: return the existing row rather than erroring (the labeler
+        # may try to create one that already exists).
+        return _page_state_dict(existing)
+
+    row = PageStateRegistry(
+        state_id=state_id,
+        display_name=name,
+        scope=body.scope,
+        domain_id=body.domain_id if body.scope in ("domain", "goal", "scenario") else None,
+        goal_id=body.goal_id if body.scope in ("goal", "scenario") else None,
+        scenario_id=body.scenario_id if body.scope == "scenario" else None,
+        category=(body.category or "general").strip() or "general",
+        description=body.description,
+        status="active",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _page_state_dict(row)
+
+
+@app.patch("/api/training/page-states/{state_id}")
+def update_page_state(state_id: str, body: PageStateUpdate, db: Session = Depends(get_db)):
+    row = db.get(PageStateRegistry, state_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Page state not found")
+    for field in ("display_name", "scope", "domain_id", "goal_id", "scenario_id", "category", "description", "status"):
+        val = getattr(body, field)
+        if val is not None:
+            setattr(row, field, val)
+    db.commit()
+    db.refresh(row)
+    return _page_state_dict(row)
+
+
+@app.delete("/api/training/page-states/{state_id}")
+def archive_page_state(state_id: str, db: Session = Depends(get_db)):
+    row = db.get(PageStateRegistry, state_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Page state not found")
+    row.status = "archived"
+    db.commit()
+    return {"ok": True}
+
+
+# ===== Action registry (the action vocabulary, user-extensible) =====
+
+def _action_dict(a: ActionRegistry) -> dict:
+    return {
+        "action_id": a.action_id,
+        "label": a.label,
+        "value_label": a.value_label,
+        "is_builtin": a.is_builtin,
+        "sort_order": a.sort_order,
+    }
+
+
+class ActionWrite(BaseModel):
+    label: str
+    value_label: Optional[str] = None
+    action_id: Optional[str] = None  # optional explicit slug; else from label
+
+
+@app.get("/api/training/actions")
+def list_actions(db: Session = Depends(get_db)):
+    rows = db.scalars(
+        select(ActionRegistry).where(ActionRegistry.status == "active")
+    ).all()
+    rows.sort(key=lambda a: (a.sort_order, a.label))
+    return [_action_dict(a) for a in rows]
+
+
+@app.post("/api/training/actions")
+def create_action(body: ActionWrite, db: Session = Depends(get_db)):
+    label = (body.label or "").strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required")
+    action_id = (body.action_id or _slugify(label)).strip()
+    if not action_id:
+        raise HTTPException(status_code=400, detail="Could not derive an action id from the label")
+    existing = db.get(ActionRegistry, action_id)
+    if existing is not None:
+        if existing.status != "active":
+            existing.status = "active"
+            db.commit()
+        return _action_dict(existing)
+    row = ActionRegistry(
+        action_id=action_id,
+        label=label,
+        value_label=(body.value_label or "Optional Payload"),
+        is_builtin=False,
+        sort_order=500,  # custom actions sort after built-ins
+        status="active",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _action_dict(row)
+
+
+@app.delete("/api/training/actions/{action_id}")
+def archive_action(action_id: str, db: Session = Depends(get_db)):
+    row = db.get(ActionRegistry, action_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if row.is_builtin:
+        raise HTTPException(status_code=400, detail="Built-in actions can't be removed")
+    row.status = "archived"
+    db.commit()
+    return {"ok": True}
+
+
 @app.get("/api/training/sessions", response_model=list[TrainingSessionRead])
 def list_training_sessions(db: Session = Depends(get_db)):
     stmt = select(TrainingSession).order_by(TrainingSession.created_at.desc())
@@ -1474,6 +1768,7 @@ def get_observation(filename: str, db: Session = Depends(get_db)):
                 "version": sidecar.get("version"),
                 "generated_at": sidecar.get("generated_at"),
                 "proposal_count": sidecar.get("proposal_count", 0),
+                "timing": sidecar.get("timing", {}),
             }
         except Exception:
             # A malformed sidecar shouldn't break the whole GET — just skip it.
@@ -1496,6 +1791,7 @@ def list_observations(db: Session = Depends(get_db)):
             continue
         try:
             data = json.loads(trace_path.read_text())
+            meta = read_meta(traces_dir, capture.artifact_filename)
             results.append({
                 "filename": capture.artifact_filename,
                 "timestamp": capture.captured_at.isoformat(),
@@ -1517,6 +1813,13 @@ def list_observations(db: Session = Depends(get_db)):
                 "goal_id": capture.goal_id,
                 "task_id": capture.task_id,
                 "capture_profile": capture.capture_profile,
+                # Organization/tree fields
+                "title": meta.get("title"),
+                "observed_page_state": capture.observed_page_state,
+                "action_type": capture.action_type_hint,
+                "action_text": capture.action_text,
+                "element_query": capture.element_query,
+                "approved_bbox": capture.approved_bbox is not None,
             })
         except Exception:
             continue
@@ -1587,6 +1890,7 @@ class UpdateMetaRequest(BaseModel):
     group: Optional[str] = None
     status: Optional[str] = None
     label: Optional[str] = None
+    title: Optional[str] = None
     training_annotation: Optional[dict] = None
     # Vision annotation fields (shorthand — can also be sent inside training_annotation)
     observed_page_state: Optional[str] = None
@@ -1610,7 +1914,7 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
         raise HTTPException(status_code=404, detail="Training capture not found")
 
     meta = read_meta(traces_dir, filename)
-    for key in ("group", "status", "label"):
+    for key in ("group", "status", "label", "title"):
         val = getattr(body, key)
         if val is not None:
             if val == "":

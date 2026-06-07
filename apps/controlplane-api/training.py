@@ -98,7 +98,12 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
         return existing
 
     merged = dict(existing or {})
-    merged.update({k: v for k, v in patch.items() if v is not None})
+    # Honor every key the patch explicitly provides — INCLUDING null. The frontend
+    # sends the full annotation on each save, so a null approved_bbox / positive_candidate_id
+    # means "clear it", not "leave it". (Previously we skipped null values, which made it
+    # impossible to un-set a box once saved — "Clear / re-pick" silently did nothing.)
+    # Keys the patch omits entirely are left untouched, preserving partial-update safety.
+    merged.update(patch)
 
     labels = merged.get("candidate_labels") or {}
     labels = {str(k): str(v) for k, v in labels.items() if v in {"approve", "reject"}}
@@ -158,10 +163,14 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
                 "created_at": entry.get("created_at") or utcnow_iso(),
             })
 
-    # A manually-drawn bbox is a valid label for vision_element_grounding even
-    # without an observer-derived positive candidate — it still satisfies the
-    # (screenshot, query) -> bbox supervision the primary model needs.
-    has_label = bool(positive_candidate_id) or bbox is not None
+    # A capture counts as a complete, reviewable label if the annotator gave us EITHER:
+    #   - a grounding target (bbox or positive candidate)  -> feeds vision_element_grounding
+    #   - a deliberate page-state classification           -> feeds page_state_classifier
+    # The second case is essential for negatives: out_of_domain / logged_in_home captures
+    # have no bbox but are valid state-classifier examples. Without this, they'd stay
+    # "draft" forever and be silently excluded from every dataset build.
+    observed_state = str(merged.get("observed_page_state") or "").strip()
+    has_label = bool(positive_candidate_id) or bbox is not None or bool(observed_state)
     review_status = "reviewed" if has_label else "draft"
 
     return {

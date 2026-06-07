@@ -68,6 +68,53 @@ class DomainRegistry(Base):
     status: Mapped[str] = mapped_column(String(50), default="active")
 
 
+class PageStateRegistry(Base):
+    """Canonical store for page states, replacing the hardcoded globals + the
+    per-domain page_states JSON blob. Two organizing axes:
+      - scope: global | domain | scenario  (how widely the state applies)
+      - category: thematic group for UI organization (auth, navigation, ...)
+    The labeler shows global + the capture's domain + the capture's scenario states,
+    grouped by category. state_id is a globally-unique slug (the value stored on
+    TrainingCapture.observed_page_state / post_action_state).
+    """
+    __tablename__ = "page_state_registry"
+
+    state_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    scope: Mapped[str] = mapped_column(String(20), default="global", index=True)  # global|domain|goal|scenario
+    domain_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("domain_registry.domain_id"), nullable=True, index=True,
+    )
+    goal_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("goal_registry.goal_id"), nullable=True, index=True,
+    )
+    scenario_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("scenario_registry.scenario_id"), nullable=True, index=True,
+    )
+    category: Mapped[str] = mapped_column(String(60), default="general", index=True)
+    description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ActionRegistry(Base):
+    """The vocabulary of actions an agent can perform at a labeled element.
+    Stored in a registry (not a hardcoded list) so annotators can add new ones.
+    action_id is the value stored on TrainingCapture.action_type_hint.
+    value_label names the payload field for that action (e.g. type -> 'Text to Type').
+    Built-ins are protected from deletion.
+    """
+    __tablename__ = "action_registry"
+
+    action_id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    label: Mapped[str] = mapped_column(String(120))
+    value_label: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    status: Mapped[str] = mapped_column(String(50), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class GoalRegistry(Base):
     __tablename__ = "goal_registry"
 
@@ -76,6 +123,9 @@ class GoalRegistry(Base):
     display_name: Mapped[str] = mapped_column(String(200))
     action_type_hints: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(50), default="active")
+    # Agent lifecycle phase this objective belongs to: unauthenticated | authenticated | neutral.
+    # The canonical hierarchy is Domain ▸ Stage ▸ Objective(=goal) ▸ Task ▸ States.
+    stage: Mapped[str] = mapped_column(String(30), default="neutral", index=True)
 
     # Training configuration
     # Semantic description of what completing this goal means for the agent
