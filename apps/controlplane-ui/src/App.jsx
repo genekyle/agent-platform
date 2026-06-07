@@ -126,6 +126,7 @@ export default function App() {
         goal_id: s.goal_id,
         scenario_id: s.scenario_id,
         category: s.category || "general",
+        stage: s.stage,
       })));
     } catch {
       setPageStateOptions([]);
