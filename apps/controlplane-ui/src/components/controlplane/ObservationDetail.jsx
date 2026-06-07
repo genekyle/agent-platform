@@ -372,7 +372,8 @@ export function ObservationDetail({
     const folder = (key, cls, icon, name, count, onClick, badge) => (
       <button key={key} type="button" className={`dd-state-folder ${cls}`} onClick={onClick}>
         <span className="dd-state-folder-icon">{icon}</span>
-        <span className="dd-state-folder-name">{name}{badge ? <span className="dd-state-home-badge">{badge}</span> : null}</span>
+        <span className="dd-state-folder-name">{name}</span>
+        {badge ? <span className="dd-state-home-badge">{badge}</span> : null}
         <span className="dd-state-folder-count">{count}</span>
       </button>
     );

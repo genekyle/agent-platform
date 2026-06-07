@@ -1862,12 +1862,12 @@ input[type="checkbox"] {
 
 .dd-state-folder-body { display: flex; flex-direction: column; gap: 10px; }
 .dd-state-folder-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px;
 }
 .dd-state-folder {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 10px; background: #fff;
-  cursor: pointer; font: inherit; text-align: left;
+  cursor: pointer; font: inherit; text-align: left; overflow: hidden;
   transition: border-color 120ms, background 120ms;
 }
 .dd-state-folder:hover { border-color: #cbd5e1; background: #f8fafc; }
@@ -1875,17 +1875,21 @@ input[type="checkbox"] {
 .dd-state-folder.stage-unauthenticated { border-left: 3px solid #f59e0b; }
 .dd-state-folder.stage-authenticated { border-left: 3px solid #10b981; }
 .dd-state-folder.stage-neutral { border-left: 3px solid #94a3b8; }
-.dd-state-folder-icon { font-size: 15px; }
-.dd-state-folder-name { flex: 1; font-weight: 600; color: #334155; font-size: 13px; }
+.dd-state-folder-icon { font-size: 15px; flex: 0 0 auto; }
+.dd-state-folder-name {
+  flex: 1 1 auto; min-width: 0; font-weight: 600; color: #334155; font-size: 13px;
+  overflow-wrap: anywhere;
+}
 .dd-state-folder-count {
+  flex: 0 0 auto;
   font-size: 11px; font-weight: 700; color: #64748b;
   background: #eef2f7; border-radius: 999px; padding: 1px 8px; min-width: 22px; text-align: center;
 }
 
 .dd-state-home-badge {
-  margin-left: 6px; font-size: 9px; font-weight: 700; text-transform: uppercase;
+  flex: 0 0 auto; font-size: 9px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.04em; color: #2563eb; background: #dbeafe;
-  border-radius: 4px; padding: 1px 5px; vertical-align: middle;
+  border-radius: 4px; padding: 1px 5px;
 }
 .dd-state-domainwide { border-top: 1px dashed #eef2f7; padding-top: 8px; }
 .dd-state-section-label {
