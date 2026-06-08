@@ -179,6 +179,13 @@ export function ObservationDetail({
   const actionValueLabel = actionList.find((a) => a.action_id === currentActionType)?.value_label ?? "Action Payload";
   // "clear" (and any action with no value_label) has no payload field.
   const actionHasPayload = Boolean(actionValueLabel);
+  // The payload field is action-aware. For value-bearing actions (type/select) it
+  // captures a VALUE SLOT — the variable the workflow binds at runtime (email,
+  // password, …), never the literal secret. For everything else it captures free-text
+  // CONTEXT about the target UI ("primary Log In button"), since the action type
+  // already says what to do.
+  const VALUE_SLOT_ACTIONS = new Set(["type", "select"]);
+  const payloadMode = VALUE_SLOT_ACTIONS.has(currentActionType) ? "slot" : "context";
 
   // Has any drawable label — drives Save button + bbox field enable state.
   const hasLabel = Boolean(approvedCandidateId || bboxOverride);
@@ -1210,19 +1217,37 @@ export function ObservationDetail({
                 </div>
 
                 {actionHasPayload ? (
-                  <label className="dd-action-field dd-action-field-full">
-                    <span className="dd-action-label">{actionValueLabel}</span>
-                    <input
-                      className="form-input"
-                      value={interactionEdits?.action_text ?? ""}
-                      placeholder={
-                        currentActionType === "type"
-                          ? "literal text to type, e.g. user@example.com"
-                          : "optional detail for this action"
-                      }
-                      onChange={(event) => updateInteractionEdit("action_text", event.target.value)}
-                    />
-                  </label>
+                  payloadMode === "slot" ? (
+                    <label className="dd-action-field dd-action-field-full">
+                      <span className="dd-action-label">Value slot</span>
+                      <input
+                        className="form-input"
+                        list="dd-value-slots"
+                        value={interactionEdits?.action_text ?? ""}
+                        placeholder="variable bound at runtime — e.g. email, password, search_query"
+                        onChange={(event) => updateInteractionEdit("action_text", event.target.value)}
+                      />
+                      <datalist id="dd-value-slots">
+                        <option value="email" />
+                        <option value="password" />
+                        <option value="search_query" />
+                        <option value="otp" />
+                        <option value="phone" />
+                      </datalist>
+                      <span className="dd-state-helper">The workflow injects the real value at runtime — store the variable name, never the literal secret.</span>
+                    </label>
+                  ) : (
+                    <label className="dd-action-field dd-action-field-full">
+                      <span className="dd-action-label">Context <span className="dd-action-optional">(optional)</span></span>
+                      <input
+                        className="form-input"
+                        value={interactionEdits?.action_text ?? ""}
+                        placeholder="describe the target UI, e.g. “primary blue Log In button”"
+                        onChange={(event) => updateInteractionEdit("action_text", event.target.value)}
+                      />
+                      <span className="dd-state-helper">Context about the element or intent — not what to do (the action type already says that).</span>
+                    </label>
+                  )
                 ) : (
                   <div className="dd-action-nopayload">No payload needed for “{actionList.find((a) => a.action_id === currentActionType)?.label || currentActionType}”.</div>
                 )}

@@ -1886,6 +1886,7 @@ input[type="checkbox"] {
   background: #eef2f7; border-radius: 999px; padding: 1px 8px; min-width: 22px; text-align: center;
 }
 
+.dd-action-optional { font-weight: 400; color: #9ca3af; font-size: 11px; }
 .dd-state-home-badge {
   flex: 0 0 auto; font-size: 9px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.04em; color: #2563eb; background: #dbeafe;
