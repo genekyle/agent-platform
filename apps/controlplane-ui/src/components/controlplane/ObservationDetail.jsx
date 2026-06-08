@@ -54,6 +54,8 @@ export function ObservationDetail({
   actionOptions = [],
   onCreateAction,
   onRefreshVision,
+  onGenerateCaptions,
+  captionsLoading,
   onSaveAnnotation,
   annotationSaving,
   annotationMessage,
@@ -912,13 +914,24 @@ export function ObservationDetail({
                     type="button"
                     className="ghost-btn dd-mini-btn dd-vision-reload"
                     onClick={() => onRefreshVision(selectedObsFilename)}
-                    title="Re-fetch vision proposals (they backfill a few seconds after capture)"
+                    title="Re-fetch vision proposals"
                   >
                     ↻ Vision
                   </button>
                 ) : null}
+                {onGenerateCaptions && visionCandidates.length > 0 ? (
+                  <button
+                    type="button"
+                    className="ghost-btn dd-mini-btn"
+                    onClick={() => onGenerateCaptions(selectedObsFilename)}
+                    disabled={captionsLoading}
+                    title="Run Florence-2 to add human-readable captions to these boxes (slow; on-demand)"
+                  >
+                    {captionsLoading ? "🅰 Captioning…" : (visionMeta?.timing?.captioned ? "🅰 Recaption" : "🅰 Generate captions")}
+                  </button>
+                ) : null}
                 {visionCandidates.length === 0 ? (
-                  <span className="dd-vision-pending">vision proposals backfilling…</span>
+                  <span className="dd-vision-pending">generating vision proposals…</span>
                 ) : null}
                 {visionMeta?.timing?.total_ms ? (
                   <span

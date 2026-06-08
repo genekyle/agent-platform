@@ -90,16 +90,22 @@ CAPTION_TOP_N = 12
 
 @dataclass
 class ProposerHandle:
-    """Cached models + device for the proposer pipeline."""
-    detector: Any                # ultralytics YOLO
-    caption_processor: Any       # transformers AutoProcessor (Florence-2)
-    caption_model: Any           # transformers AutoModelForCausalLM (OmniParser caption weights)
+    """Cached models + device for the proposer pipeline.
+
+    The captioner (Florence-2, ~1.5 GB) is loaded LAZILY — only the detector is
+    loaded up front. Detect-only is the default path (instant boxes, no caption
+    cost/RAM); captions are opt-in and load Florence-2 on first request.
+    """
+    detector: Any                       # ultralytics YOLO
     device: str
+    caption_processor: Any = None       # transformers AutoProcessor (Florence-2) — lazy
+    caption_model: Any = None           # transformers AutoModelForCausalLM — lazy
     model_name: str = OMNI_REPO
 
 
 _handle_lock = threading.Lock()
 _handle: Optional[ProposerHandle] = None
+_caption_lock = threading.Lock()
 
 
 def _resolve_device() -> str:
@@ -112,7 +118,12 @@ def _resolve_device() -> str:
 
 
 def load_proposer() -> ProposerHandle:
-    """Module-cached singleton. Concurrent first callers block until built."""
+    """Module-cached singleton — loads ONLY the detector (fast, small).
+
+    The captioner is loaded lazily by `_ensure_captioner` on the first caption
+    request, so the common detect-only path never pays Florence-2's load time or
+    ~1.5 GB of RAM. Concurrent first callers block until the detector is built.
+    """
     global _handle
     if _handle is not None:
         return _handle
@@ -122,10 +133,8 @@ def load_proposer() -> ProposerHandle:
 
         # Imports deferred so importing this module is cheap when the proposer
         # isn't actually invoked (e.g. during unit tests of other observer pieces).
-        import torch
         from huggingface_hub import hf_hub_download
         from ultralytics import YOLO
-        from transformers import AutoProcessor, AutoModelForCausalLM
 
         device = _resolve_device()
 
@@ -133,24 +142,32 @@ def load_proposer() -> ProposerHandle:
         detect_weights = hf_hub_download(repo_id=OMNI_REPO, filename=OMNI_DETECT_FILE)
         detector = YOLO(detect_weights)
 
-        # Captioner: Florence-2 processor + OmniParser fine-tuned weights.
-        # Processor comes from base Florence (provides tokenizer + image pipeline);
-        # weights come from OmniParser's icon_caption subfolder.
+        _handle = ProposerHandle(detector=detector, device=device)
+    return _handle
+
+
+def _ensure_captioner(handle: ProposerHandle) -> None:
+    """Lazily load the Florence-2 captioner into an existing handle. Only paid the
+    first time captions are actually requested (the slow/heavy step)."""
+    if handle.caption_model is not None:
+        return
+    with _caption_lock:
+        if handle.caption_model is not None:
+            return
+        import torch
+        from transformers import AutoProcessor, AutoModelForCausalLM
+
+        # Processor comes from base Florence (tokenizer + image pipeline); weights
+        # come from OmniParser's icon_caption subfolder.
         processor = AutoProcessor.from_pretrained(FLORENCE_BASE, trust_remote_code=True)
         caption_model = AutoModelForCausalLM.from_pretrained(
             OMNI_REPO,
             subfolder=OMNI_CAPTION_SUBFOLDER,
             trust_remote_code=True,
             torch_dtype=torch.float32,  # fp32 keeps MPS stable; bump to fp16 on CUDA if needed
-        ).to(device).eval()
-
-        _handle = ProposerHandle(
-            detector=detector,
-            caption_processor=processor,
-            caption_model=caption_model,
-            device=device,
-        )
-    return _handle
+        ).to(handle.device).eval()
+        handle.caption_processor = processor
+        handle.caption_model = caption_model
 
 
 def _candidate_id(bbox: dict, confidence: float, screenshot_path: str) -> str:
@@ -226,7 +243,7 @@ def propose_candidates(
     *,
     conf: float = DEFAULT_CONF_THRESHOLD,
     handle: Optional[ProposerHandle] = None,
-    include_captions: bool = True,
+    include_captions: bool = False,
     stats: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Run the proposer (detection + captioning) on one screenshot.
@@ -295,6 +312,7 @@ def propose_candidates(
     caption_start = time.perf_counter()
     captioned_n = 0
     if include_captions and crops:
+        _ensure_captioner(handle)  # lazy-load Florence-2 only now, on actual demand
         top_caps = _generate_captions_batched(handle, crops[:CAPTION_TOP_N])
         captions = top_caps + [""] * (len(crops) - len(top_caps))
         captioned_n = len(top_caps)

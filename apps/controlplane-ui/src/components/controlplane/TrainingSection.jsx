@@ -56,6 +56,8 @@ export function TrainingSection({
   actionOptions,
   onCreateAction,
   onRefreshVision,
+  onGenerateCaptions,
+  captionsLoading,
   saveTrainingAnnotation,
   annotationSaving,
   annotationMessage,
@@ -207,6 +209,8 @@ export function TrainingSection({
         actionOptions={actionOptions}
         onCreateAction={onCreateAction}
         onRefreshVision={onRefreshVision}
+        onGenerateCaptions={onGenerateCaptions}
+        captionsLoading={captionsLoading}
         onSaveAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

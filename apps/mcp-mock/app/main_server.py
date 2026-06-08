@@ -116,12 +116,9 @@ async def trigger_capture(body: CaptureRequest, background_tasks: BackgroundTask
     path = write_observation_artifact(artifact)
     candidate_count = len(artifact.get("ranked_candidates", []))
 
-    # Async backfill: proposer runs AFTER this response is sent. Capture stays
-    # fast; vision candidates show up in the labeler 1-2s later.
-    screenshot_filename = _screenshot_filename_from_artifact(artifact)
-    if screenshot_filename:
-        background_tasks.add_task(_backfill_vision_candidates, path.name, screenshot_filename)
-
+    # NOTE: the vision proposer is NOT run here. It runs lazily when a capture is
+    # opened in the labeler (see /proposer/backfill), so captures nobody reviews
+    # never cost compute. This is the deliberate fail-safe gate.
     return {"filename": path.name, "candidate_count": candidate_count}
 
 
@@ -145,12 +142,12 @@ def proposer_predict(body: ProposerPredictRequest):
 
 
 @app.post("/proposer/backfill/{artifact_filename}")
-def proposer_backfill_one(artifact_filename: str):
-    """Re-run the proposer for a single existing capture and rewrite its sidecar.
+def proposer_backfill_one(artifact_filename: str, include_captions: bool = False):
+    """Run the proposer for a single capture and write its sidecar.
 
-    Useful when the proposer model is upgraded — re-run against the same
-    screenshot and the existing artifact gets fresh vision candidates without
-    needing to re-capture.
+    This is the lazy entry point: the labeler calls it when a capture is opened
+    without candidates (detect-only, fast), and again with include_captions=true
+    when the annotator explicitly asks for Florence-2 captions.
     """
     artifact_path = ARTIFACTS_DIR / artifact_filename
     if not artifact_path.exists():
@@ -170,12 +167,13 @@ def proposer_backfill_one(artifact_filename: str):
         raise HTTPException(status_code=404, detail=f"Screenshot file missing: {screenshot_filename}")
 
     timing: dict = {}
-    proposals = propose_candidates(screenshot_path, stats=timing)
+    proposals = propose_candidates(screenshot_path, include_captions=include_captions, stats=timing)
     sidecar_path = _write_vision_sidecar(artifact_filename, screenshot_filename, proposals, timing)
     return {
         "artifact_filename": artifact_filename,
         "screenshot_filename": screenshot_filename,
         "sidecar_path": str(sidecar_path),
         "proposal_count": len(proposals),
+        "captioned": include_captions,
         "timing": timing,
     }

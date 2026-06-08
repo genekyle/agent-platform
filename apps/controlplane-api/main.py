@@ -1799,6 +1799,31 @@ def get_observation(filename: str, db: Session = Depends(get_db)):
     return data
 
 
+@app.post("/api/observations/{filename}/vision")
+async def generate_vision_candidates(filename: str, captions: bool = False):
+    """Lazily run the OmniParser proposer for ONE capture and write its sidecar.
+
+    The gate: this is only called when a capture is opened in the labeler (detect-only,
+    fast) or when the annotator clicks "Generate captions" (captions=true → loads
+    Florence-2). Captures nobody reviews never run the proposer. Proxies to the capture
+    server; the client re-fetches the observation to pick up the new candidates.
+    """
+    traces_dir = _artifacts_dir() / "observer-traces"
+    if not (traces_dir / filename).exists():
+        raise HTTPException(status_code=404, detail="Observation not found")
+    try:
+        # Captioning can take minutes on MPS; detect-only is seconds.
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            r = await client.post(
+                f"{settings.capture_server_url}/proposer/backfill/{filename}",
+                params={"include_captions": captions},
+            )
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Proposer failed: {exc}")
+
+
 @app.get("/api/observations")
 def list_observations(db: Session = Depends(get_db)):
     traces_dir = _artifacts_dir() / "observer-traces"

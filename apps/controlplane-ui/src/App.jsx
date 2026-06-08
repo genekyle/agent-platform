@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { ChatSection } from "./components/controlplane/ChatSection";
 import { CONTROL_PLANE_NAV, DEFAULT_SECTION_VIEW } from "./components/controlplane/navigation";
@@ -502,6 +502,40 @@ export default function App() {
     }
   }, []);
 
+  // Tracks filenames we've already auto-triggered detect-only generation for this
+  // session, so the lazy-on-open effect fires exactly once per capture.
+  const visionRequestedRef = useRef(new Set());
+
+  // Force-refresh vision candidates even when the count is unchanged (captions add
+  // text to existing boxes — the surgical refresh above bails on equal counts).
+  const refreshVisionForce = useCallback(async (filename) => {
+    if (!filename) return;
+    try {
+      const r = await fetch(`${API}/api/observations/${encodeURIComponent(filename)}`);
+      if (!r.ok) return;
+      const payload = await r.json();
+      setSelectedObs((cur) => (!cur || cur._error) ? cur : {
+        ...cur,
+        vision_candidates: Array.isArray(payload?.vision_candidates) ? payload.vision_candidates : [],
+        vision_candidates_meta: payload?.vision_candidates_meta ?? null,
+      });
+    } catch { /* best-effort */ }
+  }, []);
+
+  // On-demand captioning: run Florence-2 for this capture (the slow/heavy step) only
+  // when the annotator explicitly asks. Surgical refresh keeps in-progress labels.
+  const [captionsLoading, setCaptionsLoading] = useState(false);
+  const generateVisionCaptions = useCallback(async (filename) => {
+    if (!filename) return;
+    setCaptionsLoading(true);
+    try {
+      await fetch(`${API}/api/observations/${encodeURIComponent(filename)}/vision?captions=true`, { method: "POST" });
+      await refreshVisionForce(filename);
+    } finally {
+      setCaptionsLoading(false);
+    }
+  }, [refreshVisionForce]);
+
   const clearSelectedObservation = useCallback(() => {
     setSelectedObs(null);
     setSelectedObsFilename(null);
@@ -854,27 +888,30 @@ export default function App() {
     }
   }, [activePrimaryView, activeSectionId, loadTabs, selectedTrainingSession]);
 
-  // Auto-poll for async-backfilled vision candidates. After a capture, the proposer
-  // runs in the background and writes the vision sidecar ~15s+ later. While an
-  // observation with a screenshot but zero vision candidates is on screen, poll the
-  // surgical refresh every 5s (up to ~24 tries / 2 min, covering the captioning
-  // variance we measured) until candidates appear. Stops as soon as they do.
-  // Depend on PRIMITIVES, not the whole selectedObs object, so the interval isn't
-  // torn down and recreated on every unrelated re-render. The effect only re-runs
-  // when the filename changes, the screenshot appears, or the count crosses 0->N.
+  // Lazy-on-open gate: the proposer NO LONGER runs after every capture. Instead, when
+  // a capture is opened in the labeler and has a screenshot but no vision sidecar yet,
+  // generate detect-only candidates (fast, ~150ms-1s) right here — so only captures a
+  // person actually reviews ever cost compute. Captions are separate/on-demand. Fires
+  // once per filename (ref guard). Depends on PRIMITIVES so it isn't torn down on every
+  // unrelated re-render.
   const selectedHasScreenshot = Boolean(selectedObs && !selectedObs._error
     && (selectedObs.acquisition?.screenshots?.length || selectedObs.acquisition?.screenshot));
-  const selectedVisionCount = selectedObs?.vision_candidates?.length ?? 0;
+  const selectedHasVisionSidecar = Boolean(selectedObs?.vision_candidates_meta);
   useEffect(() => {
-    if (!selectedObsFilename || !selectedHasScreenshot || selectedVisionCount > 0) return undefined;
-    let tries = 0;
-    const timer = setInterval(async () => {
-      tries += 1;
-      const found = await refreshVisionCandidates(selectedObsFilename);
-      if (found > 0 || tries >= 24) clearInterval(timer);
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [selectedObsFilename, selectedHasScreenshot, selectedVisionCount, refreshVisionCandidates]);
+    if (!selectedObsFilename || !selectedHasScreenshot || selectedHasVisionSidecar) return;
+    if (visionRequestedRef.current.has(selectedObsFilename)) return;
+    visionRequestedRef.current.add(selectedObsFilename);
+    let cancelled = false;
+    (async () => {
+      try {
+        await fetch(`${API}/api/observations/${encodeURIComponent(selectedObsFilename)}/vision?captions=false`, { method: "POST" });
+        if (!cancelled) await refreshVisionCandidates(selectedObsFilename);
+      } catch {
+        visionRequestedRef.current.delete(selectedObsFilename);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedObsFilename, selectedHasScreenshot, selectedHasVisionSidecar, refreshVisionCandidates]);
 
   const activeRuns = runs.data.filter((run) => String(run.status || "").toLowerCase().includes("running")).length;
   const blockedRuns = runs.data.filter((run) => String(run.status || "").toLowerCase().includes("blocked")).length;
@@ -963,6 +1000,8 @@ export default function App() {
         actionOptions={actionOptions}
         onCreateAction={createAction}
         onRefreshVision={refreshVisionCandidates}
+        onGenerateCaptions={generateVisionCaptions}
+        captionsLoading={captionsLoading}
         saveTrainingAnnotation={saveTrainingAnnotation}
         annotationSaving={annotationSaving}
         annotationMessage={annotationMessage}

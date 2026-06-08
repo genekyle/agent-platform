@@ -33,7 +33,9 @@
       "Bash(awk '{print $5, $9}')",
       "Bash(awk '{print $5, $6, $7, $8, $9}')",
       "Bash(awk '{print $11}')",
-      "Bash(cd /Users/geno/Projects/agent-platform *)"
+      "Bash(cd /Users/geno/Projects/agent-platform *)",
+      "Bash(../../.venv/bin/python -c \"import ast; ast.parse\\(open\\('apps/mcp-mock/app/observer/vision_proposer.py'\\).read\\(\\)\\); ast.parse\\(open\\('apps/mcp-mock/app/main_server.py'\\).read\\(\\)\\); ast.parse\\(open\\('apps/controlplane-api/main.py'\\).read\\(\\)\\); print\\('py syntax OK'\\)\")",
+      "Bash(.venv/bin/python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['apps/mcp-mock/app/observer/vision_proposer.py','apps/mcp-mock/app/main_server.py','apps/controlplane-api/main.py']]; print\\('py syntax OK'\\)\")"
     ]
   }
 }
