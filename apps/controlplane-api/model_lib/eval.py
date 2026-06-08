@@ -21,7 +21,7 @@ from training import _bbox_iou, _stable_split
 
 import httpx
 
-from model_lib import v0_florence
+from model_lib import v0_florence, v0_uground
 from model_lib.query_normalize import normalize_descriptive, normalize_element_query
 from settings import settings
 
@@ -406,11 +406,87 @@ def _run_omniparser_then_florence(
 
 # Dispatch table: the swap point. Two zero-shot baselines today —
 # raw query vs. heuristically-normalized query. Same model, different input format.
+def _run_uground_zero_shot(
+    *,
+    db: Session,
+    artifacts_root: Path,
+    model: ModelRegistry,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    """Baseline: UGround-V1-2B zero-shot. Purpose-built GUI grounder; returns a
+    POINT (x, y), which we wrap as a small synthetic bbox so IoU still makes
+    sense, but center_in_target is the metric this model's output is honest about.
+    """
+    log: list[str] = [f"[{_iso_now()}] eval start model_id={model.id} (uground zero-shot)"]
+    captures = _eligible_captures(db)
+    eval_captures = [c for c in captures if _stable_split(c.artifact_filename) == "eval"]
+    log.append(f"[{_iso_now()}] eligible={len(captures)} eval_split={len(eval_captures)}")
+
+    handle = v0_uground.load_uground(model.model_name or v0_uground.UGROUND_MODEL)
+    log.append(f"[{_iso_now()}] uground loaded on device={handle.device}")
+
+    predictions: list[dict[str, Any]] = []
+    for capture in eval_captures:
+        screenshot = _resolve_screenshot(capture, artifacts_root)
+        if screenshot is None:
+            log.append(f"[skip] {capture.artifact_filename} — screenshot missing")
+            continue
+
+        original = capture.element_query or ""
+        # UGround was trained on (screenshot, NL element description) — feeding
+        # it the raw human query is the right call here, not the Florence
+        # short-form preprocessing.
+        result = v0_uground.predict_point(
+            handle=handle, screenshot_path=str(screenshot), element_query=original,
+        )
+        predicted_bbox = result["bbox"]
+        predicted_point = result["point"]
+        target = capture.approved_bbox
+        iou = _bbox_iou(predicted_bbox, target) if predicted_bbox else 0.0
+        center_in = False
+        if predicted_point and target:
+            center_in = _point_in_bbox(predicted_point["x"], predicted_point["y"], target)
+
+        viewport_ref = next(
+            (r for r in (capture.screenshot_refs or []) if r.get("shot_type") == "viewport"),
+            (capture.screenshot_refs or [{}])[0] if capture.screenshot_refs else {},
+        )
+
+        predictions.append({
+            "artifact_filename": capture.artifact_filename,
+            "screenshot_filename": screenshot.name,
+            "screenshot_width": viewport_ref.get("width"),
+            "screenshot_height": viewport_ref.get("height"),
+            "scenario_id": capture.scenario_id,
+            "domain_id": capture.domain_id,
+            "goal_id": capture.goal_id,
+            "observed_page_state": capture.observed_page_state,
+            "element_query": original,
+            "sent_query": original,
+            "predicted_bbox": predicted_bbox,
+            "predicted_point": predicted_point,            # the real model output
+            "norm_point": result.get("norm_point"),
+            "approved_bbox": target,
+            "bbox_iou": round(iou, 4),
+            "center_in_target": center_in,
+            "latency_ms": result["latency_ms"],
+            "raw_response": result.get("raw_response"),
+        })
+
+    metrics = _aggregate(predictions)
+    log.append(
+        f"[{_iso_now()}] done n={metrics['record_count']} "
+        f"mean_iou={metrics['mean_bbox_iou']} iou@50={metrics['iou_at_50_accuracy']} "
+        f"center_in={metrics['center_in_target_accuracy']}"
+    )
+    return metrics, predictions, log
+
+
 IMPLEMENTATIONS: dict[str, Callable[..., tuple[dict[str, Any], list[dict[str, Any]], list[str]]]] = {
     "v0_zero_shot_florence2_base": run_eval_florence_zero_shot,
     "v0_zero_shot_florence2_base_short_query": run_eval_florence_zero_shot_normalized,
     "v0_zero_shot_florence2_base_descriptive_query": _run_florence_descriptive,
     "v0_two_stage_omniparser_then_florence": _run_omniparser_then_florence,
+    "v0_zero_shot_uground_v1_2b": _run_uground_zero_shot,
 }
 
 

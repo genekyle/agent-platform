@@ -51,7 +51,13 @@
       "Bash(curl -s http://127.0.0.1:8081/api/models)",
       "Bash(curl -s http://127.0.0.1:8082/health)",
       "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/vision_element_grounding__v0_zero_shot_florence2_base_descriptive_query/eval --max-time 600)",
-      "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/vision_element_grounding__v0_two_stage_omniparser_then_florence/eval --max-time 1200)"
+      "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/vision_element_grounding__v0_two_stage_omniparser_then_florence/eval --max-time 1200)",
+      "WebFetch(domain:huggingface.co)",
+      "Bash(../../.venv/bin/python3 -c \"import main; print\\('API OK'\\)\")",
+      "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/vision_element_grounding__v0_zero_shot_uground_v1_2b/eval --max-time 1800)",
+      "Bash(curl -s \"http://127.0.0.1:8081/api/models/eval-runs?model_id=vision_element_grounding__v0_zero_shot_uground_v1_2b&limit=3\")",
+      "Bash(ps -e -o pid,pcpu,pmem,rss,command)",
+      "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/vision_element_grounding__v0_zero_shot_uground_v1_2b/eval --max-time 2400)"
     ]
   }
 }

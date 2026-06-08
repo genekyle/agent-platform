@@ -2120,43 +2120,44 @@ def seed_v0_florence_baseline(db: Session = Depends(get_db)):
     and demonstrates the platform's swap-point: adding a model = adding a row +
     a wrapper function in model_lib/eval.py:IMPLEMENTATIONS.
     """
-    seeds = [
-        {
-            "impl": V0_FLORENCE_IMPL,
-            "config": {"query_preprocessor": "none"},
-        },
-        {
-            "impl": "v0_zero_shot_florence2_base_short_query",
-            "config": {"query_preprocessor": "heuristic_noun_phrase"},
-        },
-        {
-            "impl": "v0_zero_shot_florence2_base_descriptive_query",
-            "config": {"query_preprocessor": "heuristic_noun_phrase + action_type_tag"},
-        },
-        {
-            "impl": "v0_two_stage_omniparser_then_florence",
-            "config": {
-                "stage_1": "omniparser_proposer",
-                "stage_2": "florence2_full_image_grounding",
-                "snap": "highest_iou_with_florence_box",
-            },
-        },
+    # Florence-2-base family — general phrase grounding model, three query
+    # preprocessing variants. Two-stage (OmniParser+Florence) is intentionally
+    # NOT seeded here; the eval showed it was strictly worse than Florence alone,
+    # and the wrapper stays in IMPLEMENTATIONS for posterity / future revisits.
+    florence_seeds = [
+        ("v0_zero_shot_florence2_base", {"query_preprocessor": "none"}),
+        ("v0_zero_shot_florence2_base_short_query", {"query_preprocessor": "heuristic_noun_phrase"}),
+        ("v0_zero_shot_florence2_base_descriptive_query", {"query_preprocessor": "heuristic_noun_phrase + action_type_tag"}),
     ]
     rows = []
-    base_config = {
-        "task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>",
-        "num_beams": 3,
-        "dtype": "float32",
-    }
-    for seed in seeds:
+    florence_base = {"task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>", "num_beams": 3, "dtype": "float32"}
+    for impl, extra in florence_seeds:
         row = model_registry.register_model(
             db,
             target_id=V0_FLORENCE_TARGET,
-            implementation=seed["impl"],
+            implementation=impl,
             model_name=V0_FLORENCE_MODEL_NAME,
-            config={**base_config, **seed["config"]},
+            config={**florence_base, **extra},
         )
         rows.append(_model_read(db, row).model_dump(mode="json"))
+
+    # UGround-V1-2B — UI-specialized GUI grounder. Different output shape
+    # (point, not bbox), wrapped as a small synthetic bbox for IoU. The
+    # honest metric for this row is center_in_target.
+    uground_row = model_registry.register_model(
+        db,
+        target_id=V0_FLORENCE_TARGET,
+        implementation="v0_zero_shot_uground_v1_2b",
+        model_name="osunlp/UGround-V1-2B",
+        config={
+            "base_architecture": "Qwen2-VL-2B",
+            "output_type": "point",
+            "synthetic_bbox_size_px": 40,
+            "dtype": "float32",
+            "honest_metric": "center_in_target",
+        },
+    )
+    rows.append(_model_read(db, uground_row).model_dump(mode="json"))
     return rows
 
 

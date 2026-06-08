@@ -74,6 +74,17 @@ function BboxOverlay({ prediction, onClose }) {
   // Two-stage baselines also expose Florence's rough bbox before snapping
   // to an OmniParser candidate. Draw it dashed so you can see the snap effect.
   const florenceRough = scaleBox(prediction.florence_bbox);
+  // Point-grounding models (UGround) predict a single (x, y) — draw it as a
+  // crosshair so you can see what the model actually output rather than the
+  // synthetic 40px box wrapper that gets used for IoU compatibility.
+  const scalePoint = (pt) => {
+    if (!pt || !imgDims) return null;
+    return {
+      left: pt.x * (imgDims.dispW / imgDims.natW),
+      top: pt.y * (imgDims.dispH / imgDims.natH),
+    };
+  };
+  const predictedPoint = scalePoint(prediction.predicted_point);
 
   return (
     <div
@@ -106,7 +117,8 @@ function BboxOverlay({ prediction, onClose }) {
             <div style={{ fontWeight: 600, fontSize: "1.05em" }}>Prediction overlay</div>
             <div style={{ fontSize: "0.85em", opacity: 0.7, marginTop: 4 }}>
               <span style={{ color: "#4caf50" }}>■ Green</span> = approved (human label) ·
-              <span style={{ color: "#ff5252", marginLeft: 8 }}>■ Red</span> = predicted (final output)
+              <span style={{ color: "#ff5252", marginLeft: 8 }}>■ Red</span>
+              {prediction.predicted_point ? " = predicted click point (UGround circle)" : " = predicted bbox (model output)"}
               {prediction.florence_bbox ? (
                 <>
                   {" · "}
@@ -163,6 +175,23 @@ function BboxOverlay({ prediction, onClose }) {
                 Model returned no bbox for this capture.
               </div>
             )}
+            {predictedPoint ? (
+              <div
+                title="UGround click-point prediction"
+                style={{
+                  position: "absolute",
+                  left: predictedPoint.left - 14,
+                  top: predictedPoint.top - 14,
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  border: "3px solid #ff5252",
+                  background: "rgba(255, 82, 82, 0.25)",
+                  pointerEvents: "none",
+                  boxShadow: "0 0 0 1px rgba(0,0,0,0.6)",
+                }}
+              />
+            ) : null}
             {florenceRough && prediction.florence_bbox &&
              JSON.stringify(prediction.florence_bbox) !== JSON.stringify(prediction.predicted_bbox) ? (
               <div
@@ -405,20 +434,23 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
       </div>
 
       <AboutPanel title="What is the Model Registry?">
-        Think of this as a leaderboard for "approaches we've tried to solve <em>vision element grounding</em>" —
-        i.e. <strong>given a screenshot and a phrase like "click the log in button", draw a box around the right element</strong>.
-        Today there are two rows — both use <code>microsoft/Florence-2-base</code> zero-shot (no fine-tuning),
-        and the <em>only</em> difference is the input format:
+        Leaderboard for approaches to <em>vision element grounding</em> — given a screenshot and a phrase
+        like "click the log in button", point at the right element. Two model families are registered today:
         <ul style={{ margin: "6px 0 6px 18px", padding: 0 }}>
-          <li><code>v0_zero_shot_florence2_base</code> — sends the raw human query: <em>"Click on the log in button"</em></li>
-          <li><code>v0_zero_shot_florence2_base_short_query</code> — strips imperative scaffolding first: <em>"log in button"</em></li>
+          <li><strong>Florence-2-base</strong> (three rows) — Microsoft's general phrase grounding model. Outputs a bbox.
+            The three rows differ only in input preprocessing (raw query / short noun-phrase / + element-type tag).
+            <em>Honest metric: Mean IoU.</em></li>
+          <li><strong>UGround-V1-2B</strong> (one row) — OSU NLP Group's UI-specialized grounder, built on Qwen2-VL,
+            trained on millions of GUI screenshots. Outputs a click POINT (x, y), not a bbox.
+            <em>Honest metric: Center-in-target — "would clicking the predicted point land inside the real element?"</em></li>
         </ul>
-        That pair is a tiny experiment with a real lesson: <strong>input format matters</strong>. Florence-2's
-        grounding task was trained on short noun phrases, not full sentences, so we'd expect the normalized variant
-        to do at least slightly better. The Registry table makes the comparison concrete.
+        Comparing two model families on the same eval split is exactly what the platform was built for. If UGround
+        beats Florence by a lot, it tells us the bottleneck was <strong>"wrong model family for UI grounding"</strong>,
+        not a fine-tuning problem.
         <div style={{ marginTop: 8 }}>
           <strong>Mean IoU</strong> = average box-overlap with the human-approved box (0 = no overlap, 1 = perfect).
-          <strong> IoU@50</strong> = fraction of predictions that got at least 50% overlap — i.e. "did it basically find the right thing."
+          <strong> IoU@50</strong> = fraction of predictions with at least 50% overlap.
+          <strong> Center-in-target</strong> = does the predicted bbox's center (or, for UGround, the predicted point) land inside the human-labeled box.
         </div>
       </AboutPanel>
 
