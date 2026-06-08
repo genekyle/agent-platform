@@ -1,5 +1,8 @@
+import base64
 import json
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from mcp import ClientSession
@@ -402,6 +405,11 @@ async def _capture_screenshot(session: ClientSession, capture_status: dict[str, 
             # Try MCP ImageContent extraction first (base64 data + mimeType attrs)
             screenshot_payload = _extract_image_content(result)
             if screenshot_payload is None:
+                # chrome-devtools-mcp >=1.x saves the shot to a temp file and returns
+                # only a text path ("Saved screenshot to /tmp/.../screenshot.png") —
+                # no inline image. Read the file off disk in that case.
+                screenshot_payload = _extract_saved_file_screenshot(result)
+            if screenshot_payload is None:
                 # Fall back to generic normalization
                 payload = normalize_capture_tool_payload(result)
                 screenshot_payload = _normalize_screenshot_payload(payload)
@@ -436,6 +444,39 @@ def _extract_image_content(result: Any) -> Optional[dict[str, Any]]:
                     "mime_type": mime_type,
                     "label": "page_screenshot",
                 }
+    return None
+
+
+_SAVED_PATH_RE = re.compile(r"(/[^\s\"']+\.(?:png|jpe?g|webp))", re.IGNORECASE)
+_MIME_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def _extract_saved_file_screenshot(result: Any) -> Optional[dict[str, Any]]:
+    """chrome-devtools-mcp >=1.x writes the screenshot to a temp file and returns a
+    text message with the path. Pull the path out, read the bytes, and return an
+    inline base64 payload so the rest of the pipeline is unchanged."""
+    content = getattr(result, "content", []) or []
+    for item in content:
+        if getattr(item, "type", None) != "text":
+            continue
+        text = getattr(item, "text", "") or ""
+        m = _SAVED_PATH_RE.search(text)
+        if not m:
+            continue
+        path = Path(m.group(1))
+        if not path.is_file():
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        if not data:
+            continue
+        return {
+            "data_base64": base64.b64encode(data).decode("ascii"),
+            "mime_type": _MIME_BY_EXT.get(path.suffix.lower(), "image/png"),
+            "label": "page_screenshot",
+        }
     return None
 
 
