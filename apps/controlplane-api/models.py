@@ -278,3 +278,39 @@ class TrainingCapture(Base):
     action_text: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
     training_session: Mapped["TrainingSession"] = relationship(back_populates="captures")
+
+
+class ModelRegistry(Base):
+    """A registered model implementation for a given training target.
+
+    `id` is the stable composite `{target_id}__{implementation}` — same string the
+    UI and HTTP endpoints address. Adding a new model = inserting a row here + a
+    wrapper module dispatched in model_lib/eval.py:IMPLEMENTATIONS.
+    """
+    __tablename__ = "model_registry"
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(100), index=True)
+    implementation: Mapped[str] = mapped_column(String(100), index=True)
+    model_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ModelEvalRun(Base):
+    """One eval run of a registered model against the eval split of reviewed captures."""
+    __tablename__ = "model_eval_run"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # uuid hex
+    model_id: Mapped[str] = mapped_column(ForeignKey("model_registry.id"), index=True)
+    dataset_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    metrics: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    artifact_dir: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    model: Mapped["ModelRegistry"] = relationship()

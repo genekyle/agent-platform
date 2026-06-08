@@ -300,3 +300,50 @@ class CaptureAnnotationPatch(BaseModel):
     # Vision annotation fields
     observed_page_state: Optional[str] = None   # which page state is shown in this screenshot
     post_action_state: Optional[str] = None     # what state results from this interaction
+
+
+# ===== Models registry / eval =====
+
+class ModelEvalRunSummary(BaseModel):
+    """Compact eval-run summary embedded under a ModelRead row."""
+    id: str
+    status: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    record_count: int
+    mean_bbox_iou: Optional[float] = None
+    iou_at_50_accuracy: Optional[float] = None
+    center_in_target_accuracy: Optional[float] = None
+
+
+class ModelRead(BaseModel):
+    id: str
+    target_id: str
+    implementation: str
+    model_name: Optional[str] = None
+    config: Optional[dict] = None
+    created_at: datetime
+    archived_at: Optional[datetime] = None
+    last_eval: Optional[ModelEvalRunSummary] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ModelEvalRunRead(BaseModel):
+    id: str
+    model_id: str
+    dataset_id: Optional[str] = None
+    status: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    record_count: int
+    metrics: Optional[dict] = None
+    artifact_dir: Optional[str] = None
+    error: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ModelEvalRunDetail(ModelEvalRunRead):
+    """Eval run with a sample of predictions inlined for the run-detail view."""
+    predictions_sample: list[dict] = []

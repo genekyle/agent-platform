@@ -22,6 +22,8 @@ from models import (
     ActionRegistry,
     DomainRegistry,
     GoalRegistry,
+    ModelEvalRun,
+    ModelRegistry,
     PageStateRegistry,
     Run,
     Step,
@@ -31,8 +33,13 @@ from models import (
     TrainingSession,
     Worker,
 )
+from model_lib import eval as model_eval, registry as model_registry
 from schemas import (
     CaptureAnnotationPatch,
+    ModelEvalRunDetail,
+    ModelEvalRunRead,
+    ModelEvalRunSummary,
+    ModelRead,
     DomainRead,
     DomainUpdate,
     DomainWrite,
@@ -2055,3 +2062,120 @@ def train_grounding(body: TrainRequest, db: Session = Depends(get_db)):
 def training_target_comparison(db: Session = Depends(get_db)):
     captures = _reviewed_training_captures(db)
     return compare_training_targets(_artifacts_dir(), captures=captures)
+
+
+# ===== Models registry + eval =====
+#
+# v0 ships `vision_element_grounding__v0_zero_shot_florence2_base` — a
+# zero-shot Florence-2 baseline. The eval contract is the durable part:
+# (screenshot, element_query) -> bbox, scored against approved_bbox on the
+# stable eval split (training._stable_split). See docs/v0-florence.md.
+
+V0_FLORENCE_TARGET = "vision_element_grounding"
+V0_FLORENCE_IMPL = "v0_zero_shot_florence2_base"
+V0_FLORENCE_MODEL_NAME = "microsoft/Florence-2-base"
+
+
+def _eval_summary_for(run: Optional[ModelEvalRun]) -> Optional[ModelEvalRunSummary]:
+    if run is None:
+        return None
+    metrics = run.metrics or {}
+    return ModelEvalRunSummary(
+        id=run.id,
+        status=run.status,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        record_count=run.record_count,
+        mean_bbox_iou=metrics.get("mean_bbox_iou"),
+        iou_at_50_accuracy=metrics.get("iou_at_50_accuracy"),
+        center_in_target_accuracy=metrics.get("center_in_target_accuracy"),
+    )
+
+
+def _model_read(db: Session, row: ModelRegistry) -> ModelRead:
+    last = model_registry.get_last_eval(db, row.id)
+    return ModelRead(
+        id=row.id,
+        target_id=row.target_id,
+        implementation=row.implementation,
+        model_name=row.model_name,
+        config=row.config,
+        created_at=row.created_at,
+        archived_at=row.archived_at,
+        last_eval=_eval_summary_for(last),
+    )
+
+
+@app.get("/api/models", response_model=list[ModelRead])
+def list_registered_models(db: Session = Depends(get_db)):
+    return [_model_read(db, row) for row in model_registry.list_models(db)]
+
+
+@app.post("/api/models/seed", response_model=ModelRead)
+def seed_v0_florence_baseline(db: Session = Depends(get_db)):
+    """Idempotent: register the v0 Florence-2 zero-shot baseline if missing."""
+    row = model_registry.register_model(
+        db,
+        target_id=V0_FLORENCE_TARGET,
+        implementation=V0_FLORENCE_IMPL,
+        model_name=V0_FLORENCE_MODEL_NAME,
+        config={
+            "task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>",
+            "num_beams": 3,
+            "dtype": "float32",
+        },
+    )
+    return _model_read(db, row)
+
+
+@app.get("/api/models/eval-runs", response_model=list[ModelEvalRunRead])
+def list_recent_eval_runs(model_id: Optional[str] = None, limit: int = 50, db: Session = Depends(get_db)):
+    return model_registry.recent_eval_runs(db, model_id=model_id, limit=limit)
+
+
+@app.get("/api/models/eval-runs/{run_id}", response_model=ModelEvalRunDetail)
+def get_eval_run_detail(run_id: str, db: Session = Depends(get_db)):
+    run = db.get(ModelEvalRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Eval run not found")
+    sample = model_eval.read_predictions_sample(run.artifact_dir, limit=25)
+    return ModelEvalRunDetail(
+        id=run.id,
+        model_id=run.model_id,
+        dataset_id=run.dataset_id,
+        status=run.status,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        record_count=run.record_count,
+        metrics=run.metrics,
+        artifact_dir=run.artifact_dir,
+        error=run.error,
+        predictions_sample=sample,
+    )
+
+
+@app.get("/api/models/{model_id}")
+def get_model_detail(model_id: str, db: Session = Depends(get_db)):
+    row = model_registry.get_model(db, model_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+    runs = model_registry.recent_eval_runs(db, model_id=model_id, limit=10)
+    return {
+        "model": _model_read(db, row).model_dump(),
+        "recent_runs": [ModelEvalRunRead.model_validate(r).model_dump(mode="json") for r in runs],
+    }
+
+
+@app.post("/api/models/{model_id}/eval", response_model=ModelEvalRunRead)
+def run_model_eval(model_id: str, db: Session = Depends(get_db)):
+    """Synchronous eval. Loads Florence-2 lazily on first call (~460 MB weights,
+    already cached). Subsequent calls reuse the in-process handle."""
+    if model_registry.get_model(db, model_id) is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+    try:
+        run = model_eval.run_eval(db=db, artifacts_root=_artifacts_dir(), model_id=model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if run.status == "failed":
+        raise HTTPException(status_code=500, detail=run.error or "Eval run failed")
+    return run
