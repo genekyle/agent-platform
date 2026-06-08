@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+// Persists the dataset-browser view (expanded folders, group-by, search, filter,
+// scroll) across the open-artifact → back round-trip. The component unmounts when an
+// artifact opens, so without this the tree would collapse back to default on return.
+// Module scope = survives remount within a session; resets on full page reload.
+const VIEW_CACHE = { expanded: [], groupBy: "states", search: "", status: "", scrollTop: 0 };
 
 // Minimal outline icons (stroke = currentColor) — no emoji, modern line style.
 function Chevron({ open }) {
@@ -75,10 +81,11 @@ export function ObservationsTable({
   emptyMessage,
 }) {
   const [obsSelection, setObsSelection] = useState(new Set());
-  const [obsStatusFilter, setObsStatusFilter] = useState("");
-  const [obsSearch, setObsSearch] = useState("");
-  const [groupBy, setGroupBy] = useState("states");
-  const [expanded, setExpanded] = useState(new Set()); // single set keyed by node path
+  const [obsStatusFilter, setObsStatusFilter] = useState(VIEW_CACHE.status);
+  const [obsSearch, setObsSearch] = useState(VIEW_CACHE.search);
+  const [groupBy, setGroupBy] = useState(VIEW_CACHE.groupBy);
+  const [expanded, setExpanded] = useState(() => new Set(VIEW_CACHE.expanded)); // single set keyed by node path
+  const treeScrollRef = useRef(null);
   const [editingTitle, setEditingTitle] = useState(null);
   const [titleDraft, setTitleDraft] = useState("");
 
@@ -216,6 +223,39 @@ export function ObservationsTable({
   useEffect(() => { if (obsSearch.trim()) setExpanded(new Set(allPaths)); /* eslint-disable-line */ }, [obsSearch, allPaths]);
 
   const toggle = (path) => setExpanded((prev) => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
+
+  // Persist the view to the module cache so opening an artifact and clicking the
+  // breadcrumb back restores the same expanded tree, filters, and scroll position.
+  useEffect(() => {
+    VIEW_CACHE.expanded = [...expanded];
+    VIEW_CACHE.groupBy = groupBy;
+    VIEW_CACHE.search = obsSearch;
+    VIEW_CACHE.status = obsStatusFilter;
+  }, [expanded, groupBy, obsSearch, obsStatusFilter]);
+
+  // Restore scroll on mount and capture it as the user scrolls. The tree itself
+  // doesn't scroll — its nearest scrollable ancestor (panel or page) does — so find
+  // that at runtime and bind to it.
+  useEffect(() => {
+    let el = treeScrollRef.current;
+    let scroller = null;
+    while (el && el !== document.body) {
+      const oy = getComputedStyle(el).overflowY;
+      if (oy === "auto" || oy === "scroll") { scroller = el; break; }
+      el = el.parentElement;
+    }
+    const win = !scroller;
+    const target = scroller || window;
+    if (VIEW_CACHE.scrollTop) {
+      requestAnimationFrame(() => {
+        if (win) window.scrollTo(0, VIEW_CACHE.scrollTop);
+        else scroller.scrollTop = VIEW_CACHE.scrollTop;
+      });
+    }
+    const onScroll = () => { VIEW_CACHE.scrollTop = win ? window.scrollY : scroller.scrollTop; };
+    target.addEventListener("scroll", onScroll, { passive: true });
+    return () => target.removeEventListener("scroll", onScroll);
+  }, []);
   const startRename = (obs, fallback) => { setEditingTitle(obs.filename); setTitleDraft(obs.title || fallback); };
   const commitRename = (obs) => { updateObsMeta(obs.filename, { title: titleDraft.trim() || "" }); setEditingTitle(null); setTitleDraft(""); };
 
@@ -323,7 +363,7 @@ export function ObservationsTable({
       ) : totalShown === 0 ? (
         <div className="empty-state">{observations.length === 0 ? emptyMessage : "No artifacts match your filters."}</div>
       ) : (
-        <div className="ds-tree">
+        <div className="ds-tree" ref={treeScrollRef}>
           {tree.map((domain) => {
             const dOpen = expanded.has(domain.domainId);
             return (

@@ -27,7 +27,13 @@
       "Bash(lsof -nP -iTCP:5174 -sTCP:LISTEN)",
       "Bash(lsof -nP -iTCP:5173 -sTCP:LISTEN)",
       "Bash(git worktree *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(curl -s http://localhost:8081/api/training/sessions)",
+      "Bash(curl -s http://localhost:8081/api/training/actions)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(awk '{print $5, $6, $7, $8, $9}')",
+      "Bash(awk '{print $11}')",
+      "Bash(cd /Users/geno/Projects/agent-platform *)"
     ]
   }
 }
