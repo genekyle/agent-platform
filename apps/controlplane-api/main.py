@@ -2166,6 +2166,25 @@ def get_model_detail(model_id: str, db: Session = Depends(get_db)):
     }
 
 
+@app.delete("/api/models/eval-runs/{run_id}")
+def delete_eval_run(run_id: str, db: Session = Depends(get_db)):
+    """Remove an eval run (DB row + on-disk artifact dir). Useful for cleaning up
+    accidental re-runs while iterating."""
+    import shutil
+    run = db.get(ModelEvalRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Eval run not found")
+    artifact_dir = run.artifact_dir
+    db.delete(run)
+    db.commit()
+    if artifact_dir:
+        try:
+            shutil.rmtree(artifact_dir, ignore_errors=True)
+        except Exception:
+            pass
+    return {"ok": True, "deleted_run_id": run_id}
+
+
 @app.post("/api/models/{model_id}/eval", response_model=ModelEvalRunRead)
 def run_model_eval(model_id: str, db: Session = Depends(get_db)):
     """Synchronous eval. Loads Florence-2 lazily on first call (~460 MB weights,

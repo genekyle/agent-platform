@@ -35,7 +35,17 @@
       "Bash(awk '{print $11}')",
       "Bash(cd /Users/geno/Projects/agent-platform *)",
       "Bash(../../.venv/bin/python -c \"import ast; ast.parse\\(open\\('apps/mcp-mock/app/observer/vision_proposer.py'\\).read\\(\\)\\); ast.parse\\(open\\('apps/mcp-mock/app/main_server.py'\\).read\\(\\)\\); ast.parse\\(open\\('apps/controlplane-api/main.py'\\).read\\(\\)\\); print\\('py syntax OK'\\)\")",
-      "Bash(.venv/bin/python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['apps/mcp-mock/app/observer/vision_proposer.py','apps/mcp-mock/app/main_server.py','apps/controlplane-api/main.py']]; print\\('py syntax OK'\\)\")"
+      "Bash(.venv/bin/python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['apps/mcp-mock/app/observer/vision_proposer.py','apps/mcp-mock/app/main_server.py','apps/controlplane-api/main.py']]; print\\('py syntax OK'\\)\")",
+      "Bash(curl -s -X PATCH http://localhost:8081/api/observations/__TRACKED_VAR__ -H 'Content-Type: application/json' -d '{\"observed_page_state\":\"incorrect_email_entered\"}' -o /dev/null -w 'repoint capture 60 -> %{http_code}\\\\n')",
+      "Bash(curl -s -X DELETE \"http://localhost:8081/api/training/page-states/wrong_email_entered\" -o /dev/null -w \"archive wrong_email_entered -> %{http_code}\\\\n\")",
+      "Bash(sed -n '1,60p' docs/v0-florence.md)",
+      "Bash(sed -n '247,300p' apps/controlplane-api/training.py)",
+      "Bash(AGENT_MODEL_DOWNLOAD=1 python3 -c ' *)",
+      "Bash(../../.venv/bin/python3 -c \"import main; print\\('main.py imports OK'\\); print\\([r.path for r in main.app.routes if '/api/models' in r.path]\\)\")",
+      "Bash(curl -s http://127.0.0.1:8081/health)",
+      "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/seed)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

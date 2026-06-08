@@ -13,6 +13,43 @@ function iou(value) {
   return Number(value).toFixed(3);
 }
 
+// "what does this mean" tooltip helper — keeps the explanatory copy near the metric.
+function MetricCard({ label, value, oneLine, range, goodIfHigher = true }) {
+  return (
+    <div className="stat-card">
+      <div className="stat-label">{label}</div>
+      <div className="stat-value small-stat-value">{value}</div>
+      <div className="stat-footnote" style={{ lineHeight: 1.35 }}>
+        {oneLine}
+        {range ? (
+          <div style={{ marginTop: 4, fontStyle: "italic", opacity: 0.8 }}>
+            Range: {range}{goodIfHigher ? " (higher = better)" : " (lower = better)"}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Banner that explains "what this whole view IS" — appears at the top of every Models view.
+function AboutPanel({ title, children }) {
+  return (
+    <section
+      className="panel"
+      style={{
+        marginBottom: 20,
+        borderLeft: "3px solid var(--accent, #5b8cff)",
+        background: "rgba(91, 140, 255, 0.06)",
+      }}
+    >
+      <div style={{ padding: "12px 16px" }}>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>{title}</div>
+        <div style={{ fontSize: "0.92em", lineHeight: 1.5, opacity: 0.9 }}>{children}</div>
+      </div>
+    </section>
+  );
+}
+
 export function ModelsSection({ section }) {
   const [models, setModels] = useState([]);
   const [modelsError, setModelsError] = useState(null);
@@ -28,6 +65,7 @@ export function ModelsSection({ section }) {
 
   const [seedingId, setSeedingId] = useState(null);
   const [runningEvalFor, setRunningEvalFor] = useState(null);
+  const [deletingRunId, setDeletingRunId] = useState(null);
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -80,7 +118,6 @@ export function ModelsSection({ section }) {
     }
   }, [section, selectedRunId, loadRunDetail]);
 
-  // Auto-select the most recent run when entering the detail view without one.
   useEffect(() => {
     if (section === "run-detail" && !selectedRunId && evalRuns.length > 0) {
       setSelectedRunId(evalRuns[0].id);
@@ -101,6 +138,13 @@ export function ModelsSection({ section }) {
   };
 
   const runEval = async (modelId) => {
+    const ok = window.confirm(
+      "Run a fresh eval?\n\n" +
+        "This loads Florence-2 (already warm) and scores every eval-split capture.\n" +
+        "Typical cost: ~1 second per capture (so ~10s for 9 captures).\n\n" +
+        "A new run row will appear in Eval Runs. You can delete it from there if it was accidental.",
+    );
+    if (!ok) return;
     setRunningEvalFor(modelId);
     try {
       const res = await fetch(`${API}/api/models/${modelId}/eval`, { method: "POST" });
@@ -113,6 +157,25 @@ export function ModelsSection({ section }) {
       setEvalRunsError(String(err?.message ?? err));
     } finally {
       setRunningEvalFor(null);
+    }
+  };
+
+  const deleteRun = async (runId) => {
+    const ok = window.confirm(`Delete eval run ${runId.slice(0, 8)}? This removes the DB row and on-disk artifacts.`);
+    if (!ok) return;
+    setDeletingRunId(runId);
+    try {
+      const res = await fetch(`${API}/api/models/eval-runs/${runId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (selectedRunId === runId) {
+        setSelectedRunId(null);
+        setRunDetail(null);
+      }
+      await Promise.all([loadEvalRuns(), loadModels()]);
+    } catch (err) {
+      setEvalRunsError(String(err?.message ?? err));
+    } finally {
+      setDeletingRunId(null);
     }
   };
 
@@ -144,6 +207,8 @@ export function ModelsSection({ section }) {
         error={evalRunsError}
         onReload={loadEvalRuns}
         onOpenRun={handleOpenRun}
+        onDelete={deleteRun}
+        deletingRunId={deletingRunId}
       />
     );
   }
@@ -168,9 +233,8 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
         <div>
           <h2 className="card-title">Models — Registry</h2>
           <p className="card-subtitle">
-            Models registered against each training target with their last-eval summary.
-            The model id is <code>{`{target_id}__{implementation}`}</code> — the stable
-            swap point for new model versions.
+            The list of model versions registered against each training target. Each row is one
+            measurable, swappable implementation.
           </p>
         </div>
         <div className="detail-actions">
@@ -179,6 +243,20 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
           </button>
         </div>
       </div>
+
+      <AboutPanel title="What is the Model Registry?">
+        Think of this as a leaderboard for "approaches we've tried to solve <em>vision element grounding</em>" —
+        i.e. <strong>given a screenshot and a phrase like "click the log in button", draw a box around the right element</strong>.
+        Today there's one entry: the v0 baseline ({" "}
+        <code>microsoft/Florence-2-base</code>, used zero-shot — meaning we did <em>not</em> fine-tune it on our data).
+        The "Last eval" columns are the score it got on our reviewed captures.
+        When we ship v1 (a fine-tuned Florence), it'll appear as a second row here and we'll be able to
+        compare them head-to-head.
+        <div style={{ marginTop: 8 }}>
+          <strong>Mean IoU</strong> = average box-overlap with the human-approved box (0 = no overlap, 1 = perfect).
+          <strong> IoU@50</strong> = fraction of predictions that got at least 50% overlap — i.e. "did it basically find the right thing."
+        </div>
+      </AboutPanel>
 
       {error ? <div className="annotation-message error">{error}</div> : null}
 
@@ -203,8 +281,8 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
                 <th>Implementation</th>
                 <th>Backing model</th>
                 <th>Last eval</th>
-                <th>Mean IoU</th>
-                <th>IoU@50</th>
+                <th title="0 = no box overlap, 1 = perfect overlap. Higher is better.">Mean IoU</th>
+                <th title="Fraction of predictions where IoU ≥ 0.5 ('basically found it'). Higher is better.">IoU@50</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -223,6 +301,7 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
                       className="secondary-btn"
                       onClick={() => onRunEval(m.id)}
                       disabled={runningEvalFor === m.id}
+                      title="Score this model against the eval-split of reviewed captures (~10s)"
                     >
                       {runningEvalFor === m.id ? "Running eval..." : "Run Eval"}
                     </button>
@@ -237,7 +316,7 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
   );
 }
 
-function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun }) {
+function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDelete, deletingRunId }) {
   const modelById = useMemo(() => {
     const m = {};
     for (const row of models) m[row.id] = row;
@@ -250,9 +329,8 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun }) {
         <div>
           <h2 className="card-title">Models — Eval Runs</h2>
           <p className="card-subtitle">
-            Recent eval runs across all registered models, most recent first.
-            Each run scores the model against the eval-split of reviewed captures
-            (captures with <code>element_query</code> + <code>approved_bbox</code>).
+            Every time you click "Run Eval", one row appears here. Click a row for the per-scenario breakdown
+            and a sample of predictions.
           </p>
         </div>
         <div className="detail-actions">
@@ -262,13 +340,29 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun }) {
         </div>
       </div>
 
+      <AboutPanel title="What is an eval run?">
+        An <strong>eval run</strong> is one scoring of a model against the same fixed set of captures (the "eval split" —
+        roughly 20% of the reviewed captures, held out by a stable hash so the split never changes between runs).
+        Re-running the same model on the same data should produce the same metrics — if it doesn't, something is
+        non-deterministic.
+        <div style={{ marginTop: 8 }}>
+          <strong>How to read a row:</strong> Mean IoU and IoU@50 are the headline accuracy numbers (higher is better).
+          Mean latency tells you how slow inference is per capture — useful for deciding if a model can be used in the loop or only offline.
+          <strong> Center-in-target</strong> is a forgiving sanity check: even if the box is sloppy, would clicking its
+          center land inside the real element? For UI automation that's often what matters.
+        </div>
+        <div style={{ marginTop: 8 }}>
+          Accidentally ran it twice? Use the 🗑 button to remove a run — it deletes the DB row and the on-disk artifacts.
+        </div>
+      </AboutPanel>
+
       {error ? <div className="annotation-message error">{error}</div> : null}
 
       {runs.length === 0 ? (
         <div className="empty-state" style={{ marginTop: 24 }}>
           <div className="empty-state-title">No eval runs yet</div>
           <p className="empty-state-copy">
-            Trigger a run from the Registry tab — the v0 Florence baseline measures
+            Trigger one from the Registry tab — the v0 Florence baseline measures
             zero-shot grounding accuracy against your reviewed captures.
           </p>
         </div>
@@ -281,25 +375,36 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun }) {
                 <th>Model</th>
                 <th>Started</th>
                 <th>Status</th>
-                <th>Records</th>
-                <th>Mean IoU</th>
-                <th>IoU@50</th>
-                <th>Center-in-target</th>
+                <th title="Number of eval-split captures the model was scored against">Records</th>
+                <th title="0 = no overlap, 1 = perfect. Higher is better.">Mean IoU</th>
+                <th title="Fraction of predictions with IoU ≥ 0.5. Higher is better.">IoU@50</th>
+                <th title="Even with a sloppy box, would a click on its center land inside the real element?">Center-in-target</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {runs.map((r) => {
                 const metrics = r.metrics || {};
                 return (
-                  <tr key={r.id} className="runs-table-row" onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>
-                    <td><code>{r.id.slice(0, 8)}</code></td>
-                    <td>{modelById[r.model_id]?.implementation || r.model_id}</td>
-                    <td>{fmt(r.started_at)}</td>
-                    <td>{r.status}</td>
-                    <td>{r.record_count}</td>
-                    <td>{iou(metrics.mean_bbox_iou)}</td>
-                    <td>{pct(metrics.iou_at_50_accuracy)}</td>
-                    <td>{pct(metrics.center_in_target_accuracy)}</td>
+                  <tr key={r.id}>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}><code>{r.id.slice(0, 8)}</code></td>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{modelById[r.model_id]?.implementation || r.model_id}</td>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{fmt(r.started_at)}</td>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{r.status}</td>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{r.record_count}</td>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{iou(metrics.mean_bbox_iou)}</td>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{pct(metrics.iou_at_50_accuracy)}</td>
+                    <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{pct(metrics.center_in_target_accuracy)}</td>
+                    <td>
+                      <button
+                        className="ghost-btn"
+                        onClick={() => onDelete(r.id)}
+                        disabled={deletingRunId === r.id}
+                        title="Delete this run"
+                      >
+                        {deletingRunId === r.id ? "Deleting..." : "🗑"}
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -308,6 +413,65 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun }) {
         </div>
       )}
     </div>
+  );
+}
+
+function ResultInterpretation({ metrics }) {
+  if (!metrics || metrics.record_count === 0) return null;
+  const iouVal = metrics.mean_bbox_iou ?? 0;
+  const hits = metrics.iou_at_50_accuracy ?? 0;
+
+  let verdict;
+  if (iouVal >= 0.5) {
+    verdict = {
+      tone: "good",
+      headline: "Strong baseline — predictions are landing on the right element most of the time.",
+      detail: "An average IoU above 0.5 means most predicted boxes substantially overlap the human-labeled box. This model could be used in production with light fine-tuning.",
+    };
+  } else if (iouVal >= 0.25) {
+    verdict = {
+      tone: "mid",
+      headline: "Partial signal — the model is finding the right region but not boxing it tightly.",
+      detail: "An IoU in the 0.25–0.5 range usually means the model spots the right area but the box is too big, too small, or shifted. Fine-tuning on labeled data typically fixes this.",
+    };
+  } else if (iouVal > 0) {
+    verdict = {
+      tone: "low",
+      headline: "Weak signal — predictions occasionally graze the right region.",
+      detail: "Very low non-zero IoU means the model is essentially guessing — sometimes a guess overlaps the real element by chance. Fine-tuning is required to make this useful.",
+    };
+  } else {
+    verdict = {
+      tone: "floor",
+      headline: "Zero-shot floor — the model isn't finding the right element at all. This is the expected baseline.",
+      detail: "An IoU of 0 means none of the predicted boxes overlap any of the human-labeled boxes. For a zero-shot generalist vision model on a specialized UI-grounding task, this is the expected starting point. The value of this number is as a floor — once we fine-tune (v1), the new score has to beat 0.0 to count as progress.",
+    };
+  }
+
+  const color = {
+    good: "rgba(80,200,120,0.12)",
+    mid: "rgba(255,200,80,0.12)",
+    low: "rgba(255,160,80,0.12)",
+    floor: "rgba(140,140,140,0.12)",
+  }[verdict.tone];
+
+  return (
+    <section
+      className="panel"
+      style={{ marginTop: 16, background: color, borderLeft: "3px solid rgba(255,255,255,0.25)" }}
+    >
+      <div style={{ padding: "12px 16px" }}>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>Reading this result</div>
+        <div style={{ fontSize: "0.92em", lineHeight: 1.5, opacity: 0.95 }}>
+          <div>{verdict.headline}</div>
+          <div style={{ marginTop: 6, opacity: 0.85 }}>{verdict.detail}</div>
+          <div style={{ marginTop: 8, fontStyle: "italic", opacity: 0.8 }}>
+            Hits at IoU@50: {pct(hits)} of {metrics.record_count} eval-split captures.
+            Per-capture latency: ~{metrics.mean_latency_ms} ms.
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -322,7 +486,8 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
         <div>
           <h2 className="card-title">Models — Run Detail</h2>
           <p className="card-subtitle">
-            Per-scenario metrics and a sample of predictions for one selected eval run.
+            One eval run, expanded. Headline metrics, the same metrics split per scenario,
+            and a sample of the actual predictions so you can sanity-check what the model said.
           </p>
         </div>
         <div className="detail-actions">
@@ -341,6 +506,18 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
         </div>
       </div>
 
+      <AboutPanel title="What am I looking at?">
+        This is the detailed result of one scoring pass. The four headline numbers tell you "how accurate"
+        and "how fast." The per-scenario table shows whether the model is bad <em>everywhere</em> or just bad
+        on certain types of captures (e.g. it might do okay on "click sign in" but fail on "clear the email field"
+        — and that tells you where to add training data).
+        <div style={{ marginTop: 8 }}>
+          The <strong>Prediction sample</strong> at the bottom shows the model's actual output next to the
+          human-approved box, so you can eyeball <em>why</em> it failed — e.g. the box is huge when it should be small,
+          or it pointed at a logo instead of a button.
+        </div>
+      </AboutPanel>
+
       {error ? <div className="annotation-message error">{error}</div> : null}
 
       {!detail ? (
@@ -350,39 +527,46 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
         </div>
       ) : (
         <>
+          <ResultInterpretation metrics={metrics} />
+
           <div className="stats-grid compact-stats-grid" style={{ marginTop: 16 }}>
-            <div className="stat-card">
-              <div className="stat-label">Records</div>
-              <div className="stat-value small-stat-value">{metrics.record_count ?? 0}</div>
-              <div className="stat-footnote">Eval-split captures scored</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Mean IoU</div>
-              <div className="stat-value small-stat-value">{iou(metrics.mean_bbox_iou)}</div>
-              <div className="stat-footnote">Average bbox overlap</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">IoU @ 0.5</div>
-              <div className="stat-value small-stat-value">{pct(metrics.iou_at_50_accuracy)}</div>
-              <div className="stat-footnote">Fraction with IoU ≥ 0.5</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Center-in-target</div>
-              <div className="stat-value small-stat-value">{pct(metrics.center_in_target_accuracy)}</div>
-              <div className="stat-footnote">Click would land in approved bbox</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Mean latency</div>
-              <div className="stat-value small-stat-value">{metrics.mean_latency_ms ?? 0} ms</div>
-              <div className="stat-footnote">Per-prediction wall time</div>
-            </div>
+            <MetricCard
+              label="Records scored"
+              value={metrics.record_count ?? 0}
+              oneLine="Eval-split captures the model was tested on. The split is held stable across runs so scores are comparable."
+            />
+            <MetricCard
+              label="Mean IoU"
+              value={iou(metrics.mean_bbox_iou)}
+              oneLine="Average box-overlap with the human-approved box. The headline accuracy number."
+              range="0.0 → 1.0"
+            />
+            <MetricCard
+              label="IoU @ 0.5"
+              value={pct(metrics.iou_at_50_accuracy)}
+              oneLine="Fraction of predictions with ≥50% overlap — a binary 'did it find the thing' rate."
+              range="0% → 100%"
+            />
+            <MetricCard
+              label="Center-in-target"
+              value={pct(metrics.center_in_target_accuracy)}
+              oneLine="Would a click on the predicted box's center land inside the real element? Forgiving sanity check for UI automation."
+              range="0% → 100%"
+            />
+            <MetricCard
+              label="Mean latency"
+              value={`${metrics.mean_latency_ms ?? 0} ms`}
+              oneLine="Wall-clock time per prediction. Useful for deciding if the model is fast enough for the live agent loop or only offline analysis."
+              range="0 ms → ∞"
+              goodIfHigher={false}
+            />
           </div>
 
           <section className="panel" style={{ marginTop: 24 }}>
             <div className="panel-header">
               <div>
                 <h3>Per-scenario breakdown</h3>
-                <p>Same metrics, split by scenario.</p>
+                <p>Same four metrics, sliced by scenario. Reveals whether failure is uniform or concentrated.</p>
               </div>
             </div>
             <div className="table-wrap">
@@ -391,9 +575,9 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
                   <tr>
                     <th>Scenario</th>
                     <th>Records</th>
-                    <th>Mean IoU</th>
-                    <th>IoU@50</th>
-                    <th>Center-in-target</th>
+                    <th title="Higher is better">Mean IoU</th>
+                    <th title="Higher is better">IoU@50</th>
+                    <th title="Higher is better">Center-in-target</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -419,7 +603,11 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
             <div className="panel-header">
               <div>
                 <h3>Prediction sample</h3>
-                <p>Predicted bbox vs. approved bbox. Overlay rendering deferred to v1.</p>
+                <p>
+                  Up to 25 per-capture predictions. Compare the predicted box to the approved one — when they're
+                  far apart, look at the <em>element query</em> column to understand what the model was being asked to find.
+                  (Bbox overlays on the screenshot will land in v1; today this is JSON.)
+                </p>
               </div>
             </div>
             <div className="table-wrap">
@@ -427,9 +615,9 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
                 <thead>
                   <tr>
                     <th>Capture</th>
-                    <th>Element query</th>
+                    <th>Element query (what we asked for)</th>
                     <th>Predicted bbox</th>
-                    <th>Approved bbox</th>
+                    <th>Approved bbox (human label)</th>
                     <th>IoU</th>
                     <th>Latency</th>
                   </tr>
