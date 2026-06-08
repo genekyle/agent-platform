@@ -2120,31 +2120,44 @@ def seed_v0_florence_baseline(db: Session = Depends(get_db)):
     and demonstrates the platform's swap-point: adding a model = adding a row +
     a wrapper function in model_lib/eval.py:IMPLEMENTATIONS.
     """
-    raw = model_registry.register_model(
-        db,
-        target_id=V0_FLORENCE_TARGET,
-        implementation=V0_FLORENCE_IMPL,
-        model_name=V0_FLORENCE_MODEL_NAME,
-        config={
-            "task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>",
-            "num_beams": 3,
-            "dtype": "float32",
-            "query_preprocessor": "none",
+    seeds = [
+        {
+            "impl": V0_FLORENCE_IMPL,
+            "config": {"query_preprocessor": "none"},
         },
-    )
-    normalized = model_registry.register_model(
-        db,
-        target_id=V0_FLORENCE_TARGET,
-        implementation="v0_zero_shot_florence2_base_short_query",
-        model_name=V0_FLORENCE_MODEL_NAME,
-        config={
-            "task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>",
-            "num_beams": 3,
-            "dtype": "float32",
-            "query_preprocessor": "heuristic_noun_phrase",
+        {
+            "impl": "v0_zero_shot_florence2_base_short_query",
+            "config": {"query_preprocessor": "heuristic_noun_phrase"},
         },
-    )
-    return [_model_read(db, raw).model_dump(mode="json"), _model_read(db, normalized).model_dump(mode="json")]
+        {
+            "impl": "v0_zero_shot_florence2_base_descriptive_query",
+            "config": {"query_preprocessor": "heuristic_noun_phrase + action_type_tag"},
+        },
+        {
+            "impl": "v0_two_stage_omniparser_then_florence",
+            "config": {
+                "stage_1": "omniparser_proposer",
+                "stage_2": "florence2_full_image_grounding",
+                "snap": "highest_iou_with_florence_box",
+            },
+        },
+    ]
+    rows = []
+    base_config = {
+        "task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>",
+        "num_beams": 3,
+        "dtype": "float32",
+    }
+    for seed in seeds:
+        row = model_registry.register_model(
+            db,
+            target_id=V0_FLORENCE_TARGET,
+            implementation=seed["impl"],
+            model_name=V0_FLORENCE_MODEL_NAME,
+            config={**base_config, **seed["config"]},
+        )
+        rows.append(_model_read(db, row).model_dump(mode="json"))
+    return rows
 
 
 @app.get("/api/models/eval-runs", response_model=list[ModelEvalRunRead])

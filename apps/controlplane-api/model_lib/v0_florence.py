@@ -82,16 +82,24 @@ def predict_bbox(
     handle: FlorenceHandle,
     screenshot_path: str,
     element_query: str,
+    region_bbox: Optional[dict[str, float]] = None,
 ) -> dict[str, Any]:
-    """Run Florence's caption-to-phrase-grounding on one screenshot.
+    """Run Florence's caption-to-phrase-grounding on a screenshot.
+
+    If `region_bbox` is provided (in original-image pixel coords), the image is
+    cropped to that region BEFORE being sent to Florence, and returned boxes
+    are remapped back to the original image's coordinate space. This is the
+    "screen region mode" — useful when you've already detected likely regions
+    (e.g. via OmniParser) and want Florence to refine the box inside one of them.
 
     Returns:
         {
-          "bbox": {x, y, width, height} | None,    screenshot pixel coords
-          "all_bboxes": [...],                      every box Florence returned
-          "raw_response": str,                      Florence's raw decoded text
-          "confidence": None,                       Florence doesn't emit calibrated conf
+          "bbox": {x, y, width, height} | None,    original-image pixel coords
+          "all_bboxes": [...],                      every box Florence returned, remapped
+          "raw_response": str,
+          "confidence": None,
           "latency_ms": int,
+          "region_bbox": dict | None,               echoed for traceability
         }
     """
     import torch
@@ -107,9 +115,27 @@ def predict_bbox(
             "confidence": None,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "error": f"screenshot not found: {screenshot_path}",
+            "region_bbox": region_bbox,
         }
 
     image = Image.open(path).convert("RGB")
+    offset_x = 0.0
+    offset_y = 0.0
+    if region_bbox is not None:
+        # Crop to the region, clamped to image bounds.
+        rx = max(0.0, float(region_bbox.get("x", 0)))
+        ry = max(0.0, float(region_bbox.get("y", 0)))
+        rw = max(1.0, float(region_bbox.get("width", 1)))
+        rh = max(1.0, float(region_bbox.get("height", 1)))
+        rx2 = min(float(image.width), rx + rw)
+        ry2 = min(float(image.height), ry + rh)
+        # Round to int for PIL.crop.
+        crop_box = (int(rx), int(ry), int(rx2), int(ry2))
+        if crop_box[2] - crop_box[0] >= 2 and crop_box[3] - crop_box[1] >= 2:
+            image = image.crop(crop_box)
+            offset_x = float(crop_box[0])
+            offset_y = float(crop_box[1])
+
     prompt = f"{TASK_PROMPT} {element_query.strip()}"
 
     with torch.inference_mode():
@@ -130,14 +156,15 @@ def predict_bbox(
 
     all_bboxes: list[dict[str, float]] = []
     for box in raw_boxes:
-        # Florence returns [x1, y1, x2, y2] in screenshot pixel coords
+        # Florence returns [x1, y1, x2, y2] in pixel coords of the IMAGE IT SAW
+        # (which may be a crop). Remap back to original-image coords.
         try:
             x1, y1, x2, y2 = (float(v) for v in box)
         except Exception:
             continue
         all_bboxes.append({
-            "x": x1,
-            "y": y1,
+            "x": x1 + offset_x,
+            "y": y1 + offset_y,
             "width": max(0.0, x2 - x1),
             "height": max(0.0, y2 - y1),
         })
@@ -150,4 +177,5 @@ def predict_bbox(
         "raw_response": raw,
         "confidence": None,
         "latency_ms": int((time.perf_counter() - started) * 1000),
+        "region_bbox": region_bbox,
     }

@@ -48,7 +48,10 @@
       "Bash(git push *)",
       "Bash(../../.venv/bin/python3 -c ' *)",
       "Bash(../../.venv/bin/python3 -c \"import main; print\\('OK'\\)\")",
-      "Bash(curl -s http://127.0.0.1:8081/api/models)"
+      "Bash(curl -s http://127.0.0.1:8081/api/models)",
+      "Bash(curl -s http://127.0.0.1:8082/health)",
+      "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/vision_element_grounding__v0_zero_shot_florence2_base_descriptive_query/eval --max-time 600)",
+      "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/vision_element_grounding__v0_two_stage_omniparser_then_florence/eval --max-time 1200)"
     ]
   }
 }

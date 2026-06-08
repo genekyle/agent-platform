@@ -71,6 +71,9 @@ function BboxOverlay({ prediction, onClose }) {
 
   const approved = scaleBox(prediction.approved_bbox);
   const predicted = scaleBox(prediction.predicted_bbox);
+  // Two-stage baselines also expose Florence's rough bbox before snapping
+  // to an OmniParser candidate. Draw it dashed so you can see the snap effect.
+  const florenceRough = scaleBox(prediction.florence_bbox);
 
   return (
     <div
@@ -103,8 +106,17 @@ function BboxOverlay({ prediction, onClose }) {
             <div style={{ fontWeight: 600, fontSize: "1.05em" }}>Prediction overlay</div>
             <div style={{ fontSize: "0.85em", opacity: 0.7, marginTop: 4 }}>
               <span style={{ color: "#4caf50" }}>■ Green</span> = approved (human label) ·
-              <span style={{ color: "#ff5252", marginLeft: 8 }}>■ Red</span> = predicted (model output) ·
-              IoU {iou(prediction.bbox_iou)}
+              <span style={{ color: "#ff5252", marginLeft: 8 }}>■ Red</span> = predicted (final output)
+              {prediction.florence_bbox ? (
+                <>
+                  {" · "}
+                  <span style={{ color: "#ffa726" }}>■ Dashed orange</span> = Florence's rough guess (before OmniParser snap)
+                </>
+              ) : null}
+              {" · "}IoU {iou(prediction.bbox_iou)}
+              {prediction.snap_strategy ? (
+                <span style={{ marginLeft: 8, opacity: 0.7 }}>· strategy: {prediction.snap_strategy}</span>
+              ) : null}
             </div>
           </div>
           <button className="ghost-btn" onClick={onClose}>✕ Close</button>
@@ -151,6 +163,18 @@ function BboxOverlay({ prediction, onClose }) {
                 Model returned no bbox for this capture.
               </div>
             )}
+            {florenceRough && prediction.florence_bbox &&
+             JSON.stringify(prediction.florence_bbox) !== JSON.stringify(prediction.predicted_bbox) ? (
+              <div
+                title="Florence's raw guess before snapping to an OmniParser candidate"
+                style={{
+                  position: "absolute",
+                  left: florenceRough.left, top: florenceRough.top,
+                  width: florenceRough.width, height: florenceRough.height,
+                  border: "2px dashed #ffa726",
+                  pointerEvents: "none",
+                }} />
+            ) : null}
           </div>
         ) : (
           <div className="annotation-message error">No screenshot filename in prediction record.</div>

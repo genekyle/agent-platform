@@ -62,6 +62,37 @@ _TRAILING_PHRASES = [
 ]
 
 
+_ACTION_ELEMENT_HINTS = {
+    "click": ("button", {"button", "link", "icon"}),
+    "type": ("input field", {"input", "field", "textbox", "textarea"}),
+    "clear": ("input field", {"input", "field", "textbox", "textarea"}),
+    "enter": ("input field", {"input", "field", "textbox", "textarea"}),
+    "select": ("dropdown", {"dropdown", "select", "menu"}),
+    "press": ("button", {"button", "key"}),
+}
+
+
+def normalize_descriptive(query: str, action_type_hint: str | None) -> str:
+    """Baseline B's preprocessor: short-form + element-type tag from action_type_hint.
+
+    The idea: Florence-2 grounding is happier with concrete object descriptions.
+    If the action is "type" and the noun phrase doesn't already mention an input,
+    appending "input field" gives Florence a more groundable concept than the
+    bare phrase alone.
+    """
+    base = normalize_element_query(query)
+    if not action_type_hint:
+        return base
+    hint = action_type_hint.strip().lower()
+    if hint not in _ACTION_ELEMENT_HINTS:
+        return base
+    suffix, present_tokens = _ACTION_ELEMENT_HINTS[hint]
+    tokens = set(re.split(r"\s+", base))
+    if tokens & present_tokens:
+        return base  # already mentions an element type — don't double up
+    return f"{base} {suffix}".strip()
+
+
 def normalize_element_query(query: str) -> str:
     if not query:
         return ""
