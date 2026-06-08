@@ -282,6 +282,7 @@ class TrainingCaptureRead(BaseModel):
     # Vision training fields
     scenario_id: Optional[str] = None
     element_query: Optional[str] = None
+    action_text: Optional[str] = None
     observed_page_state: Optional[str] = None
     post_action_state: Optional[str] = None
 
