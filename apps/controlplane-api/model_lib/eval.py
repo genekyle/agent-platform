@@ -20,6 +20,7 @@ from models import ModelEvalRun, ModelRegistry, TrainingCapture
 from training import _bbox_iou, _stable_split
 
 from model_lib import v0_florence
+from model_lib.query_normalize import normalize_element_query
 
 logger = logging.getLogger("controlplane.model_lib.eval")
 
@@ -115,18 +116,22 @@ def _aggregate(predictions: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def run_eval_florence_zero_shot(
+def _run_florence(
     *,
     db: Session,
     artifacts_root: Path,
     model: ModelRegistry,
+    normalize_query: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
-    """Implementation for `v0_zero_shot_florence2_base`.
+    """Shared Florence-2 zero-shot loop. `normalize_query` toggles the only
+    difference between the two registered implementations — input preprocessing.
 
     Returns (metrics, predictions, log_lines).
     """
     log: list[str] = []
-    log.append(f"[{_iso_now()}] eval start model_id={model.id}")
+    log.append(
+        f"[{_iso_now()}] eval start model_id={model.id} normalize_query={normalize_query}"
+    )
 
     captures = _eligible_captures(db)
     eval_captures = [c for c in captures if _stable_split(c.artifact_filename) == "eval"]
@@ -144,10 +149,13 @@ def run_eval_florence_zero_shot(
             log.append(f"[skip] {capture.artifact_filename} — screenshot missing")
             continue
 
+        original_query = capture.element_query or ""
+        sent_query = normalize_element_query(original_query) if normalize_query else original_query
+
         result = v0_florence.predict_bbox(
             handle=handle,
             screenshot_path=str(screenshot),
-            element_query=capture.element_query or "",
+            element_query=sent_query,
         )
         predicted = result["bbox"]
         target = capture.approved_bbox
@@ -157,13 +165,24 @@ def run_eval_florence_zero_shot(
             cx, cy = _bbox_center(predicted)
             center_in = _point_in_bbox(cx, cy, target)
 
+        # Read screenshot dims from the capture refs so the UI can scale the overlay
+        # without an extra HTTP roundtrip per image.
+        viewport_ref = next(
+            (r for r in (capture.screenshot_refs or []) if r.get("shot_type") == "viewport"),
+            (capture.screenshot_refs or [{}])[0] if capture.screenshot_refs else {},
+        )
+
         predictions.append({
             "artifact_filename": capture.artifact_filename,
+            "screenshot_filename": screenshot.name,
+            "screenshot_width": viewport_ref.get("width"),
+            "screenshot_height": viewport_ref.get("height"),
             "scenario_id": capture.scenario_id,
             "domain_id": capture.domain_id,
             "goal_id": capture.goal_id,
             "observed_page_state": capture.observed_page_state,
-            "element_query": capture.element_query,
+            "element_query": original_query,
+            "sent_query": sent_query,
             "predicted_bbox": predicted,
             "approved_bbox": target,
             "bbox_iou": round(iou, 4),
@@ -181,9 +200,19 @@ def run_eval_florence_zero_shot(
     return metrics, predictions, log
 
 
-# Dispatch table: the swap point.
+def run_eval_florence_zero_shot(*, db, artifacts_root, model):
+    return _run_florence(db=db, artifacts_root=artifacts_root, model=model, normalize_query=False)
+
+
+def run_eval_florence_zero_shot_normalized(*, db, artifacts_root, model):
+    return _run_florence(db=db, artifacts_root=artifacts_root, model=model, normalize_query=True)
+
+
+# Dispatch table: the swap point. Two zero-shot baselines today —
+# raw query vs. heuristically-normalized query. Same model, different input format.
 IMPLEMENTATIONS: dict[str, Callable[..., tuple[dict[str, Any], list[dict[str, Any]], list[str]]]] = {
     "v0_zero_shot_florence2_base": run_eval_florence_zero_shot,
+    "v0_zero_shot_florence2_base_short_query": run_eval_florence_zero_shot_normalized,
 }
 
 

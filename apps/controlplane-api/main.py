@@ -2111,10 +2111,16 @@ def list_registered_models(db: Session = Depends(get_db)):
     return [_model_read(db, row) for row in model_registry.list_models(db)]
 
 
-@app.post("/api/models/seed", response_model=ModelRead)
+@app.post("/api/models/seed")
 def seed_v0_florence_baseline(db: Session = Depends(get_db)):
-    """Idempotent: register the v0 Florence-2 zero-shot baseline if missing."""
-    row = model_registry.register_model(
+    """Idempotent: register both zero-shot Florence-2 baselines if missing.
+
+    Same model, two implementations — raw query vs. heuristically-normalized
+    query. The pair is the first head-to-head comparison the Registry shows,
+    and demonstrates the platform's swap-point: adding a model = adding a row +
+    a wrapper function in model_lib/eval.py:IMPLEMENTATIONS.
+    """
+    raw = model_registry.register_model(
         db,
         target_id=V0_FLORENCE_TARGET,
         implementation=V0_FLORENCE_IMPL,
@@ -2123,9 +2129,22 @@ def seed_v0_florence_baseline(db: Session = Depends(get_db)):
             "task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>",
             "num_beams": 3,
             "dtype": "float32",
+            "query_preprocessor": "none",
         },
     )
-    return _model_read(db, row)
+    normalized = model_registry.register_model(
+        db,
+        target_id=V0_FLORENCE_TARGET,
+        implementation="v0_zero_shot_florence2_base_short_query",
+        model_name=V0_FLORENCE_MODEL_NAME,
+        config={
+            "task_prompt": "<CAPTION_TO_PHRASE_GROUNDING>",
+            "num_beams": 3,
+            "dtype": "float32",
+            "query_preprocessor": "heuristic_noun_phrase",
+        },
+    )
+    return [_model_read(db, raw).model_dump(mode="json"), _model_read(db, normalized).model_dump(mode="json")]
 
 
 @app.get("/api/models/eval-runs", response_model=list[ModelEvalRunRead])

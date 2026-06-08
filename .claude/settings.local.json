@@ -45,7 +45,10 @@
       "Bash(curl -s http://127.0.0.1:8081/health)",
       "Bash(curl -s -X POST http://127.0.0.1:8081/api/models/seed)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(../../.venv/bin/python3 -c ' *)",
+      "Bash(../../.venv/bin/python3 -c \"import main; print\\('OK'\\)\")",
+      "Bash(curl -s http://127.0.0.1:8081/api/models)"
     ]
   }
 }

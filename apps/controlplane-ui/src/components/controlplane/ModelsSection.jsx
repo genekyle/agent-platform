@@ -31,6 +31,142 @@ function MetricCard({ label, value, oneLine, range, goodIfHigher = true }) {
   );
 }
 
+// Render the screenshot with the approved (green) and predicted (red) bboxes
+// drawn on top, scaled to fit. The image's native pixel dimensions drive the
+// box-coordinate scaling (bboxes are stored in screenshot pixel coords).
+function BboxOverlay({ prediction, onClose }) {
+  const [imgDims, setImgDims] = useState(null);  // {natW, natH, dispW, dispH}
+  const containerRef = useCallback((node) => {
+    if (!node) return;
+  }, []);
+
+  if (!prediction) return null;
+
+  const screenshotUrl = prediction.screenshot_filename
+    ? `${API}/api/observations/screenshots/${encodeURIComponent(prediction.screenshot_filename)}`
+    : null;
+
+  const handleImgLoad = (e) => {
+    const img = e.currentTarget;
+    setImgDims({
+      natW: img.naturalWidth,
+      natH: img.naturalHeight,
+      dispW: img.clientWidth,
+      dispH: img.clientHeight,
+    });
+  };
+
+  const scaleBox = (bbox) => {
+    if (!bbox || !imgDims) return null;
+    const { natW, natH, dispW, dispH } = imgDims;
+    const sx = dispW / natW;
+    const sy = dispH / natH;
+    return {
+      left: bbox.x * sx,
+      top: bbox.y * sy,
+      width: bbox.width * sx,
+      height: bbox.height * sy,
+    };
+  };
+
+  const approved = scaleBox(prediction.approved_bbox);
+  const predicted = scaleBox(prediction.predicted_bbox);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.78)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--panel-bg, #1a1a1a)",
+          borderRadius: 8,
+          padding: 20,
+          maxWidth: "92vw",
+          maxHeight: "92vh",
+          overflow: "auto",
+          color: "var(--text, #eee)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "1.05em" }}>Prediction overlay</div>
+            <div style={{ fontSize: "0.85em", opacity: 0.7, marginTop: 4 }}>
+              <span style={{ color: "#4caf50" }}>■ Green</span> = approved (human label) ·
+              <span style={{ color: "#ff5252", marginLeft: 8 }}>■ Red</span> = predicted (model output) ·
+              IoU {iou(prediction.bbox_iou)}
+            </div>
+          </div>
+          <button className="ghost-btn" onClick={onClose}>✕ Close</button>
+        </div>
+
+        <div style={{ marginBottom: 10, fontSize: "0.9em" }}>
+          <div><strong>Original query:</strong> "{prediction.element_query}"</div>
+          {prediction.sent_query && prediction.sent_query !== prediction.element_query ? (
+            <div style={{ marginTop: 4 }}>
+              <strong>Sent to model:</strong> "{prediction.sent_query}" <em style={{ opacity: 0.7 }}>(after normalization)</em>
+            </div>
+          ) : null}
+        </div>
+
+        {screenshotUrl ? (
+          <div ref={containerRef} style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
+            <img
+              src={screenshotUrl}
+              onLoad={handleImgLoad}
+              style={{ display: "block", maxWidth: "min(86vw, 1400px)", maxHeight: "70vh", height: "auto" }}
+              alt="capture"
+            />
+            {approved ? (
+              <div style={{
+                position: "absolute",
+                left: approved.left, top: approved.top,
+                width: approved.width, height: approved.height,
+                border: "3px solid #4caf50",
+                boxShadow: "0 0 0 1px rgba(0,0,0,0.6)",
+                pointerEvents: "none",
+              }} />
+            ) : null}
+            {predicted ? (
+              <div style={{
+                position: "absolute",
+                left: predicted.left, top: predicted.top,
+                width: predicted.width, height: predicted.height,
+                border: "3px solid #ff5252",
+                boxShadow: "0 0 0 1px rgba(0,0,0,0.6)",
+                pointerEvents: "none",
+              }} />
+            ) : (
+              <div style={{ marginTop: 8, fontStyle: "italic", color: "#ff5252" }}>
+                Model returned no bbox for this capture.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="annotation-message error">No screenshot filename in prediction record.</div>
+        )}
+
+        <details style={{ marginTop: 12, fontSize: "0.85em" }}>
+          <summary style={{ cursor: "pointer", opacity: 0.8 }}>Raw model output</summary>
+          <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", background: "rgba(255,255,255,0.04)", padding: 10, borderRadius: 4, marginTop: 6 }}>
+            {prediction.raw_response || "(none)"}
+          </pre>
+        </details>
+      </div>
+    </div>
+  );
+}
+
 // Banner that explains "what this whole view IS" — appears at the top of every Models view.
 function AboutPanel({ title, children }) {
   return (
@@ -247,11 +383,15 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
       <AboutPanel title="What is the Model Registry?">
         Think of this as a leaderboard for "approaches we've tried to solve <em>vision element grounding</em>" —
         i.e. <strong>given a screenshot and a phrase like "click the log in button", draw a box around the right element</strong>.
-        Today there's one entry: the v0 baseline ({" "}
-        <code>microsoft/Florence-2-base</code>, used zero-shot — meaning we did <em>not</em> fine-tune it on our data).
-        The "Last eval" columns are the score it got on our reviewed captures.
-        When we ship v1 (a fine-tuned Florence), it'll appear as a second row here and we'll be able to
-        compare them head-to-head.
+        Today there are two rows — both use <code>microsoft/Florence-2-base</code> zero-shot (no fine-tuning),
+        and the <em>only</em> difference is the input format:
+        <ul style={{ margin: "6px 0 6px 18px", padding: 0 }}>
+          <li><code>v0_zero_shot_florence2_base</code> — sends the raw human query: <em>"Click on the log in button"</em></li>
+          <li><code>v0_zero_shot_florence2_base_short_query</code> — strips imperative scaffolding first: <em>"log in button"</em></li>
+        </ul>
+        That pair is a tiny experiment with a real lesson: <strong>input format matters</strong>. Florence-2's
+        grounding task was trained on short noun phrases, not full sentences, so we'd expect the normalized variant
+        to do at least slightly better. The Registry table makes the comparison concrete.
         <div style={{ marginTop: 8 }}>
           <strong>Mean IoU</strong> = average box-overlap with the human-approved box (0 = no overlap, 1 = perfect).
           <strong> IoU@50</strong> = fraction of predictions that got at least 50% overlap — i.e. "did it basically find the right thing."
@@ -479,6 +619,7 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
   const metrics = detail?.metrics || {};
   const perScenario = metrics.per_scenario || {};
   const sample = detail?.predictions_sample || [];
+  const [overlayPrediction, setOverlayPrediction] = useState(null);
 
   return (
     <div className="workspace-card">
@@ -616,10 +757,10 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
                   <tr>
                     <th>Capture</th>
                     <th>Element query (what we asked for)</th>
-                    <th>Predicted bbox</th>
-                    <th>Approved bbox (human label)</th>
-                    <th>IoU</th>
+                    <th title="The string the model actually saw, after any preprocessing">Sent to model</th>
+                    <th title="Higher is better">IoU</th>
                     <th>Latency</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -630,10 +771,24 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
                       <tr key={p.artifact_filename}>
                         <td title={p.artifact_filename}><code>{(p.artifact_filename || "").slice(0, 22)}…</code></td>
                         <td>{p.element_query}</td>
-                        <td><code>{p.predicted_bbox ? JSON.stringify(p.predicted_bbox) : "—"}</code></td>
-                        <td><code>{p.approved_bbox ? JSON.stringify(p.approved_bbox) : "—"}</code></td>
+                        <td>
+                          {p.sent_query && p.sent_query !== p.element_query ? (
+                            <span style={{ fontStyle: "italic", opacity: 0.85 }}>{p.sent_query}</span>
+                          ) : (
+                            <span style={{ opacity: 0.5 }}>(same as query)</span>
+                          )}
+                        </td>
                         <td>{iou(p.bbox_iou)}</td>
                         <td>{p.latency_ms} ms</td>
+                        <td>
+                          <button
+                            className="secondary-btn"
+                            onClick={() => setOverlayPrediction(p)}
+                            title="See the predicted and approved boxes drawn on the screenshot"
+                          >
+                            View overlay
+                          </button>
+                        </td>
                       </tr>
                     ))
                   )}
@@ -643,6 +798,11 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
           </section>
         </>
       )}
+
+      <BboxOverlay
+        prediction={overlayPrediction}
+        onClose={() => setOverlayPrediction(null)}
+      />
     </div>
   );
 }
