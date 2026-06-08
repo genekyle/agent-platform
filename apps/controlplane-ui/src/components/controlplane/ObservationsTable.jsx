@@ -90,7 +90,14 @@ export function ObservationsTable({
 
   const domainLabel = (id) => domainMeta?.[id]?.display_name || humanizeId(id) || "Unassigned domain";
   const goalLabel = (id) => goalMeta?.[id]?.display_name || humanizeId(id) || "Unassigned objective";
-  const stageOf = (goalId) => goalMeta?.[goalId]?.stage || "neutral";
+  // Stage of a CAPTURE comes from its observed page state (a single objective like
+  // log_in spans both stages: the login flow is unauthenticated, but its success
+  // landing — facebook_home_logged_in — is authenticated). Fall back to the goal's
+  // stage when the state has none, then neutral.
+  const stageOfCapture = (o) =>
+    stateMeta?.[o.observed_page_state]?.stage
+    || goalMeta?.[o.goal_id]?.stage
+    || "neutral";
 
   // Domain ▸ Stage ▸ Objective(goal) ▸ Group(by) ▸ Captures.
   const tree = useMemo(() => {
@@ -148,7 +155,7 @@ export function ObservationsTable({
     for (const o of observations) {
       if (!matches(o)) continue;
       const dId = o.domain_id || "unassigned";
-      const st = stageOf(o.goal_id);
+      const st = stageOfCapture(o);
       const gId = o.goal_id || "unassigned";
       if (!domains.has(dId)) domains.set(dId, new Map());
       const stages = domains.get(dId);

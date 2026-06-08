@@ -343,7 +343,7 @@ export default function App() {
       if (!r.ok) return;
       const rows = await r.json();
       const map = {};
-      for (const s of rows) map[s.state_id] = { display_name: s.display_name, category: s.category };
+      for (const s of rows) map[s.state_id] = { display_name: s.display_name, category: s.category, stage: s.stage, goal_id: s.goal_id };
       setStateMeta(map);
     } catch { /* best-effort */ }
   }, []);
