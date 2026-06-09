@@ -299,7 +299,19 @@ class ModelRegistry(Base):
 
 
 class ModelEvalRun(Base):
-    """One eval run of a registered model against the eval split of reviewed captures."""
+    """One eval run of a registered model against the eval split of reviewed captures.
+
+    Long-running evals can take many minutes for big models on MPS. To make
+    those manageable:
+      - `progress` is updated after every capture so the UI can show a live
+        counter and "current capture" string.
+      - `predictions.jsonl` is appended to on-disk as each capture completes,
+        so a mid-run crash doesn't lose work.
+      - `cancel_requested` is checked between captures; a clean cancel
+        flushes whatever's done and exits with status=cancelled.
+      - Resume creates a new run that copies the prior run's predictions and
+        continues from where it stopped.
+    """
     __tablename__ = "model_eval_run"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)  # uuid hex
@@ -312,5 +324,12 @@ class ModelEvalRun(Base):
     metrics: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     artifact_dir: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Live-progress fields. progress shape:
+    # {completed, total, current_capture, current_step, started_at, last_update_at}
+    progress: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # If this run resumes a previous one, the originating run id (for traceability).
+    resumed_from: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     model: Mapped["ModelRegistry"] = relationship()

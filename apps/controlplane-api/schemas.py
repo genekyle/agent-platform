@@ -340,6 +340,9 @@ class ModelEvalRunRead(BaseModel):
     metrics: Optional[dict] = None
     artifact_dir: Optional[str] = None
     error: Optional[str] = None
+    progress: Optional[dict] = None
+    cancel_requested: bool = False
+    resumed_from: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

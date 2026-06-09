@@ -572,6 +572,10 @@ def _migrate_schema() -> None:
         ("task_registry", "description", "TEXT"),
         ("task_registry", "estimated_steps", "VARCHAR(50)"),
         ("task_registry", "is_repeatable", "BOOLEAN NOT NULL DEFAULT true"),
+        # model_eval_run resumability + live progress (v7)
+        ("model_eval_run", "progress", "JSON"),
+        ("model_eval_run", "cancel_requested", "BOOLEAN NOT NULL DEFAULT false"),
+        ("model_eval_run", "resumed_from", "VARCHAR(64)"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -2218,16 +2222,66 @@ def delete_eval_run(run_id: str, db: Session = Depends(get_db)):
     return {"ok": True, "deleted_run_id": run_id}
 
 
+def _spawn_eval_thread(run_id: str) -> None:
+    """Run the eval in a real daemon thread so the HTTP response can return
+    immediately. The thread carries its own DB session (see execute_eval_run).
+    uvicorn --reload will still kill the worker on file edits, but resumability
+    handles that case — predictions persist per-capture and `POST /resume`
+    picks up where we stopped.
+    """
+    import threading
+    artifacts_root = _artifacts_dir()
+    t = threading.Thread(
+        target=model_eval.execute_eval_run,
+        kwargs={"run_id": run_id, "artifacts_root": artifacts_root},
+        daemon=True,
+        name=f"eval-{run_id[:8]}",
+    )
+    t.start()
+
+
 @app.post("/api/models/{model_id}/eval", response_model=ModelEvalRunRead)
 def run_model_eval(model_id: str, db: Session = Depends(get_db)):
-    """Synchronous eval. Loads Florence-2 lazily on first call (~460 MB weights,
-    already cached). Subsequent calls reuse the in-process handle."""
+    """Schedule an eval run in a background thread and return the row immediately.
+
+    The UI polls the returned run_id for live progress (`progress.completed`,
+    `progress.current_capture`, `progress.current_step`). Per-capture
+    predictions are written to disk as they complete, so a mid-run crash is
+    recoverable via `POST /eval-runs/{id}/resume`.
+    """
     if model_registry.get_model(db, model_id) is None:
         raise HTTPException(status_code=404, detail="Model not found")
     try:
-        run = model_eval.run_eval(db=db, artifacts_root=_artifacts_dir(), model_id=model_id)
+        run = model_eval.create_eval_run(db=db, model_id=model_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if run.status == "failed":
-        raise HTTPException(status_code=500, detail=run.error or "Eval run failed")
+    _spawn_eval_thread(run.id)
     return run
+
+
+@app.post("/api/models/eval-runs/{run_id}/cancel", response_model=ModelEvalRunRead)
+def cancel_eval_run(run_id: str, db: Session = Depends(get_db)):
+    """Request a clean cancel. The background runner checks this flag between
+    captures and exits with status=cancelled after the next checkpoint."""
+    run = model_eval.request_cancel(db=db, run_id=run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Eval run not found")
+    return run
+
+
+@app.post("/api/models/eval-runs/{run_id}/resume", response_model=ModelEvalRunRead)
+def resume_eval_run(run_id: str, db: Session = Depends(get_db)):
+    """Start a NEW run that picks up the prior run's predictions.jsonl and only
+    processes captures that weren't completed. The original run row is left
+    alone; the new run links back via `resumed_from`."""
+    prev = db.get(ModelEvalRun, run_id)
+    if prev is None:
+        raise HTTPException(status_code=404, detail="Eval run not found")
+    if prev.status == "running":
+        raise HTTPException(status_code=400, detail="Run is still active; cancel it first")
+    try:
+        new_run = model_eval.create_eval_run(db=db, model_id=prev.model_id, resumed_from=prev.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _spawn_eval_thread(new_run.id)
+    return new_run

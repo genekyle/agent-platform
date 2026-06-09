@@ -255,6 +255,8 @@ export function ModelsSection({ section }) {
   const [seedingId, setSeedingId] = useState(null);
   const [runningEvalFor, setRunningEvalFor] = useState(null);
   const [deletingRunId, setDeletingRunId] = useState(null);
+  const [cancellingRunId, setCancellingRunId] = useState(null);
+  const [resumingRunId, setResumingRunId] = useState(null);
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -307,6 +309,19 @@ export function ModelsSection({ section }) {
     }
   }, [section, selectedRunId, loadRunDetail]);
 
+  // Auto-poll while a run is in-flight so the UI shows live progress every 2s.
+  // Stops as soon as status flips to a terminal value (success/failed/cancelled).
+  useEffect(() => {
+    const status = runDetail?.status;
+    if (section !== "run-detail" || !selectedRunId) return;
+    if (status !== "running" && status !== "pending") return;
+    const id = setInterval(() => {
+      loadRunDetail(selectedRunId);
+      loadEvalRuns();
+    }, 2000);
+    return () => clearInterval(id);
+  }, [section, selectedRunId, runDetail?.status, loadRunDetail, loadEvalRuns]);
+
   useEffect(() => {
     if (section === "run-detail" && !selectedRunId && evalRuns.length > 0) {
       setSelectedRunId(evalRuns[0].id);
@@ -328,10 +343,13 @@ export function ModelsSection({ section }) {
 
   const runEval = async (modelId) => {
     const ok = window.confirm(
-      "Run a fresh eval?\n\n" +
-        "This loads Florence-2 (already warm) and scores every eval-split capture.\n" +
-        "Typical cost: ~1 second per capture (so ~10s for 9 captures).\n\n" +
-        "A new run row will appear in Eval Runs. You can delete it from there if it was accidental.",
+      "Schedule a fresh eval?\n\n" +
+        "The eval runs in a background thread so this dialog won't block. Switch to\n" +
+        "the Run Detail tab to watch live progress (current capture, per-capture\n" +
+        "latency). You can cancel mid-run, and if it gets interrupted (system sleep,\n" +
+        "code reload) you can resume from where it stopped.\n\n" +
+        "Heads-up: large models like UGround can take 30s–5min per capture on MPS\n" +
+        "depending on inputs, especially on the first call when weights load.",
     );
     if (!ok) return;
     setRunningEvalFor(modelId);
@@ -341,11 +359,45 @@ export function ModelsSection({ section }) {
         const body = await res.text();
         throw new Error(`HTTP ${res.status}: ${body}`);
       }
+      const newRun = await res.json();
+      // Jump straight to the Run Detail view of the new run so the user sees progress.
+      setSelectedRunId(newRun.id);
       await Promise.all([loadModels(), loadEvalRuns()]);
     } catch (err) {
       setEvalRunsError(String(err?.message ?? err));
     } finally {
       setRunningEvalFor(null);
+    }
+  };
+
+  const cancelRun = async (runId) => {
+    setCancellingRunId(runId);
+    try {
+      const res = await fetch(`${API}/api/models/eval-runs/${runId}/cancel`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await Promise.all([loadEvalRuns(), loadRunDetail(runId)]);
+    } catch (err) {
+      setEvalRunsError(String(err?.message ?? err));
+    } finally {
+      setCancellingRunId(null);
+    }
+  };
+
+  const resumeRun = async (runId) => {
+    setResumingRunId(runId);
+    try {
+      const res = await fetch(`${API}/api/models/eval-runs/${runId}/resume`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`HTTP ${res.status}: ${body}`);
+      }
+      const newRun = await res.json();
+      setSelectedRunId(newRun.id);
+      await Promise.all([loadModels(), loadEvalRuns(), loadRunDetail(newRun.id)]);
+    } catch (err) {
+      setEvalRunsError(String(err?.message ?? err));
+    } finally {
+      setResumingRunId(null);
     }
   };
 
@@ -398,6 +450,10 @@ export function ModelsSection({ section }) {
         onOpenRun={handleOpenRun}
         onDelete={deleteRun}
         deletingRunId={deletingRunId}
+        onCancel={cancelRun}
+        cancellingRunId={cancellingRunId}
+        onResume={resumeRun}
+        resumingRunId={resumingRunId}
       />
     );
   }
@@ -409,6 +465,11 @@ export function ModelsSection({ section }) {
         onSelectRun={handleOpenRun}
         detail={runDetail}
         error={runDetailError}
+        onCancel={cancelRun}
+        cancellingRunId={cancellingRunId}
+        onResume={resumeRun}
+        resumingRunId={resumingRunId}
+        onReload={() => loadRunDetail(selectedRunId)}
       />
     );
   }
@@ -512,7 +573,7 @@ function ModelsRegistryView({ models, loading, error, onReload, onSeed, seedingI
   );
 }
 
-function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDelete, deletingRunId }) {
+function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDelete, deletingRunId, onCancel, cancellingRunId, onResume, resumingRunId }) {
   const modelById = useMemo(() => {
     const m = {};
     for (const row of models) m[row.id] = row;
@@ -591,12 +652,34 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDel
                     <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{iou(metrics.mean_bbox_iou)}</td>
                     <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{pct(metrics.iou_at_50_accuracy)}</td>
                     <td onClick={() => onOpenRun(r.id)} style={{ cursor: "pointer" }}>{pct(metrics.center_in_target_accuracy)}</td>
-                    <td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {(r.status === "running" || r.status === "pending") ? (
+                        <button
+                          className="ghost-btn"
+                          onClick={() => onCancel(r.id)}
+                          disabled={cancellingRunId === r.id || r.cancel_requested}
+                          title={r.cancel_requested ? "Already cancelling…" : "Stop after the current capture"}
+                        >
+                          {r.cancel_requested ? "Cancelling…" : cancellingRunId === r.id ? "…" : "✕"}
+                        </button>
+                      ) : null}
+                      {(r.status === "failed" || r.status === "cancelled") ? (
+                        <button
+                          className="ghost-btn"
+                          onClick={() => onResume(r.id)}
+                          disabled={resumingRunId === r.id}
+                          title="Resume from where this run stopped — re-uses completed predictions"
+                          style={{ marginLeft: 4 }}
+                        >
+                          {resumingRunId === r.id ? "…" : "↻"}
+                        </button>
+                      ) : null}
                       <button
                         className="ghost-btn"
                         onClick={() => onDelete(r.id)}
                         disabled={deletingRunId === r.id}
                         title="Delete this run"
+                        style={{ marginLeft: 4 }}
                       >
                         {deletingRunId === r.id ? "Deleting..." : "🗑"}
                       </button>
@@ -609,6 +692,113 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDel
         </div>
       )}
     </div>
+  );
+}
+
+function LiveProgressPanel({ detail, onCancel, cancellingRunId }) {
+  if (!detail) return null;
+  const status = detail.status;
+  const progress = detail.progress || {};
+  const completed = progress.completed ?? 0;
+  const total = progress.total ?? null;
+  const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  const isLive = status === "running" || status === "pending";
+
+  const colorByStatus = {
+    pending: "rgba(140,140,140,0.18)",
+    running: "rgba(91, 140, 255, 0.16)",
+    success: "rgba(80,200,120,0.14)",
+    failed: "rgba(255,80,80,0.14)",
+    cancelled: "rgba(255,180,80,0.14)",
+  };
+
+  return (
+    <section
+      className="panel"
+      style={{
+        marginTop: 16,
+        background: colorByStatus[status] || colorByStatus.pending,
+        borderLeft: "3px solid rgba(255,255,255,0.25)",
+      }}
+    >
+      <div style={{ padding: "14px 16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "1.05em" }}>
+              Status: <span style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>{status || "—"}</span>
+              {isLive ? <span style={{ marginLeft: 10, opacity: 0.7, fontSize: "0.85em" }}>auto-refreshing every 2s</span> : null}
+            </div>
+            {detail.resumed_from ? (
+              <div style={{ fontSize: "0.85em", opacity: 0.75, marginTop: 2 }}>
+                resumed from <code>{detail.resumed_from.slice(0, 8)}…</code>
+              </div>
+            ) : null}
+          </div>
+          {isLive ? (
+            <button
+              className="ghost-btn"
+              onClick={() => onCancel(detail.id)}
+              disabled={cancellingRunId === detail.id || detail.cancel_requested}
+              title={detail.cancel_requested ? "Cancel already requested — finishing current capture" : "Stop after the current capture finishes"}
+            >
+              {detail.cancel_requested ? "Cancelling…" : cancellingRunId === detail.id ? "Sending…" : "✕ Cancel run"}
+            </button>
+          ) : null}
+        </div>
+
+        {total ? (
+          <>
+            <div style={{ fontSize: "0.9em", marginBottom: 6 }}>
+              {completed} / {total} captures complete ({pct}%)
+            </div>
+            <div
+              style={{
+                height: 10,
+                background: "rgba(255,255,255,0.08)",
+                borderRadius: 5,
+                overflow: "hidden",
+                marginBottom: 8,
+              }}
+            >
+              <div
+                style={{
+                  width: `${pct}%`,
+                  height: "100%",
+                  background: status === "failed" ? "#ff5252" : status === "cancelled" ? "#ffa726" : "#5b8cff",
+                  transition: "width 0.3s ease",
+                }}
+              />
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: "0.9em", marginBottom: 6 }}>
+            {progress.current_step || (isLive ? "waiting for worker…" : "—")}
+          </div>
+        )}
+
+        {progress.current_step ? (
+          <div style={{ fontSize: "0.85em", opacity: 0.85 }}>
+            <strong>Step:</strong> {progress.current_step}
+          </div>
+        ) : null}
+        {progress.current_capture ? (
+          <div style={{ fontSize: "0.85em", opacity: 0.85, marginTop: 2 }}>
+            <strong>Current capture:</strong> <code>{progress.current_capture}</code>
+          </div>
+        ) : null}
+        {progress.last_update_at ? (
+          <div style={{ fontSize: "0.78em", opacity: 0.6, marginTop: 6 }}>
+            last update: {progress.last_update_at}
+          </div>
+        ) : null}
+
+        {detail.error ? (
+          <div className="annotation-message error" style={{ marginTop: 10 }}>
+            <strong>Error:</strong> {detail.error}
+          </div>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -671,11 +861,14 @@ function ResultInterpretation({ metrics }) {
   );
 }
 
-function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
+function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error, onCancel, cancellingRunId, onResume, resumingRunId, onReload }) {
   const metrics = detail?.metrics || {};
   const perScenario = metrics.per_scenario || {};
   const sample = detail?.predictions_sample || [];
   const [overlayPrediction, setOverlayPrediction] = useState(null);
+  const status = detail?.status;
+  const isLive = status === "running" || status === "pending";
+  const canResume = status === "failed" || status === "cancelled";
 
   return (
     <div className="workspace-card">
@@ -687,7 +880,20 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
             and a sample of the actual predictions so you can sanity-check what the model said.
           </p>
         </div>
-        <div className="detail-actions">
+        <div className="detail-actions" style={{ gap: 8 }}>
+          {onReload ? (
+            <button className="secondary-btn" onClick={onReload}>Refresh</button>
+          ) : null}
+          {canResume ? (
+            <button
+              className="primary-btn"
+              onClick={() => onResume(detail.id)}
+              disabled={resumingRunId === detail?.id}
+              title="Start a new run that re-uses completed predictions and finishes the rest"
+            >
+              {resumingRunId === detail?.id ? "Resuming…" : "↻ Resume"}
+            </button>
+          ) : null}
           <select
             value={selectedRunId || ""}
             onChange={(e) => onSelectRun(e.target.value)}
@@ -724,7 +930,8 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error }) {
         </div>
       ) : (
         <>
-          <ResultInterpretation metrics={metrics} />
+          <LiveProgressPanel detail={detail} onCancel={onCancel} cancellingRunId={cancellingRunId} />
+          {!isLive ? <ResultInterpretation metrics={metrics} /> : null}
 
           <div className="stats-grid compact-stats-grid" style={{ marginTop: 16 }}>
             <MetricCard
