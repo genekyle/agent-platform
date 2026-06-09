@@ -695,6 +695,75 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDel
   );
 }
 
+function LogTailPanel({ runId, status }) {
+  const [lines, setLines] = useState([]);
+  const [error, setError] = useState(null);
+  const [totalLines, setTotalLines] = useState(0);
+  const isLive = status === "running" || status === "pending";
+
+  const loadLog = useCallback(async () => {
+    if (!runId) return;
+    try {
+      const res = await fetch(`${API}/api/models/eval-runs/${runId}/log?tail=200`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      setLines(body.lines || []);
+      setTotalLines(body.total_lines || (body.lines || []).length);
+      setError(null);
+    } catch (err) {
+      setError(String(err?.message ?? err));
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    loadLog();
+  }, [loadLog]);
+
+  // Poll every 1.5s while live — log is the only signal during long inference
+  // steps like UGround on MPS.
+  useEffect(() => {
+    if (!isLive) return;
+    const id = setInterval(loadLog, 1500);
+    return () => clearInterval(id);
+  }, [isLive, loadLog]);
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <div className="panel-header">
+        <div>
+          <h3>Live worker log {isLive ? <span style={{ opacity: 0.6, fontSize: "0.85em" }}>(polling every 1.5s)</span> : null}</h3>
+          <p>Stream from the worker's <code>run.log</code> — fine-grained progress including per-stage timing inside model inference. The best place to see what's happening during a long step.</p>
+        </div>
+        <div className="detail-actions">
+          <button className="secondary-btn" onClick={loadLog}>Refresh log</button>
+        </div>
+      </div>
+      {error ? <div className="annotation-message error">{error}</div> : null}
+      <pre
+        style={{
+          background: "rgba(0,0,0,0.45)",
+          color: "#d8e6ff",
+          padding: 12,
+          borderRadius: 6,
+          fontSize: "0.78em",
+          lineHeight: 1.5,
+          maxHeight: 360,
+          overflowY: "auto",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+        ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}
+      >
+        {lines.length === 0 ? "(no log lines yet — worker may still be starting)" : lines.join("\n")}
+      </pre>
+      <div style={{ fontSize: "0.78em", opacity: 0.6, marginTop: 6 }}>
+        showing last {lines.length} of {totalLines} lines
+      </div>
+    </section>
+  );
+}
+
 function LiveProgressPanel({ detail, onCancel, cancellingRunId }) {
   if (!detail) return null;
   const status = detail.status;
@@ -931,6 +1000,7 @@ function RunDetailView({ runs, selectedRunId, onSelectRun, detail, error, onCanc
       ) : (
         <>
           <LiveProgressPanel detail={detail} onCancel={onCancel} cancellingRunId={cancellingRunId} />
+          <LogTailPanel runId={detail.id} status={status} />
           {!isLive ? <ResultInterpretation metrics={metrics} /> : null}
 
           <div className="stats-grid compact-stats-grid" style={{ marginTop: 16 }}>

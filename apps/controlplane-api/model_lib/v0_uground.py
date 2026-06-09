@@ -186,6 +186,7 @@ def predict_point(
     handle: UGroundHandle,
     screenshot_path: str,
     element_query: str,
+    progress_callback: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Run UGround on one screenshot for one element query.
 
@@ -215,8 +216,21 @@ def predict_point(
             "error": f"screenshot not found: {screenshot_path}",
         }
 
+    def stage(name: str, started_at: float) -> float:
+        """Log per-stage timing so the run.log reveals which sub-step is slow."""
+        elapsed = int((time.perf_counter() - started_at) * 1000)
+        logger.info("uground stage %s: %d ms", name, elapsed)
+        if progress_callback is not None:
+            try:
+                progress_callback(f"{name} ({elapsed} ms)")
+            except Exception:
+                pass
+        return time.perf_counter()
+
+    t = time.perf_counter()
     original_image = Image.open(path).convert("RGB")
     orig_w, orig_h = original_image.size
+    t = stage("image_open", t)
 
     # Downscale (preserving aspect ratio) so the Qwen2-VL vision encoder doesn't
     # blow MPS memory. We always scale UGround's 0-1000 normalized output back
@@ -227,9 +241,11 @@ def predict_point(
         new_w = max(64, int(orig_w * scale))
         new_h = max(64, int(orig_h * scale))
         image = original_image.resize((new_w, new_h), Image.LANCZOS)
+        logger.info("uground resize: %dx%d -> %dx%d", orig_w, orig_h, new_w, new_h)
     else:
         image = original_image
     img_w, img_h = orig_w, orig_h  # scaling target for the model's output points
+    t = stage("image_resize", t)
 
     # Build the OpenAI-style chat message with image + text. The processor's
     # apply_chat_template will turn this into the right token sequence.
@@ -244,6 +260,7 @@ def predict_point(
         },
     ]
     prompt_text = handle.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    t = stage("chat_template", t)
 
     inputs = handle.processor(
         text=[prompt_text],
@@ -251,6 +268,7 @@ def predict_point(
         return_tensors="pt",
         padding=True,
     ).to(handle.device)
+    t = stage("processor_to_device", t)
 
     with torch.inference_mode():
         generated_ids = handle.model.generate(
@@ -258,6 +276,7 @@ def predict_point(
             max_new_tokens=MAX_NEW_TOKENS,
             do_sample=False,
         )
+    t = stage("generate", t)
 
     # Release MPS activation memory before the next capture. Without this,
     # the cache holds onto vision-encoder workspace that grows with each call
@@ -267,6 +286,7 @@ def predict_point(
             torch.mps.empty_cache()
         except Exception:
             pass
+    t = stage("mps_empty_cache", t)
 
     # Strip the prompt prefix off the generation so we decode only the answer.
     prompt_len = inputs["input_ids"].shape[1]

@@ -586,6 +586,25 @@ def _migrate_schema() -> None:
                 conn.rollback()
 
 
+def _mark_zombie_eval_runs(db: Session) -> None:
+    """Any eval run with status in (pending, running) at process startup is a
+    zombie — its worker thread died when the previous uvicorn worker exited
+    (auto-reload, manual restart, crash, sleep). Mark them failed so the UI
+    doesn't spin forever waiting for them, and so they're visible as resume
+    candidates. Per-capture predictions on disk are preserved.
+    """
+    stuck = db.scalars(
+        select(ModelEvalRun).where(ModelEvalRun.status.in_(["pending", "running"]))
+    ).all()
+    for run in stuck:
+        run.status = "failed"
+        run.error = "worker exited mid-run (uvicorn reload, process restart, or sleep)"
+        run.finished_at = datetime.now(timezone.utc)
+        run.cancel_requested = False
+    if stuck:
+        db.commit()
+
+
 @app.on_event("startup")
 def on_startup():
     _migrate_schema()
@@ -596,6 +615,7 @@ def on_startup():
         seed_actions(db)
         backfill_goal_stages(db)
         backfill_page_state_stages(db)
+        _mark_zombie_eval_runs(db)
 
 
 @app.get("/health")
@@ -2257,6 +2277,37 @@ def run_model_eval(model_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(exc))
     _spawn_eval_thread(run.id)
     return run
+
+
+@app.get("/api/models/eval-runs/{run_id}/log")
+def read_eval_run_log(run_id: str, tail: int = 200, db: Session = Depends(get_db)):
+    """Return the tail of the run's run.log file.
+
+    The eval worker writes one line per major step (load, per-capture progress,
+    per-capture timing, cancel/exit) so this is the live window into a running
+    eval — much finer than the `progress` field which only updates between
+    captures. The UI polls this while a run is in-flight.
+    """
+    run = db.get(ModelEvalRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Eval run not found")
+    if not run.artifact_dir:
+        return {"run_id": run_id, "lines": [], "note": "no log file yet (worker has not started writing)"}
+    log_path = Path(run.artifact_dir) / "run.log"
+    if not log_path.exists():
+        return {"run_id": run_id, "lines": [], "note": "log file does not exist yet"}
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return {"run_id": run_id, "lines": [], "note": f"read failed: {exc}"}
+    all_lines = text.splitlines()
+    tail = max(1, min(tail, 5000))
+    return {
+        "run_id": run_id,
+        "lines": all_lines[-tail:],
+        "total_lines": len(all_lines),
+        "log_path": str(log_path),
+    }
 
 
 @app.post("/api/models/eval-runs/{run_id}/cancel", response_model=ModelEvalRunRead)
