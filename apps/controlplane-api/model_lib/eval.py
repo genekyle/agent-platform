@@ -262,6 +262,10 @@ def _florence_loop(*, ctx: EvalRunContext, model: ModelRegistry, normalize_query
     eval_captures = _select_eval_captures(ctx)
     ctx.log(f"florence loop: total={len(eval_captures)} normalize_query={normalize_query} descriptive={descriptive}")
 
+    # MPS only has room for one ~multi-GB vision model at a time. Evict UGround
+    # if it's cached from a prior run before loading Florence on top.
+    if v0_uground.release_uground():
+        ctx.log("evicted resident UGround handle to make room for Florence")
     handle = v0_florence.load_florence(model.model_name or v0_florence.FLORENCE_BASE)
     ctx.log(f"florence loaded on device={handle.device}")
 
@@ -359,6 +363,8 @@ def _fetch_omniparser_proposals(screenshot_filename: str) -> list[dict[str, Any]
 
 def _run_omniparser_then_florence(*, ctx: EvalRunContext, model: ModelRegistry) -> None:
     eval_captures = _select_eval_captures(ctx)
+    if v0_uground.release_uground():
+        ctx.log("evicted resident UGround handle to make room for Florence")
     handle = v0_florence.load_florence(model.model_name or v0_florence.FLORENCE_BASE)
     ctx.log(f"florence loaded on device={handle.device}")
     for i, capture in enumerate(eval_captures, start=1):
@@ -433,6 +439,10 @@ def _run_omniparser_then_florence(*, ctx: EvalRunContext, model: ModelRegistry) 
 
 def _run_uground_zero_shot(*, ctx: EvalRunContext, model: ModelRegistry) -> None:
     eval_captures = _select_eval_captures(ctx)
+    # Evict Florence (and any other heavy handle) to free MPS before loading
+    # UGround's ~4 GB of bf16 weights — both models can't coexist on a 9 GB MPS.
+    if v0_florence.release_florence():
+        ctx.log("evicted resident Florence handle to make room for UGround")
     ctx.update_progress(current_capture=None, current_step="loading uground (~4GB bf16 on MPS)")
     handle = v0_uground.load_uground(model.model_name or v0_uground.UGROUND_MODEL)
     ctx.log(f"uground loaded on device={handle.device}")

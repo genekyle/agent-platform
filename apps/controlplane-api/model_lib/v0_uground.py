@@ -83,6 +83,43 @@ _handle_lock = threading.Lock()
 _handle: Optional[UGroundHandle] = None
 
 
+def release_uground() -> bool:
+    """Tear down the cached UGround handle and free its MPS / CUDA memory.
+
+    Returns True if a handle was released. The Florence eval runner calls this
+    before loading its own weights, since both models can't coexist on a 9 GB
+    MPS budget.
+    """
+    global _handle
+    if _handle is None:
+        return False
+    with _handle_lock:
+        if _handle is None:
+            return False
+        try:
+            import gc
+            import torch
+            device = _handle.device
+            _handle.model = None
+            _handle.processor = None
+            _handle = None
+            gc.collect()
+            if device == "mps":
+                try:
+                    torch.mps.empty_cache()
+                except Exception:
+                    pass
+            elif device == "cuda":
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+            logger.info("released uground handle on %s", device)
+        except Exception:
+            _handle = None
+    return True
+
+
 def _resolve_device() -> str:
     import torch
     if torch.backends.mps.is_available():

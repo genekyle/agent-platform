@@ -43,6 +43,47 @@ _handle_lock = threading.Lock()
 _handle: Optional[FlorenceHandle] = None
 
 
+def release_florence() -> bool:
+    """Tear down the cached Florence handle and free its MPS / CUDA memory.
+
+    Returns True if a handle was released (i.e., something was freed).
+
+    This exists because the worker process can only fit one ~multi-GB vision
+    model on MPS at a time. Loading UGround on top of a resident Florence
+    overshoots the 9 GB MPS limit and crashes with "out of memory". The eval
+    runner for UGround calls this before loading its own weights, and vice
+    versa.
+    """
+    global _handle
+    if _handle is None:
+        return False
+    with _handle_lock:
+        if _handle is None:
+            return False
+        try:
+            import gc
+            import torch
+            device = _handle.device
+            _handle.model = None
+            _handle.processor = None
+            _handle = None
+            gc.collect()
+            if device == "mps":
+                try:
+                    torch.mps.empty_cache()
+                except Exception:
+                    pass
+            elif device == "cuda":
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+            logger.info("released florence handle on %s", device)
+        except Exception:
+            _handle = None
+    return True
+
+
 def _resolve_device() -> str:
     import torch
     if torch.backends.mps.is_available():
