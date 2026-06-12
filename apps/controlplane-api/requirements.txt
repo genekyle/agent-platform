@@ -16,3 +16,12 @@ transformers==4.49.0
 pillow>=10.0
 einops>=0.8
 timm>=1.0
+
+# Grounding cascade: Set-of-Marks + Claude Haiku as the catchall layer, with
+# Apple Vision OCR as a free local layer. See docs (grounding architecture pivot).
+# anthropic SDK calls Claude Haiku 4.5 (claude-haiku-4-5) for the SoM picker —
+# requires ANTHROPIC_API_KEY at runtime.
+anthropic>=0.109
+# Apple Vision OCR (macOS-only). Free, native, no API key. Optional on non-mac;
+# guard the import so Linux installs don't break.
+pyobjc-framework-Vision>=10.0 ; sys_platform == "darwin"
