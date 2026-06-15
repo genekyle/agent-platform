@@ -106,7 +106,9 @@
       "Bash(../../.venv/bin/python -m pytest select_stage/ -q)",
       "Bash(grep -rn 'import som_picker\\\\|import action_cache\\\\|^import selector\\\\|import selector$\\\\| selector\\\\b' --include='*.py' .)",
       "Bash(../../.venv/bin/python -c \"import main; print\\('main:app imports clean ✓'\\)\")",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(../../.venv/bin/python -m pytest tests/test_executor.py -q)",
+      "Bash(../../.venv/bin/python -c \"import app.executor.driver, app.executor.record_only, app.executor.minimum_jerk; print\\('executor package imports clean'\\)\")"
     ]
   }
 }

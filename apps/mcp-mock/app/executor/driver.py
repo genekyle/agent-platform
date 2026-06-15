@@ -1,0 +1,125 @@
+"""TrajectoryDriver interface + DirectDriver + driver factory.
+
+A driver receives an ActionRequest (intent + target, in SCREENSHOT pixels) and
+executes it against the live page over raw CDP. The screenshot→CSS conversion is
+the one correctness-critical bit: AX bboxes are device pixels (CSS × DPR), but
+CDP `Input.dispatchMouseEvent` wants CSS pixels — so we divide the target center
+by the device_scale_factor before dispatching.
+
+Reuses the CDP plumbing from the AX proposer (same endpoint, same session shape).
+"""
+
+from __future__ import annotations
+
+import logging
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+logger = logging.getLogger("mcp-mock.executor")
+
+
+@dataclass
+class ActionRequest:
+    """Selector → executor handoff. bbox is in SCREENSHOT pixels (as produced by
+    the AX proposer); device_scale_factor converts it to CSS px for CDP."""
+    action_id: str                      # click | type | select | scroll | submit | clear
+    target_bbox: dict[str, float]       # {x, y, width, height} screenshot px
+    backend_node_id: Optional[int] = None
+    value: Optional[str] = None
+    device_scale_factor: float = 1.0
+
+
+@dataclass
+class ExecResult:
+    ok: bool
+    driver: str
+    action_id: str
+    css_point: Optional[tuple[float, float]] = None
+    path_points: int = 0
+    detail: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+def target_css_point(bbox: dict[str, float], device_scale_factor: float = 1.0) -> tuple[float, float]:
+    """Center of the target bbox in CSS pixels (CDP input space). Pure/testable."""
+    dpr = device_scale_factor or 1.0
+    cx = (float(bbox.get("x", 0)) + float(bbox.get("width", 0)) / 2) / dpr
+    cy = (float(bbox.get("y", 0)) + float(bbox.get("height", 0)) / 2) / dpr
+    return (round(cx, 2), round(cy, 2))
+
+
+class TrajectoryDriver(ABC):
+    name = "base"
+
+    @abstractmethod
+    async def move_and_act(
+        self, *, browser_url: str, request: ActionRequest,
+        tab_id: Optional[str] = None, tab_url: Optional[str] = None,
+        start: Optional[tuple[float, float]] = None,
+    ) -> ExecResult: ...
+
+    async def _click_sequence(self, cdp, x: float, y: float, path: Optional[list[tuple[float, float]]] = None) -> None:
+        """Optional pre-move along `path` (CSS px), then a left click at (x,y)."""
+        for px, py in (path or []):
+            await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
+        await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+        await cdp.send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
+        await cdp.send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
+
+    async def _apply_value(self, cdp, request: ActionRequest) -> None:
+        """For type/select/clear actions, apply the value after focusing via click."""
+        if request.action_id in ("type", "select") and request.value:
+            await cdp.send("Input.insertText", {"text": request.value})
+        elif request.action_id == "clear":
+            # select-all + delete (focused field assumed)
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "modifiers": 2, "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "modifiers": 2, "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46})
+
+
+class DirectDriver(TrajectoryDriver):
+    """Center-click, no synthesized path — the robotic baseline. Use for tests /
+    when human-like motion isn't required. The min-jerk + diffusion drivers
+    subclass the same interface and only add a path before the click."""
+    name = "direct"
+
+    async def _path_to(self, x: float, y: float, start: Optional[tuple[float, float]]) -> Optional[list[tuple[float, float]]]:
+        return None  # DirectDriver teleports; subclasses override to synthesize a path
+
+    async def move_and_act(self, *, browser_url, request, tab_id=None, tab_url=None, start=None) -> ExecResult:
+        import websockets
+        from app.observer.ax_proposer import _CDPSession, _discover_target
+
+        x, y = target_css_point(request.target_bbox, request.device_scale_factor)
+        try:
+            target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
+            async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+                cdp = _CDPSession(ws)
+                path = await self._path_to(x, y, start)
+                await self._click_sequence(cdp, x, y, path)
+                await self._apply_value(cdp, request)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s execute failed: %s", self.name, exc)
+            return ExecResult(ok=False, driver=self.name, action_id=request.action_id, detail=str(exc))
+        logger.info("%s executed %s at css(%.1f,%.1f)", self.name, request.action_id, x, y)
+        return ExecResult(ok=True, driver=self.name, action_id=request.action_id, css_point=(x, y),
+                          path_points=0)
+
+
+def get_driver(name: Optional[str] = None) -> TrajectoryDriver:
+    """Factory. Default 'direct'; EXECUTOR_DRIVER env overrides. Min-jerk is Phase 6."""
+    import os
+    choice = (name or os.environ.get("EXECUTOR_DRIVER", "direct")).lower()
+    if choice == "record_only":
+        from .record_only import RecordOnlyDriver
+        return RecordOnlyDriver()
+    if choice == "minimum_jerk":
+        try:
+            from .minimum_jerk import MinimumJerkDriver
+            return MinimumJerkDriver()
+        except Exception:
+            logger.warning("minimum_jerk driver unavailable — falling back to direct")
+            return DirectDriver()
+    return DirectDriver()
