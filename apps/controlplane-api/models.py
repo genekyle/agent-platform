@@ -202,6 +202,12 @@ class TrainingSession(Base):
     goal_id: Mapped[str] = mapped_column(ForeignKey("goal_registry.goal_id"), index=True)
     task_id: Mapped[Optional[str]] = mapped_column(ForeignKey("task_registry.task_id"), nullable=True, index=True)
     capture_profile: Mapped[str] = mapped_column(String(100), default="viewport")
+    # Separates the catchall-training path from the workhorse product:
+    #   data_collection -> run the full proposer stack incl. the vision catchall,
+    #                      so every capture yields rich candidates to label.
+    #   production       -> cheapest-confident-first cascade (CDP-AX -> Haiku ->
+    #                      human); vision only fires as an AX-gap fallback.
+    purpose: Mapped[str] = mapped_column(String(30), default="data_collection", index=True)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     browser_session_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
     chrome_debug_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

@@ -227,6 +227,9 @@ class TrainingSessionCreate(BaseModel):
     domain_id: str
     scenario_id: str
     notes: Optional[str] = None
+    # "data_collection" (full proposer incl. vision catchall) or "production"
+    # (cheapest-first cascade, vision only on AX gaps). Defaults to data_collection.
+    purpose: str = "data_collection"
 
 
 class TrainingSessionRead(BaseModel):
@@ -237,6 +240,7 @@ class TrainingSessionRead(BaseModel):
     goal_id: str
     task_id: Optional[str] = None
     capture_profile: str
+    purpose: str = "data_collection"
     notes: Optional[str] = None
     browser_session_id: Optional[str] = None
     chrome_debug_port: Optional[int] = None

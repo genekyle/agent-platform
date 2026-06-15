@@ -12,6 +12,8 @@ from pydantic import BaseModel
 
 from app.artifacts import ARTIFACTS_DIR, SCREENSHOTS_DIR, write_observation_artifact
 from app.main import observe_live_capture
+from app.observer.ax_proposer import MODEL_VERSION as AX_MODEL_VERSION
+from app.observer.ax_proposer import AXProposerStats, propose_ax_candidates
 from app.observer.vision_proposer import MODEL_VERSION, propose_candidates
 
 
@@ -60,6 +62,40 @@ def _write_vision_sidecar(artifact_filename: str, screenshot_filename: str, prop
         "proposals": proposals,
     }
     path = _vision_sidecar_path(artifact_filename)
+    path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+    return path
+
+
+# --- CDP-AX proposer (the PRIMARY candidate source) -------------------------
+# Unlike the vision proposer (runs on the saved screenshot anytime), CDP-AX needs
+# the LIVE browser, so it runs at capture-time here and is persisted to a sidecar
+# the controlplane-api surfaces alongside the artifact.
+def _ax_sidecar_path(artifact_filename: str) -> Path:
+    return ARTIFACTS_DIR / f"{artifact_filename}.ax.json"
+
+
+def _device_scale_factor_from_artifact(artifact: dict) -> float:
+    acq = artifact.get("acquisition", {}) or {}
+    for src in (acq.get("training_metadata") or {}, acq.get("viewport_state") or {}):
+        value = src.get("device_scale_factor")
+        if value:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    return 1.0
+
+
+def _write_ax_sidecar(artifact_filename: str, proposals: list[dict], stats: AXProposerStats | None = None) -> Path:
+    sidecar = {
+        "version": AX_MODEL_VERSION,
+        "artifact_filename": artifact_filename,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "proposal_count": len(proposals),
+        "stats": stats.__dict__ if stats is not None else {},
+        "proposals": proposals,
+    }
+    path = _ax_sidecar_path(artifact_filename)
     path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
     return path
 
@@ -116,10 +152,34 @@ async def trigger_capture(body: CaptureRequest, background_tasks: BackgroundTask
     path = write_observation_artifact(artifact)
     candidate_count = len(artifact.get("ranked_candidates", []))
 
-    # NOTE: the vision proposer is NOT run here. It runs lazily when a capture is
-    # opened in the labeler (see /proposer/backfill), so captures nobody reviews
-    # never cost compute. This is the deliberate fail-safe gate.
-    return {"filename": path.name, "candidate_count": candidate_count}
+    # PRIMARY proposer: run CDP-AX now, while the browser is still live. Boxes are
+    # scaled to screenshot pixels via the capture's device_scale_factor and saved
+    # to an .ax.json sidecar. Best-effort — a failure must not fail the capture.
+    ax_candidate_count = 0
+    try:
+        ax_stats = AXProposerStats()
+        ax_candidates = await propose_ax_candidates(
+            browser_url=body.browser_url,
+            tab_id=body.tab_id,
+            tab_url=body.tab_url,
+            device_scale_factor=_device_scale_factor_from_artifact(artifact),
+            stats=ax_stats,
+        )
+        _write_ax_sidecar(path.name, ax_candidates, ax_stats)
+        ax_candidate_count = len(ax_candidates)
+        logger.info("CDP-AX capture-time: %s -> %d candidates (%dms)",
+                    path.name, ax_candidate_count, ax_stats.total_ms)
+    except Exception:
+        logger.exception("CDP-AX proposal failed for %s", path.name)
+
+    # NOTE: the vision proposer (OmniParser) is the parked super-fallback — NOT run
+    # here or on labeler-open. It only activates when AX yields nothing and we
+    # explicitly need it (not wired yet).
+    return {
+        "filename": path.name,
+        "candidate_count": candidate_count,
+        "ax_candidate_count": ax_candidate_count,
+    }
 
 
 @app.post("/proposer/predict")

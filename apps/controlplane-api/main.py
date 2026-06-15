@@ -576,6 +576,8 @@ def _migrate_schema() -> None:
         ("model_eval_run", "progress", "JSON"),
         ("model_eval_run", "cancel_requested", "BOOLEAN NOT NULL DEFAULT false"),
         ("model_eval_run", "resumed_from", "VARCHAR(64)"),
+        # training_sessions catchall-training vs workhorse split (v8)
+        ("training_sessions", "purpose", "VARCHAR(30) NOT NULL DEFAULT 'data_collection'"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -935,6 +937,22 @@ def get_system_status():
         "generated_at": utcnow().isoformat(),
         "overall_status": _overall_status_for_services(services),
         "services": services,
+    }
+
+
+@app.get("/api/usage/anthropic")
+def get_anthropic_usage():
+    """Self-logged Claude API usage + cost (token counts and dollar cost per
+    call). Authoritative org-wide numbers live in the Anthropic Console; this is
+    our context-tagged view (cost per purpose/day/model) for the flywheel."""
+    import anthropic_usage
+
+    return {
+        "generated_at": utcnow().isoformat(),
+        "key_configured": bool(anthropic_usage.settings_anthropic_key()),
+        "pricing": anthropic_usage.PRICING,
+        "budget": anthropic_usage.budget_status(),
+        **anthropic_usage.summarize(),
     }
 
 
@@ -1373,12 +1391,14 @@ def create_training_session(body: TrainingSessionCreate, db: Session = Depends(g
     if scenario.domain_id != body.domain_id:
         raise HTTPException(status_code=400, detail="Scenario is not allowed for the selected domain")
 
+    purpose = body.purpose if body.purpose in {"data_collection", "production"} else "data_collection"
     session = TrainingSession(
         domain_id=body.domain_id,
         scenario_id=body.scenario_id,
         goal_id=scenario.goal_id,
         task_id=scenario.task_id,
         capture_profile=scenario.capture_profile_override or (domain.capture_defaults or {}).get("profile", "viewport"),
+        purpose=purpose,
         notes=body.notes,
         status="draft",
     )
@@ -1807,27 +1827,120 @@ def get_observation(filename: str, db: Session = Depends(get_db)):
         meta["training_annotation"] = _training_annotation_from_capture(capture)
     data["meta"] = meta
 
-    # Vision-proposed candidates (OmniParser sidecar). Absent if the async
-    # backfill hasn't run yet — callers should render whatever's present
-    # without assuming the field exists.
-    vision_sidecar_path = traces_dir / f"{filename}.vision.json"
-    if vision_sidecar_path.exists():
+    # CDP-AX candidates (PRIMARY proposer) — written at capture-time while the
+    # browser was live. This is the main candidate source going forward.
+    ax_sidecar_path = traces_dir / f"{filename}.ax.json"
+    if ax_sidecar_path.exists():
         try:
-            sidecar = json.loads(vision_sidecar_path.read_text())
-            data["vision_candidates"] = sidecar.get("proposals", [])
-            data["vision_candidates_meta"] = {
-                "version": sidecar.get("version"),
-                "generated_at": sidecar.get("generated_at"),
-                "proposal_count": sidecar.get("proposal_count", 0),
-                "timing": sidecar.get("timing", {}),
+            ax_sidecar = json.loads(ax_sidecar_path.read_text())
+            data["ax_candidates"] = ax_sidecar.get("proposals", [])
+            data["ax_candidates_meta"] = {
+                "version": ax_sidecar.get("version"),
+                "generated_at": ax_sidecar.get("generated_at"),
+                "proposal_count": ax_sidecar.get("proposal_count", 0),
+                "stats": ax_sidecar.get("stats", {}),
             }
         except Exception:
-            # A malformed sidecar shouldn't break the whole GET — just skip it.
-            data["vision_candidates"] = []
+            data["ax_candidates"] = []
     else:
-        data["vision_candidates"] = []
+        data["ax_candidates"] = []
+
+    # Super-fallback slot (was OmniParser) — REMOVED from the runtime/labeler path
+    # 2026-06-14. OmniParser was the wrong fit; a better vision-native grounder will
+    # fill this slot ONLY when AX yields zero candidates (canvas/icon-only). Choice
+    # is TBD and parked until we actually hit that case. Returned empty so the labeler
+    # renders nothing for this source. (OmniParser code still backs the dropped
+    # two-stage EVAL baseline via mcp-mock /proposer/predict — that's separate.)
+    data["vision_candidates"] = []
 
     return data
+
+
+@app.post("/api/observations/{filename}/select")
+def select_element(filename: str, element_query: str, db: Session = Depends(get_db)):
+    """SELECT stage: run the inner-loop cascade (cache → Haiku SoM → escalate) to
+    ground `element_query` against this capture's CDP-AX candidates. Returns the
+    chosen candidate + which layer answered + cost, or an escalate result. Haiku
+    is budget-gated; over budget escalates to a human. Lets you try the select
+    stage against any captured page."""
+    from select_stage import selector
+    from select_stage.schema import candidates_from_ax
+
+    traces_dir = _artifacts_dir() / "observer-traces"
+    artifact_path = traces_dir / filename
+    if not artifact_path.exists():
+        raise HTTPException(status_code=404, detail="Observation not found")
+    artifact = json.loads(artifact_path.read_text())
+
+    ax_sidecar = traces_dir / f"{filename}.ax.json"
+    ax_candidates = []
+    if ax_sidecar.exists():
+        ax_candidates = json.loads(ax_sidecar.read_text()).get("proposals", [])
+
+    shots = (artifact.get("acquisition", {}) or {}).get("screenshots") or []
+    if not shots:
+        raise HTTPException(status_code=400, detail="Capture has no screenshot")
+    screenshot_path = shots[0].get("path") or (
+        _artifacts_dir() / "observer-screenshots" / shots[0].get("filename", "")
+    )
+    acq = artifact.get("acquisition", {}) or {}
+    url = (acq.get("page_identity", {}) or {}).get("url", "")
+    page_text = (acq.get("js_state", {}) or {}).get("body_text_preview", "") or ""
+    viewport = acq.get("viewport_state", {}) or acq.get("training_metadata", {}) or {}
+    dom_clickables = acq.get("actionable_elements", []) or []
+
+    result = selector.select(
+        url=url,
+        task_goal=element_query,
+        ax_candidates=ax_candidates,
+        screenshot_path=screenshot_path,
+        viewport=viewport,
+        page_text=page_text,
+        dom_clickables=dom_clickables,
+        meta={"filename": filename},
+    )
+    # Frozen 5-field contract + the resolved candidate (for convenience) + status.
+    resolved = next((c for c in candidates_from_ax(ax_candidates)
+                     if c.backend_node_id == result.target_backend_node_id), None)
+    return {
+        "status": result.status,
+        "action_id": result.action_id.value,
+        "target_backend_node_id": result.target_backend_node_id,
+        "confidence": result.confidence,
+        "needs_human": result.needs_human,
+        "reason_code": result.reason_code.value,
+        "layer": result.layer,
+        "cost_usd": result.cost_usd,
+        "fingerprint": result.fingerprint,
+        "candidate": ({"role": resolved.role, "name": resolved.name} if resolved else None),
+    }
+
+
+@app.post("/api/select/trajectory")
+def save_cursor_trajectory(payload: dict):
+    """Persist one recorded human cursor trajectory from the Movement Playground.
+    This grows the ground-truth corpus the diffusion input-model will train on."""
+    from select_stage import telemetry
+
+    n = telemetry.record_trajectory(payload)
+    return {"saved": True, "corpus_size": n}
+
+
+@app.get("/api/select/trajectories/count")
+def get_trajectory_count():
+    from select_stage import telemetry
+
+    return {"corpus_size": telemetry.trajectory_count()}
+
+
+@app.get("/api/select/telemetry")
+def get_select_telemetry():
+    """SELECT-stage flywheel metrics for the Lab dashboard — cache-hit rate,
+    escalation rate, cost-per-task, layer/reason mix, daily trend. Aggregated
+    from the same selection telemetry corpus the later local layers train on."""
+    from select_stage import telemetry
+
+    return {"generated_at": utcnow().isoformat(), **telemetry.summarize()}
 
 
 @app.post("/api/observations/{filename}/vision")

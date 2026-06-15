@@ -42,19 +42,6 @@ export function CaptureSection({
     () => scenarios.filter((scenario) => scenario.domain_id === sessionForm.domain_id),
     [scenarios, sessionForm.domain_id],
   );
-  const selectedScenario = useMemo(
-    () => activeScenarios.find((item) => item.scenario_id === sessionForm.scenario_id) ?? null,
-    [activeScenarios, sessionForm.scenario_id],
-  );
-  const selectedScenarioGoal = useMemo(
-    () => goals.find((goal) => goal.goal_id === selectedScenario?.goal_id) ?? null,
-    [goals, selectedScenario],
-  );
-  const selectedScenarioTask = useMemo(
-    () => tasks.find((task) => task.task_id === selectedScenario?.task_id) ?? null,
-    [tasks, selectedScenario],
-  );
-
   const selectedTab = useMemo(
     () => tabs.find((tab) => tab.id === selectedTabId),
     [tabs, selectedTabId],
@@ -178,6 +165,36 @@ export function CaptureSection({
                   })}
                 </div>
               )}
+
+              <div style={{ marginTop: 16 }}>
+                <div className="nav-label" style={{ marginBottom: 8 }}>Session Purpose</div>
+                {[
+                  {
+                    value: "data_collection",
+                    title: "Data collection",
+                    copy: "Full proposer incl. the vision catchall — label everything to train the catchall.",
+                  },
+                  {
+                    value: "production",
+                    title: "Workhorse / production",
+                    copy: "Cheapest-first cascade (CDP-AX → Haiku → human); vision only on AX gaps.",
+                  },
+                ].map((option) => {
+                  const active = (sessionForm.purpose ?? "data_collection") === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`section-nav-item ${active ? "active" : ""}`}
+                      style={{ width: "100%", textAlign: "left", marginBottom: 8 }}
+                      onClick={() => setSessionForm((current) => ({ ...current, purpose: option.value }))}
+                    >
+                      <span className="section-nav-label">{active ? "● " : "○ "}{option.title}</span>
+                      <span className="section-nav-subtitle">{option.copy}</span>
+                    </button>
+                  );
+                })}
+              </div>
 
               <textarea
                 className="form-input"

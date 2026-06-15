@@ -77,7 +77,7 @@ export function ObservationDetail({
   const [linkChoice, setLinkChoice] = useState({ type: "manual", candidateId: null, name: "", role: "button" });
   // Per-source visibility toggles for the screenshot overlay (does NOT hide from the
   // Candidates tab list or the link picker — those stay complete for labeling).
-  const [visibleSources, setVisibleSources] = useState({ observer: true, vision: true, manual: true });
+  const [visibleSources, setVisibleSources] = useState({ ax: true, observer: true, vision: true, manual: true });
   // Candidate the cursor is hovering in the link picker — highlighted on the screenshot
   // so the annotator can instantly see which box a row refers to (disambiguates same-label
   // candidates like two "input"s). Forced visible regardless of source toggles.
@@ -135,7 +135,7 @@ export function ObservationDetail({
     setDrawingRect(null);
     setPendingDraw(null);
     setLinkChoice({ type: "manual", candidateId: null, name: "", role: "button" });
-    setVisibleSources({ observer: true, vision: true, manual: true });
+    setVisibleSources({ ax: true, observer: true, vision: true, manual: true });
     setActiveStateField("observed_page_state");
     setNewPageStateName("");
     setAddingStateTarget(null);
@@ -150,6 +150,11 @@ export function ObservationDetail({
 
   const acquisition = selectedObs?.acquisition ?? {};
   const candidates = selectedObs?.ranked_candidates ?? [];
+  // CDP-AX candidates — the PRIMARY proposer (captured live, role + accessible
+  // name + bbox already in screenshot pixels). Empty on captures taken before AX
+  // was wired in. Rendered amber, solid (primary), vs vision's dashed cyan.
+  const axCandidates = selectedObs?.ax_candidates ?? [];
+  const axMeta = selectedObs?.ax_candidates_meta ?? null;
   // Vision-proposed candidates from OmniParser sidecar. Empty until the async
   // backfill writes them — the labeler handles that gracefully.
   const visionCandidates = selectedObs?.vision_candidates ?? [];
@@ -199,6 +204,10 @@ export function ObservationDetail({
   const approvedSelection = useMemo(() => {
     const approvedId = Object.keys(labels).find((id) => labels[id] === "approve") ?? null;
     if (approvedId) {
+      const ax = axCandidates.find((a) => a.candidate_id === approvedId);
+      if (ax) {
+        return { source: "ax", id: approvedId, label: ax.caption?.trim() || ax.role || approvedId };
+      }
       const obs = candidates.find((c) => c.candidate_id === approvedId);
       if (obs) {
         return { source: "observer", id: approvedId, label: obs.target?.label || obs.target?.tag || obs.element_id };
@@ -216,7 +225,7 @@ export function ObservationDetail({
     // A drawn box with no linked candidate (pure manual draw).
     if (bboxOverride) return { source: "drawn", id: null, label: "Drawn box (no element link)" };
     return null;
-  }, [labels, candidates, visionCandidates, manualCandidates, bboxOverride]);
+  }, [labels, axCandidates, candidates, visionCandidates, manualCandidates, bboxOverride]);
 
   const updateInteractionEdit = useCallback((field, value) => {
     setInteractionEdits?.((current) => ({
@@ -887,6 +896,14 @@ export function ObservationDetail({
                 <span className="dd-source-filters-label">Show on screenshot:</span>
                 <button
                   type="button"
+                  className={`dd-source-pill source-ax${visibleSources.ax ? " active" : ""}`}
+                  onClick={() => setVisibleSources((current) => ({ ...current, ax: !current.ax }))}
+                  title="CDP-AX candidates (amber) — the primary proposer"
+                >
+                  AX ({axCandidates.length})
+                </button>
+                <button
+                  type="button"
                   className={`dd-source-pill source-observer${visibleSources.observer ? " active" : ""}`}
                   onClick={() => setVisibleSources((current) => ({ ...current, observer: !current.observer }))}
                   title="Observer / DOM heuristic candidates (blue)"
@@ -995,6 +1012,30 @@ export function ObservationDetail({
                     onPointerUp={handleDrawPointerUp}
                     onPointerCancel={handleDrawPointerUp}
                   >
+                    {/* CDP-AX candidates — the PRIMARY proposer. Amber, solid (vs vision's dashed cyan). */}
+                    {visibleSources.ax && axCandidates.map((ax) => {
+                      if (!ax?.bbox) return null;
+                      const isApproved = labels[ax.candidate_id] === "approve";
+                      const isSelected = selectedCandidateId === ax.candidate_id;
+                      const stroke = isApproved ? "#16a34a" : "#f59e0b";
+                      return (
+                        <rect
+                          key={ax.candidate_id}
+                          x={ax.bbox.x}
+                          y={ax.bbox.y}
+                          width={ax.bbox.width}
+                          height={ax.bbox.height}
+                          fill={stroke}
+                          fillOpacity={isSelected ? 0.18 : 0.06}
+                          stroke={stroke}
+                          strokeWidth={isSelected ? 2.5 : 1.6}
+                          rx={3}
+                          style={{ cursor: drawMode ? "crosshair" : "pointer", pointerEvents: drawMode ? "none" : "auto" }}
+                          onClick={() => !drawMode && toggleApproveCandidate(ax.candidate_id, ax.bbox)}
+                        />
+                      );
+                    })}
+
                     {visibleSources.observer && candidates.map((candidate) => {
                       const bbox = resolveBbox(candidate, acquisition);
                       if (!bbox) return null;

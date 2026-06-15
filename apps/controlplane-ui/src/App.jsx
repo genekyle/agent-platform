@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import { ApiUsageSection } from "./components/controlplane/ApiUsageSection";
 import { ChatSection } from "./components/controlplane/ChatSection";
 import { CONTROL_PLANE_NAV, DEFAULT_SECTION_VIEW } from "./components/controlplane/navigation";
+import { LabSection } from "./components/controlplane/LabSection";
 import { DomainsSection } from "./components/controlplane/DomainsSection";
 import { HomeSection } from "./components/controlplane/HomeSection";
 import { ModelsSection } from "./components/controlplane/ModelsSection";
@@ -12,6 +14,15 @@ import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBb
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 
 const API = import.meta.env.VITE_API_BASE_URL;
+
+// The OmniParser/vision proposer is the CATCHALL, parked in the back for now.
+// In the locked AX + Haiku architecture, CDP-AX is the primary candidate source
+// and vision is only a fallback for AX gaps (canvas/icon-only) — and the heavier
+// vision-native model is the catchall's catchall. Until the AX-gap + training
+// path is wired, do NOT auto-run vision on every capture-open (it silently burns
+// compute). The endpoints + module stay available; this just unwires the
+// active path. Flip true (or drive from a per-session mode) to re-enable.
+const VISION_CATCHALL_ENABLED = false;
 
 const EMPTY_INTERACTION_EDITS = {
   element_query: "",
@@ -34,6 +45,7 @@ export default function App() {
 
   const [health, setHealth] = useState({ loading: true, ok: false, error: null });
   const [systemStatus, setSystemStatus] = useState({ loading: false, data: null, error: null });
+  const [usage, setUsage] = useState({ loading: false, data: null, error: null });
   const [runs, setRuns] = useState({ loading: true, data: [], error: null });
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [runSearch, setRunSearch] = useState("");
@@ -48,6 +60,7 @@ export default function App() {
     domain_id: "",
     scenario_id: "",
     notes: "",
+    purpose: "data_collection",
   });
   const [sessionFormError, setSessionFormError] = useState(null);
 
@@ -81,7 +94,7 @@ export default function App() {
   const currentNav = CONTROL_PLANE_NAV[activePrimaryView];
   const activeSectionId = activeSecondaryViewByPrimary[activePrimaryView] ?? currentNav.sections[0]?.id;
   const activeSection = currentNav.sections.find((section) => section.id === activeSectionId) ?? currentNav.sections[0];
-  const canEnterSecondary = ["training", "system", "workers", "domains", "models"].includes(activePrimaryView);
+  const canEnterSecondary = ["training", "system", "lab"].includes(activePrimaryView);
   const selectedTrainingSession = useMemo(
     () => sessions.find((session) => session.id === selectedTrainingSessionId) ?? null,
     [sessions, selectedTrainingSessionId],
@@ -92,10 +105,6 @@ export default function App() {
     ?? selectedObs?.metadata?.domain_id
     ?? selectedTrainingSession?.domain_id
     ?? null;
-  const selectedObservationDomain = useMemo(
-    () => trainingRegistry.domains.find((domain) => domain.domain_id === selectedObservationDomainId) ?? null,
-    [trainingRegistry.domains, selectedObservationDomainId],
-  );
   const selectedObservationScenarioId = selectedObservationAnnotation?.scenario_id
     ?? selectedTrainingSession?.scenario_id
     ?? null;
@@ -141,7 +150,7 @@ export default function App() {
 
   const openPrimaryView = useCallback((view) => {
     setActivePrimaryView(view);
-    if (view === "training" || view === "system" || view === "workers" || view === "domains" || view === "models") {
+    if (view === "training" || view === "system" || view === "lab") {
       setSidebarLevel("secondary");
       return;
     }
@@ -192,6 +201,18 @@ export default function App() {
     } catch (error) {
       setSystemStatus((current) => ({ ...current, loading: false, error: error.message }));
       return null;
+    }
+  }, []);
+
+  const loadUsage = useCallback(async () => {
+    setUsage((current) => ({ ...current, loading: true, error: null }));
+    try {
+      const response = await fetch(`${API}/api/usage/anthropic`);
+      if (!response.ok) throw new Error(`Usage failed: ${response.status}`);
+      const payload = await response.json();
+      setUsage({ loading: false, data: payload, error: null });
+    } catch (error) {
+      setUsage({ loading: false, data: null, error: error.message });
     }
   }, []);
 
@@ -664,6 +685,7 @@ export default function App() {
           domain_id: sessionForm.domain_id,
           scenario_id: sessionForm.scenario_id,
           notes: sessionForm.notes || null,
+          purpose: sessionForm.purpose || "data_collection",
         }),
       });
       let payload = null;
@@ -858,13 +880,17 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
+    if (activePrimaryView === "system" && activeSectionId === "api-usage") {
+      loadUsage();
+      return undefined;
+    }
     if (activePrimaryView === "system") {
       loadSystemStatus();
       const pollTimer = setInterval(() => loadSystemStatus(), 15000);
       return () => clearInterval(pollTimer);
     }
     return undefined;
-  }, [activePrimaryView, loadSystemStatus]);
+  }, [activePrimaryView, activeSectionId, loadSystemStatus, loadUsage]);
 
   useEffect(() => {
     if (activePrimaryView === "training" || activePrimaryView === "domains") {
@@ -898,6 +924,7 @@ export default function App() {
     && (selectedObs.acquisition?.screenshots?.length || selectedObs.acquisition?.screenshot));
   const selectedHasVisionSidecar = Boolean(selectedObs?.vision_candidates_meta);
   useEffect(() => {
+    if (!VISION_CATCHALL_ENABLED) return;  // catchall parked in the back — see flag note above
     if (!selectedObsFilename || !selectedHasScreenshot || selectedHasVisionSidecar) return;
     if (visionRequestedRef.current.has(selectedObsFilename)) return;
     visionRequestedRef.current.add(selectedObsFilename);
@@ -941,10 +968,21 @@ export default function App() {
         openSystemView={openSystemView}
       />
     );
+  } else if (activePrimaryView === "system" && activeSectionId === "api-usage") {
+    sectionContent = <ApiUsageSection usage={usage} loadUsage={loadUsage} />;
   } else if (activePrimaryView === "system") {
     sectionContent = <SystemSection section={activeSectionId} systemStatus={systemStatus} loadSystemStatus={loadSystemStatus} />;
   } else if (activePrimaryView === "training" && activeSectionId === "page-states") {
     sectionContent = <PageStatesSection registry={trainingRegistry} />;
+  } else if (activePrimaryView === "training" && activeSectionId === "domains") {
+    sectionContent = (
+      <DomainsSection
+        registry={trainingRegistry}
+        registryStatus={registryStatus}
+        saveRegistryItem={saveRegistryItem}
+        archiveRegistryItem={archiveRegistryItem}
+      />
+    );
   } else if (activePrimaryView === "training") {
     sectionContent = (
       <TrainingSection
@@ -1043,6 +1081,14 @@ export default function App() {
     );
   } else if (activePrimaryView === "chat") {
     sectionContent = <ChatSection />;
+  } else if (activePrimaryView === "lab") {
+    // Lab merges the grounding-model pipeline (Models/Eval Runs/Run Detail) with
+    // the SELECT-stage flywheel + Movement Playground.
+    if (["models", "eval-runs", "run-detail"].includes(activeSectionId)) {
+      sectionContent = <ModelsSection section={activeSectionId === "models" ? "registry" : activeSectionId} />;
+    } else {
+      sectionContent = <LabSection section={activeSectionId} />;
+    }
   } else if (activePrimaryView === "models") {
     sectionContent = <ModelsSection section={activeSectionId} />;
   } else {

@@ -1,3 +1,6 @@
+// Top-level nav, slimmed to 4 keys: Home · Training · Lab · System.
+// Folded in: Domains → Training; Models → Lab. Hidden for now (components kept
+// in code, just off the menu): Workers, Chat — restore by re-adding entries here.
 export const CONTROL_PLANE_NAV = {
   home: {
     label: "Home",
@@ -19,7 +22,7 @@ export const CONTROL_PLANE_NAV = {
   training: {
     label: "Training",
     title: "Training",
-    subtitle: "Structured training sessions, capture, review, and model-prep for grounding data.",
+    subtitle: "Structured training sessions, capture, review, registry, and model-prep.",
     sections: [
       {
         id: "session-setup",
@@ -51,6 +54,25 @@ export const CONTROL_PLANE_NAV = {
         label: "Export / Model Prep",
         subtitle: "Export reviewed labels from the current artifact and stage model-prep work.",
       },
+      {
+        id: "domains",
+        label: "Domains",
+        subtitle: "Registry: domains, allowed goals, scoped tasks, and scenarios used by sessions.",
+      },
+    ],
+  },
+  lab: {
+    label: "Lab",
+    title: "Lab",
+    subtitle: "Input-model playground, the SELECT-stage flywheel, and grounding models.",
+    sections: [
+      { id: "playground", label: "Movement Playground", subtitle: "Record real cursor paths, compare against generated motion, and grow the input-model corpus." },
+      { id: "test", label: "Model Test", subtitle: "Run the live SELECT cascade against a capture + goal." },
+      { id: "eval", label: "Select Metrics", subtitle: "Flywheel metrics: cache-hit rate, escalation rate, cost-per-task." },
+      { id: "visualization", label: "Visualization", subtitle: "Cost/day, selections/day, layer mix, and reason codes over the corpus." },
+      { id: "models", label: "Models", subtitle: "Grounding models registered against each training target, with last-eval summary." },
+      { id: "eval-runs", label: "Eval Runs", subtitle: "Recent eval runs across all models, ordered by recency." },
+      { id: "run-detail", label: "Run Detail", subtitle: "Per-scenario metrics and a sample of predictions for one eval run." },
     ],
   },
   system: {
@@ -73,73 +95,10 @@ export const CONTROL_PLANE_NAV = {
         label: "Training Readiness",
         subtitle: "Gate model-training work on the dependencies that must be online first.",
       },
-    ],
-  },
-  workers: {
-    label: "Workers",
-    title: "Workers",
-    subtitle: "Operational execution surfaces for workers, runs, and raw observer debugging.",
-    sections: [
       {
-        id: "runs",
-        label: "Runs",
-        subtitle: "Monitor execution history, run state, and step progress.",
-      },
-      {
-        id: "worker-health",
-        label: "Worker Health",
-        subtitle: "Track worker status, seat assignments, and execution readiness.",
-      },
-      {
-        id: "worker-observations",
-        label: "Worker Observations",
-        subtitle: "Inspect raw observer artifacts used for worker debugging and grounding analysis.",
-      },
-    ],
-  },
-  chat: {
-    label: "Chat",
-    title: "Chat",
-    subtitle: "Command-center entry point for intent-driven task orchestration.",
-    sections: [
-      {
-        id: "command-center",
-        label: "Command Center",
-        subtitle: "Translate operator intent into future domain workflows and task plans.",
-      },
-    ],
-  },
-  domains: {
-    label: "Domains",
-    title: "Domains",
-    subtitle: "Configure domains, goals, tasks, and scenarios used by training sessions.",
-    sections: [
-      {
-        id: "registry",
-        label: "Registry",
-        subtitle: "CRUD configuration for training domains, allowed goals, scoped tasks, and scenarios.",
-      },
-    ],
-  },
-  models: {
-    label: "Models",
-    title: "Models",
-    subtitle: "Registered models for each training target, eval runs, and per-scenario metrics.",
-    sections: [
-      {
-        id: "registry",
-        label: "Registry",
-        subtitle: "Models registered against each training target with their last-eval summary.",
-      },
-      {
-        id: "eval-runs",
-        label: "Eval Runs",
-        subtitle: "Recent eval runs across all models, ordered by recency.",
-      },
-      {
-        id: "run-detail",
-        label: "Run Detail",
-        subtitle: "Per-scenario metrics and a sample of predictions for one selected eval run.",
+        id: "api-usage",
+        label: "API Usage",
+        subtitle: "Claude API spend and token usage, tagged by purpose, with links to the Anthropic Console.",
       },
     ],
   },

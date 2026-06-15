@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,8 +12,22 @@ class Settings(BaseSettings):
     training_chrome_profiles_dir: str = "/tmp/agent-platform-training-chrome"
     training_chrome_port_start: int = 9322
     redis_url: str = "redis://localhost:6379/0"
+    # Anthropic key for the Haiku SoM picker. Read from .env here so adding it
+    # never crashes Settings; extra="ignore" also tolerates other future .env keys.
+    anthropic_api_key: str = ""
+    # Hard cap on AUTONOMOUS (no-human-in-the-loop) Claude spend per rolling 7 days.
+    # When exceeded, the budget guard blocks further LLM calls and the loop must
+    # escalate to a human. Keeps testing/runtime cost bounded. Override in .env.
+    anthropic_weekly_budget_usd: float = 5.0
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
 
 settings = Settings()
+
+# Export the key into the process env so `anthropic.Anthropic()` (which reads
+# ANTHROPIC_API_KEY from os.environ) works server-side without extra plumbing.
+if settings.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+    os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key

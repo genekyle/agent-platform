@@ -1586,6 +1586,12 @@ input[type="checkbox"] {
   color: #6b21a8;
 }
 
+.dd-source-pill.source-ax.active {
+  background: #fffbeb;
+  border-color: #f59e0b;
+  color: #92400e;
+}
+
 .dd-vision-reload {
   margin-left: 4px;
 }
@@ -1642,6 +1648,7 @@ input[type="checkbox"] {
 .dd-selection-badge.source-observer { background: #2f6feb; }
 .dd-selection-badge.source-vision   { background: #06b6d4; }
 .dd-selection-badge.source-manual   { background: #a855f7; }
+.dd-selection-badge.source-ax        { background: #f59e0b; }
 .dd-selection-badge.source-drawn    { background: #facc15; color: #78350f; }
 .dd-selection-badge.source-unknown  { background: #6b7280; }
 
