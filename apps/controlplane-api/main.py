@@ -1916,6 +1916,31 @@ def select_element(filename: str, element_query: str, db: Session = Depends(get_
     }
 
 
+@app.post("/api/observations/verify")
+def verify_action(before: str, after: str, action_id: str = "click",
+                  target_backend_node_id: Optional[int] = None, expected_value: Optional[str] = None):
+    """ActionVerifierV1: did the action produce the predicted change between the
+    BEFORE and AFTER capture? Returns ok + observed delta + next_step (ok/retry/
+    escalate). Lets you test the verifier against any two captures."""
+    from select_stage import verifier
+
+    traces_dir = _artifacts_dir() / "observer-traces"
+
+    def _snap(fn: str):
+        ap = traces_dir / fn
+        if not ap.exists():
+            raise HTTPException(status_code=404, detail=f"Observation not found: {fn}")
+        art = json.loads(ap.read_text())
+        sc = traces_dir / f"{fn}.ax.json"
+        ax = json.loads(sc.read_text()).get("proposals", []) if sc.exists() else []
+        return verifier.snapshot_from_artifact(art, ax)
+
+    res = verifier.verify(action_id=action_id, before=_snap(before), after=_snap(after),
+                          target_backend_node_id=target_backend_node_id, expected_value=expected_value)
+    return {"ok": res.ok, "predicted": res.predicted, "observed": res.observed,
+            "reason": res.reason, "next_step": verifier.next_step(res, 0)}
+
+
 @app.post("/api/select/trajectory")
 def save_cursor_trajectory(payload: dict):
     """Persist one recorded human cursor trajectory from the Movement Playground.

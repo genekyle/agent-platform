@@ -108,7 +108,9 @@
       "Bash(../../.venv/bin/python -c \"import main; print\\('main:app imports clean ✓'\\)\")",
       "Bash(git commit *)",
       "Bash(../../.venv/bin/python -m pytest tests/test_executor.py -q)",
-      "Bash(../../.venv/bin/python -c \"import app.executor.driver, app.executor.record_only, app.executor.minimum_jerk; print\\('executor package imports clean'\\)\")"
+      "Bash(../../.venv/bin/python -c \"import app.executor.driver, app.executor.record_only, app.executor.minimum_jerk; print\\('executor package imports clean'\\)\")",
+      "Bash(../../.venv/bin/python -m pytest select_stage/test_verifier.py -q)",
+      "Bash(curl -s --max-time 10 -X POST 'http://localhost:8081/api/observations/verify?before=__TRACKED_VAR__&after=__TRACKED_VAR__&action_id=click')"
     ]
   }
 }
