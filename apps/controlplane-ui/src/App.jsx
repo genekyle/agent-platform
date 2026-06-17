@@ -10,6 +10,7 @@ import { ModelsSection } from "./components/controlplane/ModelsSection";
 import { SystemSection } from "./components/controlplane/SystemSection";
 import { TrainingSection } from "./components/controlplane/TrainingSection";
 import { PageStatesSection } from "./components/controlplane/PageStatesSection";
+import { CoverageSection } from "./components/controlplane/CoverageSection";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 
@@ -972,6 +973,8 @@ export default function App() {
     sectionContent = <ApiUsageSection usage={usage} loadUsage={loadUsage} />;
   } else if (activePrimaryView === "system") {
     sectionContent = <SystemSection section={activeSectionId} systemStatus={systemStatus} loadSystemStatus={loadSystemStatus} />;
+  } else if (activePrimaryView === "training" && activeSectionId === "coverage") {
+    sectionContent = <CoverageSection session={selectedTrainingSession} />;
   } else if (activePrimaryView === "training" && activeSectionId === "page-states") {
     sectionContent = <PageStatesSection registry={trainingRegistry} />;
   } else if (activePrimaryView === "training" && activeSectionId === "domains") {

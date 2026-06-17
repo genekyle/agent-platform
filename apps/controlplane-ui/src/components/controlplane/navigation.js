@@ -35,6 +35,11 @@ export const CONTROL_PLANE_NAV = {
         subtitle: "Capture only from the active training session Chrome instance.",
       },
       {
+        id: "coverage",
+        label: "Coverage",
+        subtitle: "Per-page-state capture coverage for the active session — drive to the gaps.",
+      },
+      {
         id: "dataset-browser",
         label: "Dataset Browser",
         subtitle: "Browse captured artifacts, curate metadata, and select records for review.",
