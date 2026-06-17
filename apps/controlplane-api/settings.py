@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     # When exceeded, the budget guard blocks further LLM calls and the loop must
     # escalate to a human. Keeps testing/runtime cost bounded. Override in .env.
     anthropic_weekly_budget_usd: float = 5.0
+    # Test-account credentials for capturing logged-in states, read from the
+    # GITIGNORED .env only. NEVER hardcode a real value here and NEVER log these —
+    # see _login_secrets(). Use a throwaway/test account, not a primary one.
+    fb_username: str = ""
+    fb_password: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"

@@ -14,7 +14,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from db import Base, engine, get_db
@@ -1206,6 +1206,82 @@ class PageStateUpdate(BaseModel):
     status: Optional[str] = None
 
 
+@app.get("/api/training/coverage")
+def training_coverage(
+    domain_id: Optional[str] = None,
+    goal_id: Optional[str] = None,
+    scenario_id: Optional[str] = None,
+    target_per_state: int = 5,
+    db: Session = Depends(get_db),
+):
+    """Capture-coverage matrix for a campaign: for every page-state RELEVANT to the
+    given domain/goal/scenario, how many captures are tagged with it. This is the
+    navigation aid for data collection — it turns "what should I capture next?" into
+    "drive to the ⚠️ gap rows", and surfaces the per-class cap so you don't
+    over-collect one state.
+
+    `target_per_state` is the soft cap per class (default 5): below it = gap,
+    at/above = covered, well above = over-collected (diversity better spent on a new
+    state/domain). Counts come from `TrainingCapture.observed_page_state`, so a
+    capture only counts once it's been page-state tagged (Review/Label or PATCH)."""
+    states = db.scalars(
+        select(PageStateRegistry).where(PageStateRegistry.status == "active")
+    ).all()
+    context = any((domain_id, goal_id, scenario_id))
+
+    def relevant(s: PageStateRegistry) -> bool:
+        if not context:
+            return True
+        if s.scope == "global":
+            return True
+        if s.scope == "domain":
+            return domain_id is not None and s.domain_id == domain_id
+        if s.scope == "goal":
+            return goal_id is not None and s.goal_id == goal_id
+        if s.scope == "scenario":
+            return scenario_id is not None and s.scenario_id == scenario_id
+        return False
+
+    # One grouped count over all captures, then map onto the relevant states.
+    counts = dict(
+        db.execute(
+            select(TrainingCapture.observed_page_state, func.count())
+            .group_by(TrainingCapture.observed_page_state)
+        ).all()
+    )
+
+    rows = []
+    for s in states:
+        if not relevant(s):
+            continue
+        n = int(counts.get(s.state_id, 0) or 0)
+        status = "gap" if n == 0 else ("thin" if n < target_per_state else
+                                       ("over" if n > target_per_state * 3 else "covered"))
+        rows.append({
+            "state_id": s.state_id, "display_name": s.display_name,
+            "scope": s.scope, "category": s.category, "stage": s.stage,
+            "count": n, "target": target_per_state, "status": status,
+        })
+    rows.sort(key=lambda r: (r["status"] != "gap", r["scope"], r["category"], r["display_name"]))
+
+    tagged = sum(r["count"] for r in rows)
+    untagged = int(counts.get(None, 0) or 0)
+    covered_classes = sum(1 for r in rows if r["count"] >= 1)
+    return {
+        "generated_at": utcnow().isoformat(),
+        "target_per_state": target_per_state,
+        "filters": {"domain_id": domain_id, "goal_id": goal_id, "scenario_id": scenario_id},
+        "totals": {
+            "relevant_states": len(rows),
+            "covered_states": covered_classes,
+            "gap_states": sum(1 for r in rows if r["status"] == "gap"),
+            "tagged_captures": tagged,
+            "untagged_captures": untagged,
+        },
+        "states": rows,
+    }
+
+
 @app.get("/api/training/page-states")
 def list_page_states(
     scope: Optional[str] = None,
@@ -1939,6 +2015,169 @@ def verify_action(before: str, after: str, action_id: str = "click",
                           target_backend_node_id=target_backend_node_id, expected_value=expected_value)
     return {"ok": res.ok, "predicted": res.predicted, "observed": res.observed,
             "reason": res.reason, "next_step": verifier.next_step(res, 0)}
+
+
+def _observation_from_capture(filename: str):
+    """Build a runtime `Observation` from a stored capture + its CDP-AX sidecar.
+
+    Returns `(observation, capture_goal)`. `capture_goal` is the goal recorded at
+    capture time (`task_context.goal`), used as the batch default. Raises 404 if the
+    capture file is missing. A capture with no `.ax.json` sidecar yields an empty
+    candidate list — the select stage will escalate (no_match), which is itself a
+    valid corpus row (it tells us the propose stage produced nothing to pick)."""
+    from runtime import Observation
+    from select_stage import verifier
+
+    traces_dir = _artifacts_dir() / "observer-traces"
+    artifact_path = traces_dir / filename
+    if not artifact_path.exists():
+        raise HTTPException(status_code=404, detail="Observation not found")
+    artifact = json.loads(artifact_path.read_text())
+
+    ax_sidecar = traces_dir / f"{filename}.ax.json"
+    ax_candidates = json.loads(ax_sidecar.read_text()).get("proposals", []) if ax_sidecar.exists() else []
+
+    acq = artifact.get("acquisition", {}) or {}
+    url = (acq.get("page_identity", {}) or {}).get("url", "")
+    page_text = (acq.get("js_state", {}) or {}).get("body_text_preview", "") or ""
+    viewport = acq.get("viewport_state", {}) or acq.get("training_metadata", {}) or {}
+    shots = acq.get("screenshots") or []
+    screenshot_path = (shots[0].get("path") if shots else "") or ""
+    capture_goal = (acq.get("task_context", {}) or {}).get("goal", "") or ""
+
+    observation = Observation(
+        url=url, page_text=page_text, ax_candidates=ax_candidates,
+        screenshot_path=screenshot_path, viewport=viewport,
+        dom_clickables=acq.get("actionable_elements", []) or [],
+        snapshot=verifier.snapshot_from_artifact(artifact, ax_candidates),
+    )
+    return observation, capture_goal
+
+
+@app.post("/api/runtime/run")
+def runtime_run(filename: str, task_goal: str, max_steps: int = 1):
+    """Run the per-step runtime loop (classify → propose → select → act → verify)
+    against a captured page, RECORD-ONLY. The default RecordOnlyActor logs the
+    decided intent and executes nothing — no cursor moves, no clicks — so this is
+    safe to run against any capture. Propose is backed by the capture's CDP-AX
+    sidecar (a single static observation), so a record-only run resolves one step:
+    classify the page, select a target, record the intent, then stop for a human.
+
+    This is the safe first wiring of the loop end-to-end. The live multi-step driver
+    (repeated captures + a real executor driver) is the next increment and is gated
+    behind explicit go-ahead — see PROJECT_STATUS."""
+    from dataclasses import asdict
+
+    from runtime import run_loop
+
+    observation, _ = _observation_from_capture(filename)
+
+    # Single static observation → record-only resolves exactly one step and stops.
+    result = run_loop(task_goal=task_goal, proposer=lambda: observation, max_steps=max_steps)
+    return {
+        "status": result.status.value,
+        "reason": result.reason,
+        "escalation_reason": result.escalation_reason,
+        "total_cost_usd": result.total_cost_usd,
+        "steps": [asdict(s) for s in result.steps],
+    }
+
+
+@app.post("/api/runtime/run_batch")
+def runtime_run_batch(only_with_sidecar: bool = True, force: bool = False, limit: int = 0):
+    """Replay every stored capture through the record-only loop to FILL THE CORPORA.
+
+    For each capture this runs classify → propose → select → (record) and appends a
+    `StepRecord` to `cache/loop_steps.jsonl` plus a row to `selection_telemetry.jsonl`
+    — no inputs are ever fired. This is the mechanism that turns accumulated captures
+    into training rows for the cheap local layers (L3/L4) that will displace Haiku.
+
+    Idempotent by design: each capture's state fingerprint is checked against the
+    fingerprints already in `loop_steps.jsonl`; a capture whose state was already
+    recorded is SKIPPED (status `skipped_duplicate`) unless `force=True`. Because the
+    SELECT cache is also seeded on the first confident pick, re-running the batch
+    costs ~$0 (cache hits) even when `force=True`.
+
+    Params:
+      * `only_with_sidecar` — skip captures lacking a `.ax.json` (no AX candidates →
+        nothing to select). True by default: those rows are just no_match noise.
+      * `force` — re-run even captures already represented in the corpus.
+      * `limit` — cap the number of captures processed (0 = all). Useful to stay
+        well inside the $5/week budget on the first warm-up run.
+
+    Per-capture `task_goal` comes from the capture's own `task_context.goal`."""
+    from dataclasses import asdict
+
+    from runtime import run_loop
+    from select_stage import fingerprint
+
+    traces_dir = _artifacts_dir() / "observer-traces"
+    if not traces_dir.exists():
+        return {"processed": 0, "skipped": 0, "captures": [], "total_cost_usd": 0.0}
+
+    def _is_capture(p: Path) -> bool:
+        n = p.name
+        return n.endswith(".json") and not any(
+            n.endswith(s) for s in (".ax.json", ".vision.json", ".meta.json")
+        )
+
+    captures = sorted(p.name for p in traces_dir.iterdir() if p.is_file() and _is_capture(p))
+
+    # Fingerprints already present in the corpus. `seen_fps` grows as we process so
+    # two captures of the same state in one batch don't both log; `corpus_fps` is the
+    # frozen pre-run set, so `force` can refresh cache/telemetry WITHOUT appending a
+    # duplicate trajectory row (we only log a state's first occurrence, ever).
+    seen_fps: set[str] = set()
+    steps_path = traces_dir.parent / "cache" / "loop_steps.jsonl"
+    if steps_path.exists():
+        for line in steps_path.read_text(encoding="utf-8").splitlines():
+            try:
+                seen_fps.add(json.loads(line).get("fingerprint", ""))
+            except Exception:
+                continue
+    corpus_fps = set(seen_fps)
+
+    results: list[dict] = []
+    processed = skipped = 0
+    total_cost = 0.0
+    for filename in captures:
+        if only_with_sidecar and not (traces_dir / f"{filename}.ax.json").exists():
+            skipped += 1
+            results.append({"filename": filename, "status": "skipped_no_sidecar"})
+            continue
+
+        observation, capture_goal = _observation_from_capture(filename)
+        fp = fingerprint.compute(
+            url=observation.url, viewport=observation.viewport,
+            candidates=observation.ax_candidates, task_goal=capture_goal,
+            dom_clickables=observation.dom_clickables,
+        )
+        if fp in seen_fps and not force:
+            skipped += 1
+            results.append({"filename": filename, "status": "skipped_duplicate",
+                            "fingerprint": fp, "task_goal": capture_goal})
+            continue
+
+        result = run_loop(task_goal=capture_goal, proposer=lambda o=observation: o,
+                          max_steps=1, log_corpus=fp not in corpus_fps)
+        seen_fps.add(fp)
+        corpus_fps.add(fp)
+        processed += 1
+        total_cost += result.total_cost_usd
+        step = result.steps[0] if result.steps else None
+        results.append({
+            "filename": filename, "task_goal": capture_goal,
+            "status": result.status.value, "escalation_reason": result.escalation_reason,
+            "cost_usd": result.total_cost_usd,
+            "step": asdict(step) if step else None,
+        })
+        if limit and processed >= limit:
+            break
+
+    return {
+        "processed": processed, "skipped": skipped,
+        "total_cost_usd": round(total_cost, 6), "captures": results,
+    }
 
 
 @app.post("/api/select/trajectory")
