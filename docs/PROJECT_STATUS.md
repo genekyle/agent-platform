@@ -92,6 +92,7 @@ design — we collect data first, train later. Here's the full model roster:
 
 | Corpus | File | Feeds |
 |---|---|---|
+| Loop steps | `cache/loop_steps.jsonl` | L4 selector, state_transition (per-step trajectory) |
 | Selection telemetry | `cache/selection_telemetry.jsonl` | tiny classifier (L3), micro-model (L4) |
 | Cursor trajectories | `cache/cursor_trajectories.jsonl` | diffusion input model |
 | Training captures + labels | `observer-traces/` + `.ax.json` + annotations | grounding, page_state_classifier |
@@ -127,9 +128,29 @@ retrain scheduler are still ahead.**
 
 ## What still needs help (remaining work)
 
-1. **Wire the runtime loop** — orchestrate the 5 stages end-to-end against a live
-   task (classify→propose→select→**act**→verify→repeat). The stages exist as units;
-   nothing drives them as a loop yet. _Start in `record_only` so no real clicks fire._
+1. ✅ **Runtime loop orchestrator wired (record-only)** — `runtime/loop.py` drives
+   classify→propose→select→act→verify→repeat as a pure, port-based engine
+   (`Proposer`/`Actor` injected, so it's unit-tested without a browser; 7 tests).
+   `RecordOnlyActor` is the default: it logs the decided intent and executes
+   nothing. Endpoint `POST /api/runtime/run` runs it against a real capture, safely.
+   Every step appends to a new corpus, `cache/loop_steps.jsonl` (feeds L4 / state-
+   transition). **Next increment:** the live multi-step driver — a `Proposer` that
+   re-captures each step + a real executor driver for autonomous action. Held pending
+   go-ahead (still record-only until then).
+   - ✅ **Batch corpus replay** — `POST /api/runtime/run_batch` replays every stored
+     capture through the record-only loop, filling `loop_steps.jsonl` +
+     `selection_telemetry.jsonl` with **no inputs fired**. Idempotent (skips states
+     whose fingerprint is already in the corpus); `force=True` refreshes cache/
+     telemetry at ~$0 (cache hits) without duplicating trajectory rows; `limit=N`
+     caps spend on a cold run. This is the mechanism that turns accumulated captures
+     into training rows for L3/L4.
+   - ⚠️ **Corpus can't be backfilled from history.** Select needs AX candidates, which
+     come only from a capture's `.ax.json` sidecar (live CDP at capture time). Of 175
+     captures, only **3** have a sidecar (the pipeline started emitting them
+     2026-06-15); the rest store the `get_accessibility_tree not found` stub and
+     cannot be re-proposed offline. So the corpus grows only from *new* captures that
+     carry a sidecar — `run_batch` over today's backlog yields ~3 rows. The data
+     faucet is the live-capture path; backfill is a dead end.
 2. **Fire real inputs** — DirectDriver can click the live browser; held pending go-ahead.
 3. **Build the trainers** — diffusion input model (#7), tiny classifier (L3),
    micro-model (L4), and the planned brain models (page_state/transition/outcome).
