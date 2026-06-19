@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # see _login_secrets(). Use a throwaway/test account, not a primary one.
     fb_username: str = ""
     fb_password: str = ""
+    indeed_username: str = ""
+    indeed_password: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
