@@ -2424,9 +2424,49 @@ def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
             break
 
     capture = db.scalar(select(TrainingCapture).where(TrainingCapture.artifact_filename == filename))
+
+    # Mission context + trajectory — a labeled pick is an EDGE in the state graph
+    # (from_state, mission) --action--> to_state, not an isolated node. Surface the
+    # intent the operator is labeling toward, and the prior/next captured states so
+    # they can see where this step came from and leads to.
+    context = trajectory = None
+    if capture is not None:
+        context = {
+            "domain_id": capture.domain_id, "goal_id": capture.goal_id,
+            "task_id": capture.task_id, "scenario_id": capture.scenario_id,
+            "element_query": capture.element_query, "action_type_hint": capture.action_type_hint,
+            "observed_page_state": capture.observed_page_state,
+            "post_action_state": capture.post_action_state, "notes": capture.notes,
+        }
+
+        def _thumb(cap: TrainingCapture):
+            refs = cap.screenshot_refs or []
+            return refs[0].get("filename") if refs and isinstance(refs[0], dict) else None
+
+        def _neighbor(cap: TrainingCapture):
+            return {
+                "filename": cap.artifact_filename, "url": cap.url,
+                "screenshot_filename": _thumb(cap),
+                "observed_page_state": cap.observed_page_state,
+                "captured_at": cap.captured_at.isoformat(),
+            }
+
+        session_caps = db.scalars(
+            select(TrainingCapture)
+            .where(TrainingCapture.training_session_id == capture.training_session_id)
+            .order_by(TrainingCapture.captured_at.asc())
+        ).all()
+        pos = next((i for i, c in enumerate(session_caps) if c.id == capture.id), None)
+        trajectory = {
+            "index": pos, "total": len(session_caps),
+            "prev": _neighbor(session_caps[pos - 1]) if pos and pos > 0 else None,
+            "next": _neighbor(session_caps[pos + 1]) if pos is not None and pos + 1 < len(session_caps) else None,
+        }
+
     return {
         "filename": filename, "fingerprint": fp[:12], "url": observation.url, "goal": goal,
         "screenshot_filename": screenshot_filename,
+        "context": context, "trajectory": trajectory,
         "candidates": [
             {"candidate_id": c.get("candidate_id"), "role": c.get("role"),
              "name": c.get("caption") or c.get("name") or "", "backend_node_id": c.get("backend_node_id"),

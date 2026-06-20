@@ -31,9 +31,13 @@ export function TrainingSpaceSection() {
   const [stats, setStats] = useState({ confirmed: 0, corrected: 0, none: 0 });
   const [imgDims, setImgDims] = useState(null);
   const [flash, setFlash] = useState(null);
+  const [pageStates, setPageStates] = useState([]);
+  const [fromState, setFromState] = useState("");
+  const [toState, setToState] = useState("");
 
   const items = queue?.items ?? [];
   const current = items[idx] ?? null;
+  const shotUrl = (fn) => (fn ? `${API}/api/observations/screenshots/${encodeURIComponent(fn)}` : null);
 
   const loadQueue = useCallback(async () => {
     setLoading(true); setError(null);
@@ -55,6 +59,11 @@ export function TrainingSpaceSection() {
     setItem(d);
     setSelectedId(d.suggestion?.candidate_id ?? d.candidates?.[0]?.candidate_id ?? null);
     setVerb(d.suggestion?.action_id && VERBS.includes(d.suggestion.action_id) ? d.suggestion.action_id : "click");
+    const ctx = d.context || {};
+    setFromState(ctx.observed_page_state || "");
+    setToState(ctx.post_action_state || d.trajectory?.next?.observed_page_state || "");
+    const qs = new URLSearchParams({ domain_id: ctx.domain_id || "", goal_id: ctx.goal_id || "", scenario_id: ctx.scenario_id || "" });
+    fetch(`${API}/api/training/page-states?${qs}`).then((x) => (x.ok ? x.json() : [])).then(setPageStates).catch(() => setPageStates([]));
   }, []);
 
   useEffect(() => { if (current) loadItem(current.filename); }, [current, loadItem]);
@@ -73,6 +82,8 @@ export function TrainingSpaceSection() {
         body: JSON.stringify({
           training_annotation: { positive_candidate_id: selectedId, rejected_candidate_ids: rejected, review_status: "reviewed" },
           action_type: verb,
+          observed_page_state: fromState || "",
+          post_action_state: toState || "",
         }),
       });
       if (!r.ok) throw new Error(`Save failed: ${r.status}`);
@@ -80,7 +91,7 @@ export function TrainingSpaceSection() {
       showFlash(isCorrection ? "Corrected" : "Confirmed", isCorrection ? C.amber : C.green);
       advance();
     } catch (e) { setError(e.message); } finally { setBusy(false); }
-  }, [item, selectedId, verb, busy, advance]);
+  }, [item, selectedId, verb, busy, advance, fromState, toState]);
 
   const markNone = useCallback(async () => {
     if (!item || busy) return;
@@ -180,6 +191,32 @@ export function TrainingSpaceSection() {
       ) : null}
 
       {!done && item ? (
+        <>
+        {/* mission band — what are we labeling toward */}
+        {item.context ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "9px 14px", background: C.blueSoft, borderRadius: 12, marginBottom: 12 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: C.indigo, textTransform: "uppercase", letterSpacing: 0.5 }}>Mission</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{prettify(item.context.goal_id) || item.goal || "—"}</span>
+            <span className="chip">{item.context.domain_id}</span>
+            {item.context.scenario_id ? <span className="chip muted">{item.context.scenario_id}</span> : null}
+            {item.context.task_id ? <span className="chip muted">{item.context.task_id}</span> : null}
+            {item.context.element_query ? (
+              <span style={{ fontSize: 12, color: C.muted, flex: 1, minWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                intent: “{item.context.element_query}”
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* trajectory — from → now → to (the edge in the state graph) */}
+        <div style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 14 }}>
+          <TrajNode label="came from" node={item.trajectory?.prev} shotUrl={shotUrl} />
+          <TrajArrow verb={verb} />
+          <TrajNode label="now · labeling" node={{ url: item.url, screenshot_filename: item.screenshot_filename, observed_page_state: fromState }} current shotUrl={shotUrl} />
+          <TrajArrow />
+          <TrajNode label="leads to" node={item.trajectory?.next} target shotUrl={shotUrl} />
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.55fr) minmax(300px,1fr)", gap: 18, alignItems: "start" }}>
           {/* screenshot stage */}
           <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
@@ -244,6 +281,15 @@ export function TrainingSpaceSection() {
               <Kbd>T</Kbd>
             </div>
 
+            {/* transition: this state → next state (the edge label) */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+              <span style={{ color: C.muted }}>From</span>
+              <StateSelect value={fromState} onChange={setFromState} options={pageStates} />
+              <span style={{ color: C.faint }}>→</span>
+              <span style={{ color: C.muted }}>To</span>
+              <StateSelect value={toState} onChange={setToState} options={pageStates} />
+            </div>
+
             {/* candidate list */}
             <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 360, overflowY: "auto", paddingRight: 2 }}>
               {(item.candidates ?? []).map((c, i) => {
@@ -290,12 +336,62 @@ export function TrainingSpaceSection() {
             </div>
           </div>
         </div>
+        </>
       ) : null}
 
       {!loading && items.length === 0 && !error && !done ? (
         <div className="empty-state">Queue empty — capture some states (with AX sidecars) first.</div>
       ) : null}
     </section>
+  );
+}
+
+function prettify(id) {
+  return id ? String(id).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()) : "";
+}
+
+// One node in the trajectory strip: a small thumbnail + the page-state + url.
+function TrajNode({ label, node, current, target, shotUrl }) {
+  const empty = !node;
+  const url = node?.url || "";
+  const state = node?.observed_page_state;
+  const thumb = shotUrl(node?.screenshot_filename);
+  const accent = current ? "#2f6feb" : target ? "#b45309" : "#94a3b8";
+  return (
+    <div style={{ flex: 1, minWidth: 0, border: `1px solid ${current ? accent : "#e5edf6"}`, borderRadius: 12, overflow: "hidden",
+      background: "#fff", boxShadow: current ? "0 0 0 3px rgba(47,111,235,0.12)" : "none", opacity: empty ? 0.55 : 1 }}>
+      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: accent, padding: "5px 8px 3px" }}>{label}</div>
+      <div style={{ height: 56, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        {empty ? <span style={{ fontSize: 11, color: "#9ca3af" }}>{target ? "— end —" : "— start —"}</span>
+          : thumb ? <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
+          : <span style={{ fontSize: 11, color: "#9ca3af" }}>no shot</span>}
+      </div>
+      <div style={{ padding: "5px 8px" }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: state ? "#24344d" : "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {state ? prettify(state) : "unlabeled state"}
+        </div>
+        <div style={{ fontSize: 10, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url.replace("https://", "") || "—"}</div>
+      </div>
+    </div>
+  );
+}
+
+function TrajArrow({ verb }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#9ca3af", minWidth: 34 }}>
+      {verb ? <span style={{ fontSize: 9, fontWeight: 600, color: "#6b7280" }}>{verb}</span> : null}
+      <span style={{ fontSize: 18, lineHeight: 1 }}>→</span>
+    </div>
+  );
+}
+
+function StateSelect({ value, onChange, options }) {
+  return (
+    <select value={value || ""} onChange={(e) => onChange(e.target.value)} className="form-select"
+      style={{ fontSize: 12, padding: "4px 6px", maxWidth: 150 }}>
+      <option value="">— unset —</option>
+      {options.map((s) => <option key={s.state_id} value={s.state_id}>{s.display_name}</option>)}
+    </select>
   );
 }
 
