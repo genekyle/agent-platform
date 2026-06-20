@@ -176,7 +176,6 @@ export function TrainingSpaceSection() {
   const sug = item?.suggestion;
   const acceptCount = Object.values(marks).filter((v) => v === "acceptable").length;
   const rejectCount = Object.values(marks).filter((v) => v === "rejected").length;
-  const isCorrection = item && goldenId !== sug?.candidate_id;
 
   return (
     <section className="panel" style={{ padding: 22 }}>
@@ -327,20 +326,28 @@ export function TrainingSpaceSection() {
               <StateSelect value={toState} onChange={setToState} options={pageStates} />
             </div>
 
-            {/* candidate list */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 320, overflowY: "auto", paddingRight: 2 }}>
+            {/* candidate list — tag each candidate's tier, then Save once */}
+            <div style={{ fontSize: 11, color: C.muted, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>Tag each candidate, then save:</span>
+              <span style={{ display: "inline-flex", gap: 8 }}>
+                <span style={{ color: C.blue, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
+                <span style={{ color: C.teal, fontWeight: 600 }}>{acceptCount} acc</span>
+                <span style={{ color: C.red, fontWeight: 600 }}>{rejectCount} rej</span>
+              </span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 300, overflowY: "auto", paddingRight: 2 }}>
               {(item.candidates ?? []).map((c, i) => {
-                const mk = markOf(c.candidate_id);
+                const id = c.candidate_id;
+                const mk = markOf(id);
                 const m = mk ? MARK[mk] : null;
-                const isCursor = c.candidate_id === cursorId;
-                const isSug = c.candidate_id === sug?.candidate_id;
+                const isCursor = id === cursorId;
+                const isSug = id === sug?.candidate_id;
                 return (
-                  <div key={c.candidate_id} onClick={() => { setCursorId(c.candidate_id); setGolden(c.candidate_id); }}
-                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, cursor: "pointer",
-                      background: m ? m.fill : "#fff",
-                      border: `1px solid ${m ? m.color : C.line}`,
-                      outline: isCursor ? `2px solid rgba(47,111,235,0.45)` : "none", outlineOffset: -1, transition: "background 120ms" }}>
-                    <span style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 5, background: isCursor ? C.blue : C.surface,
+                  <div key={id} onClick={() => setCursorId(id)}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 10, cursor: "pointer",
+                      background: m ? m.fill : "#fff", border: `1px solid ${m ? m.color : C.line}`,
+                      outline: isCursor ? `2px solid rgba(47,111,235,0.40)` : "none", outlineOffset: -1, transition: "background 120ms" }}>
+                    <span style={{ width: 17, height: 17, flexShrink: 0, borderRadius: 5, background: isCursor ? C.blue : C.surface,
                       color: isCursor ? "#fff" : C.faint, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       {i < 9 ? i + 1 : "·"}
                     </span>
@@ -348,23 +355,25 @@ export function TrainingSpaceSection() {
                     <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13,
                       color: C.ink, textDecoration: mk === "rejected" ? "line-through" : "none", opacity: mk === "rejected" ? 0.6 : 1 }}>
                       {c.name || <span style={{ color: C.faint }}>—</span>}
+                      {isSug ? <span title="model suggestion" style={{ color: C.amber, fontSize: 10, marginLeft: 6 }}>★sug</span> : null}
                     </span>
-                    {isSug ? <span title="model suggestion" style={{ color: C.amber, fontSize: 11 }}>sug</span> : null}
-                    {m ? <span title={m.label} style={{ color: m.color, fontWeight: 700 }}>{m.glyph}</span> : null}
+                    {/* explicit per-candidate tier toggles */}
+                    <div style={{ display: "inline-flex", gap: 3, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+                      <TierBtn active={mk === "golden"} color={C.blue} title="Golden (the preferred pick)" onClick={() => { setCursorId(id); setGolden(id); }}>G</TierBtn>
+                      <TierBtn active={mk === "acceptable"} color={C.teal} title="Acceptable alternate" onClick={() => { setCursorId(id); toggleMark(id, "acceptable"); }}>A</TierBtn>
+                      <TierBtn active={mk === "rejected"} color={C.red} title="Rejected (wrong)" onClick={() => { setCursorId(id); toggleMark(id, "rejected"); }}>X</TierBtn>
+                    </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* per-candidate tier hint for the cursored row */}
-            <div style={{ fontSize: 11, color: C.faint, display: "flex", gap: 12, justifyContent: "center" }}>
-              <span><Kbd>G</Kbd> golden</span>
-              <span style={{ color: C.teal }}><Kbd>A</Kbd> acceptable{acceptCount ? ` (${acceptCount})` : ""}</span>
-              <span style={{ color: C.red }}><Kbd>X</Kbd> reject{rejectCount ? ` (${rejectCount})` : ""}</span>
+            <div style={{ fontSize: 11, color: C.faint, textAlign: "center" }}>
+              click <b style={{ color: C.blue }}>G</b>/<b style={{ color: C.teal }}>A</b>/<b style={{ color: C.red }}>X</b> on any row · or cursor + <Kbd>G</Kbd><Kbd>A</Kbd><Kbd>X</Kbd> · tag as many as you want
             </div>
 
             <button className="primary-btn" onClick={commit} disabled={busy || !goldenId} style={{ width: "100%" }}>
-              {isCorrection ? "Save correction" : "Confirm"} &nbsp;<Kbd dark>↵</Kbd>
+              {goldenId ? `Save labels (${(goldenId ? 1 : 0) + acceptCount + rejectCount} marked)` : "Mark a golden pick first"} &nbsp;<Kbd dark>↵</Kbd>
             </button>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="ghost-btn" style={{ flex: 1 }} onClick={markNone} disabled={busy} title="No candidate is correct → flag for the vision layer">
@@ -444,6 +453,18 @@ function StateSelect({ value, onChange, options }) {
 function candName(item, id) {
   const c = (item.candidates ?? []).find((x) => x.candidate_id === id);
   return c ? `${c.role}: ${c.name || "—"}` : (id || "—");
+}
+
+// A small per-candidate tier toggle (G / A / X). Filled in its color when active.
+function TierBtn({ active, color, title, onClick, children }) {
+  return (
+    <button title={title} onClick={onClick}
+      style={{ width: 24, height: 24, borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer",
+        border: `1px solid ${active ? color : "#d4deeb"}`,
+        background: active ? color : "#fff", color: active ? "#fff" : "#94a3b8", lineHeight: 1, padding: 0 }}>
+      {children}
+    </button>
+  );
 }
 
 function Stat({ value, label, color }) {
