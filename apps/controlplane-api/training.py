@@ -105,15 +105,18 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
     # Keys the patch omits entirely are left untouched, preserving partial-update safety.
     merged.update(patch)
 
+    # Three label tiers per candidate: "approve" = the single golden pick (the preferred
+    # target), "acceptable" = also-correct-but-not-preferred (a state can have several),
+    # "reject" = clearly wrong. acceptable rides in candidate_labels (no extra column).
     labels = merged.get("candidate_labels") or {}
-    labels = {str(k): str(v) for k, v in labels.items() if v in {"approve", "reject"}}
+    labels = {str(k): str(v) for k, v in labels.items() if v in {"approve", "reject", "acceptable"}}
     positive_ids = [candidate_id for candidate_id, label in labels.items() if label == "approve"]
     positive_candidate_id = positive_ids[0] if positive_ids else merged.get("positive_candidate_id")
     if positive_candidate_id:
         labels = {
             candidate_id: ("approve" if candidate_id == positive_candidate_id else label)
             for candidate_id, label in labels.items()
-            if candidate_id == positive_candidate_id or label == "reject"
+            if candidate_id == positive_candidate_id or label in {"reject", "acceptable"}
         }
     rejected_ids = sorted(
         set(merged.get("rejected_candidate_ids") or []).union(

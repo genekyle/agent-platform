@@ -2477,6 +2477,7 @@ def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
         "golden": {
             "positive_candidate_id": capture.positive_candidate_id if capture else None,
             "review_status": capture.review_status if capture else None,
+            "candidate_labels": (capture.candidate_labels or {}) if capture else {},
         },
     }
 

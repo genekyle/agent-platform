@@ -8,22 +8,35 @@ const C = {
   blue: "#2f6feb", blueSoft: "#eef4fc", ink: "#24344d", indigo: "#1e3a8a",
   muted: "#6b7280", faint: "#9ca3af", line: "#e5edf6", surface: "#f1f5f9",
   amber: "#b45309", amberBg: "#fef6e7", amberLine: "#f5d9a8",
-  green: "#15803d", red: "#dc2626",
+  teal: "#0d9488", green: "#15803d", red: "#dc2626",
+};
+// candidate mark → visual
+const MARK = {
+  golden: { color: C.blue, glyph: "★", fill: "rgba(47,111,235,0.14)", label: "golden" },
+  acceptable: { color: C.teal, glyph: "✓", fill: "rgba(13,148,136,0.12)", label: "acceptable" },
+  rejected: { color: C.red, glyph: "✕", fill: "rgba(220,38,38,0.08)", label: "rejected" },
 };
 
 /**
- * Training Space — keyboard-driven AX confirm/correct.
+ * Training Space — keyboard-driven AX confirm/correct with three candidate tiers.
  *
- * Walks an active-learning queue (the model's weakest states first) and, for each,
- * shows the screenshot with candidate bboxes overlaid + the model's SUGGESTED pick
- * pre-lit. The operator CONFIRMS (Enter) or CORRECTS (pick another), writing a golden
- * `positive_candidate_id`. This is the ground-truth faucet for the L3/L4 models.
+ *  golden (approve)  one preferred target → positive_candidate_id
+ *  acceptable        also-correct-but-not-preferred (a state can have several)
+ *  rejected          clearly wrong (strengthens the negative signal)
+ *
+ * Plus mission context + a from→now→to trajectory, so every label is a full
+ * state-graph EDGE, not an isolated node.
+ *
+ *  ↑/↓ move cursor · 1-9 jump · G golden · A acceptable · X reject
+ *  Enter commit · N none→needs-vision · → skip · T verb
  */
 export function TrainingSpaceSection() {
   const [queue, setQueue] = useState(null);
   const [idx, setIdx] = useState(0);
   const [item, setItem] = useState(null);
-  const [selectedId, setSelectedId] = useState(null);
+  const [goldenId, setGoldenId] = useState(null);
+  const [cursorId, setCursorId] = useState(null);
+  const [marks, setMarks] = useState({});           // {candidate_id: "acceptable"|"rejected"}
   const [verb, setVerb] = useState("click");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -38,6 +51,7 @@ export function TrainingSpaceSection() {
   const items = queue?.items ?? [];
   const current = items[idx] ?? null;
   const shotUrl = (fn) => (fn ? `${API}/api/observations/screenshots/${encodeURIComponent(fn)}` : null);
+  const markOf = (id) => (id === goldenId ? "golden" : marks[id] || null);
 
   const loadQueue = useCallback(async () => {
     setLoading(true); setError(null);
@@ -57,7 +71,17 @@ export function TrainingSpaceSection() {
     if (!r.ok) { setError(`Load failed: ${r.status}`); return; }
     const d = await r.json();
     setItem(d);
-    setSelectedId(d.suggestion?.candidate_id ?? d.candidates?.[0]?.candidate_id ?? null);
+    // pre-load any existing labels; else default golden = the model's suggestion
+    const existing = d.golden?.candidate_labels || {};
+    let golden = d.golden?.positive_candidate_id || null;
+    const m = {};
+    Object.entries(existing).forEach(([id, lab]) => {
+      if (lab === "approve") golden = golden || id;
+      else if (lab === "acceptable") m[id] = "acceptable";
+      else if (lab === "reject") m[id] = "rejected";
+    });
+    if (!golden) golden = d.suggestion?.candidate_id ?? d.candidates?.[0]?.candidate_id ?? null;
+    setGoldenId(golden); setCursorId(golden); setMarks(m);
     setVerb(d.suggestion?.action_id && VERBS.includes(d.suggestion.action_id) ? d.suggestion.action_id : "click");
     const ctx = d.context || {};
     setFromState(ctx.observed_page_state || "");
@@ -71,19 +95,29 @@ export function TrainingSpaceSection() {
   const showFlash = (text, color) => { setFlash({ text, color }); setTimeout(() => setFlash(null), 750); };
   const advance = useCallback(() => setIdx((i) => Math.min(i + 1, items.length)), [items.length]);
 
+  // tier setters (mutually exclusive per candidate)
+  const setGolden = useCallback((id) => { setGoldenId(id); setMarks((m) => { const n = { ...m }; delete n[id]; return n; }); }, []);
+  const toggleMark = useCallback((id, kind) => {
+    setMarks((m) => { const n = { ...m }; if (n[id] === kind) delete n[id]; else n[id] = kind; return n; });
+    setGoldenId((g) => (g === id ? null : g));   // can't be golden and marked
+  }, []);
+
   const commit = useCallback(async () => {
-    if (!item || !selectedId || busy) return;
-    const isCorrection = selectedId !== item.suggestion?.candidate_id;
+    if (!item || !goldenId || busy) return;
+    const isCorrection = goldenId !== item.suggestion?.candidate_id;
+    const candidate_labels = { [goldenId]: "approve" };
+    const rejected = [];
+    Object.entries(marks).forEach(([id, kind]) => {
+      candidate_labels[id] = kind === "rejected" ? "reject" : "acceptable";
+      if (kind === "rejected") rejected.push(id);
+    });
     setBusy(true);
     try {
-      const rejected = item.suggestion?.candidate_id && isCorrection ? [item.suggestion.candidate_id] : [];
       const r = await fetch(`${API}/api/observations/${encodeURIComponent(item.filename)}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          training_annotation: { positive_candidate_id: selectedId, rejected_candidate_ids: rejected, review_status: "reviewed" },
-          action_type: verb,
-          observed_page_state: fromState || "",
-          post_action_state: toState || "",
+          training_annotation: { positive_candidate_id: goldenId, candidate_labels, rejected_candidate_ids: rejected, review_status: "reviewed" },
+          action_type: verb, observed_page_state: fromState || "", post_action_state: toState || "",
         }),
       });
       if (!r.ok) throw new Error(`Save failed: ${r.status}`);
@@ -91,7 +125,7 @@ export function TrainingSpaceSection() {
       showFlash(isCorrection ? "Corrected" : "Confirmed", isCorrection ? C.amber : C.green);
       advance();
     } catch (e) { setError(e.message); } finally { setBusy(false); }
-  }, [item, selectedId, verb, busy, advance, fromState, toState]);
+  }, [item, goldenId, marks, verb, busy, advance, fromState, toState]);
 
   const markNone = useCallback(async () => {
     if (!item || busy) return;
@@ -111,10 +145,13 @@ export function TrainingSpaceSection() {
     const onKey = (e) => {
       if (!item) return;
       const cands = item.candidates ?? [];
-      const pos = cands.findIndex((c) => c.candidate_id === selectedId);
-      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); setSelectedId(cands[Math.min(pos + 1, cands.length - 1)]?.candidate_id ?? selectedId); }
-      else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); setSelectedId(cands[Math.max(pos - 1, 0)]?.candidate_id ?? selectedId); }
-      else if (e.key >= "1" && e.key <= "9") { const n = Number(e.key) - 1; if (cands[n]) setSelectedId(cands[n].candidate_id); }
+      const pos = cands.findIndex((c) => c.candidate_id === cursorId);
+      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); setCursorId(cands[Math.min(pos + 1, cands.length - 1)]?.candidate_id ?? cursorId); }
+      else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); setCursorId(cands[Math.max(pos - 1, 0)]?.candidate_id ?? cursorId); }
+      else if (e.key >= "1" && e.key <= "9") { const n = Number(e.key) - 1; if (cands[n]) setCursorId(cands[n].candidate_id); }
+      else if (e.key === "g" || e.key === "G") { if (cursorId) setGolden(cursorId); }
+      else if (e.key === "a" || e.key === "A") { if (cursorId) toggleMark(cursorId, "acceptable"); }
+      else if (e.key === "x" || e.key === "X") { if (cursorId) toggleMark(cursorId, "rejected"); }
       else if (e.key === "Enter") { e.preventDefault(); commit(); }
       else if (e.key === "n" || e.key === "N") { markNone(); }
       else if (e.key === "ArrowRight" || e.key === "s") { advance(); }
@@ -122,11 +159,8 @@ export function TrainingSpaceSection() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [item, selectedId, commit, markNone, advance]);
+  }, [item, cursorId, commit, markNone, advance, setGolden, toggleMark]);
 
-  const screenshotUrl = item?.screenshot_filename
-    ? `${API}/api/observations/screenshots/${encodeURIComponent(item.screenshot_filename)}`
-    : null;
   const scaleBox = (bbox) => {
     if (!bbox || !imgDims) return null;
     const sx = imgDims.dispW / imgDims.natW, sy = imgDims.dispH / imgDims.natH;
@@ -140,7 +174,9 @@ export function TrainingSpaceSection() {
   const agreePct = stats.confirmed + stats.corrected > 0
     ? Math.round((100 * stats.confirmed) / (stats.confirmed + stats.corrected)) : null;
   const sug = item?.suggestion;
-  const isCorrection = item && selectedId !== sug?.candidate_id;
+  const acceptCount = Object.values(marks).filter((v) => v === "acceptable").length;
+  const rejectCount = Object.values(marks).filter((v) => v === "rejected").length;
+  const isCorrection = item && goldenId !== sug?.candidate_id;
 
   return (
     <section className="panel" style={{ padding: 22 }}>
@@ -148,8 +184,8 @@ export function TrainingSpaceSection() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 18 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 20, color: C.ink }}>Training Space</h2>
-          <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 520 }}>
-            Confirm or correct the model's pick. Your golden labels are the ground truth the cheap models train on.
+          <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 540 }}>
+            Mark a <b style={{ color: C.blue }}>golden</b> pick, plus any <b style={{ color: C.teal }}>acceptable</b> alternates and <b style={{ color: C.red }}>rejected</b> ones. Your labels are the ground truth the cheap models train on.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -162,7 +198,7 @@ export function TrainingSpaceSection() {
       </div>
 
       {/* progress */}
-      <div style={{ marginBottom: 18 }}>
+      <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12, color: C.muted }}>
           <span>{labeled} labeled this session{totalQ ? ` · ${Math.max(0, totalQ - labeled)} left in queue` : ""}</span>
           {current ? (
@@ -192,7 +228,7 @@ export function TrainingSpaceSection() {
 
       {!done && item ? (
         <>
-        {/* mission band — what are we labeling toward */}
+        {/* mission band */}
         {item.context ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "9px 14px", background: C.blueSoft, borderRadius: 12, marginBottom: 12 }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: C.indigo, textTransform: "uppercase", letterSpacing: 0.5 }}>Mission</span>
@@ -208,7 +244,7 @@ export function TrainingSpaceSection() {
           </div>
         ) : null}
 
-        {/* trajectory — from → now → to (the edge in the state graph) */}
+        {/* trajectory */}
         <div style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 14 }}>
           <TrajNode label="came from" node={item.trajectory?.prev} shotUrl={shotUrl} />
           <TrajArrow verb={verb} />
@@ -217,32 +253,34 @@ export function TrainingSpaceSection() {
           <TrajNode label="leads to" node={item.trajectory?.next} target shotUrl={shotUrl} />
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.55fr) minmax(300px,1fr)", gap: 18, alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.55fr) minmax(320px,1fr)", gap: 18, alignItems: "start" }}>
           {/* screenshot stage */}
           <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
             background: C.surface, border: `1px solid ${C.line}`, borderRadius: 16, padding: 14, minHeight: 420 }}>
-            {screenshotUrl ? (
+            {shotUrl(item.screenshot_filename) ? (
               <div style={{ position: "relative", display: "inline-block", lineHeight: 0, borderRadius: 8, overflow: "hidden", boxShadow: "0 4px 16px rgba(15,23,42,0.10)" }}>
-                <img src={screenshotUrl} alt="capture" style={{ maxHeight: 560, maxWidth: "100%", width: "auto", height: "auto", display: "block" }}
+                <img src={shotUrl(item.screenshot_filename)} alt="capture" style={{ maxHeight: 560, maxWidth: "100%", width: "auto", height: "auto", display: "block" }}
                   onLoad={(e) => setImgDims({ natW: e.currentTarget.naturalWidth, natH: e.currentTarget.naturalHeight, dispW: e.currentTarget.clientWidth, dispH: e.currentTarget.clientHeight })} />
                 {imgDims && (item.candidates ?? []).map((c) => {
                   const box = scaleBox(c.bbox); if (!box) return null;
-                  const isSel = c.candidate_id === selectedId;
-                  const isSug = c.candidate_id === sug?.candidate_id;
-                  const color = isSel ? C.blue : isSug ? C.amber : "rgba(99,102,241,0.4)";
+                  const mk = markOf(c.candidate_id);
+                  const isCursor = c.candidate_id === cursorId;
+                  const isSug = !mk && c.candidate_id === sug?.candidate_id;
+                  const m = mk ? MARK[mk] : null;
+                  const color = m ? m.color : isSug ? C.amber : "rgba(99,102,241,0.4)";
                   return (
-                    <div key={c.candidate_id} onClick={() => setSelectedId(c.candidate_id)} title={`${c.role}: ${c.name}`}
+                    <div key={c.candidate_id} onClick={() => { setCursorId(c.candidate_id); setGolden(c.candidate_id); }} title={`${c.role}: ${c.name}`}
                       style={{ position: "absolute", ...box, border: `2px solid ${color}`,
-                        background: isSel ? "rgba(47,111,235,0.16)" : "transparent",
-                        borderRadius: 4, cursor: "pointer", zIndex: isSel ? 3 : isSug ? 2 : 1,
-                        boxShadow: isSel ? `0 0 0 3px rgba(47,111,235,0.25)` : "none", transition: "background 120ms" }} />
+                        background: m ? m.fill : "transparent", borderRadius: 4, cursor: "pointer",
+                        zIndex: mk ? 3 : isSug ? 2 : 1,
+                        boxShadow: isCursor ? `0 0 0 3px rgba(47,111,235,0.25)` : "none", transition: "background 120ms" }} />
                   );
                 })}
               </div>
             ) : <div style={{ color: C.muted, fontSize: 13 }}>No screenshot for this capture.</div>}
             {flash ? (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 16,
-                background: "rgba(255,255,255,0.6)", backdropFilter: "blur(1px)", pointerEvents: "none" }}>
+                background: "rgba(255,255,255,0.6)", pointerEvents: "none" }}>
                 <span style={{ fontSize: 22, fontWeight: 700, color: flash.color, background: "#fff", padding: "10px 20px", borderRadius: 999, boxShadow: "0 6px 20px rgba(15,23,42,0.15)" }}>
                   {flash.text} ✓
                 </span>
@@ -252,7 +290,6 @@ export function TrainingSpaceSection() {
 
           {/* control column */}
           <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-            {/* suggestion callout */}
             {sug?.candidate_id ? (
               <div style={{ padding: "10px 12px", borderRadius: 12, background: C.amberBg, border: `1px solid ${C.amberLine}` }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: C.amber, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 3 }}>★ Model suggests</div>
@@ -281,7 +318,7 @@ export function TrainingSpaceSection() {
               <Kbd>T</Kbd>
             </div>
 
-            {/* transition: this state → next state (the edge label) */}
+            {/* transition */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
               <span style={{ color: C.muted }}>From</span>
               <StateSelect value={fromState} onChange={setFromState} options={pageStates} />
@@ -291,32 +328,42 @@ export function TrainingSpaceSection() {
             </div>
 
             {/* candidate list */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 360, overflowY: "auto", paddingRight: 2 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 320, overflowY: "auto", paddingRight: 2 }}>
               {(item.candidates ?? []).map((c, i) => {
-                const isSel = c.candidate_id === selectedId;
+                const mk = markOf(c.candidate_id);
+                const m = mk ? MARK[mk] : null;
+                const isCursor = c.candidate_id === cursorId;
                 const isSug = c.candidate_id === sug?.candidate_id;
                 return (
-                  <div key={c.candidate_id} onClick={() => setSelectedId(c.candidate_id)}
+                  <div key={c.candidate_id} onClick={() => { setCursorId(c.candidate_id); setGolden(c.candidate_id); }}
                     style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, cursor: "pointer",
-                      background: isSel ? "rgba(47,111,235,0.10)" : "#fff",
-                      border: `1px solid ${isSel ? C.blue : C.line}`, transition: "background 120ms" }}>
-                    <span style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 5, background: isSel ? C.blue : C.surface,
-                      color: isSel ? "#fff" : C.faint, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      background: m ? m.fill : "#fff",
+                      border: `1px solid ${m ? m.color : C.line}`,
+                      outline: isCursor ? `2px solid rgba(47,111,235,0.45)` : "none", outlineOffset: -1, transition: "background 120ms" }}>
+                    <span style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 5, background: isCursor ? C.blue : C.surface,
+                      color: isCursor ? "#fff" : C.faint, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       {i < 9 ? i + 1 : "·"}
                     </span>
                     <span className="chip muted" style={{ flexShrink: 0 }}>{c.role}</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: C.ink }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13,
+                      color: C.ink, textDecoration: mk === "rejected" ? "line-through" : "none", opacity: mk === "rejected" ? 0.6 : 1 }}>
                       {c.name || <span style={{ color: C.faint }}>—</span>}
                     </span>
-                    {isSug ? <span title="model suggestion" style={{ color: C.amber }}>★</span> : null}
-                    {isSel ? <span style={{ color: C.blue, fontSize: 12 }}>●</span> : null}
+                    {isSug ? <span title="model suggestion" style={{ color: C.amber, fontSize: 11 }}>sug</span> : null}
+                    {m ? <span title={m.label} style={{ color: m.color, fontWeight: 700 }}>{m.glyph}</span> : null}
                   </div>
                 );
               })}
             </div>
 
-            {/* actions */}
-            <button className="primary-btn" onClick={commit} disabled={busy || !selectedId} style={{ width: "100%" }}>
+            {/* per-candidate tier hint for the cursored row */}
+            <div style={{ fontSize: 11, color: C.faint, display: "flex", gap: 12, justifyContent: "center" }}>
+              <span><Kbd>G</Kbd> golden</span>
+              <span style={{ color: C.teal }}><Kbd>A</Kbd> acceptable{acceptCount ? ` (${acceptCount})` : ""}</span>
+              <span style={{ color: C.red }}><Kbd>X</Kbd> reject{rejectCount ? ` (${rejectCount})` : ""}</span>
+            </div>
+
+            <button className="primary-btn" onClick={commit} disabled={busy || !goldenId} style={{ width: "100%" }}>
               {isCorrection ? "Save correction" : "Confirm"} &nbsp;<Kbd dark>↵</Kbd>
             </button>
             <div style={{ display: "flex", gap: 8 }}>
@@ -327,7 +374,7 @@ export function TrainingSpaceSection() {
                 Skip&nbsp;<Kbd>→</Kbd>
               </button>
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", fontSize: 11, color: C.faint, marginTop: 2 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", fontSize: 11, color: C.faint }}>
               <span><Kbd>↑</Kbd><Kbd>↓</Kbd> move</span>
               <span><Kbd>1</Kbd>–<Kbd>9</Kbd> jump</span>
               <span><Kbd>↵</Kbd> commit</span>
@@ -350,7 +397,6 @@ function prettify(id) {
   return id ? String(id).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()) : "";
 }
 
-// One node in the trajectory strip: a small thumbnail + the page-state + url.
 function TrajNode({ label, node, current, target, shotUrl }) {
   const empty = !node;
   const url = node?.url || "";
