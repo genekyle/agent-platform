@@ -2180,6 +2180,347 @@ def runtime_run_batch(only_with_sidecar: bool = True, force: bool = False, limit
     }
 
 
+@app.post("/api/runtime/verify_replay")
+def runtime_verify_replay(training_session_id: int, db: Session = Depends(get_db)):
+    """Replay-verify a session's flow WITHOUT firing any input.
+
+    The verifier is a pure before/after function. Since a capture burst records the
+    real flow as consecutive page-states, we pair each capture with the next
+    (time-ordered) and run the SAME `verifier.verify` the live loop uses. The result
+    is a behavioral ground-truth signal — did each real transition actually advance
+    the way the recorded action predicted — with zero risk (nothing is executed).
+
+    This is the same code path that runs live once the executor is trusted; here it
+    runs over captured data. Per-transition verdicts are written to
+    `cache/verify_replay.jsonl` (keyed by `from_fingerprint`) for the quality gate to
+    join against the loop-step corpus.
+    """
+    from select_stage import fingerprint, verifier
+
+    caps = db.scalars(
+        select(TrainingCapture)
+        .where(TrainingCapture.training_session_id == training_session_id)
+        .order_by(TrainingCapture.captured_at.asc())
+    ).all()
+    if len(caps) < 2:
+        return {"transitions": 0, "advanced": 0, "advance_rate": None, "verdicts": [],
+                "reason": "need >=2 captures in the session to form a transition"}
+
+    # The action the loop decided at each state, looked up by fingerprint from the
+    # trajectory corpus. If a state isn't in the corpus yet we fall back to "click"
+    # (the default "did anything change?" check).
+    action_by_fp: dict[str, str] = {}
+    corpus_path = _artifacts_dir() / "cache" / "loop_steps.jsonl"
+    if corpus_path.exists():
+        for line in corpus_path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+                action_by_fp[row.get("fingerprint", "")] = row.get("action_id", "click")
+            except Exception:
+                continue
+
+    def _obs_fp(obs, goal: str) -> str:
+        return fingerprint.compute(url=obs.url, viewport=obs.viewport,
+                                   candidates=obs.ax_candidates, task_goal=goal,
+                                   dom_clickables=obs.dom_clickables)
+
+    verdicts: list[dict] = []
+    advanced = 0
+    prev_obs = prev_goal = prev_fp = None
+    for cap in caps:
+        try:
+            obs, goal = _observation_from_capture(cap.artifact_filename)
+        except HTTPException:
+            continue  # capture file vanished — skip, don't break the chain hard
+        fp = _obs_fp(obs, goal or "")
+        if prev_obs is not None:
+            action_id = action_by_fp.get(prev_fp, "click")
+            vres = verifier.verify(
+                action_id=action_id,
+                before=prev_obs.snapshot or verifier.Snapshot(),
+                after=obs.snapshot or verifier.Snapshot(),
+            )
+            advanced += 1 if vres.ok else 0
+            verdicts.append({
+                "from_fingerprint": prev_fp, "to_fingerprint": fp,
+                "from_url": prev_obs.url, "to_url": obs.url,
+                "action_id": action_id, "ok": vres.ok,
+                "predicted": vres.predicted, "observed": vres.observed,
+            })
+        prev_obs, prev_goal, prev_fp = obs, goal, fp
+
+    # Persist verdicts for the gate (overwrite this session's rows: latest replay wins).
+    out_path = _artifacts_dir() / "cache" / "verify_replay.jsonl"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    this_session_fps = {v["from_fingerprint"] for v in verdicts}
+    if out_path.exists():
+        for line in out_path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+                if row.get("from_fingerprint") not in this_session_fps:
+                    existing.append(row)
+            except Exception:
+                continue
+    with out_path.open("w", encoding="utf-8") as fh:
+        for row in existing + verdicts:
+            fh.write(json.dumps(row) + "\n")
+
+    n = len(verdicts)
+    return {
+        "training_session_id": training_session_id,
+        "transitions": n, "advanced": advanced,
+        "advance_rate": round(advanced / n, 3) if n else None,
+        "verdicts": verdicts,
+    }
+
+
+#: Quality-gate thresholds. The corpus stays the raw record of every decision; the
+#: gate is a DERIVED classification (a view), so the trainer and the scorecard share
+#: one policy and the corpus is never mutated. A row is train-eligible only if the
+#: teacher was confident, didn't escalate, and the behavioral verify didn't fail.
+_GATE_MIN_CONFIDENCE = 0.85
+
+
+def _gate_verdict(*, confidence: float, needs_human: bool, verify_ok: Optional[bool]):
+    """Classify one corpus row → (train_eligible, quarantine_reason).
+
+    Quarantined rows are NOT discarded — they route to human review (the path that
+    turns them into golden truth). Reasons are ordered by severity so the most
+    important defect is surfaced first."""
+    if needs_human:
+        return False, "escalated"           # teacher itself punted → never a positive label
+    if verify_ok is False:
+        return False, "verify_failed"       # action didn't advance the page → bad transition
+    if (confidence or 0) < _GATE_MIN_CONFIDENCE:
+        return False, "low_confidence"      # borderline teacher pick → needs a human look
+    return True, None
+
+
+@app.get("/api/training/label_queue")
+def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
+                include_labeled: bool = False, db: Session = Depends(get_db)):
+    """Active-learning queue for the AX confirm/correct training space.
+
+    Returns captures (that have AX candidates) ordered so human attention lands where
+    the model is WEAKEST first: unlabeled states whose teacher pick was escalated or
+    low-confidence rank above confident ones, which rank above already-golden rows.
+    This is active learning — label the model's blind spots, not random captures.
+
+    Each item carries just enough to render the queue; the panel fetches
+    `candidate_suggestion` for the focused item. `include_labeled` keeps already-golden
+    rows in (greyed in the UI) so you can revisit/relabel."""
+    from select_stage import fingerprint
+
+    traces_dir = _artifacts_dir() / "observer-traces"
+
+    # Teacher signal per fingerprint from the corpus (confidence / escalation).
+    corpus: dict[str, dict] = {}
+    corpus_path = _artifacts_dir() / "cache" / "loop_steps.jsonl"
+    if corpus_path.exists():
+        for line in corpus_path.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+                corpus[r.get("fingerprint", "")] = r
+            except Exception:
+                continue
+
+    stmt = select(TrainingCapture)
+    if training_session_id is not None:
+        stmt = stmt.where(TrainingCapture.training_session_id == training_session_id)
+    stmt = stmt.order_by(TrainingCapture.captured_at.desc())
+    captures = db.scalars(stmt).all()
+
+    items: list[dict] = []
+    for cap in captures:
+        fn = cap.artifact_filename
+        if not (traces_dir / f"{fn}.ax.json").exists():
+            continue  # no candidates → nothing to confirm/correct
+        has_golden = cap.positive_candidate_id is not None
+        if has_golden and not include_labeled:
+            continue
+        try:
+            obs, goal = _observation_from_capture(fn)
+        except HTTPException:
+            continue
+        fp = fingerprint.compute(url=obs.url, viewport=obs.viewport,
+                                 candidates=obs.ax_candidates, task_goal=goal or "",
+                                 dom_clickables=obs.dom_clickables)
+        row = corpus.get(fp)
+        # Stop-states (captcha/checkpoint) are classify-stage escalations, NOT selection
+        # tasks — there's no correct candidate to pick, so they don't belong in the
+        # confirm/correct queue. Skip them.
+        if row and (row.get("layer") == "classify" or row.get("reason_code") == "stop_state"):
+            continue
+        conf = row.get("confidence") if row else None
+        escalated = bool(row.get("needs_human")) if row else False
+        # Priority: escalated (2) > low-conf (1) > confident/unknown (0); golden sinks.
+        if escalated:
+            prio, reason = 2, "escalated"
+        elif conf is not None and conf < _GATE_MIN_CONFIDENCE:
+            prio, reason = 1, "low_confidence"
+        else:
+            prio, reason = 0, "confident" if conf is not None else "uncorpused"
+        items.append({
+            "filename": fn, "url": obs.url, "domain_id": cap.domain_id,
+            "goal_id": cap.goal_id, "captured_at": cap.captured_at.isoformat(),
+            "candidate_count": len(obs.ax_candidates),
+            "has_golden": has_golden, "suggestion_confidence": conf,
+            "priority": prio, "priority_reason": reason,
+        })
+
+    items.sort(key=lambda it: (it["has_golden"], -it["priority"], it["captured_at"]), reverse=False)
+    # has_golden False first; higher prio first; older first within a tier.
+    items.sort(key=lambda it: (it["has_golden"], -it["priority"]))
+    total_unlabeled = sum(1 for it in items if not it["has_golden"])
+    return {"total": len(items), "unlabeled": total_unlabeled, "items": items[:limit]}
+
+
+@app.get("/api/observations/{filename}/candidate_suggestion")
+def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
+    """The data contract for the AX-CDP training space: the candidate set + the
+    model's SUGGESTED pick (so the UI can pre-highlight it) + the current human golden
+    label. The operator then CONFIRMS (accept suggestion) or CORRECTS (pick another) —
+    either way persisting `positive_candidate_id` via PATCH /api/observations/{filename}.
+
+    Suggestion is looked up from the loop-step corpus by the capture's fingerprint and
+    mapped from `target_backend_node_id` back to a `candidate_id`. If the state isn't in
+    the corpus yet, `suggestion` is null and it's a pure cold label."""
+    from select_stage import fingerprint
+
+    observation, goal = _observation_from_capture(filename)
+    traces_dir = _artifacts_dir() / "observer-traces"
+    artifact = json.loads((traces_dir / filename).read_text())
+    shots = (artifact.get("acquisition", {}) or {}).get("screenshots") or []
+    screenshot_filename = (shots[0].get("filename") if shots else None)
+    by_backend = {
+        int(c["backend_node_id"]): c["candidate_id"]
+        for c in observation.ax_candidates
+        if c.get("backend_node_id") is not None and c.get("candidate_id")
+    }
+    fp = fingerprint.compute(url=observation.url, viewport=observation.viewport,
+                             candidates=observation.ax_candidates, task_goal=goal or "",
+                             dom_clickables=observation.dom_clickables)
+
+    suggestion = None
+    corpus_path = _artifacts_dir() / "cache" / "loop_steps.jsonl"
+    if corpus_path.exists():
+        for line in corpus_path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if row.get("fingerprint") != fp:
+                continue
+            tb = row.get("target_backend_node_id")
+            suggestion = {
+                "candidate_id": by_backend.get(int(tb)) if tb is not None else None,
+                "target_backend_node_id": tb,
+                "action_id": row.get("action_id"),
+                "confidence": row.get("confidence"),
+                "layer": row.get("layer"),
+                "needs_human": bool(row.get("needs_human")),
+            }
+            break
+
+    capture = db.scalar(select(TrainingCapture).where(TrainingCapture.artifact_filename == filename))
+    return {
+        "filename": filename, "fingerprint": fp[:12], "url": observation.url, "goal": goal,
+        "screenshot_filename": screenshot_filename,
+        "candidates": [
+            {"candidate_id": c.get("candidate_id"), "role": c.get("role"),
+             "name": c.get("caption") or c.get("name") or "", "backend_node_id": c.get("backend_node_id"),
+             "bbox": c.get("bbox")}
+            for c in observation.ax_candidates
+        ],
+        "suggestion": suggestion,
+        "golden": {
+            "positive_candidate_id": capture.positive_candidate_id if capture else None,
+            "review_status": capture.review_status if capture else None,
+        },
+    }
+
+
+@app.get("/api/training/scorecard")
+def training_scorecard(db: Session = Depends(get_db)):
+    """Corpus health + the quality gate — the 'is this data good enough to train on?'
+    view. Joins three truth signals per state: the teacher's self-confidence
+    (loop_steps), the behavioral verify verdict (verify_replay, by fingerprint), and
+    human review (TrainingCapture.review_status / positive_candidate_id). Returns a
+    per-state gate classification + aggregate strength metrics so bad data is
+    quarantined for review instead of silently distilled into the cheap models."""
+    cache_dir = _artifacts_dir() / "cache"
+
+    rows: list[dict] = []
+    corpus_path = cache_dir / "loop_steps.jsonl"
+    if corpus_path.exists():
+        for line in corpus_path.read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+
+    verify_ok_by_fp: dict[str, bool] = {}
+    vpath = cache_dir / "verify_replay.jsonl"
+    if vpath.exists():
+        for line in vpath.read_text(encoding="utf-8").splitlines():
+            try:
+                v = json.loads(line)
+                verify_ok_by_fp[v.get("from_fingerprint", "")] = bool(v.get("ok"))
+            except Exception:
+                continue
+
+    # Human ground-truth counts (reviewed captures with a confirmed positive candidate).
+    reviewed = db.scalar(select(func.count()).select_from(TrainingCapture)
+                         .where(TrainingCapture.review_status == "reviewed")) or 0
+    with_positive = db.scalar(select(func.count()).select_from(TrainingCapture)
+                              .where(TrainingCapture.positive_candidate_id.isnot(None))) or 0
+
+    states: list[dict] = []
+    counts = {"train_eligible": 0, "escalated": 0, "verify_failed": 0, "low_confidence": 0}
+    conf_sum = verified_n = 0.0
+    for r in rows:
+        fp = r.get("fingerprint", "")
+        verify_ok = verify_ok_by_fp.get(fp)  # None = no verdict (unverified)
+        eligible, reason = _gate_verdict(
+            confidence=r.get("confidence", 0.0),
+            needs_human=bool(r.get("needs_human")),
+            verify_ok=verify_ok,
+        )
+        counts["train_eligible" if eligible else reason] += 1
+        conf_sum += r.get("confidence", 0.0)
+        verified_n += 1 if verify_ok is not None else 0
+        states.append({
+            "route": r.get("route"), "fingerprint": fp[:12],
+            "action_id": r.get("action_id"), "layer": r.get("layer"),
+            "confidence": r.get("confidence"), "needs_human": bool(r.get("needs_human")),
+            "verify_ok": verify_ok, "candidate_count": r.get("candidate_count"),
+            "train_eligible": eligible, "quarantine_reason": reason,
+        })
+
+    n = len(rows)
+    return {
+        "generated_at": utcnow().isoformat(),
+        "totals": {
+            "states": n,
+            "train_eligible": counts["train_eligible"],
+            "quarantined": n - counts["train_eligible"],
+            "mean_confidence": round(conf_sum / n, 3) if n else None,
+            "verified_states": int(verified_n),
+            "unverified_states": n - int(verified_n),
+            "escalation_rate": round(counts["escalated"] / n, 3) if n else None,
+            "human_reviewed": int(reviewed),
+            "human_confirmed_label": int(with_positive),
+        },
+        "quarantine_breakdown": {
+            "escalated": counts["escalated"],
+            "verify_failed": counts["verify_failed"],
+            "low_confidence": counts["low_confidence"],
+        },
+        "states": states,
+    }
+
+
 @app.post("/api/select/trajectory")
 def save_cursor_trajectory(payload: dict):
     """Persist one recorded human cursor trajectory from the Movement Playground.

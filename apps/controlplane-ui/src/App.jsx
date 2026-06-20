@@ -11,6 +11,8 @@ import { SystemSection } from "./components/controlplane/SystemSection";
 import { TrainingSection } from "./components/controlplane/TrainingSection";
 import { PageStatesSection } from "./components/controlplane/PageStatesSection";
 import { CoverageSection } from "./components/controlplane/CoverageSection";
+import { ScorecardSection } from "./components/controlplane/ScorecardSection";
+import { TrainingSpaceSection } from "./components/controlplane/TrainingSpaceSection";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 
@@ -1089,6 +1091,10 @@ export default function App() {
     // the SELECT-stage flywheel + Movement Playground.
     if (["models", "eval-runs", "run-detail"].includes(activeSectionId)) {
       sectionContent = <ModelsSection section={activeSectionId === "models" ? "registry" : activeSectionId} />;
+    } else if (activeSectionId === "scorecard") {
+      sectionContent = <ScorecardSection />;
+    } else if (activeSectionId === "training-space") {
+      sectionContent = <TrainingSpaceSection />;
     } else {
       sectionContent = <LabSection section={activeSectionId} />;
     }

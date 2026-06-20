@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     fb_password: str = ""
     indeed_username: str = ""
     indeed_password: str = ""
+    gmail_username: str = ""
+    gmail_password: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
