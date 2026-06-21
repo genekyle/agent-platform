@@ -72,7 +72,22 @@ export function ScorecardSection() {
             <Stat label="Verified" value={`${t.verified_states}/${t.states}`} />
             <Stat label="Escalation rate" value={t.escalation_rate ?? "—"} accent={(t.escalation_rate ?? 0) > 0.3} />
             <Stat label="Human golden labels" value={t.human_confirmed_label} accent={t.human_confirmed_label === 0} />
+            <Stat label="Teacher accuracy" value={t.agreement_pct != null ? `${t.agreement_pct}%` : "—"}
+              good={(t.agreement_pct ?? 0) >= 80} accent={t.agreement_pct != null && t.agreement_pct < 60} />
           </div>
+
+          {data.agreement && data.agreement.scored > 0 ? (
+            <div className="chrome-label muted" style={{ marginBottom: 12 }}>
+              teacher-vs-human over {data.agreement.scored} golden-labeled states:
+              {" "}🟢 {data.agreement.golden} exact · 🔵 {data.agreement.acceptable} acceptable · 🔴 {data.agreement.miss} miss
+              {data.agreement.no_model_pick ? ` · ${data.agreement.no_model_pick} not-yet-seen by model` : ""}
+              {" "}— this is real accuracy (golden OR acceptable counts), not the teacher's self-confidence.
+            </div>
+          ) : (
+            <div className="chrome-label muted" style={{ marginBottom: 12 }}>
+              teacher accuracy needs golden labels — label states in the Training Space and this fills in.
+            </div>
+          )}
 
           {/* train-eligible bar */}
           <div style={{ height: 10, borderRadius: 6, overflow: "hidden", display: "flex", marginBottom: 6, background: "rgba(127,127,127,0.12)" }}>

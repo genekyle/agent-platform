@@ -2548,6 +2548,46 @@ def training_scorecard(db: Session = Depends(get_db)):
     with_positive = db.scalar(select(func.count()).select_from(TrainingCapture)
                               .where(TrainingCapture.positive_candidate_id.isnot(None))) or 0
 
+    # AGREEMENT: teacher pick vs human golden — the first TRUE accuracy signal (not the
+    # teacher grading itself). For each golden-labeled capture, map the model's recorded
+    # pick (loop_steps target_backend_node_id, by fingerprint) to a candidate_id and
+    # compare. A match on the golden OR an acceptable alternate counts as agreement.
+    from select_stage import fingerprint as _fp
+
+    target_by_fp = {r.get("fingerprint", ""): r.get("target_backend_node_id") for r in rows}
+    labeled_caps = db.scalars(
+        select(TrainingCapture).where(TrainingCapture.positive_candidate_id.isnot(None))
+    ).all()
+    agree = {"scored": 0, "golden": 0, "acceptable": 0, "miss": 0, "no_model_pick": 0}
+    agreement_rows: list[dict] = []
+    for cap in labeled_caps:
+        try:
+            obs, goal = _observation_from_capture(cap.artifact_filename)
+        except HTTPException:
+            continue
+        fp = _fp.compute(url=obs.url, viewport=obs.viewport, candidates=obs.ax_candidates,
+                         task_goal=goal or "", dom_clickables=obs.dom_clickables)
+        tb = target_by_fp.get(fp)
+        if tb is None:
+            agree["no_model_pick"] += 1
+            continue
+        model_pick = next((c.get("candidate_id") for c in obs.ax_candidates
+                           if c.get("backend_node_id") is not None and int(c["backend_node_id"]) == int(tb)), None)
+        acceptable = {k for k, v in (cap.candidate_labels or {}).items() if v == "acceptable"}
+        if model_pick and model_pick == cap.positive_candidate_id:
+            verdict = "golden"
+        elif model_pick and model_pick in acceptable:
+            verdict = "acceptable"
+        else:
+            verdict = "miss"
+        agree["scored"] += 1
+        agree[verdict] += 1
+        agreement_rows.append({
+            "route": _fp.route_template(obs.url), "model_pick": model_pick,
+            "human_golden": cap.positive_candidate_id, "verdict": verdict,
+        })
+    agree_pct = round(100 * (agree["golden"] + agree["acceptable"]) / agree["scored"]) if agree["scored"] else None
+
     states: list[dict] = []
     counts = {"train_eligible": 0, "escalated": 0, "verify_failed": 0, "low_confidence": 0}
     conf_sum = verified_n = 0.0
@@ -2583,11 +2623,18 @@ def training_scorecard(db: Session = Depends(get_db)):
             "escalation_rate": round(counts["escalated"] / n, 3) if n else None,
             "human_reviewed": int(reviewed),
             "human_confirmed_label": int(with_positive),
+            "agreement_pct": agree_pct,
+            "agreement_scored": agree["scored"],
         },
         "quarantine_breakdown": {
             "escalated": counts["escalated"],
             "verify_failed": counts["verify_failed"],
             "low_confidence": counts["low_confidence"],
+        },
+        "agreement": {
+            "scored": agree["scored"], "golden": agree["golden"], "acceptable": agree["acceptable"],
+            "miss": agree["miss"], "no_model_pick": agree["no_model_pick"], "pct": agree_pct,
+            "rows": agreement_rows,
         },
         "states": states,
     }
