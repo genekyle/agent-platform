@@ -364,6 +364,16 @@ export function TrainingSpaceSection() {
           <button className="ghost-btn" onClick={advance} disabled={busy}>Skip <Kbd>→</Kbd></button>
         </div>
 
+        {/* description of the chosen state — so the taxonomy "ties to something" */}
+        {(() => {
+          const sd = pageStates.find((s) => s.state_id === fromState)?.description;
+          return sd ? (
+            <div style={{ fontSize: 11, color: C.muted, background: C.surface, borderRadius: 8, padding: "6px 10px", marginBottom: 10 }}>
+              <b style={{ color: C.ink }}>{prettify(fromState)}:</b> {sd}
+            </div>
+          ) : null;
+        })()}
+
         {/* candidate list — bottom, scrollable, indented by nesting */}
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: C.surface, fontSize: 11, color: C.muted }}>
