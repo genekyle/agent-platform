@@ -1237,7 +1237,12 @@ def training_coverage(
         if s.scope == "domain":
             return domain_id is not None and s.domain_id == domain_id
         if s.scope == "goal":
-            return goal_id is not None and s.goal_id == goal_id
+            if goal_id is None or s.goal_id != goal_id:
+                return False
+            # Optional domain pin: a goal-scoped state may be restricted to ONE domain
+            # (e.g. FB's password_entered). domain_id=None = generic across all domains
+            # with this goal (e.g. logged_in). Prevents FB login states leaking into Indeed.
+            return s.domain_id is None or domain_id is None or s.domain_id == domain_id
         if s.scope == "scenario":
             return scenario_id is not None and s.scenario_id == scenario_id
         return False
@@ -1308,7 +1313,12 @@ def list_page_states(
         if s.scope == "domain":
             return domain_id is not None and s.domain_id == domain_id
         if s.scope == "goal":
-            return goal_id is not None and s.goal_id == goal_id
+            if goal_id is None or s.goal_id != goal_id:
+                return False
+            # Optional domain pin: a goal-scoped state may be restricted to ONE domain
+            # (e.g. FB's password_entered). domain_id=None = generic across all domains
+            # with this goal (e.g. logged_in). Prevents FB login states leaking into Indeed.
+            return s.domain_id is None or domain_id is None or s.domain_id == domain_id
         if s.scope == "scenario":
             return scenario_id is not None and s.scenario_id == scenario_id
         return False
