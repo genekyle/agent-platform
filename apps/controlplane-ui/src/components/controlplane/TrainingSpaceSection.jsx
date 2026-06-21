@@ -46,6 +46,9 @@ export function TrainingSpaceSection() {
   const [fromState, setFromState] = useState("");
   const [toState, setToState] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [addingState, setAddingState] = useState(false);
+  const [newStateName, setNewStateName] = useState("");
+  const [newStateDesc, setNewStateDesc] = useState("");
   const imgRef = useRef(null);
 
   const items = queue?.items ?? [];
@@ -127,6 +130,27 @@ export function TrainingSpaceSection() {
     return () => { ro.disconnect(); window.removeEventListener("resize", recomputeDims); };
   }, [recomputeDims, item]);
 
+  // Create a page-state inline (goal-scoped to this capture's goal) so the operator can
+  // add a variant without leaving the labeler. New state is appended + auto-selected.
+  const createState = useCallback(async () => {
+    const name = newStateName.trim();
+    if (!name || !item) return;
+    try {
+      const r = await fetch(`${API}/api/training/page-states`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          display_name: name, description: newStateDesc.trim() || null,
+          scope: "goal", goal_id: item.context?.goal_id || "", category: "general", stage: "neutral",
+        }),
+      });
+      if (!r.ok) throw new Error(`Create state failed: ${r.status}`);
+      const created = await r.json();
+      setPageStates((prev) => [...prev.filter((s) => s.state_id !== created.state_id), created]);
+      setFromState(created.state_id);
+      setAddingState(false); setNewStateName(""); setNewStateDesc("");
+    } catch (e) { setError(e.message); }
+  }, [newStateName, newStateDesc, item]);
+
   const showFlash = (text, color) => { setFlash({ text, color }); setTimeout(() => setFlash(null), 750); };
   const advance = useCallback(() => setIdx((i) => Math.min(i + 1, items.length)), [items.length]);
   const setGolden = useCallback((id) => { setGoldenId(id); setMarks((m) => { const n = { ...m }; delete n[id]; return n; }); }, []);
@@ -192,7 +216,7 @@ export function TrainingSpaceSection() {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (!item || e.target.tagName === "SELECT") return;
+      if (!item || ["SELECT", "INPUT", "TEXTAREA"].includes(e.target.tagName) || e.target.isContentEditable) return;
       const pos = ordered.findIndex((c) => c.candidate_id === cursorId);
       if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); setCursorId(ordered[Math.min(pos + 1, ordered.length - 1)]?.candidate_id ?? cursorId); }
       else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); setCursorId(ordered[Math.max(pos - 1, 0)]?.candidate_id ?? cursorId); }
@@ -348,6 +372,8 @@ export function TrainingSpaceSection() {
           </div>
           <span style={{ fontSize: 12, color: C.muted }} title="What state is this page?">state</span>
           <StateSelect value={fromState} onChange={setFromState} options={pageStates} />
+          <button className="ghost-btn" style={{ minHeight: 0, padding: "3px 8px", fontSize: 12 }}
+            onClick={() => setAddingState((v) => !v)} title="Create a new page-state for this variant">+ new</button>
           <span style={{ fontSize: 12, color: C.muted }} title="If the correct action succeeds, where SHOULD it go? (the intended happy path — not necessarily what actually happened)">· expect →</span>
           <StateSelect value={toState} onChange={setToState} options={pageStates} />
           <span style={{ fontSize: 12, marginLeft: "auto", display: "inline-flex", gap: 8 }}>
@@ -363,6 +389,22 @@ export function TrainingSpaceSection() {
           <button className="ghost-btn" onClick={markNone} disabled={busy} title="No candidate is correct / AX-blind → flag for the vision layer">None <Kbd>N</Kbd></button>
           <button className="ghost-btn" onClick={advance} disabled={busy}>Skip <Kbd>→</Kbd></button>
         </div>
+
+        {/* inline new-state creator */}
+        {addingState ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: C.blueSoft, borderRadius: 10, padding: "8px 10px", marginBottom: 10 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.indigo }}>NEW STATE</span>
+            <input autoFocus value={newStateName} onChange={(e) => setNewStateName(e.target.value)} placeholder="display name (e.g. Email Recognized — SSO or Code)"
+              onKeyDown={(e) => { if (e.key === "Enter") createState(); if (e.key === "Escape") setAddingState(false); }}
+              className="form-select" style={{ fontSize: 12, width: 280 }} />
+            <input value={newStateDesc} onChange={(e) => setNewStateDesc(e.target.value)} placeholder="description — how to recognize it (optional but recommended)"
+              onKeyDown={(e) => { if (e.key === "Enter") createState(); if (e.key === "Escape") setAddingState(false); }}
+              className="form-select" style={{ fontSize: 12, flex: 1, minWidth: 220 }} />
+            <span style={{ fontSize: 11, color: C.muted }}>goal: {item.context?.goal_id || "—"}</span>
+            <button className="primary-btn" style={{ minHeight: 0, padding: "5px 12px" }} onClick={createState} disabled={!newStateName.trim()}>Create + select</button>
+            <button className="ghost-btn" style={{ minHeight: 0, padding: "5px 10px" }} onClick={() => setAddingState(false)}>Cancel</button>
+          </div>
+        ) : null}
 
         {/* description of the chosen state — so the taxonomy "ties to something" */}
         {(() => {
