@@ -2337,7 +2337,9 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
         if not (traces_dir / f"{fn}.ax.json").exists():
             continue  # no candidates → nothing to confirm/correct
         has_golden = cap.positive_candidate_id is not None
-        if has_golden and not include_labeled:
+        # Anything already dealt with (golden, terminal, or none/needs-vision → reviewed)
+        # leaves the queue, so handled captures don't keep reappearing.
+        if cap.review_status == "reviewed" and not include_labeled:
             continue
         try:
             obs, goal = _observation_from_capture(fn)
@@ -2348,19 +2350,22 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
                                  dom_clickables=obs.dom_clickables)
         row = corpus.get(fp)
         # Stop-states (captcha/checkpoint) are classify-stage escalations, NOT selection
-        # tasks — there's no correct candidate to pick, so they don't belong in the
-        # confirm/correct queue. Skip them.
+        # tasks — there's no correct candidate to pick, so they don't belong here.
         if row and (row.get("layer") == "classify" or row.get("reason_code") == "stop_state"):
             continue
         conf = row.get("confidence") if row else None
         escalated = bool(row.get("needs_human")) if row else False
-        # Priority: escalated (2) > low-conf (1) > confident/unknown (0); golden sinks.
-        if escalated:
+        # Priority puts the highest-value-to-label first. States the model never picked
+        # on (uncorpused) sink to the bottom: labeling them yields no accuracy signal
+        # until the model has made a pick to compare against.
+        if row is None:
+            prio, reason = -1, "uncorpused"
+        elif escalated:
             prio, reason = 2, "escalated"
         elif conf is not None and conf < _GATE_MIN_CONFIDENCE:
             prio, reason = 1, "low_confidence"
         else:
-            prio, reason = 0, "confident" if conf is not None else "uncorpused"
+            prio, reason = 0, "confident"
         items.append({
             "filename": fn, "url": obs.url, "domain_id": cap.domain_id,
             "goal_id": cap.goal_id, "captured_at": cap.captured_at.isoformat(),
@@ -2369,11 +2374,9 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
             "priority": prio, "priority_reason": reason,
         })
 
-    items.sort(key=lambda it: (it["has_golden"], -it["priority"], it["captured_at"]), reverse=False)
-    # has_golden False first; higher prio first; older first within a tier.
-    items.sort(key=lambda it: (it["has_golden"], -it["priority"]))
-    total_unlabeled = sum(1 for it in items if not it["has_golden"])
-    return {"total": len(items), "unlabeled": total_unlabeled, "items": items[:limit]}
+    # higher priority first; older first within a tier (stable progression)
+    items.sort(key=lambda it: (-it["priority"], it["captured_at"]))
+    return {"total": len(items), "unlabeled": len(items), "items": items[:limit]}
 
 
 def _candidate_visible(c: dict, bound_w: float, bound_h: float, profile: str) -> bool:

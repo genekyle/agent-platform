@@ -39,7 +39,7 @@ export function TrainingSpaceSection() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [stats, setStats] = useState({ confirmed: 0, corrected: 0, none: 0 });
+  const [stats, setStats] = useState({ confirmed: 0, corrected: 0, none: 0, done: 0 });
   const [imgDims, setImgDims] = useState(null);
   const [flash, setFlash] = useState(null);
   const [pageStates, setPageStates] = useState([]);
@@ -171,6 +171,22 @@ export function TrainingSpaceSection() {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }, [item, busy, advance]);
 
+  // Terminal: the task/scenario is already complete here (e.g. logged-in home) — no
+  // action to pick. Records it as a STATE example (observed_page_state), not a selection.
+  const markDone = useCallback(async () => {
+    if (!item || busy) return;
+    setBusy(true);
+    try {
+      await fetch(`${API}/api/observations/${encodeURIComponent(item.filename)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ observed_page_state: fromState || "task_complete", label: "terminal", status: "reviewed" }),
+      });
+      setStats((s) => ({ ...s, done: s.done + 1 }));
+      showFlash("Terminal", C.indigo);
+      advance();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }, [item, busy, advance, fromState]);
+
   useEffect(() => {
     const onKey = (e) => {
       if (!item || e.target.tagName === "SELECT") return;
@@ -183,12 +199,13 @@ export function TrainingSpaceSection() {
       else if (e.key === "x" || e.key === "X") { if (cursorId) toggleMark(cursorId, "rejected"); }
       else if (e.key === "Enter") { e.preventDefault(); commit(); }
       else if (e.key === "n" || e.key === "N") { markNone(); }
+      else if (e.key === "d" || e.key === "D") { markDone(); }
       else if (e.key === "ArrowRight" || e.key === "s") { advance(); }
       else if (e.key === "t" || e.key === "T") { setVerb((v) => VERBS[(VERBS.indexOf(v) + 1) % VERBS.length]); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [item, cursorId, ordered, commit, markNone, advance, setGolden, toggleMark]);
+  }, [item, cursorId, ordered, commit, markNone, markDone, advance, setGolden, toggleMark]);
 
   const scaleBox = (bbox) => {
     if (!bbox || !imgDims) return null;
@@ -219,6 +236,7 @@ export function TrainingSpaceSection() {
           <Stat value={stats.confirmed} label="confirmed" color={C.green} />
           <Stat value={stats.corrected} label="corrected" color={C.amber} />
           <Stat value={stats.none} label="needs vision" color={C.red} />
+          <Stat value={stats.done} label="terminal" color={C.indigo} />
           {agreePct !== null ? <Stat value={`${agreePct}%`} label="agreement" color={C.blue} /> : null}
           <button className="ghost-btn small-btn" onClick={loadQueue} disabled={loading} title="Reload queue">↻</button>
         </div>
@@ -338,7 +356,8 @@ export function TrainingSpaceSection() {
           <button className="primary-btn" onClick={commit} disabled={busy || !goldenId}>
             {goldenId ? `Save (${(goldenId ? 1 : 0) + acceptCount + rejectCount})` : "Pick a golden first"} <Kbd dark>↵</Kbd>
           </button>
-          <button className="ghost-btn" onClick={markNone} disabled={busy} title="No candidate is correct → flag for vision">None <Kbd>N</Kbd></button>
+          <button className="ghost-btn" onClick={markDone} disabled={busy} title="Task already complete here (e.g. logged-in home) — record as a terminal state, no pick needed">Done <Kbd>D</Kbd></button>
+          <button className="ghost-btn" onClick={markNone} disabled={busy} title="No candidate is correct / AX-blind → flag for the vision layer">None <Kbd>N</Kbd></button>
           <button className="ghost-btn" onClick={advance} disabled={busy}>Skip <Kbd>→</Kbd></button>
         </div>
 
