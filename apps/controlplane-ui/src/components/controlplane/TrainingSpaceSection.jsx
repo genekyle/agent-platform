@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PageStatePicker } from "./PageStatePicker";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 const VERBS = ["click", "type", "select"];
@@ -46,9 +47,9 @@ export function TrainingSpaceSection() {
   const [fromState, setFromState] = useState("");
   const [toState, setToState] = useState("");
   const [showAll, setShowAll] = useState(false);
-  const [addingState, setAddingState] = useState(false);
-  const [newStateName, setNewStateName] = useState("");
-  const [newStateDesc, setNewStateDesc] = useState("");
+  const [domains, setDomains] = useState([]);
+  const [goals, setGoals] = useState([]);
+  const [activeStateField, setActiveStateField] = useState("observed"); // observed | post
   const imgRef = useRef(null);
 
   const items = queue?.items ?? [];
@@ -87,6 +88,12 @@ export function TrainingSpaceSection() {
   }, []);
   useEffect(() => { loadQueue(); }, [loadQueue]);
 
+  // registry for the picker's folder labels (domains + goals)
+  useEffect(() => {
+    fetch(`${API}/api/training/domains`).then((r) => (r.ok ? r.json() : [])).then(setDomains).catch(() => {});
+    fetch(`${API}/api/training/goals`).then((r) => (r.ok ? r.json() : [])).then(setGoals).catch(() => {});
+  }, []);
+
   const loadItem = useCallback(async (filename) => {
     setImgDims(null); setHoveredId(null);
     const r = await fetch(`${API}/api/observations/${encodeURIComponent(filename)}/candidate_suggestion`);
@@ -110,6 +117,7 @@ export function TrainingSpaceSection() {
     // actual next capture — the actual (which may be a captcha/interruption) is shown in
     // the trajectory strip; expected is what SHOULD happen if the right action succeeds.
     setToState(ctx.post_action_state || "");
+    setActiveStateField("observed");
     const qs = new URLSearchParams({ domain_id: ctx.domain_id || "", goal_id: ctx.goal_id || "", scenario_id: ctx.scenario_id || "" });
     fetch(`${API}/api/training/page-states?${qs}`).then((x) => (x.ok ? x.json() : [])).then(setPageStates).catch(() => setPageStates([]));
   }, []);
@@ -130,26 +138,21 @@ export function TrainingSpaceSection() {
     return () => { ro.disconnect(); window.removeEventListener("resize", recomputeDims); };
   }, [recomputeDims, item]);
 
-  // Create a page-state inline (goal-scoped to this capture's goal) so the operator can
-  // add a variant without leaving the labeler. New state is appended + auto-selected.
-  const createState = useCallback(async () => {
-    const name = newStateName.trim();
-    if (!name || !item) return;
-    try {
-      const r = await fetch(`${API}/api/training/page-states`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          display_name: name, description: newStateDesc.trim() || null,
-          scope: "goal", goal_id: item.context?.goal_id || "", category: "general", stage: "neutral",
-        }),
-      });
-      if (!r.ok) throw new Error(`Create state failed: ${r.status}`);
-      const created = await r.json();
-      setPageStates((prev) => [...prev.filter((s) => s.state_id !== created.state_id), created]);
-      setFromState(created.state_id);
-      setAddingState(false); setNewStateName(""); setNewStateDesc("");
-    } catch (e) { setError(e.message); }
-  }, [newStateName, newStateDesc, item]);
+  // Create a page-state (goal-scoped to this capture's goal); returns the created state
+  // so the shared picker can auto-select it. Appended to options so it shows immediately.
+  const createPageState = useCallback(async (name, { category, description } = {}) => {
+    const r = await fetch(`${API}/api/training/page-states`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        display_name: name, description: description || null,
+        scope: "goal", goal_id: item?.context?.goal_id || "", category: category || "general", stage: "neutral",
+      }),
+    });
+    if (!r.ok) throw new Error(`Create state failed: ${r.status}`);
+    const created = await r.json();
+    setPageStates((prev) => [...prev.filter((s) => s.state_id !== created.state_id), created]);
+    return created;
+  }, [item]);
 
   const showFlash = (text, color) => { setFlash({ text, color }); setTimeout(() => setFlash(null), 750); };
   const advance = useCallback(() => setIdx((i) => Math.min(i + 1, items.length)), [items.length]);
@@ -370,12 +373,6 @@ export function TrainingSpaceSection() {
                 background: v === verb ? "#fff" : "transparent", color: v === verb ? C.blue : C.muted, boxShadow: v === verb ? "0 1px 3px rgba(15,23,42,0.12)" : "none" }}>{v}</button>
             ))}
           </div>
-          <span style={{ fontSize: 12, color: C.muted }} title="What state is this page?">state</span>
-          <StateSelect value={fromState} onChange={setFromState} options={pageStates} />
-          <button className="ghost-btn" style={{ minHeight: 0, padding: "3px 8px", fontSize: 12 }}
-            onClick={() => setAddingState((v) => !v)} title="Create a new page-state for this variant">+ new</button>
-          <span style={{ fontSize: 12, color: C.muted }} title="If the correct action succeeds, where SHOULD it go? (the intended happy path — not necessarily what actually happened)">· expect →</span>
-          <StateSelect value={toState} onChange={setToState} options={pageStates} />
           <span style={{ fontSize: 12, marginLeft: "auto", display: "inline-flex", gap: 8 }}>
             <span style={{ color: C.blue, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
             <span style={{ color: C.teal, fontWeight: 600 }}>{acceptCount} acc</span>
@@ -390,31 +387,50 @@ export function TrainingSpaceSection() {
           <button className="ghost-btn" onClick={advance} disabled={busy}>Skip <Kbd>→</Kbd></button>
         </div>
 
-        {/* inline new-state creator */}
-        {addingState ? (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: C.blueSoft, borderRadius: 10, padding: "8px 10px", marginBottom: 10 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: C.indigo }}>NEW STATE</span>
-            <input autoFocus value={newStateName} onChange={(e) => setNewStateName(e.target.value)} placeholder="display name (e.g. Email Recognized — SSO or Code)"
-              onKeyDown={(e) => { if (e.key === "Enter") createState(); if (e.key === "Escape") setAddingState(false); }}
-              className="form-select" style={{ fontSize: 12, width: 280 }} />
-            <input value={newStateDesc} onChange={(e) => setNewStateDesc(e.target.value)} placeholder="description — how to recognize it (optional but recommended)"
-              onKeyDown={(e) => { if (e.key === "Enter") createState(); if (e.key === "Escape") setAddingState(false); }}
-              className="form-select" style={{ fontSize: 12, flex: 1, minWidth: 220 }} />
-            <span style={{ fontSize: 11, color: C.muted }}>goal: {item.context?.goal_id || "—"}</span>
-            <button className="primary-btn" style={{ minHeight: 0, padding: "5px 12px" }} onClick={createState} disabled={!newStateName.trim()}>Create + select</button>
-            <button className="ghost-btn" style={{ minHeight: 0, padding: "5px 10px" }} onClick={() => setAddingState(false)}>Cancel</button>
+        {/* stepped state picker — Current state → Expected next, organized folder/search
+            selector reused from the vision labeler */}
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            {[
+              { f: "observed", n: 1, label: "Current state", val: fromState },
+              { f: "post", n: 2, label: "Expected next", val: toState },
+            ].map((s, i) => (
+              <div key={s.f} style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                {i > 0 ? <span style={{ color: C.faint }}>→</span> : null}
+                <button onClick={() => setActiveStateField(s.f)}
+                  style={{ flex: 1, textAlign: "left", cursor: "pointer", borderRadius: 10, padding: "6px 10px",
+                    border: `1px solid ${activeStateField === s.f ? C.blue : C.line}`,
+                    background: activeStateField === s.f ? "rgba(47,111,235,0.08)" : "#fff" }}>
+                  <div style={{ fontSize: 10, color: C.muted }}>{s.n}. {s.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: s.val ? C.ink : C.faint }}>
+                    {s.val ? prettify(pageStates.find((p) => p.state_id === s.val)?.display_name || s.val) : "choose…"}
+                  </div>
+                </button>
+              </div>
+            ))}
           </div>
-        ) : null}
-
-        {/* description of the chosen state — so the taxonomy "ties to something" */}
-        {(() => {
-          const sd = pageStates.find((s) => s.state_id === fromState)?.description;
-          return sd ? (
-            <div style={{ fontSize: 11, color: C.muted, background: C.surface, borderRadius: 8, padding: "6px 10px", marginBottom: 10 }}>
-              <b style={{ color: C.ink }}>{prettify(fromState)}:</b> {sd}
-            </div>
-          ) : null;
-        })()}
+          <PageStatePicker
+            value={activeStateField === "observed" ? fromState : toState}
+            onChange={(id) => {
+              if (activeStateField === "observed") { setFromState(id); if (id) setActiveStateField("post"); }
+              else setToState(id);
+            }}
+            onCreate={createPageState}
+            options={pageStates} goals={goals} domains={domains}
+            captureDomainId={item.context?.domain_id} captureGoalId={item.context?.goal_id}
+            title={activeStateField === "observed" ? "Current Page State" : "Expected Next State"}
+            helper={activeStateField === "observed" ? "What is visible before the action?" : "Where should the agent land if the action succeeds? (intended — not necessarily what actually happened)"}
+          />
+          {(() => {
+            const sel = activeStateField === "observed" ? fromState : toState;
+            const sd = pageStates.find((s) => s.state_id === sel)?.description;
+            return sd ? (
+              <div style={{ fontSize: 11, color: C.muted, background: C.surface, borderRadius: 8, padding: "6px 10px", marginTop: 8 }}>
+                <b style={{ color: C.ink }}>{prettify(sel)}:</b> {sd}
+              </div>
+            ) : null;
+          })()}
+        </div>
 
         {/* candidate list — bottom, scrollable, indented by nesting */}
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
@@ -487,15 +503,6 @@ function MiniNode({ label, node, current, target, shotUrl }) {
         {node?.observed_page_state ? prettify(node.observed_page_state) : (node ? "—" : "")}
       </div>
     </div>
-  );
-}
-
-function StateSelect({ value, onChange, options }) {
-  return (
-    <select value={value || ""} onChange={(e) => onChange(e.target.value)} className="form-select" style={{ fontSize: 12, padding: "4px 6px", maxWidth: 150 }}>
-      <option value="">— unset —</option>
-      {options.map((s) => <option key={s.state_id} value={s.state_id}>{s.display_name}</option>)}
-    </select>
   );
 }
 
