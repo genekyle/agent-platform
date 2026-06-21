@@ -45,6 +45,7 @@ export function TrainingSpaceSection() {
   const [pageStates, setPageStates] = useState([]);
   const [fromState, setFromState] = useState("");
   const [toState, setToState] = useState("");
+  const [showAll, setShowAll] = useState(false);
   const imgRef = useRef(null);
 
   const items = queue?.items ?? [];
@@ -52,19 +53,25 @@ export function TrainingSpaceSection() {
   const shotUrl = (fn) => (fn ? `${API}/api/observations/screenshots/${encodeURIComponent(fn)}` : null);
   const markOf = (id) => (id === goldenId ? "golden" : marks[id] || null);
 
+  // off-screen / zero-size candidates are hidden by default (Facebook dumps tons);
+  // toggle reveals them. Client-side filter on the `visible` flag → no refetch, no mark loss.
+  const cands = useMemo(
+    () => (item?.candidates ?? []).filter((c) => showAll || c.visible),
+    [item, showAll],
+  );
+
   // nesting depth (containment) + z-rank (smaller area on top → click into nested)
   const geom = useMemo(() => {
-    const cs = item?.candidates ?? [];
     const depth = {}, z = {};
-    cs.forEach((a) => { depth[a.candidate_id] = cs.reduce((n, b) => n + (a.candidate_id !== b.candidate_id && contains(b.bbox, a.bbox) ? 1 : 0), 0); });
-    [...cs].sort((x, y) => boxArea(y.bbox) - boxArea(x.bbox)).forEach((a, i) => { z[a.candidate_id] = i + 1; });
+    cands.forEach((a) => { depth[a.candidate_id] = cands.reduce((n, b) => n + (a.candidate_id !== b.candidate_id && contains(b.bbox, a.bbox) ? 1 : 0), 0); });
+    [...cands].sort((x, y) => boxArea(y.bbox) - boxArea(x.bbox)).forEach((a, i) => { z[a.candidate_id] = i + 1; });
     return { depth, z };
-  }, [item]);
+  }, [cands]);
 
   // list in reading order (top → left), indented by nesting depth
   const ordered = useMemo(
-    () => [...(item?.candidates ?? [])].sort((a, b) => (a.bbox?.y ?? 0) - (b.bbox?.y ?? 0) || (a.bbox?.x ?? 0) - (b.bbox?.x ?? 0)),
-    [item],
+    () => [...cands].sort((a, b) => (a.bbox?.y ?? 0) - (b.bbox?.y ?? 0) || (a.bbox?.x ?? 0) - (b.bbox?.x ?? 0)),
+    [cands],
   );
 
   const loadQueue = useCallback(async () => {
@@ -204,8 +211,8 @@ export function TrainingSpaceSection() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 14 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 20, color: C.ink }}>Training Space</h2>
-          <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 560 }}>
-            Tag a <b style={{ color: C.blue }}>golden</b> pick + any <b style={{ color: C.teal }}>acceptable</b> / <b style={{ color: C.red }}>rejected</b> ones, then Save. Each candidate is labeled on its own — tagging a container never labels what's inside it.
+          <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 580 }}>
+            Mark the <b style={{ color: C.blue }}>golden</b> pick (+ any <b style={{ color: C.teal }}>acceptable</b> alternates), then Save. <b>Everything you don't mark is a negative automatically</b> — only use <b style={{ color: C.red }}>✕</b> for a tempting wrong element. Each candidate is labeled on its own; tagging a container never labels what's inside it.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -277,7 +284,7 @@ export function TrainingSpaceSection() {
             <div style={{ position: "relative", display: "inline-block", lineHeight: 0, borderRadius: 8, overflow: "hidden", boxShadow: "0 4px 16px rgba(15,23,42,0.10)" }}>
               <img ref={imgRef} src={shotUrl(item.screenshot_filename)} alt="capture"
                 style={{ maxHeight: "64vh", maxWidth: "100%", width: "auto", height: "auto", display: "block" }} onLoad={recomputeDims} />
-              {imgDims && (item.candidates ?? []).map((c) => {
+              {imgDims && cands.map((c) => {
                 const box = scaleBox(c.bbox); if (!box) return null;
                 const id = c.candidate_id;
                 const mk = markOf(id); const m = mk ? MARK[mk] : null;
@@ -326,6 +333,7 @@ export function TrainingSpaceSection() {
             <span style={{ color: C.blue, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
             <span style={{ color: C.teal, fontWeight: 600 }}>{acceptCount} acc</span>
             <span style={{ color: C.red, fontWeight: 600 }}>{rejectCount} rej</span>
+            <span style={{ color: C.faint }}>· rest neg</span>
           </span>
           <button className="primary-btn" onClick={commit} disabled={busy || !goldenId}>
             {goldenId ? `Save (${(goldenId ? 1 : 0) + acceptCount + rejectCount})` : "Pick a golden first"} <Kbd dark>↵</Kbd>
@@ -337,8 +345,15 @@ export function TrainingSpaceSection() {
         {/* candidate list — bottom, scrollable, indented by nesting */}
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: C.surface, fontSize: 11, color: C.muted }}>
-            <span>{ordered.length} candidates · indented by nesting · hover to locate · click <b style={{ color: C.blue }}>G</b>/<b style={{ color: C.teal }}>A</b>/<b style={{ color: C.red }}>X</b></span>
-            <span>cursor + <Kbd>G</Kbd><Kbd>A</Kbd><Kbd>X</Kbd></span>
+            <span>{ordered.length} reachable · indented by nesting · hover to locate · mark <b style={{ color: C.blue }}>G</b>(olden){" "}<b style={{ color: C.teal }}>A</b>(ccept) · unmarked = negative</span>
+            <span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
+              {item.hidden_count ? (
+                <button className="ghost-btn" style={{ minHeight: 0, padding: "2px 8px", fontSize: 11 }} onClick={() => setShowAll((s) => !s)}>
+                  {showAll ? "hide off-screen" : `show ${item.hidden_count} off-screen`}
+                </button>
+              ) : null}
+              <span>cursor + <Kbd>G</Kbd><Kbd>A</Kbd><Kbd>X</Kbd></span>
+            </span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", maxHeight: 220, overflowY: "auto" }}>
             {ordered.map((c, i) => {

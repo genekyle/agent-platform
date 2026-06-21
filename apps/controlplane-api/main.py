@@ -2376,6 +2376,26 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
     return {"total": len(items), "unlabeled": total_unlabeled, "items": items[:limit]}
 
 
+def _candidate_visible(c: dict, bound_w: float, bound_h: float, profile: str) -> bool:
+    """Is this AX node actually reachable in the captured screenshot? Facebook's SPA
+    dumps zero-size / off-screen / below-the-fold nodes into the AX tree — they aren't
+    clickable, so they shouldn't clutter the labeler (or the trainer's negatives).
+
+    bbox coords are in SCREENSHOT (device) pixels, so the caller passes bounds already
+    scaled by device_scale_factor. For a viewport capture, anything starting past the
+    bottom/right screenshot edge is below the fold / off-screen."""
+    b = c.get("bbox") or {}
+    w, h, x, y = b.get("width", 0), b.get("height", 0), b.get("x", 0), b.get("y", 0)
+    if w < 3 or h < 3 or x < -2 or y < -2 or x > 40000 or y > 80000:
+        return False
+    if profile == "viewport":
+        if bound_w and x >= bound_w:
+            return False
+        if bound_h and y >= bound_h:
+            return False
+    return True
+
+
 @app.get("/api/observations/{filename}/candidate_suggestion")
 def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
     """The data contract for the AX-CDP training space: the candidate set + the
@@ -2463,16 +2483,27 @@ def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
             "next": _neighbor(session_caps[pos + 1]) if pos is not None and pos + 1 < len(session_caps) else None,
         }
 
+    # bbox coords are in screenshot/device pixels → scale the CSS viewport bounds by DPR.
+    # Each candidate is tagged `visible`; the labeler hides off-screen ones by default
+    # but can reveal them, and the trainer can use the same flag for its negative set.
+    dsf = (capture.device_scale_factor if capture and capture.device_scale_factor else 1) or 1
+    bound_w = (capture.viewport_width or 0) * dsf if capture else 0
+    bound_h = (capture.viewport_height or 0) * dsf if capture else 0
+    profile = capture.capture_profile if capture else "viewport"
+    all_cands = observation.ax_candidates
+    out = [
+        {"candidate_id": c.get("candidate_id"), "role": c.get("role"),
+         "name": c.get("caption") or c.get("name") or "", "backend_node_id": c.get("backend_node_id"),
+         "bbox": c.get("bbox"), "visible": _candidate_visible(c, bound_w, bound_h, profile)}
+        for c in all_cands
+    ]
     return {
         "filename": filename, "fingerprint": fp[:12], "url": observation.url, "goal": goal,
         "screenshot_filename": screenshot_filename,
         "context": context, "trajectory": trajectory,
-        "candidates": [
-            {"candidate_id": c.get("candidate_id"), "role": c.get("role"),
-             "name": c.get("caption") or c.get("name") or "", "backend_node_id": c.get("backend_node_id"),
-             "bbox": c.get("bbox")}
-            for c in observation.ax_candidates
-        ],
+        "total_candidates": len(out),
+        "hidden_count": sum(1 for c in out if not c["visible"]),
+        "candidates": out,
         "suggestion": suggestion,
         "golden": {
             "positive_candidate_id": capture.positive_candidate_id if capture else None,
