@@ -103,7 +103,10 @@ export function TrainingSpaceSection() {
     setVerb(d.suggestion?.action_id && VERBS.includes(d.suggestion.action_id) ? d.suggestion.action_id : "click");
     const ctx = d.context || {};
     setFromState(ctx.observed_page_state || "");
-    setToState(ctx.post_action_state || d.trajectory?.next?.observed_page_state || "");
+    // EXPECTED next = the intended happy-path outcome. Deliberately NOT inferred from the
+    // actual next capture — the actual (which may be a captcha/interruption) is shown in
+    // the trajectory strip; expected is what SHOULD happen if the right action succeeds.
+    setToState(ctx.post_action_state || "");
     const qs = new URLSearchParams({ domain_id: ctx.domain_id || "", goal_id: ctx.goal_id || "", scenario_id: ctx.scenario_id || "" });
     fetch(`${API}/api/training/page-states?${qs}`).then((x) => (x.ok ? x.json() : [])).then(setPageStates).catch(() => setPageStates([]));
   }, []);
@@ -291,7 +294,7 @@ export function TrainingSpaceSection() {
             <span style={{ color: C.faint }}>→</span>
             <MiniNode label="now" node={{ url: item.url, screenshot_filename: item.screenshot_filename, observed_page_state: fromState }} current shotUrl={shotUrl} />
             <span style={{ color: C.faint }}>→</span>
-            <MiniNode label="to" node={item.trajectory?.next} target shotUrl={shotUrl} />
+            <MiniNode label="actually led to" node={item.trajectory?.next} target shotUrl={shotUrl} />
           </div>
         </div>
 
@@ -343,9 +346,9 @@ export function TrainingSpaceSection() {
                 background: v === verb ? "#fff" : "transparent", color: v === verb ? C.blue : C.muted, boxShadow: v === verb ? "0 1px 3px rgba(15,23,42,0.12)" : "none" }}>{v}</button>
             ))}
           </div>
-          <span style={{ fontSize: 12, color: C.muted }}>From</span>
+          <span style={{ fontSize: 12, color: C.muted }} title="What state is this page?">state</span>
           <StateSelect value={fromState} onChange={setFromState} options={pageStates} />
-          <span style={{ color: C.faint }}>→</span>
+          <span style={{ fontSize: 12, color: C.muted }} title="If the correct action succeeds, where SHOULD it go? (the intended happy path — not necessarily what actually happened)">· expect →</span>
           <StateSelect value={toState} onChange={setToState} options={pageStates} />
           <span style={{ fontSize: 12, marginLeft: "auto", display: "inline-flex", gap: 8 }}>
             <span style={{ color: C.blue, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
