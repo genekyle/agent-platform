@@ -35,6 +35,7 @@ export function PageStatePicker({
     return m;
   }, [goals]);
   const domainLabelOf = useCallback((id) => {
+    if (id === "_unscoped") return "Generic (all domains)";
     const d = (domains || []).find((x) => (x.domain_id || x.id) === id);
     return d?.display_name || d?.label || id;
   }, [domains]);
