@@ -1,34 +1,31 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 const VERBS = ["click", "type", "select"];
 
-// On-theme palette (matches App.css light theme).
 const C = {
   blue: "#2f6feb", blueSoft: "#eef4fc", ink: "#24344d", indigo: "#1e3a8a",
   muted: "#6b7280", faint: "#9ca3af", line: "#e5edf6", surface: "#f1f5f9",
   amber: "#b45309", amberBg: "#fef6e7", amberLine: "#f5d9a8",
   teal: "#0d9488", green: "#15803d", red: "#dc2626",
 };
-// candidate mark → visual
 const MARK = {
-  golden: { color: C.blue, glyph: "★", fill: "rgba(47,111,235,0.14)", label: "golden" },
-  acceptable: { color: C.teal, glyph: "✓", fill: "rgba(13,148,136,0.12)", label: "acceptable" },
-  rejected: { color: C.red, glyph: "✕", fill: "rgba(220,38,38,0.08)", label: "rejected" },
+  golden: { color: C.blue, glyph: "★", fill: "rgba(47,111,235,0.16)", label: "golden" },
+  acceptable: { color: C.teal, glyph: "✓", fill: "rgba(13,148,136,0.14)", label: "acceptable" },
+  rejected: { color: C.red, glyph: "✕", fill: "rgba(220,38,38,0.10)", label: "rejected" },
 };
 
+const boxArea = (b) => (b ? (b.width || 0) * (b.height || 0) : 0);
+const contains = (o, i) => !!o && !!i &&
+  o.x - 2 <= i.x && o.y - 2 <= i.y &&
+  o.x + o.width + 2 >= i.x + i.width && o.y + o.height + 2 >= i.y + i.height &&
+  boxArea(o) > boxArea(i);
+
 /**
- * Training Space — keyboard-driven AX confirm/correct with three candidate tiers.
- *
- *  golden (approve)  one preferred target → positive_candidate_id
- *  acceptable        also-correct-but-not-preferred (a state can have several)
- *  rejected          clearly wrong (strengthens the negative signal)
- *
- * Plus mission context + a from→now→to trajectory, so every label is a full
- * state-graph EDGE, not an isolated node.
- *
- *  ↑/↓ move cursor · 1-9 jump · G golden · A acceptable · X reject
- *  Enter commit · N none→needs-vision · → skip · T verb
+ * Training Space — keyboard + mouse AX confirm/correct with three candidate tiers.
+ * Image-dominant: tag golden/acceptable/rejected on the big screenshot or the list,
+ * then Save once. Per-candidate learning, so labeling a container does NOT label its
+ * children — they are separate candidates.
  */
 export function TrainingSpaceSection() {
   const [queue, setQueue] = useState(null);
@@ -36,7 +33,8 @@ export function TrainingSpaceSection() {
   const [item, setItem] = useState(null);
   const [goldenId, setGoldenId] = useState(null);
   const [cursorId, setCursorId] = useState(null);
-  const [marks, setMarks] = useState({});           // {candidate_id: "acceptable"|"rejected"}
+  const [hoveredId, setHoveredId] = useState(null);
+  const [marks, setMarks] = useState({});
   const [verb, setVerb] = useState("click");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -47,31 +45,44 @@ export function TrainingSpaceSection() {
   const [pageStates, setPageStates] = useState([]);
   const [fromState, setFromState] = useState("");
   const [toState, setToState] = useState("");
+  const imgRef = useRef(null);
 
   const items = queue?.items ?? [];
   const current = items[idx] ?? null;
   const shotUrl = (fn) => (fn ? `${API}/api/observations/screenshots/${encodeURIComponent(fn)}` : null);
   const markOf = (id) => (id === goldenId ? "golden" : marks[id] || null);
 
+  // nesting depth (containment) + z-rank (smaller area on top → click into nested)
+  const geom = useMemo(() => {
+    const cs = item?.candidates ?? [];
+    const depth = {}, z = {};
+    cs.forEach((a) => { depth[a.candidate_id] = cs.reduce((n, b) => n + (a.candidate_id !== b.candidate_id && contains(b.bbox, a.bbox) ? 1 : 0), 0); });
+    [...cs].sort((x, y) => boxArea(y.bbox) - boxArea(x.bbox)).forEach((a, i) => { z[a.candidate_id] = i + 1; });
+    return { depth, z };
+  }, [item]);
+
+  // list in reading order (top → left), indented by nesting depth
+  const ordered = useMemo(
+    () => [...(item?.candidates ?? [])].sort((a, b) => (a.bbox?.y ?? 0) - (b.bbox?.y ?? 0) || (a.bbox?.x ?? 0) - (b.bbox?.x ?? 0)),
+    [item],
+  );
+
   const loadQueue = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const r = await fetch(`${API}/api/training/label_queue?limit=80`);
       if (!r.ok) throw new Error(`Queue failed: ${r.status}`);
-      const d = await r.json();
-      setQueue(d); setIdx(0);
+      setQueue(await r.json()); setIdx(0);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }, []);
-
   useEffect(() => { loadQueue(); }, [loadQueue]);
 
   const loadItem = useCallback(async (filename) => {
-    setImgDims(null);
+    setImgDims(null); setHoveredId(null);
     const r = await fetch(`${API}/api/observations/${encodeURIComponent(filename)}/candidate_suggestion`);
     if (!r.ok) { setError(`Load failed: ${r.status}`); return; }
     const d = await r.json();
     setItem(d);
-    // pre-load any existing labels; else default golden = the model's suggestion
     const existing = d.golden?.candidate_labels || {};
     let golden = d.golden?.positive_candidate_id || null;
     const m = {};
@@ -89,17 +100,29 @@ export function TrainingSpaceSection() {
     const qs = new URLSearchParams({ domain_id: ctx.domain_id || "", goal_id: ctx.goal_id || "", scenario_id: ctx.scenario_id || "" });
     fetch(`${API}/api/training/page-states?${qs}`).then((x) => (x.ok ? x.json() : [])).then(setPageStates).catch(() => setPageStates([]));
   }, []);
-
   useEffect(() => { if (current) loadItem(current.filename); }, [current, loadItem]);
+
+  // keep bbox scaling correct on ANY window/layout resize (fixes drift-until-resize-back)
+  const recomputeDims = useCallback(() => {
+    const el = imgRef.current;
+    if (!el || !el.naturalWidth) return;
+    setImgDims({ natW: el.naturalWidth, natH: el.naturalHeight, dispW: el.clientWidth, dispH: el.clientHeight });
+  }, []);
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(recomputeDims);
+    ro.observe(el);
+    window.addEventListener("resize", recomputeDims);
+    return () => { ro.disconnect(); window.removeEventListener("resize", recomputeDims); };
+  }, [recomputeDims, item]);
 
   const showFlash = (text, color) => { setFlash({ text, color }); setTimeout(() => setFlash(null), 750); };
   const advance = useCallback(() => setIdx((i) => Math.min(i + 1, items.length)), [items.length]);
-
-  // tier setters (mutually exclusive per candidate)
   const setGolden = useCallback((id) => { setGoldenId(id); setMarks((m) => { const n = { ...m }; delete n[id]; return n; }); }, []);
   const toggleMark = useCallback((id, kind) => {
     setMarks((m) => { const n = { ...m }; if (n[id] === kind) delete n[id]; else n[id] = kind; return n; });
-    setGoldenId((g) => (g === id ? null : g));   // can't be golden and marked
+    setGoldenId((g) => (g === id ? null : g));
   }, []);
 
   const commit = useCallback(async () => {
@@ -143,12 +166,11 @@ export function TrainingSpaceSection() {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (!item) return;
-      const cands = item.candidates ?? [];
-      const pos = cands.findIndex((c) => c.candidate_id === cursorId);
-      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); setCursorId(cands[Math.min(pos + 1, cands.length - 1)]?.candidate_id ?? cursorId); }
-      else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); setCursorId(cands[Math.max(pos - 1, 0)]?.candidate_id ?? cursorId); }
-      else if (e.key >= "1" && e.key <= "9") { const n = Number(e.key) - 1; if (cands[n]) setCursorId(cands[n].candidate_id); }
+      if (!item || e.target.tagName === "SELECT") return;
+      const pos = ordered.findIndex((c) => c.candidate_id === cursorId);
+      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); setCursorId(ordered[Math.min(pos + 1, ordered.length - 1)]?.candidate_id ?? cursorId); }
+      else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); setCursorId(ordered[Math.max(pos - 1, 0)]?.candidate_id ?? cursorId); }
+      else if (e.key >= "1" && e.key <= "9") { const n = Number(e.key) - 1; if (ordered[n]) setCursorId(ordered[n].candidate_id); }
       else if (e.key === "g" || e.key === "G") { if (cursorId) setGolden(cursorId); }
       else if (e.key === "a" || e.key === "A") { if (cursorId) toggleMark(cursorId, "acceptable"); }
       else if (e.key === "x" || e.key === "X") { if (cursorId) toggleMark(cursorId, "rejected"); }
@@ -159,7 +181,7 @@ export function TrainingSpaceSection() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [item, cursorId, commit, markNone, advance, setGolden, toggleMark]);
+  }, [item, cursorId, ordered, commit, markNone, advance, setGolden, toggleMark]);
 
   const scaleBox = (bbox) => {
     if (!bbox || !imgDims) return null;
@@ -171,8 +193,7 @@ export function TrainingSpaceSection() {
   const labeled = stats.confirmed + stats.corrected + stats.none;
   const totalQ = queue?.unlabeled ?? 0;
   const progressPct = totalQ ? Math.min(100, Math.round((100 * labeled) / totalQ)) : 0;
-  const agreePct = stats.confirmed + stats.corrected > 0
-    ? Math.round((100 * stats.confirmed) / (stats.confirmed + stats.corrected)) : null;
+  const agreePct = stats.confirmed + stats.corrected > 0 ? Math.round((100 * stats.confirmed) / (stats.confirmed + stats.corrected)) : null;
   const sug = item?.suggestion;
   const acceptCount = Object.values(marks).filter((v) => v === "acceptable").length;
   const rejectCount = Object.values(marks).filter((v) => v === "rejected").length;
@@ -180,11 +201,11 @@ export function TrainingSpaceSection() {
   return (
     <section className="panel" style={{ padding: 22 }}>
       {/* header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 14 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 20, color: C.ink }}>Training Space</h2>
-          <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 540 }}>
-            Mark a <b style={{ color: C.blue }}>golden</b> pick, plus any <b style={{ color: C.teal }}>acceptable</b> alternates and <b style={{ color: C.red }}>rejected</b> ones. Your labels are the ground truth the cheap models train on.
+          <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 560 }}>
+            Tag a <b style={{ color: C.blue }}>golden</b> pick + any <b style={{ color: C.teal }}>acceptable</b> / <b style={{ color: C.red }}>rejected</b> ones, then Save. Each candidate is labeled on its own — tagging a container never labels what's inside it.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -197,13 +218,13 @@ export function TrainingSpaceSection() {
       </div>
 
       {/* progress */}
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12, color: C.muted }}>
-          <span>{labeled} labeled this session{totalQ ? ` · ${Math.max(0, totalQ - labeled)} left in queue` : ""}</span>
+          <span>{labeled} labeled this session{totalQ ? ` · ${Math.max(0, totalQ - labeled)} left` : ""}</span>
           {current ? (
             <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
               <PriorityChip reason={current.priority_reason} conf={current.suggestion_confidence} />
-              <span style={{ color: C.faint }}>{(current.url || "").replace("https://", "").slice(0, 48)}</span>
+              <span style={{ color: C.faint }}>{(current.url || "").replace("https://", "").slice(0, 56)}</span>
             </span>
           ) : null}
         </div>
@@ -227,169 +248,126 @@ export function TrainingSpaceSection() {
 
       {!done && item ? (
         <>
-        {/* mission band */}
-        {item.context ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "9px 14px", background: C.blueSoft, borderRadius: 12, marginBottom: 12 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: C.indigo, textTransform: "uppercase", letterSpacing: 0.5 }}>Mission</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{prettify(item.context.goal_id) || item.goal || "—"}</span>
-            <span className="chip">{item.context.domain_id}</span>
-            {item.context.scenario_id ? <span className="chip muted">{item.context.scenario_id}</span> : null}
-            {item.context.task_id ? <span className="chip muted">{item.context.task_id}</span> : null}
-            {item.context.element_query ? (
-              <span style={{ fontSize: 12, color: C.muted, flex: 1, minWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                intent: “{item.context.element_query}”
-              </span>
-            ) : null}
+        {/* mission + trajectory (compact, gives the image room) */}
+        <div style={{ display: "flex", gap: 10, alignItems: "stretch", marginBottom: 12, flexWrap: "wrap" }}>
+          {item.context ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "8px 12px", background: C.blueSoft, borderRadius: 12, flex: 1, minWidth: 280 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.indigo, textTransform: "uppercase", letterSpacing: 0.5 }}>Mission</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{prettify(item.context.goal_id) || item.goal || "—"}</span>
+              <span className="chip">{item.context.domain_id}</span>
+              {item.context.scenario_id ? <span className="chip muted">{item.context.scenario_id}</span> : null}
+              {item.context.element_query ? (
+                <span style={{ fontSize: 12, color: C.muted, flex: 1, minWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>intent: “{item.context.element_query}”</span>
+              ) : null}
+            </div>
+          ) : null}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <MiniNode label="from" node={item.trajectory?.prev} shotUrl={shotUrl} />
+            <span style={{ color: C.faint }}>→</span>
+            <MiniNode label="now" node={{ url: item.url, screenshot_filename: item.screenshot_filename, observed_page_state: fromState }} current shotUrl={shotUrl} />
+            <span style={{ color: C.faint }}>→</span>
+            <MiniNode label="to" node={item.trajectory?.next} target shotUrl={shotUrl} />
           </div>
-        ) : null}
-
-        {/* trajectory */}
-        <div style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 14 }}>
-          <TrajNode label="came from" node={item.trajectory?.prev} shotUrl={shotUrl} />
-          <TrajArrow verb={verb} />
-          <TrajNode label="now · labeling" node={{ url: item.url, screenshot_filename: item.screenshot_filename, observed_page_state: fromState }} current shotUrl={shotUrl} />
-          <TrajArrow />
-          <TrajNode label="leads to" node={item.trajectory?.next} target shotUrl={shotUrl} />
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.55fr) minmax(320px,1fr)", gap: 18, alignItems: "start" }}>
-          {/* screenshot stage */}
-          <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
-            background: C.surface, border: `1px solid ${C.line}`, borderRadius: 16, padding: 14, minHeight: 420 }}>
-            {shotUrl(item.screenshot_filename) ? (
-              <div style={{ position: "relative", display: "inline-block", lineHeight: 0, borderRadius: 8, overflow: "hidden", boxShadow: "0 4px 16px rgba(15,23,42,0.10)" }}>
-                <img src={shotUrl(item.screenshot_filename)} alt="capture" style={{ maxHeight: 560, maxWidth: "100%", width: "auto", height: "auto", display: "block" }}
-                  onLoad={(e) => setImgDims({ natW: e.currentTarget.naturalWidth, natH: e.currentTarget.naturalHeight, dispW: e.currentTarget.clientWidth, dispH: e.currentTarget.clientHeight })} />
-                {imgDims && (item.candidates ?? []).map((c) => {
-                  const box = scaleBox(c.bbox); if (!box) return null;
-                  const mk = markOf(c.candidate_id);
-                  const isCursor = c.candidate_id === cursorId;
-                  const isSug = !mk && c.candidate_id === sug?.candidate_id;
-                  const m = mk ? MARK[mk] : null;
-                  const color = m ? m.color : isSug ? C.amber : "rgba(99,102,241,0.4)";
-                  return (
-                    <div key={c.candidate_id} onClick={() => { setCursorId(c.candidate_id); setGolden(c.candidate_id); }} title={`${c.role}: ${c.name}`}
-                      style={{ position: "absolute", ...box, border: `2px solid ${color}`,
-                        background: m ? m.fill : "transparent", borderRadius: 4, cursor: "pointer",
-                        zIndex: mk ? 3 : isSug ? 2 : 1,
-                        boxShadow: isCursor ? `0 0 0 3px rgba(47,111,235,0.25)` : "none", transition: "background 120ms" }} />
-                  );
-                })}
-              </div>
-            ) : <div style={{ color: C.muted, fontSize: 13 }}>No screenshot for this capture.</div>}
-            {flash ? (
-              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 16,
-                background: "rgba(255,255,255,0.6)", pointerEvents: "none" }}>
-                <span style={{ fontSize: 22, fontWeight: 700, color: flash.color, background: "#fff", padding: "10px 20px", borderRadius: 999, boxShadow: "0 6px 20px rgba(15,23,42,0.15)" }}>
-                  {flash.text} ✓
-                </span>
-              </div>
-            ) : null}
-          </div>
-
-          {/* control column */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-            {sug?.candidate_id ? (
-              <div style={{ padding: "10px 12px", borderRadius: 12, background: C.amberBg, border: `1px solid ${C.amberLine}` }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.amber, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 3 }}>★ Model suggests</div>
-                <div style={{ fontSize: 13, color: C.ink }}>
-                  <strong>{candName(item, sug.candidate_id)}</strong>
-                  <span style={{ color: C.muted }}> · {sug.action_id} · conf {sug.confidence}{sug.needs_human ? " · ⚠ escalated" : ""}</span>
-                </div>
-              </div>
-            ) : (
-              <div style={{ padding: "10px 12px", borderRadius: 12, background: C.surface, border: `1px solid ${C.line}`, fontSize: 13, color: C.muted }}>
-                No model suggestion — cold state. Pick the correct element.
-              </div>
-            )}
-
-            {/* action verb */}
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{ fontSize: 12, color: C.muted }}>Action</span>
-              <div style={{ display: "inline-flex", background: C.surface, borderRadius: 10, padding: 3, gap: 2 }}>
-                {VERBS.map((v) => (
-                  <button key={v} onClick={() => setVerb(v)}
-                    style={{ border: "none", cursor: "pointer", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600,
-                      background: v === verb ? "#fff" : "transparent", color: v === verb ? C.blue : C.muted,
-                      boxShadow: v === verb ? "0 1px 3px rgba(15,23,42,0.12)" : "none" }}>{v}</button>
-                ))}
-              </div>
-              <Kbd>T</Kbd>
-            </div>
-
-            {/* transition */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-              <span style={{ color: C.muted }}>From</span>
-              <StateSelect value={fromState} onChange={setFromState} options={pageStates} />
-              <span style={{ color: C.faint }}>→</span>
-              <span style={{ color: C.muted }}>To</span>
-              <StateSelect value={toState} onChange={setToState} options={pageStates} />
-            </div>
-
-            {/* candidate list — tag each candidate's tier, then Save once */}
-            <div style={{ fontSize: 11, color: C.muted, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Tag each candidate, then save:</span>
-              <span style={{ display: "inline-flex", gap: 8 }}>
-                <span style={{ color: C.blue, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
-                <span style={{ color: C.teal, fontWeight: 600 }}>{acceptCount} acc</span>
-                <span style={{ color: C.red, fontWeight: 600 }}>{rejectCount} rej</span>
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 300, overflowY: "auto", paddingRight: 2 }}>
-              {(item.candidates ?? []).map((c, i) => {
+        {/* BIG screenshot stage */}
+        <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
+          background: C.surface, border: `1px solid ${C.line}`, borderRadius: 16, padding: 14, marginBottom: 12 }}>
+          {shotUrl(item.screenshot_filename) ? (
+            <div style={{ position: "relative", display: "inline-block", lineHeight: 0, borderRadius: 8, overflow: "hidden", boxShadow: "0 4px 16px rgba(15,23,42,0.10)" }}>
+              <img ref={imgRef} src={shotUrl(item.screenshot_filename)} alt="capture"
+                style={{ maxHeight: "64vh", maxWidth: "100%", width: "auto", height: "auto", display: "block" }} onLoad={recomputeDims} />
+              {imgDims && (item.candidates ?? []).map((c) => {
+                const box = scaleBox(c.bbox); if (!box) return null;
                 const id = c.candidate_id;
-                const mk = markOf(id);
-                const m = mk ? MARK[mk] : null;
-                const isCursor = id === cursorId;
-                const isSug = id === sug?.candidate_id;
+                const mk = markOf(id); const m = mk ? MARK[mk] : null;
+                const isCursor = id === cursorId, isHover = id === hoveredId;
+                const isSug = !m && id === sug?.candidate_id;
+                const active = !!m || isCursor || isHover;
+                const color = m ? m.color : isCursor ? C.blue : isHover ? C.indigo : isSug ? C.amber : "rgba(99,102,241,0.5)";
                 return (
-                  <div key={id} onClick={() => setCursorId(id)}
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 10, cursor: "pointer",
-                      background: m ? m.fill : "#fff", border: `1px solid ${m ? m.color : C.line}`,
-                      outline: isCursor ? `2px solid rgba(47,111,235,0.40)` : "none", outlineOffset: -1, transition: "background 120ms" }}>
-                    <span style={{ width: 17, height: 17, flexShrink: 0, borderRadius: 5, background: isCursor ? C.blue : C.surface,
-                      color: isCursor ? "#fff" : C.faint, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      {i < 9 ? i + 1 : "·"}
-                    </span>
-                    <span className="chip muted" style={{ flexShrink: 0 }}>{c.role}</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13,
-                      color: C.ink, textDecoration: mk === "rejected" ? "line-through" : "none", opacity: mk === "rejected" ? 0.6 : 1 }}>
-                      {c.name || <span style={{ color: C.faint }}>—</span>}
-                      {isSug ? <span title="model suggestion" style={{ color: C.amber, fontSize: 10, marginLeft: 6 }}>★sug</span> : null}
-                    </span>
-                    {/* explicit per-candidate tier toggles */}
-                    <div style={{ display: "inline-flex", gap: 3, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-                      <TierBtn active={mk === "golden"} color={C.blue} title="Golden (the preferred pick)" onClick={() => { setCursorId(id); setGolden(id); }}>G</TierBtn>
-                      <TierBtn active={mk === "acceptable"} color={C.teal} title="Acceptable alternate" onClick={() => { setCursorId(id); toggleMark(id, "acceptable"); }}>A</TierBtn>
-                      <TierBtn active={mk === "rejected"} color={C.red} title="Rejected (wrong)" onClick={() => { setCursorId(id); toggleMark(id, "rejected"); }}>X</TierBtn>
-                    </div>
-                  </div>
+                  <div key={id} title={`${c.role}: ${c.name}`}
+                    onMouseEnter={() => setHoveredId(id)} onMouseLeave={() => setHoveredId((h) => (h === id ? null : h))}
+                    onClick={() => { setCursorId(id); setGolden(id); }}
+                    style={{ position: "absolute", ...box, borderRadius: 3, cursor: "pointer",
+                      border: active ? `2px solid ${color}` : `1px solid rgba(148,163,184,0.4)`,
+                      background: m ? m.fill : isHover ? "rgba(47,111,235,0.08)" : "transparent",
+                      opacity: active || isSug ? 1 : 0.4,
+                      zIndex: (active ? 1000 : 0) + (geom.z[id] || 0), transition: "opacity 100ms" }} />
                 );
               })}
             </div>
+          ) : <div style={{ color: C.muted, fontSize: 13, padding: 40 }}>No screenshot for this capture.</div>}
+          {flash ? (
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 16, background: "rgba(255,255,255,0.55)", pointerEvents: "none" }}>
+              <span style={{ fontSize: 22, fontWeight: 700, color: flash.color, background: "#fff", padding: "10px 20px", borderRadius: 999, boxShadow: "0 6px 20px rgba(15,23,42,0.15)" }}>{flash.text} ✓</span>
+            </div>
+          ) : null}
+        </div>
 
-            <div style={{ fontSize: 11, color: C.faint, textAlign: "center" }}>
-              click <b style={{ color: C.blue }}>G</b>/<b style={{ color: C.teal }}>A</b>/<b style={{ color: C.red }}>X</b> on any row · or cursor + <Kbd>G</Kbd><Kbd>A</Kbd><Kbd>X</Kbd> · tag as many as you want
-            </div>
+        {/* control bar */}
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          {sug?.candidate_id ? (
+            <span style={{ fontSize: 12, color: C.amber, background: C.amberBg, border: `1px solid ${C.amberLine}`, borderRadius: 999, padding: "4px 10px" }}>
+              ★ suggests <b>{candName(item, sug.candidate_id)}</b> · {sug.confidence}
+            </span>
+          ) : <span style={{ fontSize: 12, color: C.muted }}>cold state — no suggestion</span>}
+          <div style={{ display: "inline-flex", background: C.surface, borderRadius: 10, padding: 3, gap: 2 }}>
+            {VERBS.map((v) => (
+              <button key={v} onClick={() => setVerb(v)} style={{ border: "none", cursor: "pointer", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600,
+                background: v === verb ? "#fff" : "transparent", color: v === verb ? C.blue : C.muted, boxShadow: v === verb ? "0 1px 3px rgba(15,23,42,0.12)" : "none" }}>{v}</button>
+            ))}
+          </div>
+          <span style={{ fontSize: 12, color: C.muted }}>From</span>
+          <StateSelect value={fromState} onChange={setFromState} options={pageStates} />
+          <span style={{ color: C.faint }}>→</span>
+          <StateSelect value={toState} onChange={setToState} options={pageStates} />
+          <span style={{ fontSize: 12, marginLeft: "auto", display: "inline-flex", gap: 8 }}>
+            <span style={{ color: C.blue, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
+            <span style={{ color: C.teal, fontWeight: 600 }}>{acceptCount} acc</span>
+            <span style={{ color: C.red, fontWeight: 600 }}>{rejectCount} rej</span>
+          </span>
+          <button className="primary-btn" onClick={commit} disabled={busy || !goldenId}>
+            {goldenId ? `Save (${(goldenId ? 1 : 0) + acceptCount + rejectCount})` : "Pick a golden first"} <Kbd dark>↵</Kbd>
+          </button>
+          <button className="ghost-btn" onClick={markNone} disabled={busy} title="No candidate is correct → flag for vision">None <Kbd>N</Kbd></button>
+          <button className="ghost-btn" onClick={advance} disabled={busy}>Skip <Kbd>→</Kbd></button>
+        </div>
 
-            <button className="primary-btn" onClick={commit} disabled={busy || !goldenId} style={{ width: "100%" }}>
-              {goldenId ? `Save labels (${(goldenId ? 1 : 0) + acceptCount + rejectCount} marked)` : "Mark a golden pick first"} &nbsp;<Kbd dark>↵</Kbd>
-            </button>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="ghost-btn" style={{ flex: 1 }} onClick={markNone} disabled={busy} title="No candidate is correct → flag for the vision layer">
-                None&nbsp;<Kbd>N</Kbd>
-              </button>
-              <button className="ghost-btn" style={{ flex: 1 }} onClick={advance} disabled={busy} title="Skip without labeling">
-                Skip&nbsp;<Kbd>→</Kbd>
-              </button>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", fontSize: 11, color: C.faint }}>
-              <span><Kbd>↑</Kbd><Kbd>↓</Kbd> move</span>
-              <span><Kbd>1</Kbd>–<Kbd>9</Kbd> jump</span>
-              <span><Kbd>↵</Kbd> commit</span>
-              <span><Kbd>N</Kbd> needs-vision</span>
-              <span><Kbd>→</Kbd> skip</span>
-            </div>
+        {/* candidate list — bottom, scrollable, indented by nesting */}
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: C.surface, fontSize: 11, color: C.muted }}>
+            <span>{ordered.length} candidates · indented by nesting · hover to locate · click <b style={{ color: C.blue }}>G</b>/<b style={{ color: C.teal }}>A</b>/<b style={{ color: C.red }}>X</b></span>
+            <span>cursor + <Kbd>G</Kbd><Kbd>A</Kbd><Kbd>X</Kbd></span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", maxHeight: 220, overflowY: "auto" }}>
+            {ordered.map((c, i) => {
+              const id = c.candidate_id;
+              const mk = markOf(id); const m = mk ? MARK[mk] : null;
+              const isCursor = id === cursorId, isHover = id === hoveredId, isSug = id === sug?.candidate_id;
+              return (
+                <div key={id} onClick={() => setCursorId(id)} onMouseEnter={() => setHoveredId(id)} onMouseLeave={() => setHoveredId((h) => (h === id ? null : h))}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", cursor: "pointer",
+                    background: m ? m.fill : isHover ? "rgba(47,111,235,0.06)" : "#fff",
+                    borderLeft: `3px solid ${m ? m.color : isCursor ? C.blue : "transparent"}`,
+                    borderBottom: `1px solid ${C.line}` }}>
+                  <span style={{ width: 16, color: C.faint, fontSize: 10, fontWeight: 700, textAlign: "right", flexShrink: 0 }}>{i < 9 ? i + 1 : ""}</span>
+                  <span style={{ width: (geom.depth[id] || 0) * 16, flexShrink: 0 }} />
+                  {geom.depth[id] ? <span style={{ color: C.faint, fontSize: 11, flexShrink: 0 }}>↳</span> : null}
+                  <span className="chip muted" style={{ flexShrink: 0 }}>{c.role}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: C.ink,
+                    textDecoration: mk === "rejected" ? "line-through" : "none", opacity: mk === "rejected" ? 0.6 : 1 }}>
+                    {c.name || <span style={{ color: C.faint }}>—</span>}
+                    {isSug ? <span title="model suggestion" style={{ color: C.amber, fontSize: 10, marginLeft: 6 }}>★sug</span> : null}
+                  </span>
+                  <div style={{ display: "inline-flex", gap: 3, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+                    <TierBtn active={mk === "golden"} color={C.blue} title="Golden" onClick={() => { setCursorId(id); setGolden(id); }}>G</TierBtn>
+                    <TierBtn active={mk === "acceptable"} color={C.teal} title="Acceptable" onClick={() => { setCursorId(id); toggleMark(id, "acceptable"); }}>A</TierBtn>
+                    <TierBtn active={mk === "rejected"} color={C.red} title="Rejected" onClick={() => { setCursorId(id); toggleMark(id, "rejected"); }}>X</TierBtn>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
         </>
@@ -406,44 +384,26 @@ function prettify(id) {
   return id ? String(id).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()) : "";
 }
 
-function TrajNode({ label, node, current, target, shotUrl }) {
-  const empty = !node;
-  const url = node?.url || "";
-  const state = node?.observed_page_state;
+// compact trajectory node for the top strip
+function MiniNode({ label, node, current, target, shotUrl }) {
   const thumb = shotUrl(node?.screenshot_filename);
   const accent = current ? "#2f6feb" : target ? "#b45309" : "#94a3b8";
   return (
-    <div style={{ flex: 1, minWidth: 0, border: `1px solid ${current ? accent : "#e5edf6"}`, borderRadius: 12, overflow: "hidden",
-      background: "#fff", boxShadow: current ? "0 0 0 3px rgba(47,111,235,0.12)" : "none", opacity: empty ? 0.55 : 1 }}>
-      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: accent, padding: "5px 8px 3px" }}>{label}</div>
-      <div style={{ height: 56, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-        {empty ? <span style={{ fontSize: 11, color: "#9ca3af" }}>{target ? "— end —" : "— start —"}</span>
-          : thumb ? <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
-          : <span style={{ fontSize: 11, color: "#9ca3af" }}>no shot</span>}
+    <div style={{ width: 96, border: `1px solid ${current ? accent : "#e5edf6"}`, borderRadius: 10, overflow: "hidden", background: "#fff", opacity: node ? 1 : 0.5 }}>
+      <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: accent, padding: "3px 6px 1px" }}>{label}</div>
+      <div style={{ height: 34, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        {thumb ? <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} /> : <span style={{ fontSize: 9, color: "#9ca3af" }}>{target ? "end" : node ? "" : "start"}</span>}
       </div>
-      <div style={{ padding: "5px 8px" }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: state ? "#24344d" : "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {state ? prettify(state) : "unlabeled state"}
-        </div>
-        <div style={{ fontSize: 10, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url.replace("https://", "") || "—"}</div>
+      <div style={{ fontSize: 9, color: "#6b7280", padding: "2px 6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {node?.observed_page_state ? prettify(node.observed_page_state) : (node ? "—" : "")}
       </div>
-    </div>
-  );
-}
-
-function TrajArrow({ verb }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#9ca3af", minWidth: 34 }}>
-      {verb ? <span style={{ fontSize: 9, fontWeight: 600, color: "#6b7280" }}>{verb}</span> : null}
-      <span style={{ fontSize: 18, lineHeight: 1 }}>→</span>
     </div>
   );
 }
 
 function StateSelect({ value, onChange, options }) {
   return (
-    <select value={value || ""} onChange={(e) => onChange(e.target.value)} className="form-select"
-      style={{ fontSize: 12, padding: "4px 6px", maxWidth: 150 }}>
+    <select value={value || ""} onChange={(e) => onChange(e.target.value)} className="form-select" style={{ fontSize: 12, padding: "4px 6px", maxWidth: 150 }}>
       <option value="">— unset —</option>
       {options.map((s) => <option key={s.state_id} value={s.state_id}>{s.display_name}</option>)}
     </select>
@@ -455,13 +415,11 @@ function candName(item, id) {
   return c ? `${c.role}: ${c.name || "—"}` : (id || "—");
 }
 
-// A small per-candidate tier toggle (G / A / X). Filled in its color when active.
 function TierBtn({ active, color, title, onClick, children }) {
   return (
     <button title={title} onClick={onClick}
-      style={{ width: 24, height: 24, borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer",
-        border: `1px solid ${active ? color : "#d4deeb"}`,
-        background: active ? color : "#fff", color: active ? "#fff" : "#94a3b8", lineHeight: 1, padding: 0 }}>
+      style={{ width: 22, height: 22, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", padding: 0, lineHeight: 1,
+        border: `1px solid ${active ? color : "#d4deeb"}`, background: active ? color : "#fff", color: active ? "#fff" : "#94a3b8" }}>
       {children}
     </button>
   );
@@ -489,13 +447,8 @@ function PriorityChip({ reason, conf }) {
 
 function Kbd({ children, dark }) {
   return (
-    <kbd style={{
-      display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 18, height: 18, padding: "0 4px",
-      borderRadius: 5, fontSize: 11, fontWeight: 600, fontFamily: "inherit",
-      background: dark ? "rgba(255,255,255,0.22)" : "#fff",
-      color: dark ? "#fff" : "#475569",
-      border: dark ? "1px solid rgba(255,255,255,0.35)" : "1px solid #d4deeb",
-      boxShadow: dark ? "none" : "0 1px 0 #d4deeb",
-    }}>{children}</kbd>
+    <kbd style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 18, height: 18, padding: "0 4px", borderRadius: 5,
+      fontSize: 11, fontWeight: 600, fontFamily: "inherit", background: dark ? "rgba(255,255,255,0.22)" : "#fff",
+      color: dark ? "#fff" : "#475569", border: dark ? "1px solid rgba(255,255,255,0.35)" : "1px solid #d4deeb", boxShadow: dark ? "none" : "0 1px 0 #d4deeb" }}>{children}</kbd>
   );
 }
