@@ -140,12 +140,14 @@ export function TrainingSpaceSection() {
 
   // Create a page-state (goal-scoped to this capture's goal); returns the created state
   // so the shared picker can auto-select it. Appended to options so it shows immediately.
-  const createPageState = useCallback(async (name, { category, description } = {}) => {
+  const createPageState = useCallback(async (name, { category, description, stage } = {}) => {
     const r = await fetch(`${API}/api/training/page-states`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         display_name: name, description: description || null,
-        scope: "goal", goal_id: item?.context?.goal_id || "", category: category || "general", stage: "neutral",
+        // pin to THIS capture's domain (no cross-domain leak) + chosen lifecycle stage
+        scope: "goal", goal_id: item?.context?.goal_id || "", domain_id: item?.context?.domain_id || null,
+        category: category || "general", stage: stage || "neutral",
       }),
     });
     if (!r.ok) throw new Error(`Create state failed: ${r.status}`);

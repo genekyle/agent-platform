@@ -27,6 +27,7 @@ export function PageStatePicker({
   const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState("Login");
   const [newDesc, setNewDesc] = useState("");
+  const [newStage, setNewStage] = useState("unauthenticated");
   const [error, setError] = useState(null);
 
   const goalById = useMemo(() => {
@@ -99,7 +100,7 @@ export function PageStatePicker({
     if (!newName.trim() || !onCreate) return;
     setError(null);
     try {
-      const created = await onCreate(newName.trim(), { category: newCategory, description: newDesc.trim() || null });
+      const created = await onCreate(newName.trim(), { category: newCategory, description: newDesc.trim() || null, stage: newStage });
       if (created && sid(created)) { onChange(sid(created)); setNewName(""); setNewDesc(""); setAdding(false); }
     } catch (e) { setError(e.message || String(e)); }
   };
@@ -247,6 +248,9 @@ export function PageStatePicker({
           <input className="form-input" list="dd-known-categories" value={newCategory} placeholder="Category"
             onChange={(e) => setNewCategory(e.target.value)} />
           <datalist id="dd-known-categories">{knownCategories.map((c) => <option key={c} value={c} />)}</datalist>
+          <select className="form-input" value={newStage} onChange={(e) => setNewStage(e.target.value)} title="Which lifecycle folder this state lives in">
+            {STAGE_ORDER.map((s) => <option key={s} value={s}>{STAGE_LABEL[s]}</option>)}
+          </select>
           <button className="primary-btn" type="button" onClick={create} disabled={!newName.trim()}>Add &amp; select</button>
           <input className="form-input" value={newDesc} placeholder="Description — how to recognize this state (recommended)"
             onChange={(e) => setNewDesc(e.target.value)} style={{ flexBasis: "100%" }}
