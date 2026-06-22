@@ -13,6 +13,7 @@ import { PageStatesSection } from "./components/controlplane/PageStatesSection";
 import { CoverageSection } from "./components/controlplane/CoverageSection";
 import { ScorecardSection } from "./components/controlplane/ScorecardSection";
 import { TrainingSpaceSection } from "./components/controlplane/TrainingSpaceSection";
+import { StateGraphSection } from "./components/controlplane/StateGraphSection";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 
@@ -1095,6 +1096,8 @@ export default function App() {
       sectionContent = <ScorecardSection />;
     } else if (activeSectionId === "training-space") {
       sectionContent = <TrainingSpaceSection />;
+    } else if (activeSectionId === "state-graph") {
+      sectionContent = <StateGraphSection />;
     } else {
       sectionContent = <LabSection section={activeSectionId} />;
     }

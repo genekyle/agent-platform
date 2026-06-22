@@ -76,6 +76,7 @@ export const CONTROL_PLANE_NAV = {
       { id: "eval", label: "Select Metrics", subtitle: "Flywheel metrics: cache-hit rate, escalation rate, cost-per-task." },
       { id: "training-space", label: "Training Space", subtitle: "Keyboard-driven AX confirm/correct — turn the model's picks into golden labels." },
       { id: "scorecard", label: "Corpus Scorecard", subtitle: "The quality gate: train-eligible vs quarantined states, by confidence/verify/human-review." },
+      { id: "state-graph", label: "State Graph", subtitle: "The agent's map of the world: page-states as nodes, transitions as edges (intended vs observed)." },
       { id: "visualization", label: "Visualization", subtitle: "Cost/day, selections/day, layer mix, and reason codes over the corpus." },
       { id: "models", label: "Models", subtitle: "Grounding models registered against each training target, with last-eval summary." },
       { id: "eval-runs", label: "Eval Runs", subtitle: "Recent eval runs across all models, ordered by recency." },

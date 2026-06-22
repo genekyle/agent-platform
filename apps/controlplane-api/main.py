@@ -2526,6 +2526,94 @@ def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/training/state_graph")
+def training_state_graph(db: Session = Depends(get_db)):
+    """The agent's map of the world — nodes = page-states, edges = transitions.
+
+    Two edge sources, merged by (from,to):
+      * intended  — a capture's observed_page_state → post_action_state (the human-labeled
+        "this action should lead there"); carries the action verb. The planner's substrate.
+      * observed  — consecutive captures in a session (prev.observed → cur.observed): what
+        actually happened. Divergence from intended = where reality branches (captcha, etc).
+
+    Nodes carry metadata (domain/stage/category/terminal) + how many captures use them +
+    whether any has a golden pick — so the Lab can render coverage at a glance and you can
+    see which nodes are thin (need more L3 examples)."""
+    # node metadata from the page-state registry
+    meta = {}
+    for s in db.scalars(select(PageStateRegistry).where(PageStateRegistry.status == "active")).all():
+        meta[s.state_id] = {
+            "state_id": s.state_id, "display_name": s.display_name, "scope": s.scope,
+            "domain_id": s.domain_id, "goal_id": s.goal_id, "category": s.category or "general",
+            "stage": s.stage or "neutral",
+        }
+    goal_domain = {g.goal_id: g.domain_id for g in db.scalars(select(GoalRegistry)).all()}
+
+    caps = db.scalars(select(TrainingCapture)).all()
+    node_stat = {}   # state_id -> {count, golden, domains:set}
+    def _bump(state_id, domain_id, golden):
+        if not state_id:
+            return
+        n = node_stat.setdefault(state_id, {"count": 0, "golden": 0, "domains": set()})
+        n["count"] += 1
+        n["golden"] += 1 if golden else 0
+        if domain_id:
+            n["domains"].add(domain_id)
+
+    edges = {}  # (from,to) -> {actions:set, intended:int, observed:int}
+    def _edge(a, b, action=None, kind="intended"):
+        if not a or not b or a == b:
+            return
+        e = edges.setdefault((a, b), {"actions": set(), "intended": 0, "observed": 0})
+        if action:
+            e["actions"].add(action)
+        e[kind] += 1
+
+    for c in caps:
+        _bump(c.observed_page_state, c.domain_id, c.positive_candidate_id is not None)
+        if c.observed_page_state and c.post_action_state:
+            _edge(c.observed_page_state, c.post_action_state, c.action_type_hint, "intended")
+
+    # observed edges from session ordering
+    by_session = {}
+    for c in caps:
+        by_session.setdefault(c.training_session_id, []).append(c)
+    for caps_in in by_session.values():
+        ordered = sorted(caps_in, key=lambda c: c.captured_at)
+        for prev, cur in zip(ordered, ordered[1:]):
+            if prev.observed_page_state and cur.observed_page_state:
+                _edge(prev.observed_page_state, cur.observed_page_state, None, "observed")
+
+    def _domain_of(sid):
+        m = meta.get(sid, {})
+        return m.get("domain_id") or goal_domain.get(m.get("goal_id")) or (
+            "global" if m.get("scope") == "global" else "generic")
+
+    # ensure every edge endpoint is a node (a target only seen as "expected next" has no
+    # capture observed as it yet → count 0, but it must still appear in the graph)
+    for (a, b) in edges:
+        for sid in (a, b):
+            node_stat.setdefault(sid, {"count": 0, "golden": 0, "domains": set()})
+
+    nodes = []
+    for sid, stat in node_stat.items():
+        m = meta.get(sid, {"display_name": sid, "category": "general", "stage": "neutral", "scope": "unknown"})
+        nodes.append({
+            "state_id": sid, "display_name": m.get("display_name", sid),
+            "domain": _domain_of(sid), "stage": m.get("stage", "neutral"),
+            "category": m.get("category", "general"), "terminal": m.get("category") == "terminal",
+            "count": stat["count"], "has_golden": stat["golden"] > 0,
+        })
+    edge_list = [
+        {"from": a, "to": b, "actions": sorted(e["actions"]),
+         "intended": e["intended"], "observed": e["observed"],
+         "count": e["intended"] + e["observed"]}
+        for (a, b), e in edges.items()
+    ]
+    return {"generated_at": utcnow().isoformat(), "nodes": nodes, "edges": edge_list,
+            "domains": sorted({n["domain"] for n in nodes})}
+
+
 @app.get("/api/training/scorecard")
 def training_scorecard(db: Session = Depends(get_db)):
     """Corpus health + the quality gate — the 'is this data good enough to train on?'
