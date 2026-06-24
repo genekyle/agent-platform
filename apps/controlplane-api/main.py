@@ -3273,6 +3273,25 @@ def train_stage_observer_endpoint(db: Session = Depends(get_db)):
     return result
 
 
+@app.post("/api/training/train_state_transition")
+def train_state_transition_endpoint(db: Session = Depends(get_db)):
+    """Train the state-transition model (the planner's look-ahead edge-model): given
+    (from_state, action) predict to_state. Built from captures with BOTH observed_page_state
+    and post_action_state — the same intended edges the state graph renders. A smoothed
+    transition table with a (from_state) backoff; the substrate planner graph-search uses."""
+    import state_transition
+
+    captures = db.scalars(
+        select(TrainingCapture)
+        .where(TrainingCapture.observed_page_state.isnot(None))
+        .where(TrainingCapture.post_action_state.isnot(None))
+    ).all()
+    result = state_transition.train_transition_model(_artifacts_dir(), captures=captures)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
 # ===== Models registry + eval =====
 #
 # v0 ships `vision_element_grounding__v0_zero_shot_florence2_base` — a

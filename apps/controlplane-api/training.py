@@ -83,7 +83,8 @@ TRAINING_TARGETS = [
 # trainable far sooner (only ~3 classes), so we report it separately.
 _L3_MIN_PER_STATE = 10   # examples before a page-state class is "deep" enough to train
 _L3_MIN_DEEP_STATES = 3  # need at least this many deep states for a useful classifier
-_TRANSITION_MIN_PAIRS = 10  # (before, after) pairs before the transition model is worth training
+_TRANSITION_MIN_PAIRS = 10     # distinct (before, after) edges → a usable planner MAP
+_TRANSITION_MIN_REPEATED = 5   # edges seen ≥2x → enough repetition to GENERALIZE / hold out
 
 
 def utcnow_iso() -> str:
@@ -700,10 +701,15 @@ def compare_training_targets(artifacts_root: Path, *, captures: list[Any]) -> di
     observed_state_counts: Counter[str] = Counter(
         c.observed_page_state for c in captures if getattr(c, "observed_page_state", None)
     )
-    transition_pairs = sum(
-        1 for c in captures
+    # Transition edges with MULTIPLICITY. Raw pair count alone is misleading: 14 pairs
+    # that are all unique is a memorized map, not a model you can hold out and evaluate.
+    # Generalization needs edges seen more than once, so track repeated edges too.
+    edge_counts: Counter[tuple] = Counter(
+        (c.observed_page_state, getattr(c, "action_type_hint", None) or "any", c.post_action_state)
+        for c in captures
         if getattr(c, "observed_page_state", None) and getattr(c, "post_action_state", None)
     )
+    transition_pairs = sum(edge_counts.values())
     signals = {
         "captures": captures,
         "reviewed_count": reviewed_count,
@@ -711,6 +717,8 @@ def compare_training_targets(artifacts_root: Path, *, captures: list[Any]) -> di
         "scenario_count": len(scenario_counts),
         "observed_state_counts": observed_state_counts,
         "transition_pairs": transition_pairs,
+        "distinct_transitions": len(edge_counts),
+        "repeated_transitions": sum(1 for n in edge_counts.values() if n >= 2),
     }
 
     target_rows = []
@@ -793,12 +801,25 @@ def _target_readiness(target_id: str, signals: dict[str, Any]) -> dict[str, Any]
         return {"ready": ready, "blocker": blocker, "detail": detail}
 
     if target_id == "state_transition":
-        ready = transition_pairs >= _TRANSITION_MIN_PAIRS
-        return {"ready": ready, "detail": {"transition_pairs": transition_pairs,
-                                           "needed": _TRANSITION_MIN_PAIRS},
-                "blocker": None if ready else
-                f"Needs ≥{_TRANSITION_MIN_PAIRS} captures with BOTH observed + post_action state "
-                f"(have {transition_pairs}). Label post_action_state on transition captures."}
+        distinct = signals["distinct_transitions"]
+        repeated = signals["repeated_transitions"]
+        # Two bars: a usable planner MAP needs enough distinct edges; a GENERALIZING /
+        # evaluable model needs edges seen more than once (else held-out eval is 0 by
+        # construction — every eval edge is novel). We gate on the stronger bar.
+        map_usable = distinct >= _TRANSITION_MIN_PAIRS
+        ready = repeated >= _TRANSITION_MIN_REPEATED
+        detail = {"transition_pairs": transition_pairs, "distinct_edges": distinct,
+                  "repeated_edges": repeated, "needed_repeated": _TRANSITION_MIN_REPEATED,
+                  "map_usable_now": map_usable}
+        if ready:
+            blocker = None
+        else:
+            note = (" A memorized planner map IS usable now for graph-search over known states."
+                    if map_usable else "")
+            blocker = (f"Generalization data-gated: {repeated}/{_TRANSITION_MIN_REPEATED} edges seen "
+                       f"≥2x ({distinct} distinct edges, mostly unique → held-out eval ~0)."
+                       f" Re-capture COMMON transitions to repeat edges.{note}")
+        return {"ready": ready, "blocker": blocker, "detail": detail}
 
     # task_outcome and anything else: needs whole labeled session traces.
     ready = transition_pairs >= _TRANSITION_MIN_PAIRS and len(state_counts) >= _L3_MIN_DEEP_STATES
