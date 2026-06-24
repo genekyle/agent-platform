@@ -14,7 +14,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from db import Base, engine, get_db
@@ -483,6 +483,9 @@ def _training_annotation_from_capture(capture: TrainingCapture) -> dict:
         "capture_profile": capture.capture_profile,
         "notes": capture.notes,
         "positive_candidate_id": capture.positive_candidate_id,
+        "label_source": capture.label_source,
+        "label_confidence": capture.label_confidence,
+        "verified_at": capture.verified_at.isoformat() if capture.verified_at else None,
         "rejected_candidate_ids": capture.rejected_candidate_ids or [],
         "candidate_labels": capture.candidate_labels or {},
         "approved_bbox": capture.approved_bbox,
@@ -578,6 +581,10 @@ def _migrate_schema() -> None:
         ("model_eval_run", "resumed_from", "VARCHAR(64)"),
         # training_sessions catchall-training vs workhorse split (v8)
         ("training_sessions", "purpose", "VARCHAR(30) NOT NULL DEFAULT 'data_collection'"),
+        # training_captures distillation provenance (v9)
+        ("training_captures", "label_source", "VARCHAR(20)"),
+        ("training_captures", "label_confidence", "DOUBLE PRECISION"),
+        ("training_captures", "verified_at", "TIMESTAMPTZ"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -607,6 +614,20 @@ def _mark_zombie_eval_runs(db: Session) -> None:
         db.commit()
 
 
+def backfill_label_sources(db: Session) -> None:
+    """Stamp pre-existing golden labels (created before provenance tracking) as 'human'.
+    They were all hand-confirmed in the labeler, so the auto-promotion pass must treat
+    them as human-owned (never overwrite) and the scorecard should count them as human."""
+    stmt = (update(TrainingCapture)
+            .where(TrainingCapture.label_source.is_(None))
+            .where(or_(TrainingCapture.review_status.in_(["reviewed", "approved"]),
+                       TrainingCapture.positive_candidate_id.isnot(None)))
+            .values(label_source="human"))
+    res = db.execute(stmt)
+    if res.rowcount:
+        db.commit()
+
+
 @app.on_event("startup")
 def on_startup():
     _migrate_schema()
@@ -617,6 +638,7 @@ def on_startup():
         seed_actions(db)
         backfill_goal_stages(db)
         backfill_page_state_stages(db)
+        backfill_label_sources(db)
         _mark_zombie_eval_runs(db)
 
 
@@ -2307,6 +2329,181 @@ def _gate_verdict(*, confidence: float, needs_human: bool, verify_ok: Optional[b
     return True, None
 
 
+#: Auto-promotion band. The verifier turns a Haiku pick into a golden label without a
+#: human IF it both confirmed behaviorally (verify_ok) and the teacher was confident.
+#: Two tiers (hybrid posture): at/above AUTO we write the golden label outright (machine
+#: golden, train-eligible, revocable); in the staged band [GATE_MIN, AUTO) we only flag
+#: it 'suggested' and rank it for a one-click human confirm. Below GATE_MIN, or
+#: unverified/verify-failed/escalated, it stays an ordinary human label_queue item.
+_PROMOTE_AUTO_CONFIDENCE = 0.95
+
+
+def _promotion_decision(*, confidence: Optional[float], needs_human: bool,
+                        verify_ok: Optional[bool], has_candidate: bool):
+    """Classify one corpus row → (label_source, skip_reason).
+
+    label_source is 'auto' (write golden now) or 'suggested' (stage for 1-click); when
+    None, skip_reason says why this row is left to a human. Behavioral confirmation is
+    MANDATORY for both tiers — an unverified pick (no replay verdict yet) never
+    auto-promotes, it just waits for a verify_replay pass."""
+    if needs_human:
+        return None, "escalated"
+    if verify_ok is False:
+        return None, "verify_failed"
+    if verify_ok is None:
+        return None, "unverified"            # no replay verdict yet — run verify_replay first
+    if not has_candidate:
+        return None, "no_candidate_mapping"  # picked node isn't in this capture's AX set
+    c = confidence or 0.0
+    if c >= _PROMOTE_AUTO_CONFIDENCE:
+        return "auto", None
+    if c >= _GATE_MIN_CONFIDENCE:
+        return "suggested", None
+    return None, "low_confidence"
+
+
+@app.post("/api/training/promote_auto")
+def promote_auto(training_session_id: Optional[int] = None, dry_run: bool = False,
+                 db: Session = Depends(get_db)):
+    """Distillation promotion pass — turn verifier-confirmed Haiku picks into labels.
+
+    For every capture (optionally one session), join the teacher's pick (loop_steps, by
+    fingerprint) with the behavioral verdict (verify_replay, by from_fingerprint) and the
+    same gate the trainer uses, then:
+      • 'auto'      → write positive_candidate_id (machine golden, train-eligible)
+      • 'suggested' → flag for a one-click human confirm (no golden written yet)
+    Human labels (label_source='human' or review_status in reviewed/approved) are never
+    touched. Idempotent: re-running RE-derives machine labels and REVOKES any prior
+    'auto'/'suggested' whose pick no longer passes the gate (e.g. a later verify failed).
+    `dry_run` reports what would change without writing."""
+    from select_stage import fingerprint
+
+    traces_dir = _artifacts_dir() / "observer-traces"
+
+    corpus: dict[str, dict] = {}
+    corpus_path = _artifacts_dir() / "cache" / "loop_steps.jsonl"
+    if corpus_path.exists():
+        for line in corpus_path.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+                corpus[r.get("fingerprint", "")] = r   # later append wins (most recent decision)
+            except Exception:
+                continue
+
+    verify_ok_by_fp: dict[str, bool] = {}
+    vpath = _artifacts_dir() / "cache" / "verify_replay.jsonl"
+    if vpath.exists():
+        for line in vpath.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+                verify_ok_by_fp[r.get("from_fingerprint", "")] = bool(r.get("ok"))
+            except Exception:
+                continue
+
+    stmt = select(TrainingCapture)
+    if training_session_id is not None:
+        stmt = stmt.where(TrainingCapture.training_session_id == training_session_id)
+    captures = db.scalars(stmt).all()
+
+    promoted_auto: list[dict] = []
+    staged: list[dict] = []
+    revoked: list[dict] = []
+    skipped: dict[str, int] = {}
+
+    def _skip(reason: str):
+        skipped[reason] = skipped.get(reason, 0) + 1
+
+    for cap in captures:
+        fn = cap.artifact_filename
+        # Never touch a human decision (confirmed/corrected/terminal in the labeler).
+        if cap.label_source == "human" or cap.review_status in ("reviewed", "approved"):
+            _skip("human_owned")
+            continue
+        if not (traces_dir / f"{fn}.ax.json").exists():
+            _skip("no_candidates")
+            continue
+        try:
+            obs, goal = _observation_from_capture(fn)
+        except HTTPException:
+            _skip("artifact_missing")
+            continue
+        fp = fingerprint.compute(url=obs.url, viewport=obs.viewport,
+                                 candidates=obs.ax_candidates, task_goal=goal or "",
+                                 dom_clickables=obs.dom_clickables)
+        row = corpus.get(fp)
+        if not row:
+            _skip("uncorpused")
+            continue
+        # Stop-states are classify-stage escalations, not selection tasks — no pick to label.
+        if row.get("layer") == "classify" or row.get("reason_code") == "stop_state":
+            _skip("stop_state")
+            continue
+
+        by_backend = {
+            int(c["backend_node_id"]): c["candidate_id"]
+            for c in obs.ax_candidates
+            if c.get("backend_node_id") is not None and c.get("candidate_id")
+        }
+        tb = row.get("target_backend_node_id")
+        candidate_id = by_backend.get(int(tb)) if tb is not None else None
+        source, reason = _promotion_decision(
+            confidence=row.get("confidence"), needs_human=bool(row.get("needs_human")),
+            verify_ok=verify_ok_by_fp.get(fp), has_candidate=candidate_id is not None,
+        )
+
+        prior = cap.label_source  # 'auto' | 'suggested' | None
+        if source is None:
+            # No longer (or never) eligible. Revoke a stale machine label if present.
+            if prior in ("auto", "suggested"):
+                revoked.append({"filename": fn, "was": prior, "reason": reason})
+                if not dry_run:
+                    cap.positive_candidate_id = None
+                    cap.label_source = None
+                    cap.label_confidence = None
+                    cap.verified_at = None
+                    cap.review_status = "draft"
+            else:
+                _skip(reason)
+            continue
+
+        conf = float(row.get("confidence") or 0.0)
+        if source == "auto":
+            promoted_auto.append({"filename": fn, "candidate_id": candidate_id,
+                                  "confidence": conf, "was": prior})
+            if not dry_run:
+                cap.positive_candidate_id = candidate_id
+                cap.label_source = "auto"
+                cap.label_confidence = conf
+                cap.verified_at = datetime.now(timezone.utc)
+                cap.review_status = "auto"
+        else:  # suggested — stage for one-click confirm, do NOT write a golden label yet
+            staged.append({"filename": fn, "candidate_id": candidate_id,
+                           "confidence": conf, "was": prior})
+            if not dry_run:
+                # If it was previously auto and dropped into the staged band, pull the golden.
+                if prior == "auto":
+                    cap.positive_candidate_id = None
+                cap.label_source = "suggested"
+                cap.label_confidence = conf
+                cap.verified_at = datetime.now(timezone.utc)
+                cap.review_status = "suggested"
+
+    if not dry_run:
+        db.commit()
+
+    return {
+        "dry_run": dry_run,
+        "training_session_id": training_session_id,
+        "scanned": len(captures),
+        "auto_promoted": len(promoted_auto),
+        "staged_for_confirm": len(staged),
+        "revoked": len(revoked),
+        "skipped": skipped,
+        "thresholds": {"auto": _PROMOTE_AUTO_CONFIDENCE, "suggested_floor": _GATE_MIN_CONFIDENCE},
+        "details": {"auto": promoted_auto, "staged": staged, "revoked": revoked},
+    }
+
+
 @app.get("/api/training/label_queue")
 def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
                 include_labeled: bool = False, db: Session = Depends(get_db)):
@@ -2349,7 +2546,9 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
         has_golden = cap.positive_candidate_id is not None
         # Anything already dealt with (golden, terminal, or none/needs-vision → reviewed)
         # leaves the queue, so handled captures don't keep reappearing.
-        if cap.review_status == "reviewed" and not include_labeled:
+        # 'auto' = machine golden (handled); leaves the queue like 'reviewed' unless
+        # the operator opts to revisit. 'suggested' stays IN — it's the one-click confirm.
+        if cap.review_status in ("reviewed", "auto") and not include_labeled:
             continue
         try:
             obs, goal = _observation_from_capture(fn)
@@ -2368,7 +2567,11 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
         # Priority puts the highest-value-to-label first. States the model never picked
         # on (uncorpused) sink to the bottom: labeling them yields no accuracy signal
         # until the model has made a pick to compare against.
-        if row is None:
+        if cap.review_status == "suggested":
+            # Verifier-confirmed pick in the staged band — ready for a fast confirm, so
+            # it sits above cold labels. The pre-highlighted pick comes from candidate_suggestion.
+            prio, reason = 3, "suggested_confirm"
+        elif row is None:
             prio, reason = -1, "uncorpused"
         elif escalated:
             prio, reason = 2, "escalated"
@@ -2381,6 +2584,7 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
             "goal_id": cap.goal_id, "captured_at": cap.captured_at.isoformat(),
             "candidate_count": len(obs.ax_candidates),
             "has_golden": has_golden, "suggestion_confidence": conf,
+            "label_source": cap.label_source,
             "priority": prio, "priority_reason": reason,
         })
 
@@ -2521,6 +2725,8 @@ def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
         "golden": {
             "positive_candidate_id": capture.positive_candidate_id if capture else None,
             "review_status": capture.review_status if capture else None,
+            "label_source": capture.label_source if capture else None,
+            "label_confidence": capture.label_confidence if capture else None,
             "candidate_labels": (capture.candidate_labels or {}) if capture else {},
         },
     }
@@ -2648,6 +2854,19 @@ def training_scorecard(db: Session = Depends(get_db)):
                          .where(TrainingCapture.review_status == "reviewed")) or 0
     with_positive = db.scalar(select(func.count()).select_from(TrainingCapture)
                               .where(TrainingCapture.positive_candidate_id.isnot(None))) or 0
+    # Distillation provenance — how the golden labels are being produced. 'auto' rows are
+    # machine golden the verifier promoted from Haiku reps (the flywheel); 'human' are
+    # operator-confirmed; 'suggested' await a one-click confirm (not yet golden).
+    by_source = dict(db.execute(
+        select(TrainingCapture.label_source, func.count())
+        .where(TrainingCapture.label_source.isnot(None))
+        .group_by(TrainingCapture.label_source)
+    ).all())
+    label_sources = {
+        "human": int(by_source.get("human", 0)),
+        "auto": int(by_source.get("auto", 0)),
+        "suggested": int(by_source.get("suggested", 0)),
+    }
 
     # AGREEMENT: teacher pick vs human golden — the first TRUE accuracy signal (not the
     # teacher grading itself). For each golden-labeled capture, map the model's recorded
@@ -2727,6 +2946,7 @@ def training_scorecard(db: Session = Depends(get_db)):
             "agreement_pct": agree_pct,
             "agreement_scored": agree["scored"],
         },
+        "label_sources": label_sources,
         "quarantine_breakdown": {
             "escalated": counts["escalated"],
             "verify_failed": counts["verify_failed"],
@@ -2944,6 +3164,11 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
         capture.candidate_labels = merged.get("candidate_labels") or {}
         capture.approved_bbox = merged.get("approved_bbox")
         capture.manual_candidates = merged.get("manual_candidates") or []
+        # A human touched this label → highest trust, and the auto-promotion pass must
+        # never overwrite it (it may CONFIRM a prior 'suggested' or CORRECT an 'auto').
+        if merged.get("review_status") in ("reviewed", "approved") or merged.get("positive_candidate_id"):
+            capture.label_source = "human"
+            capture.verified_at = datetime.now(timezone.utc)
         meta["training_annotation"] = merged
         db.commit()
     elif body.status in {"draft", "reviewed", "approved", "rejected", "archived"}:
@@ -3024,6 +3249,28 @@ def train_grounding(body: TrainRequest, db: Session = Depends(get_db)):
 def training_target_comparison(db: Session = Depends(get_db)):
     captures = _reviewed_training_captures(db)
     return compare_training_targets(_artifacts_dir(), captures=captures)
+
+
+@app.post("/api/training/train_stage_observer")
+def train_stage_observer_endpoint(db: Session = Depends(get_db)):
+    """Train the coarse page-state observer (L3 v0): a cheap 3-way auth-stage classifier
+    (authenticated/unauthenticated/neutral) over URL+AX features. Labels come from each
+    capture's observed_page_state mapped through the page-state registry's lifecycle
+    stage. Trainable today on existing labels; the planner's #1 'am I logged in?' signal."""
+    import state_observer
+
+    stage_by_state = {
+        row.state_id: row.stage
+        for row in db.scalars(select(PageStateRegistry)).all() if row.stage
+    }
+    captures = db.scalars(
+        select(TrainingCapture).where(TrainingCapture.observed_page_state.isnot(None))
+    ).all()
+    result = state_observer.train_stage_observer(
+        _artifacts_dir(), captures=captures, stage_by_state=stage_by_state)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
 
 
 # ===== Models registry + eval =====

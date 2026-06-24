@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from training import build_grounding_dataset, compare_training_targets, merge_training_annotation, train_grounding_model
+from training import TRAINING_TARGETS, build_grounding_dataset, compare_training_targets, merge_training_annotation, train_grounding_model
 
 
 @dataclass
@@ -141,10 +141,15 @@ def test_build_dataset_and_train_model(tmp_path: Path):
     assert Path(training_result["model_dir"]).exists()
 
     comparison = compare_training_targets(tmp_path, captures=[capture])
-    assert comparison["recommended_target"] == "element_grounding"
+    # One reviewed capture with an approved bbox → vision grounding is the only ready
+    # target, so it ranks first and is recommended.
+    valid_target_ids = {t["target_id"] for t in TRAINING_TARGETS}
+    assert comparison["recommended_target"] in valid_target_ids
+    assert comparison["recommended_target"] == "vision_element_grounding"
     assert comparison["capture_summary"]["scenario_counts"] == {"indeed_search_results_open_job_posting": 1}
-    assert comparison["targets"][0]["target_id"] in {
-        "element_grounding",
-        "action_classification",
-        "scenario_classification",
-    }
+    assert comparison["targets"][0]["target_id"] == "vision_element_grounding"
+    assert comparison["targets"][0]["readiness"]["ready"] is True
+    # Every target row carries a readiness verdict with the gap math.
+    for row in comparison["targets"]:
+        assert "ready" in row["readiness"]
+        assert "scores" in row and "weighted_score" in row

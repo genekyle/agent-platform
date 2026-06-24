@@ -31,6 +31,7 @@ TRAINING_TARGETS = [
         "inputs": ["screenshot", "element_query"],
         "output": "bbox",
         "requires": ["element_query on scenario", "approved_bbox on capture"],
+        "scores": {"app_usefulness": 5, "evaluation_clarity": 5},
     },
     {
         "target_id": "page_state_classifier",
@@ -44,6 +45,7 @@ TRAINING_TARGETS = [
         "inputs": ["screenshot", "domain_id"],
         "output": "page_state_id",
         "requires": ["observed_page_state annotation on capture"],
+        "scores": {"app_usefulness": 5, "evaluation_clarity": 4},
     },
     {
         "target_id": "state_transition",
@@ -57,6 +59,7 @@ TRAINING_TARGETS = [
         "inputs": ["page_state_before", "element_query", "approved_bbox"],
         "output": "page_state_after",
         "requires": ["observed_page_state + post_action_state annotation on capture"],
+        "scores": {"app_usefulness": 4, "evaluation_clarity": 3},
     },
     {
         "target_id": "task_outcome",
@@ -70,8 +73,17 @@ TRAINING_TARGETS = [
         "inputs": ["session_trace"],
         "output": "outcome_label",
         "requires": ["full session traces with state and action annotations"],
+        "scores": {"app_usefulness": 3, "evaluation_clarity": 2},
     },
 ]
+
+# Readiness gates for the page-state observer (L3) and the planner's edge-model.
+# A per-class depth bar keeps a high-cardinality classifier from memorizing: a state
+# needs enough varied examples before it generalizes. The coarse auth-stage label is
+# trainable far sooner (only ~3 classes), so we report it separately.
+_L3_MIN_PER_STATE = 10   # examples before a page-state class is "deep" enough to train
+_L3_MIN_DEEP_STATES = 3  # need at least this many deep states for a useful classifier
+_TRANSITION_MIN_PAIRS = 10  # (before, after) pairs before the transition model is worth training
 
 
 def utcnow_iso() -> str:
@@ -682,11 +694,30 @@ def compare_training_targets(artifacts_root: Path, *, captures: list[Any]) -> di
         if getattr(capture, "positive_candidate_id", None):
             labeled_count += 1
 
+    # Real label signals for the observer (L3) and planner edge-model, read straight
+    # from the capture annotations (not artifact metadata): per-state depth and the
+    # count of (before, after) transition pairs.
+    observed_state_counts: Counter[str] = Counter(
+        c.observed_page_state for c in captures if getattr(c, "observed_page_state", None)
+    )
+    transition_pairs = sum(
+        1 for c in captures
+        if getattr(c, "observed_page_state", None) and getattr(c, "post_action_state", None)
+    )
+    signals = {
+        "captures": captures,
+        "reviewed_count": reviewed_count,
+        "labeled_count": labeled_count,
+        "scenario_count": len(scenario_counts),
+        "observed_state_counts": observed_state_counts,
+        "transition_pairs": transition_pairs,
+    }
+
     target_rows = []
     for target in TRAINING_TARGETS:
         score_values = target["scores"]
         weighted_score = round(sum(score_values.values()) / len(score_values), 2)
-        readiness = _target_readiness(target["target_id"], captures, reviewed_count, labeled_count, len(scenario_counts))
+        readiness = _target_readiness(target["target_id"], signals)
         target_rows.append({
             **target,
             "weighted_score": weighted_score,
@@ -695,9 +726,16 @@ def compare_training_targets(artifacts_root: Path, *, captures: list[Any]) -> di
 
     target_rows.sort(key=lambda row: (row["readiness"]["ready"], row["weighted_score"]), reverse=True)
 
+    # Recommend the highest-value target that is actually trainable right now (the sort
+    # already put ready targets first, ranked by weighted score).
+    top = target_rows[0]
     return {
-        "recommended_target": "element_grounding",
-        "recommendation_reason": "Element grounding has the clearest direct payoff for browser automation and can be evaluated from the same reviewed capture labels.",
+        "recommended_target": top["target_id"],
+        "recommendation_reason": (
+            f"{top['label']} ranks highest on payoff among targets that are "
+            + ("ready to train now." if top["readiness"]["ready"]
+               else "defined, though all targets are still data-gated — see blockers.")
+        ),
         "capture_summary": {
             "capture_count": len(captures),
             "reviewed_count": reviewed_count,
@@ -708,22 +746,64 @@ def compare_training_targets(artifacts_root: Path, *, captures: list[Any]) -> di
             "missing_artifact_count": missing_artifacts,
             "scenario_counts": dict(sorted(scenario_counts.items())),
             "page_state_counts": dict(sorted(page_states.items())),
+            # Real annotation-based signals (drive the observer/planner gaps view).
+            "observed_state_counts": dict(observed_state_counts.most_common()),
+            "transition_pairs": transition_pairs,
         },
         "targets": target_rows,
     }
 
 
-def _target_readiness(target_id: str, captures: list[Any], reviewed_count: int, labeled_count: int, scenario_count: int) -> dict[str, Any]:
-    if target_id == "element_grounding":
+def _target_readiness(target_id: str, signals: dict[str, Any]) -> dict[str, Any]:
+    """Per-target train-readiness against the REAL data gates. `ready` drives the panel;
+    `blocker` says what to capture next; `detail` carries the gap math for the gaps view."""
+    labeled_count = signals["labeled_count"]
+    state_counts: Counter[str] = signals["observed_state_counts"]
+    transition_pairs = signals["transition_pairs"]
+
+    if target_id == "vision_element_grounding":
         ready = labeled_count > 0
-        blocker = None if ready else "Needs reviewed captures with an approved candidate."
-    elif target_id == "action_classification":
-        ready = reviewed_count > 0
-        blocker = None if ready else "Needs reviewed captures with action hints from scenario goals."
-    else:
-        ready = scenario_count > 1 and len(captures) > 1
-        blocker = None if ready else "Needs captures spread across multiple scenarios or page states."
-    return {"ready": ready, "blocker": blocker}
+        return {"ready": ready, "detail": {"labeled_captures": labeled_count},
+                "blocker": None if ready else "Needs reviewed captures with an approved bbox / positive candidate."}
+
+    if target_id == "page_state_classifier":
+        # Fine classifier is gated on per-class DEPTH, not just breadth. The coarse
+        # auth-stage label (~3 classes) is trainable far sooner, so we surface it too.
+        deep = {s: n for s, n in state_counts.items() if n >= _L3_MIN_PER_STATE}
+        shallow = {s: n for s, n in state_counts.items() if n < _L3_MIN_PER_STATE}
+        ready = len(deep) >= _L3_MIN_DEEP_STATES
+        gaps = sorted(((s, _L3_MIN_PER_STATE - n) for s, n in shallow.items()),
+                      key=lambda x: x[1])[:5]
+        coarse_ready = sum(state_counts.values()) >= 12  # enough for a 3-way auth-stage v0
+        detail = {
+            "distinct_states": len(state_counts),
+            "deep_states": len(deep), "deep_threshold": _L3_MIN_PER_STATE,
+            "needed_deep_states": _L3_MIN_DEEP_STATES,
+            "top_gaps": [{"state": s, "needs": d} for s, d in gaps],
+            "coarse_stage_trainable_now": coarse_ready,
+        }
+        if ready:
+            blocker = None
+        else:
+            note = (" Coarse auth-stage classifier IS trainable now."
+                    if coarse_ready else "")
+            blocker = (f"Fine classifier data-gated: {len(deep)}/{_L3_MIN_DEEP_STATES} states have "
+                       f"≥{_L3_MIN_PER_STATE} examples ({len(state_counts)} states seen, mostly shallow)."
+                       + note)
+        return {"ready": ready, "blocker": blocker, "detail": detail}
+
+    if target_id == "state_transition":
+        ready = transition_pairs >= _TRANSITION_MIN_PAIRS
+        return {"ready": ready, "detail": {"transition_pairs": transition_pairs,
+                                           "needed": _TRANSITION_MIN_PAIRS},
+                "blocker": None if ready else
+                f"Needs ≥{_TRANSITION_MIN_PAIRS} captures with BOTH observed + post_action state "
+                f"(have {transition_pairs}). Label post_action_state on transition captures."}
+
+    # task_outcome and anything else: needs whole labeled session traces.
+    ready = transition_pairs >= _TRANSITION_MIN_PAIRS and len(state_counts) >= _L3_MIN_DEEP_STATES
+    return {"ready": ready, "detail": {},
+            "blocker": None if ready else "Needs full session traces with state + outcome labels."}
 
 
 def _bbox_iou(predicted: Optional[dict], target: Optional[dict]) -> float:

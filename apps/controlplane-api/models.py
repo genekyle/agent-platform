@@ -239,6 +239,14 @@ class TrainingCapture(Base):
     candidate_count: Mapped[int] = mapped_column(Integer, default=0)
     review_status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
     positive_candidate_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Distillation provenance (v9): how the golden label was set.
+    #   'human'     — an operator confirmed/corrected in the labeler (highest trust)
+    #   'auto'      — verifier-confirmed Haiku pick, conf>=AUTO threshold; train-eligible, revocable
+    #   'suggested' — verifier-confirmed Haiku pick in the staged band; awaits 1-click human confirm
+    # Human labels are never overwritten by the auto-promotion pass.
+    label_source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    label_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     rejected_candidate_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     candidate_labels: Mapped[dict] = mapped_column(JSON, default=dict)
     approved_bbox: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
