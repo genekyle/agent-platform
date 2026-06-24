@@ -89,6 +89,10 @@ class AXProposerStats:
     boxed: int = 0                    # had a usable layout box
     no_box: int = 0                   # filtered out by getBoxModel
     device_scale_factor: float = 1.0
+    # Iframe traversal (Gmail / Docs / Workday etc. render in child frames).
+    frames_total: int = 0             # frames in Page.getFrameTree (incl. main)
+    frames_with_ax: int = 0           # frames that returned an AX tree
+    frame_ax_nodes: int = 0           # AX nodes pulled from non-main frames
     errors: list[str] = field(default_factory=list)
 
 
@@ -187,6 +191,26 @@ def _ax_value(node: dict[str, Any], key: str) -> str:
     return str(field_val or "")
 
 
+def _enumerate_frame_ids(frame_tree: dict[str, Any]) -> list[str]:
+    """Flatten Page.getFrameTree into a list of frame ids (main frame first, then
+    children depth-first). Gmail/Docs/Workday/Salesforce render their real UI
+    inside child frames — without this walk the AX proposer only sees the
+    outer Google/Workday chrome and Gmail's inbox looks empty (the symptom that
+    triggered this code: 11 candidates for a real inbox)."""
+    out: list[str] = []
+
+    def _walk(node: dict[str, Any]) -> None:
+        frame = node.get("frame") or {}
+        fid = frame.get("id")
+        if fid:
+            out.append(fid)
+        for child in node.get("childFrames") or []:
+            _walk(child)
+
+    _walk(frame_tree)
+    return out
+
+
 def _keep_node(role: str, name: str, ignored: bool) -> bool:
     if ignored:
         return False
@@ -239,9 +263,36 @@ async def propose_ax_candidates(
         async with websockets.connect(ws_url, max_size=32 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             await cdp.send("DOM.enable")
+            await cdp.send("Page.enable")
             await cdp.send("Accessibility.enable")
             tree = await cdp.send("Accessibility.getFullAXTree")
-            nodes = tree.get("nodes", [])
+            nodes = list(tree.get("nodes", []))
+
+            # IFRAME TRAVERSAL: getFullAXTree on the session returns only the
+            # current (main) frame's tree. Sites like Gmail/Docs/Workday render
+            # the real UI inside child frames, so without this pass the proposer
+            # is blind to anything useful there. We walk Page.getFrameTree and
+            # call getFullAXTree(frameId) per child. backendDOMNodeIds are
+            # session-wide unique, so the downstream getBoxModel still works.
+            try:
+                frame_tree = (await cdp.send("Page.getFrameTree")).get("frameTree", {})
+                frame_ids = _enumerate_frame_ids(frame_tree)
+                st.frames_total = len(frame_ids)
+                for fid in frame_ids[1:]:  # skip main frame (already pulled above)
+                    try:
+                        sub = await cdp.send("Accessibility.getFullAXTree", {"frameId": fid})
+                        sub_nodes = sub.get("nodes", []) or []
+                        if sub_nodes:
+                            st.frames_with_ax += 1
+                            st.frame_ax_nodes += len(sub_nodes)
+                            nodes.extend(sub_nodes)
+                    except CDPError as exc:
+                        # OOPIF cross-origin frames need Target.attachToTarget; defer
+                        # that until/if real-world sites surface it. Record + continue.
+                        st.errors.append(f"frame_ax({fid[:8]}): {exc.cdp_message}")
+            except CDPError as exc:
+                st.errors.append(f"frame_tree: {exc.cdp_message}")
+
             st.ax_nodes = len(nodes)
 
             now = datetime.now(timezone.utc).isoformat()
@@ -303,8 +354,9 @@ async def propose_ax_candidates(
 
     st.total_ms = int((time.perf_counter() - t0) * 1000)
     logger.info(
-        "CDP-AX: nodes=%d candidates=%d boxed=%d no_box=%d dpr=%.2f total=%dms url=%s",
-        st.ax_nodes, st.candidate_nodes, st.boxed, st.no_box,
+        "CDP-AX: nodes=%d (frames=%d, w/ax=%d, sub_nodes=%d) candidates=%d boxed=%d no_box=%d dpr=%.2f total=%dms url=%s",
+        st.ax_nodes, st.frames_total, st.frames_with_ax, st.frame_ax_nodes,
+        st.candidate_nodes, st.boxed, st.no_box,
         device_scale_factor, st.total_ms, st.target_url,
     )
     return out
