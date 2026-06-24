@@ -247,6 +247,12 @@ class TrainingCapture(Base):
     label_source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     label_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Page-state label provenance (v10): how observed_page_state was set. 'human' (labeler)
+    # or 'auto' (high-confidence Haiku page-state classification). Only these two ever WRITE
+    # observed_page_state; lower-confidence Haiku guesses stay read-only suggestions. Keeps
+    # the L3 / transition training label trustworthy. Parallels label_source for selections.
+    state_label_source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    state_label_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     rejected_candidate_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     candidate_labels: Mapped[dict] = mapped_column(JSON, default=dict)
     approved_bbox: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

@@ -6,7 +6,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -585,6 +585,9 @@ def _migrate_schema() -> None:
         ("training_captures", "label_source", "VARCHAR(20)"),
         ("training_captures", "label_confidence", "DOUBLE PRECISION"),
         ("training_captures", "verified_at", "TIMESTAMPTZ"),
+        # training_captures page-state label provenance (v10)
+        ("training_captures", "state_label_source", "VARCHAR(20)"),
+        ("training_captures", "state_label_confidence", "DOUBLE PRECISION"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -624,7 +627,15 @@ def backfill_label_sources(db: Session) -> None:
                        TrainingCapture.positive_candidate_id.isnot(None)))
             .values(label_source="human"))
     res = db.execute(stmt)
-    if res.rowcount:
+    # Existing page-state labels were all hand-set before provenance tracking → 'human',
+    # so the Haiku auto pass treats them as owned and never overwrites them.
+    state_res = db.execute(
+        update(TrainingCapture)
+        .where(TrainingCapture.state_label_source.is_(None))
+        .where(TrainingCapture.observed_page_state.isnot(None))
+        .values(state_label_source="human")
+    )
+    if res.rowcount or state_res.rowcount:
         db.commit()
 
 
@@ -3179,6 +3190,9 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
     vision_dirty = False
     if body.observed_page_state is not None:
         capture.observed_page_state = body.observed_page_state or None
+        # A human set the page-state → highest trust; the Haiku auto pass must not overwrite.
+        capture.state_label_source = "human" if body.observed_page_state else None
+        capture.state_label_confidence = None
         vision_dirty = True
     if body.post_action_state is not None:
         capture.post_action_state = body.post_action_state or None
@@ -3290,6 +3304,96 @@ def train_state_transition_endpoint(db: Session = Depends(get_db)):
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
     return result
+
+
+#: Page-state auto-label band. The Haiku page-state teacher WRITES observed_page_state
+#: only when it confidently matches a KNOWN state — below this it stays a read-only
+#: suggestion for one-click human confirm (keeps the L3/transition training label clean).
+_PAGE_STATE_AUTO_CONFIDENCE = 0.9
+
+
+def _candidate_states_for(db: Session, *, domain_id: Optional[str], goal_id: Optional[str],
+                          scenario_id: Optional[str]) -> list[dict[str, Any]]:
+    """The state menu shown to the teacher: global + this capture's domain/goal/scenario
+    states (same scoping the labeler uses), so it can't pick a cross-domain state."""
+    states = db.scalars(select(PageStateRegistry).where(PageStateRegistry.status == "active")).all()
+
+    def relevant(s: PageStateRegistry) -> bool:
+        if s.scope == "global":
+            return True
+        if s.scope == "domain":
+            return domain_id is not None and s.domain_id == domain_id
+        if s.scope == "goal":
+            if goal_id is None or s.goal_id != goal_id:
+                return False
+            return s.domain_id is None or domain_id is None or s.domain_id == domain_id
+        if s.scope == "scenario":
+            return scenario_id is not None and s.scenario_id == scenario_id
+        return False
+
+    return [{"state_id": s.state_id, "display_name": s.display_name, "description": s.description}
+            for s in states if relevant(s)]
+
+
+@app.post("/api/training/suggest_page_state")
+def suggest_page_state(filename: str, write: bool = True, db: Session = Depends(get_db)):
+    """Haiku page-state TEACHER for one capture: classify which known state the screenshot
+    shows, growing the observed_page_state corpus that L3 + the transition model distill from.
+
+    One budget-gated Haiku call (supervised, not a batch — keeps spend controlled). WRITES
+    observed_page_state only on a confident match to a KNOWN state (≥0.9, not is_new,
+    not needs_human) tagged state_label_source='auto'; otherwise returns a read-only
+    suggestion for one-click human confirm. Never overwrites a human label."""
+    from select_stage import haiku_page_state
+
+    capture = db.scalar(select(TrainingCapture).where(TrainingCapture.artifact_filename == filename))
+    if capture is None:
+        raise HTTPException(status_code=404, detail="Training capture not found")
+    traces_dir = _artifacts_dir() / "observer-traces"
+    if not (traces_dir / filename).exists():
+        raise HTTPException(status_code=404, detail="Capture artifact not found")
+    artifact = json.loads((traces_dir / filename).read_text())
+    acq = artifact.get("acquisition", {}) or {}
+    shots = acq.get("screenshots") or []
+    if not shots:
+        raise HTTPException(status_code=400, detail="Capture has no screenshot")
+    screenshot_path = shots[0].get("path") or str(
+        _artifacts_dir() / "observer-screenshots" / shots[0].get("filename", ""))
+    url = (acq.get("page_identity", {}) or {}).get("url", "")
+    page_text = (acq.get("js_state", {}) or {}).get("body_text_preview", "") or ""
+
+    candidate_states = _candidate_states_for(
+        db, domain_id=capture.domain_id, goal_id=capture.goal_id, scenario_id=capture.scenario_id)
+    if not candidate_states:
+        raise HTTPException(status_code=400, detail="No candidate page-states registered for this scope")
+
+    try:
+        pred = haiku_page_state.classify(
+            screenshot_path=screenshot_path, candidate_states=candidate_states,
+            url=url, page_text=page_text, meta={"filename": filename, "kind": "page_state"})
+    except anthropic_usage.BudgetExceededError as exc:
+        raise HTTPException(status_code=429, detail=f"Budget exceeded — try later: {exc}")
+
+    # A human label is anything already set that the auto pass didn't write.
+    human_owned = bool(capture.observed_page_state) and capture.state_label_source != "auto"
+    written = None
+    if (write and not human_owned and pred["state_id"] and not pred["is_new"]
+            and not pred["needs_human"] and pred["confidence"] >= _PAGE_STATE_AUTO_CONFIDENCE):
+        capture.observed_page_state = pred["state_id"]
+        capture.state_label_source = "auto"
+        capture.state_label_confidence = pred["confidence"]
+        db.commit()
+        written = "auto"
+
+    return {
+        "filename": filename,
+        "suggestion": pred,
+        "written": written,
+        "write_mode": "auto" if written else ("suggested_only" if pred["state_id"] else "abstained"),
+        "human_owned": human_owned,
+        "auto_threshold": _PAGE_STATE_AUTO_CONFIDENCE,
+        "candidate_state_count": len(candidate_states),
+    }
 
 
 # ===== Models registry + eval =====
