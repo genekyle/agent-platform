@@ -253,6 +253,19 @@ class TrainingCapture(Base):
     # the L3 / transition training label trustworthy. Parallels label_source for selections.
     state_label_source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     state_label_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Multi-tenant / cross-platform axes (v11). domain_id is the PLATFORM ("workday",
+    # "greenhouse"); tenant_id is the INSTANCE ("acme", "bigco") — lets the trainer
+    # stratify by tenant to MEASURE cross-tenant generalization on platforms like
+    # Workday where 1000s of companies share the same UI but different tenants.
+    # predecessor_capture_id makes cross-platform FLOWS explicit: an indeed posting
+    # that redirects to a workday tenant via "Apply on company site" produces a
+    # workday capture whose predecessor is that indeed capture — the planner sees a
+    # real cross-platform edge in the state graph, not a mystery jump.
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    predecessor_capture_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("training_captures.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
     rejected_candidate_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     candidate_labels: Mapped[dict] = mapped_column(JSON, default=dict)
     approved_bbox: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

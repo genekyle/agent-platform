@@ -588,6 +588,9 @@ def _migrate_schema() -> None:
         # training_captures page-state label provenance (v10)
         ("training_captures", "state_label_source", "VARCHAR(20)"),
         ("training_captures", "state_label_confidence", "DOUBLE PRECISION"),
+        # training_captures multi-tenant + cross-platform axes (v11)
+        ("training_captures", "tenant_id", "VARCHAR(120)"),
+        ("training_captures", "predecessor_capture_id", "INTEGER REFERENCES training_captures(id) ON DELETE SET NULL"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
