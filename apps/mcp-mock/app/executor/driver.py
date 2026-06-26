@@ -93,7 +93,9 @@ class TrajectoryDriver(ABC):
             await cdp.send("Runtime.callFunctionOn",
                            {"objectId": object_id, "functionDeclaration": fn, "awaitPromise": False})
 
-        if request.action_id in ("type", "select") and request.value:
+        if request.action_id == "select" and request.value:
+            await self._select_option(cdp, object_id, request.value)
+        elif request.action_id == "type" and request.value:
             await call("function(){ this.scrollIntoView({block:'center',inline:'center'}); this.focus(); }")
             await cdp.send("Input.insertText", {"text": request.value})
         elif request.action_id == "clear":
@@ -103,6 +105,40 @@ class TrajectoryDriver(ABC):
         else:  # click / submit / default
             await call("function(){ this.scrollIntoView({block:'center',inline:'center'}); this.click(); }")
         return "element"
+
+    async def _select_option(self, cdp, object_id: str, value: str) -> None:
+        """Choose `value` in a dropdown — handles BOTH a native <select> (set value +
+        dispatch change) and a custom ARIA combobox (click to open, then click the option
+        whose text matches). Custom-combobox options often render in a portal at the
+        document root, so phase 2 searches the whole document, not just the node."""
+        import asyncio
+
+        phase = await cdp.send("Runtime.callFunctionOn", {
+            "objectId": object_id, "returnByValue": True,
+            "arguments": [{"value": value}],
+            "functionDeclaration": (
+                "function(v){"
+                " v=(v||'').toLowerCase();"
+                " if(this.tagName==='SELECT'){"
+                "   const o=[...this.options].find(x=>x.text.trim().toLowerCase().includes(v));"
+                "   if(o){this.value=o.value;this.dispatchEvent(new Event('change',{bubbles:true}));return 'native';}"
+                "   return 'native_notfound';}"
+                " this.scrollIntoView({block:'center'}); this.click(); return 'opened';"
+                "}"),
+        })
+        if (phase.get("result") or {}).get("value") != "opened":
+            return  # native <select> already handled (or not found)
+
+        await asyncio.sleep(0.4)  # let the listbox/portal render
+        import json as _json
+        v = _json.dumps(value)
+        await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression": (
+            "(()=>{const v=" + v + ".toLowerCase();"
+            "const opts=[...document.querySelectorAll('[role=option],li[role=option],"
+            "[role=listbox] li,[role=menuitem],ul[role=listbox] [role=option]')];"
+            "const o=opts.find(x=>(x.innerText||'').trim().toLowerCase().includes(v));"
+            "if(o){o.scrollIntoView({block:'center'});o.click();return 'picked';}return 'notfound';})()"
+        )})
 
 
 class DirectDriver(TrajectoryDriver):
