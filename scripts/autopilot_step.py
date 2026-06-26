@@ -62,6 +62,32 @@ def _activate(session, tab_id):
         pass
 
 
+def _scroll(session, tab, dy):
+    """Scroll the tab by dy CSS px via CDP (so an off-screen field enters the SoM
+    screenshot before we re-capture + re-select). Returns True if it actually moved."""
+    import asyncio
+    from websockets.asyncio.client import connect
+    port = _session_port(session)
+    targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json").read())
+    t = next((x for x in targets if x["id"] == tab["id"]), None)
+    if not t:
+        return False
+
+    async def _go():
+        async with connect(t["webSocketDebuggerUrl"], max_size=4 * 1024 * 1024) as ws:
+            await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
+                "expression": f"(()=>{{const b=window.scrollY;window.scrollBy(0,{dy});return window.scrollY-b;}})()",
+                "returnByValue": True}}))
+            while True:
+                m = json.loads(await ws.recv())
+                if m.get("id") == 1:
+                    return abs(m.get("result", {}).get("result", {}).get("value", 0)) > 2
+    try:
+        return asyncio.run(_go())
+    except Exception:
+        return False
+
+
 def _capture(session, tab):
     return _post("/api/capture", {"training_session_id": session, "tab_id": tab["id"], "tab_url": tab["url"]})
 
@@ -90,7 +116,7 @@ def _resolve_candidate_id(fn, backend_node_id):
     return None, None
 
 
-def step(session, filt, goal, go):
+def step(session, filt, goal, go, scroll=3):
     out = {"goal": goal}
     tab = _pick_tab(session, filt)
     if not tab:
@@ -98,15 +124,30 @@ def step(session, filt, goal, go):
     _activate(session, tab["id"])
     time.sleep(0.4)
 
-    cap = _capture(session, tab)
-    fn = cap.get("filename")
-    out["url"] = tab["url"][:90]
-    out["candidates"] = cap.get("candidate_count")
-    cls = _classify(fn)["suggestion"]
-    out["state"] = f"{cls.get('state_id')} ({cls.get('confidence')})"
-
-    sel = _post(f"/api/observations/{urllib.parse.quote(fn)}/select", params={"element_query": goal})
-    cand = sel.get("candidate") or {}
+    # capture -> select, SCROLLING to find the target if the first viewport can't see it
+    # (SoM only binds elements visible in the screenshot, so off-screen fields need a scroll).
+    fn = None
+    sel = {}
+    cand = {}
+    for attempt in range(max(1, scroll + 1)):
+        cap = _capture(session, tab)
+        fn = cap.get("filename")
+        out["candidates"] = cap.get("candidate_count")
+        if attempt == 0:
+            out["url"] = tab["url"][:90]
+            out["state"] = "{} ({})".format(*[_classify(fn)["suggestion"].get(k) for k in ("state_id", "confidence")])
+        sel = _post(f"/api/observations/{urllib.parse.quote(fn)}/select", params={"element_query": goal})
+        cand = sel.get("candidate") or {}
+        found = cand and sel.get("target_backend_node_id") is not None and not sel.get("needs_human") \
+            and (sel.get("confidence") or 0) >= MIN_CONF
+        if found or attempt == scroll:
+            break
+        # not found / low-conf — scroll down a viewport and try again
+        if not _scroll(session, tab, 600):
+            out["scrolled_to_bottom"] = True
+            break
+        out["scrolls_used"] = attempt + 1
+        time.sleep(0.5)
     out["pick"] = {"name": cand.get("name"), "role": cand.get("role"),
                    "action": sel.get("action_id"), "layer": sel.get("layer"),
                    "conf": sel.get("confidence"), "needs_human": sel.get("needs_human"),
@@ -153,5 +194,6 @@ if __name__ == "__main__":
     p.add_argument("--filter", default="")
     p.add_argument("--goal", required=True)
     p.add_argument("--go", action="store_true", help="actually execute (default: preview)")
+    p.add_argument("--scroll", type=int, default=3, help="max viewport scrolls to find an off-screen target")
     a = p.parse_args()
-    print(json.dumps(step(a.session, a.filter, a.goal, a.go), indent=2))
+    print(json.dumps(step(a.session, a.filter, a.goal, a.go, a.scroll), indent=2))
