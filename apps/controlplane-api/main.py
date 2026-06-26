@@ -2073,6 +2073,7 @@ async def runtime_execute(body: ExecuteActionRequest, db: Session = Depends(get_
 
     bbox = body.target_bbox
     dsf = 1.0
+    backend_node_id = None
     if bbox is None:
         if not (body.filename and body.candidate_id):
             raise HTTPException(status_code=400, detail="Provide target_bbox, or filename + candidate_id")
@@ -2085,9 +2086,11 @@ async def runtime_execute(body: ExecuteActionRequest, db: Session = Depends(get_
             raise HTTPException(status_code=404, detail="candidate_id not found in capture")
         bbox = cand.get("bbox")
         dsf = float((cand.get("_debug") or {}).get("dpr", 1.0) or 1.0)
+        backend_node_id = cand.get("backend_node_id")  # enables robust element-based action
 
     payload = {
         "action_id": body.action_id, "target_bbox": bbox, "value": body.value,
+        "backend_node_id": backend_node_id,
         "device_scale_factor": dsf, "tab_id": body.tab_id, "tab_url": body.tab_url,
         "browser_url": browser_url, "driver": body.driver,
     }

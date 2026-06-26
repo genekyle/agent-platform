@@ -78,6 +78,32 @@ class TrajectoryDriver(ABC):
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46})
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46})
 
+    async def _element_act(self, cdp, request: ActionRequest) -> str:
+        """ELEMENT-BASED action via backend_node_id — robust to spacing/scroll/layout
+        where coordinate-clicking fails (closely-spaced radios, off-screen fields). We
+        resolve the node, scroll it into view, then drive it natively: .click() for
+        click/select, focus+insertText for type. Avoids the 'clicked the No 25px below
+        Yes' class of bug coordinate-clicking hit on long application forms."""
+        await cdp.send("DOM.enable")
+        await cdp.send("Runtime.enable")
+        resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": request.backend_node_id})
+        object_id = resolved["object"]["objectId"]
+
+        async def call(fn: str) -> None:
+            await cdp.send("Runtime.callFunctionOn",
+                           {"objectId": object_id, "functionDeclaration": fn, "awaitPromise": False})
+
+        if request.action_id in ("type", "select") and request.value:
+            await call("function(){ this.scrollIntoView({block:'center',inline:'center'}); this.focus(); }")
+            await cdp.send("Input.insertText", {"text": request.value})
+        elif request.action_id == "clear":
+            await call("function(){ this.scrollIntoView({block:'center'}); this.focus();"
+                       " if(this.select)this.select(); }")
+            await self._apply_value(cdp, request)  # reuse the select-all+delete keystrokes
+        else:  # click / submit / default
+            await call("function(){ this.scrollIntoView({block:'center',inline:'center'}); this.click(); }")
+        return "element"
+
 
 class DirectDriver(TrajectoryDriver):
     """Center-click, no synthesized path — the robotic baseline. Use for tests /
@@ -93,19 +119,25 @@ class DirectDriver(TrajectoryDriver):
         from app.observer.ax_proposer import _CDPSession, _discover_target
 
         x, y = target_css_point(request.target_bbox, request.device_scale_factor)
+        mode = "coordinate"
         try:
             target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
             async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
                 cdp = _CDPSession(ws)
-                path = await self._path_to(x, y, start)
-                await self._click_sequence(cdp, x, y, path)
-                await self._apply_value(cdp, request)
+                # Prefer ELEMENT-based action when we have the node id (robust); fall back
+                # to coordinate-clicking only when no backend_node_id was provided.
+                if request.backend_node_id is not None:
+                    mode = await self._element_act(cdp, request)
+                else:
+                    path = await self._path_to(x, y, start)
+                    await self._click_sequence(cdp, x, y, path)
+                    await self._apply_value(cdp, request)
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s execute failed: %s", self.name, exc)
             return ExecResult(ok=False, driver=self.name, action_id=request.action_id, detail=str(exc))
-        logger.info("%s executed %s at css(%.1f,%.1f)", self.name, request.action_id, x, y)
-        return ExecResult(ok=True, driver=self.name, action_id=request.action_id, css_point=(x, y),
-                          path_points=0)
+        logger.info("%s executed %s (%s) at css(%.1f,%.1f)", self.name, request.action_id, mode, x, y)
+        return ExecResult(ok=True, driver=self.name, action_id=request.action_id,
+                          css_point=(x, y), path_points=0, extra={"mode": mode})
 
 
 def get_driver(name: Optional[str] = None) -> TrajectoryDriver:
