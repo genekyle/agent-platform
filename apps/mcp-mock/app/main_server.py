@@ -134,6 +134,43 @@ class ProposerPredictRequest(BaseModel):
     screenshot_filename: str
 
 
+class ExecuteRequest(BaseModel):
+    """Interim executor handoff (v1 — CDP DirectDriver, the pre-diffusion-mouse bridge).
+    target_bbox is in SCREENSHOT pixels (as the AX proposer emits); device_scale_factor
+    converts to CSS px for CDP input. driver defaults to 'direct' (record_only = dry-run)."""
+    action_id: str                       # click | type | select | clear
+    target_bbox: dict                    # {x, y, width, height} screenshot px
+    value: Optional[str] = None
+    backend_node_id: Optional[int] = None
+    device_scale_factor: float = 1.0
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    browser_url: str = "http://127.0.0.1:9222"
+    driver: Optional[str] = None         # 'direct' (default) | 'record_only' (dry-run)
+
+
+@app.post("/execute")
+async def execute_action(body: ExecuteRequest):
+    """INTERIM EXECUTOR (v1): perform one resolved action against the live page via the
+    existing raw-CDP DirectDriver. This is the bridge that lets us advance flows during
+    burst-training WITHOUT waiting on the diffusion-mouse executor (v2). It clicks the
+    bbox center (dpr-corrected) and, for type/clear, applies the value to the focused
+    field. Returns the ExecResult. Best-effort; never raises into the caller."""
+    from app.executor.driver import ActionRequest, get_driver
+
+    driver = get_driver(body.driver)
+    req = ActionRequest(
+        action_id=body.action_id, target_bbox=body.target_bbox, value=body.value,
+        backend_node_id=body.backend_node_id, device_scale_factor=body.device_scale_factor,
+    )
+    result = await driver.move_and_act(
+        browser_url=body.browser_url, request=req, tab_id=body.tab_id, tab_url=body.tab_url)
+    return {
+        "ok": result.ok, "driver": result.driver, "action_id": result.action_id,
+        "css_point": result.css_point, "detail": result.detail,
+    }
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "mcp-mock-capture-server"}

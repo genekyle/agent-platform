@@ -2045,6 +2045,61 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+class ExecuteActionRequest(BaseModel):
+    """Drive one action against a session's live tab via the interim CDP executor.
+    Provide a target either explicitly (target_bbox in screenshot px) or by resolving
+    it from a prior capture (filename + candidate_id, looked up in the .ax.json sidecar)."""
+    training_session_id: int
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    action_id: str = "click"
+    value: Optional[str] = None
+    target_bbox: Optional[dict] = None
+    filename: Optional[str] = None        # resolve bbox from this capture's AX sidecar
+    candidate_id: Optional[str] = None    # ...for this candidate
+    driver: Optional[str] = None          # 'direct' (default) | 'record_only' (dry-run)
+
+
+@app.post("/api/runtime/execute")
+async def runtime_execute(body: ExecuteActionRequest, db: Session = Depends(get_db)):
+    """INTERIM EXECUTOR proxy — the v2-bypass that lets us advance flows during burst
+    training. Resolves the session's Chrome port and the target bbox, then proxies to the
+    capture server's CDP DirectDriver. Either pass target_bbox directly, or (filename +
+    candidate_id) to pull the bbox + device_scale_factor from that capture's AX sidecar."""
+    session = db.get(TrainingSession, body.training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+
+    bbox = body.target_bbox
+    dsf = 1.0
+    if bbox is None:
+        if not (body.filename and body.candidate_id):
+            raise HTTPException(status_code=400, detail="Provide target_bbox, or filename + candidate_id")
+        sidecar = _artifacts_dir() / "observer-traces" / f"{body.filename}.ax.json"
+        if not sidecar.exists():
+            raise HTTPException(status_code=404, detail="AX sidecar not found for that capture")
+        proposals = json.loads(sidecar.read_text()).get("proposals", [])
+        cand = next((c for c in proposals if c.get("candidate_id") == body.candidate_id), None)
+        if cand is None:
+            raise HTTPException(status_code=404, detail="candidate_id not found in capture")
+        bbox = cand.get("bbox")
+        dsf = float((cand.get("_debug") or {}).get("dpr", 1.0) or 1.0)
+
+    payload = {
+        "action_id": body.action_id, "target_bbox": bbox, "value": body.value,
+        "device_scale_factor": dsf, "tab_id": body.tab_id, "tab_url": body.tab_url,
+        "browser_url": browser_url, "driver": body.driver,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{settings.capture_server_url}/execute", json=payload)
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"executor unreachable: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Observation artifact endpoints
 # ---------------------------------------------------------------------------
