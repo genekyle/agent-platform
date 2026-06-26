@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import asyncio
+import re
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -1564,12 +1565,40 @@ async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
             "duplicates": dup_count, "search_query": body.search_query}
 
 
-def _job_dict(j: ObservedJob) -> dict[str, Any]:
+_SENIORITY = {"senior", "sr", "junior", "jr", "lead", "principal", "staff", "associate",
+              "i", "ii", "iii", "iv", "v", "1", "2", "3"}
+_CO_SUFFIX = {"inc", "llc", "corp", "co", "ltd", "lp", "company", "incorporated", "the"}
+
+
+def _norm_company(s: str) -> str:
+    toks = [t for t in re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split() if t not in _CO_SUFFIX]
+    return " ".join(toks).strip()
+
+
+def _norm_title(s: str) -> str:
+    toks = [t for t in re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split() if t not in _SENIORITY]
+    return " ".join(toks).strip()
+
+
+def _applied_key(company: str, title: str) -> str:
+    """Cross-PLATFORM application identity: same company + same core title = same job,
+    whether seen on Indeed, Workday, or applied externally by hand. Lets 'already applied'
+    suppress a job we (or the user) applied to anywhere — not just by Indeed jk."""
+    return f"{_norm_company(company)}|{_norm_title(title)}"
+
+
+def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None) -> dict[str, Any]:
+    # already_applied = applied directly OR matches the (company,title) of any applied job
+    # (cross-platform dedup — the user may have applied off-Indeed).
+    already = j.application_status == "applied"
+    if not already and applied_keys is not None:
+        already = _applied_key(j.company, j.title) in applied_keys
     return {
         "job_id": j.job_id, "platform": j.platform, "external_id": j.external_id,
         "title": j.title, "company": j.company, "location": j.location, "url": j.url,
-        "application_status": j.application_status, "seen_count": j.seen_count,
-        "search_queries": j.search_queries or [],
+        "application_status": j.application_status, "already_applied": already,
+        "seen_count": j.seen_count, "search_queries": j.search_queries or [],
+        "apply_type": j.apply_type, "application_platform": j.application_platform,
         "first_seen_at": j.first_seen_at.isoformat() if j.first_seen_at else None,
         "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
         "applied_at": j.applied_at.isoformat() if j.applied_at else None,
@@ -1595,8 +1624,10 @@ def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
     for j in jobs:
         by_status[j.application_status] = by_status.get(j.application_status, 0) + 1
     applied = [j for j in jobs if j.application_status == "applied"]
-    dupes = [j for j in jobs if (j.seen_count or 1) > 1]
+    # Cross-platform applied signatures (company+core-title of everything applied anywhere).
+    applied_keys = {_applied_key(j.company, j.title) for j in applied}
     searches = sorted({q for j in jobs for q in (j.search_queries or [])})
+    already_applied = [j for j in jobs if _job_dict(j, applied_keys)["already_applied"]]
     return {
         "platform": platform,
         "totals": {
@@ -1605,12 +1636,13 @@ def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
             "duplicates_collapsed": sum((j.seen_count or 1) - 1 for j in jobs),
             "distinct_companies": len({j.company for j in jobs if j.company}),
             "applied": len(applied),
+            "already_applied_incl_cross_platform": len(already_applied),
             "by_status": by_status,
         },
         "searches": searches,
-        "jobs_seen": [_job_dict(j) for j in jobs[:100]],
-        "jobs_applied": [_job_dict(j) for j in applied],
-        "most_seen": [_job_dict(j) for j in sorted(jobs, key=lambda x: x.seen_count or 1, reverse=True)[:10]],
+        "jobs_seen": [_job_dict(j, applied_keys) for j in jobs[:100]],
+        "jobs_applied": [_job_dict(j, applied_keys) for j in applied],
+        "most_seen": [_job_dict(j, applied_keys) for j in sorted(jobs, key=lambda x: x.seen_count or 1, reverse=True)[:10]],
     }
 
 
