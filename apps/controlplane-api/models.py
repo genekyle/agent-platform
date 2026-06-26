@@ -429,3 +429,8 @@ class ObservedJob(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Richer signal captured by clicking INTO a posting — powers matching + resume tailoring.
+    salary: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # full JD text
+    # 'quick_apply' (Indeed on-site) | 'company_site' (redirects to Workday/Greenhouse/...)
+    apply_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)

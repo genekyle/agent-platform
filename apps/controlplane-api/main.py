@@ -6,6 +6,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import asyncio
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -603,6 +604,10 @@ def _migrate_schema() -> None:
         # training_captures multi-tenant + cross-platform axes (v11)
         ("training_captures", "tenant_id", "VARCHAR(120)"),
         ("training_captures", "predecessor_capture_id", "INTEGER REFERENCES training_captures(id) ON DELETE SET NULL"),
+        # observed_jobs richer signal (v12)
+        ("observed_jobs", "salary", "VARCHAR(200)"),
+        ("observed_jobs", "description", "TEXT"),
+        ("observed_jobs", "apply_type", "VARCHAR(30)"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -1536,6 +1541,7 @@ async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
                 job_id=job_id, platform=body.platform, external_id=ext,
                 title=(j.get("title") or "")[:400], company=(j.get("company") or "")[:300],
                 location=(j.get("location") or "")[:300], url=(j.get("url") or "")[:1200],
+                salary=(j.get("salary") or "")[:200] or None,
                 search_queries=[body.search_query] if body.search_query else [],
                 first_seen_at=now, last_seen_at=now, seen_count=1,
             )
@@ -1595,6 +1601,53 @@ def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
         "jobs_applied": [_job_dict(j) for j in applied],
         "most_seen": [_job_dict(j) for j in sorted(jobs, key=lambda x: x.seen_count or 1, reverse=True)[:10]],
     }
+
+
+class FetchDescriptionsRequest(BaseModel):
+    training_session_id: int
+    job_ids: list[str] = []   # specific jobs; if empty, fetch the N most-seen unfetched
+    limit: int = 8
+
+
+@app.post("/api/jobs/fetch_descriptions")
+async def fetch_job_descriptions(body: FetchDescriptionsRequest, db: Session = Depends(get_db)):
+    """Click INTO postings to collect full job descriptions (+ salary, apply_type) — the
+    richer signal that powers matching + resume tailoring. Targets specific job_ids, or the
+    most-seen jobs that don't have a description yet. One viewjob navigation per job."""
+    session = db.get(TrainingSession, body.training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+
+    if body.job_ids:
+        jobs = [db.get(ObservedJob, jid) for jid in body.job_ids]
+        jobs = [j for j in jobs if j is not None]
+    else:
+        jobs = db.scalars(
+            select(ObservedJob).where(ObservedJob.platform == "indeed",
+                                      ObservedJob.description.is_(None))
+            .order_by(ObservedJob.seen_count.desc()).limit(body.limit)).all()
+
+    fetched = 0
+    results = []
+    async with httpx.AsyncClient(timeout=40.0) as client:
+        for j in jobs[:body.limit]:
+            try:
+                r = await client.post(f"{settings.capture_server_url}/fetch_job_description",
+                                      json={"external_id": j.external_id, "browser_url": browser_url})
+                d = r.json()
+            except httpx.HTTPError:
+                continue
+            if d.get("ok"):
+                j.description = (d.get("description") or "")[:20000]
+                j.salary = j.salary or (d.get("salary") or "")[:200] or None
+                j.apply_type = d.get("apply_type") or j.apply_type
+                fetched += 1
+                results.append({"job_id": j.job_id, "title": j.title, "apply_type": j.apply_type,
+                                "salary": j.salary, "desc_chars": len(j.description or "")})
+            await asyncio.sleep(0.6)
+    db.commit()
+    return {"ok": True, "fetched": fetched, "results": results}
 
 
 @app.patch("/api/jobs/{job_id:path}")

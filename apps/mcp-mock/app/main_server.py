@@ -233,6 +233,53 @@ async def extract_jobs(body: ExtractJobsRequest):
         return {"ok": False, "jobs": [], "count": 0, "detail": str(exc)}
 
 
+class JobDescriptionRequest(BaseModel):
+    external_id: str                     # Indeed jk
+    browser_url: str = "http://127.0.0.1:9222"
+
+
+# Scrape a single Indeed job's detail page (viewjob): full description + salary + whether
+# it's Indeed Quick Apply vs a company-site redirect (the apply_type that decides which
+# apply FLOW the planner uses). This is the "click into the posting" the operator does by hand.
+_JOB_DESC_JS = r"""
+(() => {
+  const descEl = document.querySelector('#jobDescriptionText, [id*=jobDescription], .jobsearch-JobComponent-description');
+  const description = descEl ? descEl.innerText.trim() : '';
+  const salEl = document.querySelector('#salaryInfoAndJobType, [id*=salaryInfo], [class*=salary]');
+  const salary = salEl ? salEl.innerText.trim() : '';
+  const titleEl = document.querySelector('h1, h2.jobsearch-JobInfoHeader-title');
+  const title = titleEl ? titleEl.innerText.trim() : '';
+  const btnText = Array.from(document.querySelectorAll('button, a')).map(b => (b.innerText||'').trim()).join(' | ');
+  const apply_type = /apply on company site|apply on/i.test(btnText) ? 'company_site'
+                   : /easily apply|apply now/i.test(btnText) ? 'quick_apply' : 'unknown';
+  return { description, salary, title, apply_type };
+})()
+"""
+
+
+@app.post("/fetch_job_description")
+async def fetch_job_description(body: JobDescriptionRequest):
+    """Navigate to an Indeed job's viewjob page and scrape its full description + salary +
+    apply_type. Returns the data; the control plane stores it on observed_jobs."""
+    import asyncio
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=None, tab_url="indeed.com")
+        url = f"https://www.indeed.com/viewjob?jk={body.external_id}"
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.navigate", {"url": url})
+            await asyncio.sleep(2.6)
+            res = await cdp.send("Runtime.evaluate", {"expression": _JOB_DESC_JS, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {}
+        data["ok"] = bool(data.get("description"))
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fetch_job_description failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "mcp-mock-capture-server"}
