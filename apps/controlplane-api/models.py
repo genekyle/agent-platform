@@ -434,3 +434,6 @@ class ObservedJob(Base):
     description: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # full JD text
     # 'quick_apply' (Indeed on-site) | 'company_site' (redirects to Workday/Greenhouse/...)
     apply_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)
+    # Finer cross-site routing: indeed_quick_apply | workday | greenhouse | lever | icims |
+    # ... | company_site. Drives which per-platform apply recipe runs (apply is NOT siloed).
+    application_platform: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)

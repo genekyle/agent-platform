@@ -608,6 +608,8 @@ def _migrate_schema() -> None:
         ("observed_jobs", "salary", "VARCHAR(200)"),
         ("observed_jobs", "description", "TEXT"),
         ("observed_jobs", "apply_type", "VARCHAR(30)"),
+        # observed_jobs cross-site apply routing (v13)
+        ("observed_jobs", "application_platform", "VARCHAR(40)"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -1572,6 +1574,15 @@ def _job_dict(j: ObservedJob) -> dict[str, Any]:
         "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
         "applied_at": j.applied_at.isoformat() if j.applied_at else None,
     }
+
+
+@app.get("/api/search/cadence")
+def search_cadence_spec():
+    """The bounded job-search cadence: the two task modes (extraction_sweep vs apply_triage),
+    their recipes + safety bounds, and the cross-site apply-platform list. The seed of the
+    job-search planner — the logic that keeps search safe + consistent instead of ad-hoc."""
+    import search_cadence
+    return search_cadence.cadence_spec()
 
 
 @app.get("/api/dashboards/indeed_jobs")
