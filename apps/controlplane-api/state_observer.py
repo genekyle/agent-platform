@@ -22,7 +22,7 @@ import math
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from training import _stable_split, utcnow_iso
 

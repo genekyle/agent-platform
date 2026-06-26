@@ -36,7 +36,6 @@ from models import (
 )
 from model_lib import eval as model_eval, registry as model_registry
 from schemas import (
-    CaptureAnnotationPatch,
     ModelEvalRunDetail,
     ModelEvalRunRead,
     ModelEvalRunSummary,

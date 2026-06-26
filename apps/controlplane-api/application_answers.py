@@ -11,7 +11,7 @@ the matched answer's `value`/`options` to fill the field.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 _WORD = re.compile(r"[a-z0-9]+")
 # Generic words that shouldn't drive a match (every question has them).
