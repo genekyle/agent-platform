@@ -366,3 +366,36 @@ class ModelEvalRun(Base):
     resumed_from: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     model: Mapped["ModelRegistry"] = relationship()
+
+
+class ApplicationAnswer(Base):
+    """A stored, reusable answer to a repeatable job-application question.
+
+    Job applications (Indeed quick-apply, Workday, Greenhouse, ...) ask the same
+    questions over and over — demographics (race/gender/veteran/disability), salary
+    expectation, work authorization, etc. Rather than re-deriving each time, we keep a
+    canonical answer per `answer_key` and a list of `question_patterns` (the many ways
+    that question gets phrased) so a matcher can map an arbitrary on-screen question to
+    the right stored answer. Platform-agnostic on purpose: the same salary answer serves
+    Indeed and Workday. This is the data the (future) form-fill executor reads from;
+    today it's operator-managed in the Indeed workspace UI.
+    """
+    __tablename__ = "application_answers"
+
+    answer_key: Mapped[str] = mapped_column(String(80), primary_key=True)  # canonical slug
+    display_name: Mapped[str] = mapped_column(String(200))
+    # compensation | demographics | eligibility | logistics | experience | custom
+    category: Mapped[str] = mapped_column(String(40), default="custom", index=True)
+    value: Mapped[str] = mapped_column(String(2000), default="")
+    # Example phrasings of the question, used by the matcher to recognize it on a page.
+    question_patterns: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Hint for the future executor: number | text | select | radio | boolean | textarea
+    input_hint: Mapped[str] = mapped_column(String(20), default="text")
+    # For select/radio: the exact option label to choose (when value isn't the label).
+    options: Mapped[list[str]] = mapped_column(JSON, default=list)
+    notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # 'human' (operator-entered, trusted) — parallels label provenance elsewhere.
+    source: Mapped[str] = mapped_column(String(20), default="human")
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

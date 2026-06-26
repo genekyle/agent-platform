@@ -66,6 +66,23 @@ export const CONTROL_PLANE_NAV = {
       },
     ],
   },
+  indeed: {
+    label: "Indeed",
+    title: "Indeed Workspace",
+    subtitle: "The job-seeking workspace: stored application answers, coverage, and (soon) the jobs dashboard.",
+    sections: [
+      {
+        id: "indeed-overview",
+        label: "Overview",
+        subtitle: "Indeed workspace at a glance: states covered, stored answers, capture totals.",
+      },
+      {
+        id: "application-answers",
+        label: "Application Answers",
+        subtitle: "Reusable answers to repeatable application questions (demographics, salary). Editable.",
+      },
+    ],
+  },
   lab: {
     label: "Lab",
     title: "Lab",
