@@ -16,7 +16,100 @@ const EMPTY_DRAFT = {
  */
 export function IndeedWorkspaceSection({ section }) {
   if (section === "application-answers") return <ApplicationAnswers />;
+  if (section === "jobs-dashboard") return <JobsDashboard />;
   return <IndeedOverview />;
+}
+
+function JobsDashboard() {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(() => {
+    fetch(`${API}/api/dashboards/indeed_jobs`).then((r) => r.json()).then(setData).catch(() => {});
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const extract = useCallback(async () => {
+    setBusy(true); setMsg("");
+    try {
+      // find an active Indeed session with a results tab open
+      const sessions = await fetch(`${API}/api/training/sessions`).then((r) => r.json());
+      const s = sessions.find((x) => x.domain_id === "indeed" && x.status === "active");
+      if (!s) { setMsg("No active Indeed session — start one and open a search."); return; }
+      const r = await fetch(`${API}/api/jobs/extract`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ training_session_id: s.id, tab_url: "indeed.com/jobs", search_query: "manual extract" }),
+      }).then((x) => x.json());
+      setMsg(r.ok ? `Scraped ${r.scraped} · ${r.new} new · ${r.duplicates} duplicates` : `Failed: ${r.detail || "?"}`);
+      load();
+    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
+  }, [load]);
+
+  const mark = useCallback(async (jobId, status) => {
+    await fetch(`${API}/api/jobs/${encodeURIComponent(jobId)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ application_status: status }),
+    });
+    load();
+  }, [load]);
+
+  if (!data) return <div className="section-body"><p className="muted">Loading…</p></div>;
+  const t = data.totals;
+
+  return (
+    <div className="section-body">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <p className="muted" style={{ margin: 0 }}>
+          Jobs the agent has seen, deduped by identity. Re-seen jobs collapse into one row
+          (seen count) so duplicates are easy to find and the corpus stays manageable.
+        </p>
+        <button className="btn" disabled={busy} onClick={extract}>{busy ? "Extracting…" : "Extract from active search"}</button>
+      </div>
+      {msg && <div className="muted" style={{ marginTop: 6 }}>{msg}</div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginTop: 12 }}>
+        <Stat label="Jobs found" value={t.jobs_found} />
+        <Stat label="Companies" value={t.distinct_companies} />
+        <Stat label="Searches" value={t.searches_performed} />
+        <Stat label="Duplicates collapsed" value={t.duplicates_collapsed} />
+        <Stat label="Applied" value={t.applied} />
+      </div>
+
+      {data.jobs_applied.length > 0 && (
+        <JobTable title="Jobs Applied" jobs={data.jobs_applied} mark={mark} />
+      )}
+      <JobTable title="Jobs Seen" jobs={data.jobs_seen} mark={mark} />
+    </div>
+  );
+}
+
+function JobTable({ title, jobs, mark }) {
+  return (
+    <div className="panel" style={{ marginTop: 14 }}>
+      <div className="panel-header"><div>{title} <span className="muted">({jobs.length})</span></div></div>
+      <div className="table-wrap">
+        <table className="runs-table">
+          <thead><tr><th>Title</th><th>Company</th><th>Location</th><th>Seen</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {jobs.map((j) => (
+              <tr key={j.job_id}>
+                <td>{j.url ? <a href={j.url} target="_blank" rel="noreferrer">{j.title || j.external_id}</a> : (j.title || j.external_id)}</td>
+                <td>{j.company || <span className="muted">—</span>}</td>
+                <td>{j.location || <span className="muted">—</span>}</td>
+                <td style={{ textAlign: "center" }}>{j.seen_count > 1 ? <strong>{j.seen_count}×</strong> : j.seen_count}</td>
+                <td>{j.application_status}</td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  {j.application_status !== "applied" && <button className="btn btn-sm" onClick={() => mark(j.job_id, "applied")}>Applied</button>}{" "}
+                  {j.application_status !== "skipped" && <button className="btn btn-sm" onClick={() => mark(j.job_id, "skipped")}>Skip</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 function IndeedOverview() {

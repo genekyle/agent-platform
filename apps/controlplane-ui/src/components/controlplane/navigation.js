@@ -78,8 +78,13 @@ export const CONTROL_PLANE_NAV = {
       },
       {
         id: "application-answers",
-        label: "Application Answers",
-        subtitle: "Reusable answers to repeatable application questions (demographics, salary). Editable.",
+        label: "Application Profile",
+        subtitle: "Your reusable autofill profile — identity/EEO, eligibility, compensation, logistics, and acknowledgments. Editable.",
+      },
+      {
+        id: "jobs-dashboard",
+        label: "Jobs Dashboard",
+        subtitle: "Jobs found across searches — counts, duplicates, and applied status. Drives what to apply to next.",
       },
     ],
   },

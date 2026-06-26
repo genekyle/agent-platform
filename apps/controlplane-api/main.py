@@ -22,6 +22,7 @@ from models import (
     ActionRegistry,
     ApplicationAnswer,
     DomainRegistry,
+    ObservedJob,
     GoalRegistry,
     ModelEvalRun,
     ModelRegistry,
@@ -1487,6 +1488,129 @@ def match_application_answer(body: QuestionMatchRequest, db: Session = Depends(g
     rows = db.scalars(select(ApplicationAnswer).where(ApplicationAnswer.status == "active")).all()
     answers = [_answer_dict(a) for a in rows]
     return aa.match_question(body.question, answers)
+
+
+class JobExtractRequest(BaseModel):
+    training_session_id: int
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    search_query: Optional[str] = None
+    platform: str = "indeed"
+
+
+class JobStatusUpdate(BaseModel):
+    application_status: Optional[str] = None  # seen|viewed|applied|skipped|rejected
+    notes: Optional[str] = None
+
+
+@app.post("/api/jobs/extract")
+async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
+    """Scrape the live results page for job postings and UPSERT them into observed_jobs,
+    deduped by job_id = '{platform}:{external_id}'. A re-seen job bumps seen_count +
+    last_seen_at (and records the search/capture) instead of duplicating. Returns how many
+    were new vs. duplicates — the dedup signal the operator manages the corpus by."""
+    session = db.get(TrainingSession, body.training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{settings.capture_server_url}/extract_jobs",
+                                  json={"tab_id": body.tab_id, "tab_url": body.tab_url,
+                                        "browser_url": browser_url})
+            r.raise_for_status()
+            raw = r.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"extractor unreachable: {exc}")
+
+    now = utcnow()
+    new_count = dup_count = 0
+    for j in raw.get("jobs", []):
+        ext = (j.get("external_id") or "").strip()
+        if not ext:
+            continue
+        job_id = f"{body.platform}:{ext}"
+        row = db.get(ObservedJob, job_id)
+        if row is None:
+            row = ObservedJob(
+                job_id=job_id, platform=body.platform, external_id=ext,
+                title=(j.get("title") or "")[:400], company=(j.get("company") or "")[:300],
+                location=(j.get("location") or "")[:300], url=(j.get("url") or "")[:1200],
+                search_queries=[body.search_query] if body.search_query else [],
+                first_seen_at=now, last_seen_at=now, seen_count=1,
+            )
+            db.add(row)
+            new_count += 1
+        else:
+            row.seen_count += 1
+            row.last_seen_at = now
+            if body.search_query and body.search_query not in (row.search_queries or []):
+                row.search_queries = (row.search_queries or []) + [body.search_query]
+            # backfill any fields that were blank before
+            row.title = row.title or (j.get("title") or "")[:400]
+            row.company = row.company or (j.get("company") or "")[:300]
+            row.location = row.location or (j.get("location") or "")[:300]
+            dup_count += 1
+    db.commit()
+    return {"ok": True, "scraped": raw.get("count", 0), "new": new_count,
+            "duplicates": dup_count, "search_query": body.search_query}
+
+
+def _job_dict(j: ObservedJob) -> dict[str, Any]:
+    return {
+        "job_id": j.job_id, "platform": j.platform, "external_id": j.external_id,
+        "title": j.title, "company": j.company, "location": j.location, "url": j.url,
+        "application_status": j.application_status, "seen_count": j.seen_count,
+        "search_queries": j.search_queries or [],
+        "first_seen_at": j.first_seen_at.isoformat() if j.first_seen_at else None,
+        "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
+        "applied_at": j.applied_at.isoformat() if j.applied_at else None,
+    }
+
+
+@app.get("/api/dashboards/indeed_jobs")
+def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
+    """The Jobs Dashboard data: headline counts + the Jobs Seen and Jobs Applied tables.
+    Duplicates are surfaced explicitly (jobs with seen_count>1) so the corpus stays manageable."""
+    jobs = db.scalars(select(ObservedJob).where(ObservedJob.platform == platform)
+                      .order_by(ObservedJob.last_seen_at.desc())).all()
+    by_status: dict[str, int] = {}
+    for j in jobs:
+        by_status[j.application_status] = by_status.get(j.application_status, 0) + 1
+    applied = [j for j in jobs if j.application_status == "applied"]
+    dupes = [j for j in jobs if (j.seen_count or 1) > 1]
+    searches = sorted({q for j in jobs for q in (j.search_queries or [])})
+    return {
+        "platform": platform,
+        "totals": {
+            "jobs_found": len(jobs),
+            "searches_performed": len(searches),
+            "duplicates_collapsed": sum((j.seen_count or 1) - 1 for j in jobs),
+            "distinct_companies": len({j.company for j in jobs if j.company}),
+            "applied": len(applied),
+            "by_status": by_status,
+        },
+        "searches": searches,
+        "jobs_seen": [_job_dict(j) for j in jobs[:100]],
+        "jobs_applied": [_job_dict(j) for j in applied],
+        "most_seen": [_job_dict(j) for j in sorted(jobs, key=lambda x: x.seen_count or 1, reverse=True)[:10]],
+    }
+
+
+@app.patch("/api/jobs/{job_id:path}")
+def update_job(job_id: str, body: JobStatusUpdate, db: Session = Depends(get_db)):
+    """Update a job's application status (e.g. mark 'applied' after the apply flow)."""
+    row = db.get(ObservedJob, job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if body.application_status:
+        row.application_status = body.application_status
+        if body.application_status == "applied" and row.applied_at is None:
+            row.applied_at = utcnow()
+    if body.notes is not None:
+        row.notes = body.notes
+    db.commit()
+    return _job_dict(row)
 
 
 @app.post("/api/training/page-states")

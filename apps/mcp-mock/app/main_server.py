@@ -171,6 +171,68 @@ async def execute_action(body: ExecuteRequest):
     }
 
 
+class ExtractJobsRequest(BaseModel):
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    browser_url: str = "http://127.0.0.1:9222"
+
+
+# Indeed search-result job-card extractor. Pulls (jk, title, company, location, url) from
+# every [data-jk] card. Kept as a string so it runs in the page; resilient to Indeed's
+# shifting class names by trying several selectors per field.
+_INDEED_JOBS_JS = r"""
+(() => {
+  const isLoc = (s) => /(,\s*[A-Z]{2}\b)|\bRemote\b|\bHybrid\b|United States|\b\d{5}\b/.test(s);
+  const noise = (s) => s === '·' || s === 'New' || /^\d+\s*(min|hour|day|week|month)/i.test(s)
+                       || /^(Easily apply|Urgently hiring|Hiring multiple|Responded to|Often replies|Multiple openings|Posted|Active|\+\d+|View all)/i.test(s);
+  const anchors = Array.from(document.querySelectorAll('a[data-jk], [data-jk]'));
+  const seen = new Set();
+  const out = [];
+  for (const a of anchors) {
+    const jk = a.getAttribute('data-jk');
+    if (!jk || seen.has(jk)) continue;
+    seen.add(jk);
+    const titleEl = a.querySelector('span[title]') || a;
+    const title = (titleEl.getAttribute && titleEl.getAttribute('title') || titleEl.innerText || '').trim();
+    const card = a.closest('li') || a.closest('.cardOutline') || a.closest('[class*=card]') || a.parentElement;
+    const lines = (card ? card.innerText : '').split('\n').map(s => s.trim()).filter(Boolean);
+    const ti = Math.max(0, lines.findIndex(l => l && title.startsWith(l.slice(0, 12))));
+    let company = '', location = '', salary = '';
+    for (let i = ti + 1; i < lines.length; i++) {
+      const l = lines[i];
+      if (noise(l)) continue;
+      if (!salary && /\$|per (hour|year)|a year|an hour/i.test(l)) { salary = l; continue; }
+      if (!location && isLoc(l)) { location = l; continue; }
+      if (!company && l !== title) { company = l; continue; }
+      if (company && location) break;
+    }
+    const url = a.href || (a.querySelector('a[href]') || {}).href || '';
+    out.push({ external_id: jk, title, company, location, salary, url });
+  }
+  return out;
+})()
+"""
+
+
+@app.post("/extract_jobs")
+async def extract_jobs(body: ExtractJobsRequest):
+    """Scrape the live Indeed results DOM for job cards (data-jk). Returns the raw list;
+    the control plane dedupes + persists. Best-effort — returns [] on any failure."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate",
+                                 {"expression": _INDEED_JOBS_JS, "returnByValue": True})
+        jobs = (res.get("result") or {}).get("value") or []
+        return {"ok": True, "jobs": jobs, "count": len(jobs), "url": target.get("url", "")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("extract_jobs failed: %s", exc)
+        return {"ok": False, "jobs": [], "count": 0, "detail": str(exc)}
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "mcp-mock-capture-server"}

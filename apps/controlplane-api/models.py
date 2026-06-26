@@ -399,3 +399,33 @@ class ApplicationAnswer(Base):
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ObservedJob(Base):
+    """A job posting the agent has seen (Indeed/Workday/LinkedIn), deduped by identity.
+
+    Dedup is the whole point: the same job shows up across many searches and scrolls, so
+    we key by `job_id` = "{platform}:{external_id}" (Indeed's jk, Workday req id, ...) and
+    bump `seen_count` + `last_seen_at` instead of inserting duplicates. The dashboard reads
+    this table for "jobs found / duplicates / applied". One row per real job; provenance
+    (which searches/captures surfaced it) is kept in JSON so nothing is lost.
+    """
+    __tablename__ = "observed_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(160), primary_key=True)  # "{platform}:{external_id}"
+    platform: Mapped[str] = mapped_column(String(40), default="indeed", index=True)
+    external_id: Mapped[str] = mapped_column(String(120), index=True)   # raw jk / req id
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(400), default="")
+    company: Mapped[str] = mapped_column(String(300), default="", index=True)
+    location: Mapped[str] = mapped_column(String(300), default="")
+    url: Mapped[str] = mapped_column(String(1200), default="")
+    # seen | viewed | applied | skipped | rejected
+    application_status: Mapped[str] = mapped_column(String(30), default="seen", index=True)
+    seen_count: Mapped[int] = mapped_column(Integer, default=1)
+    search_queries: Mapped[list[str]] = mapped_column(JSON, default=list)   # which searches surfaced it
+    capture_filenames: Mapped[list[str]] = mapped_column(JSON, default=list)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
