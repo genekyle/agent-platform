@@ -33,6 +33,14 @@ SEED_ANSWERS: list[dict[str, Any]] = [
         "notes": "Annual USD. Adjust per role if needed.",
     },
     {
+        "answer_key": "location", "display_name": "Location / city",
+        "category": "logistics", "value": "Concord, NH 03301", "input_hint": "text",
+        "question_patterns": ["location", "city", "where are you located", "current location",
+                              "city, state", "postal code", "zip code", "address"],
+        "options": [],
+        "notes": "Home base; also the default Indeed search location.",
+    },
+    {
         "answer_key": "race_ethnicity", "display_name": "Race / ethnicity",
         "category": "demographics", "value": "Asian", "input_hint": "select",
         "question_patterns": ["race", "ethnicity", "race/ethnicity", "racial",
