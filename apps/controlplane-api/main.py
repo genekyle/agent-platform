@@ -379,6 +379,10 @@ _TRAINING_CHROME_FLAGS = [
     "--disable-infobars",
     "--disable-prompt-on-repost",
     "--no-pings",
+    # Indeed (and most ATS) open the apply flow via window.open in a new tab; Chrome's
+    # popup blocker stops it when the click isn't a trusted gesture. Allow it so apply
+    # tabs open. (We still reach apply pages via on-page clicks, never URL-jumps.)
+    "--disable-popup-blocking",
     "--password-store=basic",  # don't talk to macOS Keychain
 ]
 
@@ -1603,6 +1607,29 @@ def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None) -> dict[str, A
         "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
         "applied_at": j.applied_at.isoformat() if j.applied_at else None,
     }
+
+
+@app.post("/api/jobs/autofill_form")
+async def autofill_form(training_session_id: int, db: Session = Depends(get_db)):
+    """Fill the current Indeed apply form from the Application Profile using the
+    type-generalizing interaction layer — match each question to an answer, dispatch by the
+    element type present (radio/select/text/number/checkbox/combobox). Returns what filled vs
+    what's unmatched (the operator handles unmatched). Same answers, any element shape."""
+    session = db.get(TrainingSession, training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    rows = db.scalars(select(ApplicationAnswer).where(ApplicationAnswer.status == "active")).all()
+    answers = [{"key": a.answer_key, "value": a.value, "options": a.options or [],
+                "patterns": a.question_patterns or []} for a in rows]
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{settings.capture_server_url}/autofill_form",
+                                  json={"answers": answers, "browser_url": _session_browser_url(session),
+                                        "tab_url": "smartapply"})
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"autofill unreachable: {exc}")
 
 
 @app.get("/api/search/cadence")

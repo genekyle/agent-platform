@@ -233,6 +233,117 @@ async def extract_jobs(body: ExtractJobsRequest):
         return {"ok": False, "jobs": [], "count": 0, "detail": str(exc)}
 
 
+class AutofillFormRequest(BaseModel):
+    answers: list[dict]                  # [{key,value,options[],patterns[]}] from the profile
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_url: Optional[str] = "smartapply"
+
+
+# The TYPE-GENERALIZING form filler. Indeed's same-site form BUILDER lets employers pick the
+# element type per question (radio / dropdown / free text / number / checkbox), so the SAME
+# question appears as different elements across employers. This matches each question to a
+# profile answer (semantics), then dispatches by the element type actually present — so we
+# never need per-question nested if/else logic. Radio/select/text/number are filled in one
+# pass; ARIA comboboxes are returned for the executor's open+pick (async). Returns a report.
+_AUTOFILL_JS = r"""
+(answers) => {
+  const STOP = new Set(['what','is','are','your','the','a','an','do','you','have','to','of',
+    'for','in','on','please','select','choose','enter','provide','this','will','can','we','or','and']);
+  const toks = s => ((s||'').toLowerCase().match(/[a-z0-9]+/g)||[]).filter(t=>!STOP.has(t)&&t.length>1);
+  function match(qtext){
+    const q=(qtext||'').toLowerCase(); const qt=new Set(toks(q));
+    let best=null,bs=0;
+    for(const a of answers){
+      let s=0;
+      for(const p of (a.patterns||[])){ const pl=p.toLowerCase();
+        if(pl && q.includes(pl)) s+=3; else { s += toks(p).filter(t=>qt.has(t)).length; } }
+      if(s>bs){bs=s;best=a;}
+    }
+    return bs>=2?best:null;
+  }
+  function setNativeValue(el,val){
+    const proto = el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
+    const setter=Object.getOwnPropertyDescriptor(proto,'value').set; setter.call(el,val);
+    el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));
+  }
+  const containers=[...document.querySelectorAll('.ia-Questions-item,[class*=Questions-item]')];
+  const report=[]; const combos=[];
+  for(const c of containers){
+    const qtext=(c.innerText||'').replace(/\s+/g,' ').trim();
+    if(qtext.length<5) continue;
+    const a=match(qtext);
+    if(!a){ report.push({q:qtext.slice(0,55),status:'unmatched'}); continue; }
+    const want=((a.options&&a.options.length?a.options:[a.value])).map(x=>(x||'').toLowerCase());
+    const radios=[...c.querySelectorAll('[role=radio],input[type=radio]')];
+    const selects=[...c.querySelectorAll('select')];
+    const aria=[...c.querySelectorAll('[role=combobox]')];
+    const texts=[...c.querySelectorAll('input[type=text],input[type=number],input:not([type]),textarea')];
+    const checks=[...c.querySelectorAll('input[type=checkbox]')];
+    try {
+      if(radios.length){
+        const r=radios.find(x=>{let l=(x.closest('label')?x.closest('label').innerText:(x.getAttribute('aria-label')||'')).toLowerCase().trim();
+          return want.some(w=>l===w||l.startsWith(w)||l.includes(w));});
+        if(r){r.scrollIntoView({block:'center'});r.click();report.push({q:qtext.slice(0,45),key:a.key,via:'radio',status:'filled'});}
+        else report.push({q:qtext.slice(0,45),key:a.key,via:'radio',status:'no_option'});
+      } else if(selects.length){
+        const s=selects[0]; const o=[...s.options].find(o=>want.some(w=>o.text.toLowerCase().includes(w)));
+        if(o){s.value=o.value;s.dispatchEvent(new Event('change',{bubbles:true}));report.push({q:qtext.slice(0,45),key:a.key,via:'select',status:'filled'});}
+        else report.push({q:qtext.slice(0,45),key:a.key,via:'select',status:'no_option'});
+      } else if(aria.length){
+        combos.push({q:qtext.slice(0,80),key:a.key,value:a.value,want}); // executor handles open+pick
+        report.push({q:qtext.slice(0,45),key:a.key,via:'combobox',status:'needs_executor'});
+      } else if(texts.length){
+        setNativeValue(texts[0],a.value); texts[0].scrollIntoView({block:'center'});
+        report.push({q:qtext.slice(0,45),key:a.key,via:'text',status:'filled'});
+      } else if(checks.length){
+        const affirm=/^(yes|true|agree|accept)/i.test(a.value||'');
+        if(checks[0].checked!==affirm) checks[0].click();
+        report.push({q:qtext.slice(0,45),key:a.key,via:'checkbox',status:'filled'});
+      } else report.push({q:qtext.slice(0,45),key:a.key,status:'unknown_element'});
+    } catch(e){ report.push({q:qtext.slice(0,45),key:a.key,status:'error:'+e.message}); }
+  }
+  return {report, combos};
+}
+"""
+
+
+@app.post("/autofill_form")
+async def autofill_form(body: AutofillFormRequest):
+    """Fill the current Indeed custom form by matching each question to a profile answer and
+    dispatching by the element type present (the type-generalizing interaction layer). Radio/
+    select/text/number/checkbox in one JS pass; ARIA comboboxes via CDP open+pick. Returns a
+    report so the caller knows what filled vs what's unmatched (→ human/escalation)."""
+    import asyncio
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=None, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            r = await cdp.send("Runtime.evaluate", {
+                "expression": f"({_AUTOFILL_JS})({json.dumps(body.answers)})", "returnByValue": True})
+            out = (r.get("result") or {}).get("value") or {"report": [], "combos": []}
+            # Handle ARIA comboboxes (open → wait → pick the matching option in the portal)
+            for combo in out.get("combos", []):
+                want = combo.get("want") or [combo.get("value", "").lower()]
+                await cdp.send("Runtime.evaluate", {"expression":
+                    "(()=>{const its=[...document.querySelectorAll('.ia-Questions-item,[class*=Questions-item]')];"
+                    f"const it=its.find(x=>(x.innerText||'').slice(0,80).includes({json.dumps(combo['q'][:40])}));"
+                    "const c=it&&it.querySelector('[role=combobox]'); if(c){c.scrollIntoView({block:'center'});c.click();}})()"})
+                await asyncio.sleep(0.7)
+                await cdp.send("Runtime.evaluate", {"expression":
+                    f"(()=>{{const want={json.dumps(want)};"
+                    "const o=[...document.querySelectorAll('[role=option],li[role=option],[role=listbox] li')]"
+                    ".find(x=>want.some(w=>(x.innerText||'').toLowerCase().includes(w)));"
+                    "if(o){o.scrollIntoView({block:'center'});o.click();return 'picked';}return 'no_option';})()",
+                    "returnByValue": True})
+                await asyncio.sleep(0.3)
+        return {"ok": True, **out}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("autofill_form failed: %s", exc)
+        return {"ok": False, "detail": str(exc), "report": [], "combos": []}
+
+
 class JobDescriptionRequest(BaseModel):
     external_id: str                     # Indeed jk
     browser_url: str = "http://127.0.0.1:9222"
