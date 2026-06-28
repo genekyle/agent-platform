@@ -268,39 +268,56 @@ _AUTOFILL_JS = r"""
   }
   const containers=[...document.querySelectorAll('.ia-Questions-item,[class*=Questions-item]')];
   const report=[]; const combos=[];
+  // Match a native <select> to whichever answer's value/options appear in its option list —
+  // so MULTI-FIELD containers (e.g. one "Country / State" item with BOTH a Country and a State
+  // select) each get the right answer, instead of only the first field. This is the fix for the
+  // missed required State field (single-field assumption hid the empty second select).
+  function fillSelect(s, qtext){
+    for(const ans of answers){
+      const w=((ans.options&&ans.options.length?ans.options:[ans.value])).map(x=>(x||'').toLowerCase()).filter(x=>x.length>1);
+      const o=[...s.options].find(opt=>w.some(ww=>opt.text.toLowerCase().includes(ww)));
+      if(o){o.selected=true;s.value=o.value;s.dispatchEvent(new Event('change',{bubbles:true}));
+        return {q:qtext.slice(0,45),key:ans.key,via:'select',status:'filled'};}
+    }
+    return {q:qtext.slice(0,45),via:'select',status:'no_option'};
+  }
   for(const c of containers){
     const qtext=(c.innerText||'').replace(/\s+/g,' ').trim();
     if(qtext.length<5) continue;
-    const a=match(qtext);
-    if(!a){ report.push({q:qtext.slice(0,55),status:'unmatched'}); continue; }
-    const want=((a.options&&a.options.length?a.options:[a.value])).map(x=>(x||'').toLowerCase());
     const radios=[...c.querySelectorAll('[role=radio],input[type=radio]')];
     const selects=[...c.querySelectorAll('select')];
     const aria=[...c.querySelectorAll('[role=combobox]')];
     const texts=[...c.querySelectorAll('input[type=text],input[type=number],input:not([type]),textarea')];
     const checks=[...c.querySelectorAll('input[type=checkbox]')];
     try {
-      if(radios.length){
-        const r=radios.find(x=>{let l=(x.closest('label')?x.closest('label').innerText:(x.getAttribute('aria-label')||'')).toLowerCase().trim();
-          return want.some(w=>l===w||l.startsWith(w)||l.includes(w));});
-        if(r){r.scrollIntoView({block:'center'});r.click();report.push({q:qtext.slice(0,45),key:a.key,via:'radio',status:'filled'});}
-        else report.push({q:qtext.slice(0,45),key:a.key,via:'radio',status:'no_option'});
-      } else if(selects.length){
-        const s=selects[0]; const o=[...s.options].find(o=>want.some(w=>o.text.toLowerCase().includes(w)));
-        if(o){s.value=o.value;s.dispatchEvent(new Event('change',{bubbles:true}));report.push({q:qtext.slice(0,45),key:a.key,via:'select',status:'filled'});}
-        else report.push({q:qtext.slice(0,45),key:a.key,via:'select',status:'no_option'});
-      } else if(aria.length){
-        combos.push({q:qtext.slice(0,80),key:a.key,value:a.value,want}); // executor handles open+pick
-        report.push({q:qtext.slice(0,45),key:a.key,via:'combobox',status:'needs_executor'});
-      } else if(texts.length){
-        setNativeValue(texts[0],a.value); texts[0].scrollIntoView({block:'center'});
-        report.push({q:qtext.slice(0,45),key:a.key,via:'text',status:'filled'});
-      } else if(checks.length){
-        const affirm=/^(yes|true|agree|accept)/i.test(a.value||'');
-        if(checks[0].checked!==affirm) checks[0].click();
-        report.push({q:qtext.slice(0,45),key:a.key,via:'checkbox',status:'filled'});
-      } else report.push({q:qtext.slice(0,45),key:a.key,status:'unknown_element'});
-    } catch(e){ report.push({q:qtext.slice(0,45),key:a.key,status:'error:'+e.message}); }
+      // SELECTS: per-element (multi-field aware) — every select in the container.
+      let didSelect=false;
+      for(const s of selects){ report.push(fillSelect(s, qtext)); didSelect=true; }
+      // RADIOS / ARIA / TEXT / CHECKBOX: one logical field per container → container question.
+      const a=(radios.length||aria.length||texts.length||checks.length)?match(qtext):null;
+      if(a){
+        const want=((a.options&&a.options.length?a.options:[a.value])).map(x=>(x||'').toLowerCase());
+        if(radios.length){
+          let r=radios.find(x=>{let l=(x.closest('label')?x.closest('label').innerText:(x.getAttribute('aria-label')||'')).toLowerCase().trim();
+            return want.some(w=>l===w||l.startsWith(w)||l.includes(w));});
+          if(!r && radios.length===1 && (a.category==='acknowledgment' || /^(yes|i agree|i accept|accept|i have read|i acknowledge)/i.test(a.value||''))) r=radios[0];
+          if(r){r.scrollIntoView({block:'center'});r.click();report.push({q:qtext.slice(0,45),key:a.key,via:'radio',status:'filled'});}
+          else report.push({q:qtext.slice(0,45),key:a.key,via:'radio',status:'no_option'});
+        } else if(aria.length){
+          combos.push({q:qtext.slice(0,80),key:a.key,value:a.value,want});
+          report.push({q:qtext.slice(0,45),key:a.key,via:'combobox',status:'needs_executor'});
+        } else if(texts.length){
+          setNativeValue(texts[0],a.value); texts[0].scrollIntoView({block:'center'});
+          report.push({q:qtext.slice(0,45),key:a.key,via:'text',status:'filled'});
+        } else if(checks.length){
+          const affirm=/^(yes|true|agree|accept)/i.test(a.value||'');
+          if(checks[0].checked!==affirm) checks[0].click();
+          report.push({q:qtext.slice(0,45),key:a.key,via:'checkbox',status:'filled'});
+        }
+      } else if(!didSelect && (radios.length||aria.length||texts.length||checks.length)){
+        report.push({q:qtext.slice(0,55),status:'unmatched'});
+      }
+    } catch(e){ report.push({q:qtext.slice(0,45),status:'error:'+e.message}); }
   }
   return {report, combos};
 }
