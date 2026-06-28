@@ -97,6 +97,9 @@ def classify_apply_platform(url: str) -> str:
 # of blindly clicking. See project_apply_random_events.
 _APPLY_OUTCOMES = [
     ("submitted",          False, r"application (has been )?submitted|your application was sent|application sent|thanks for applying"),
+    # reCAPTCHA gate at submit (often EXPIRES if the form sat too long) — HUMAN must (re)check
+    # the box; never auto-solve. Submit button stays disabled until then.
+    ("captcha",            True,  r"i'm not a robot|verification expired|recaptcha challenge|check the checkbox again|select all images"),
     # Post-submit AI-assistant satisfaction survey — OPTIONAL, app already submitted; skippable.
     ("post_submit_feedback", False, r"satisfied were you with the ai|improving the ai assistant|rate your experience"),
     # Interview-review step (after the AI interview): user-owned 'Submit all' to finalize.
