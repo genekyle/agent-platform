@@ -91,12 +91,46 @@ def classify_apply_platform(url: str) -> str:
     return "company_site"
 
 
+# Apply OUTCOME branches — the "random events" an Indeed application can hit after the form.
+# Each tuple: (outcome, human_required, regex). First match wins; order = most-specific first.
+# Lets the apply loop RECOGNIZE the branch and route (autofill vs escalate to human) instead
+# of blindly clicking. See project_apply_random_events.
+_APPLY_OUTCOMES = [
+    ("submitted",          False, r"application (has been )?submitted|your application was sent|application sent|thanks for applying"),
+    # Post-submit AI-assistant satisfaction survey — OPTIONAL, app already submitted; skippable.
+    ("post_submit_feedback", False, r"satisfied were you with the ai|improving the ai assistant|rate your experience"),
+    # Interview-review step (after the AI interview): user-owned 'Submit all' to finalize.
+    ("interview_review",   True,  r"interview review|review and edit responses|review your responses"),
+    # AI-recruiter mini-interview gate (video/audio/text) — REQUIRES the human.
+    ("ai_recruiter_gate",  True,  r"ai recruiter|respond using video|video,? audio,? or text|complete these steps before your application"),
+    ("survey_assessment",  True,  r"\bsurvey\b|\bassessment\b|skills? test|questionnaire|personality"),
+    ("account_creation",   True,  r"create (an )?account|set a password|sign up to continue"),
+    ("company_site",       True,  r"apply on company site|continue to (the )?employer|you are leaving indeed"),
+    ("additional_questions", False, r"answer these questions from the employer|questions from the employer"),
+]
+
+
+def classify_apply_outcome(page_text: str, url: str = "") -> dict:
+    """Detect which apply-outcome branch the current page is — the 'check' for random events
+    like the AI-recruiter interview. Returns {outcome, human_required, matched}. 'unknown'
+    when nothing matches (treat as continue/inspect)."""
+    import re
+    text = (page_text or "")[:4000].lower()
+    for outcome, human, pattern in _APPLY_OUTCOMES:
+        if re.search(pattern, text):
+            return {"outcome": outcome, "human_required": human, "matched": True}
+    return {"outcome": "unknown", "human_required": False, "matched": False}
+
+
 def cadence_spec() -> dict:
     """The full cadence definition — what GET /api/search/cadence returns."""
     return {
         "bounds": BOUNDS,
         "modes": CADENCE_MODES,
         "known_platforms": sorted(set(_PLATFORM_HOSTS.values()) | {"company_site"}),
+        "apply_outcomes": [{"outcome": o, "human_required": h} for o, h, _ in _APPLY_OUTCOMES],
         "note": "Two search tasks: extraction_sweep (record everything) vs apply_triage "
-                "(triage→approve→apply→record). Apply routes by platform; not Indeed-only.",
+                "(triage→approve→apply→record). Apply routes by platform; not Indeed-only. "
+                "After the form, classify_apply_outcome() detects random-event branches "
+                "(ai_recruiter_gate, survey, account_creation, ...) and routes human vs auto.",
     }
