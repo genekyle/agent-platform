@@ -1620,7 +1620,7 @@ async def autofill_form(training_session_id: int, db: Session = Depends(get_db))
         raise HTTPException(status_code=404, detail="Training session not found")
     rows = db.scalars(select(ApplicationAnswer).where(ApplicationAnswer.status == "active")).all()
     answers = [{"key": a.answer_key, "value": a.value, "options": a.options or [],
-                "patterns": a.question_patterns or []} for a in rows]
+                "patterns": a.question_patterns or [], "category": a.category} for a in rows]
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(f"{settings.capture_server_url}/autofill_form",
@@ -1630,6 +1630,44 @@ async def autofill_form(training_session_id: int, db: Session = Depends(get_db))
             return r.json()
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"autofill unreachable: {exc}")
+
+
+@app.get("/api/runtime/apply_state")
+async def apply_state(training_session_id: int, db: Session = Depends(get_db)):
+    """Live state manager for the apply task: read every tab in the session's Chrome and map
+    each onto the Indeed apply recipe — role (search/apply), current state, recipe step,
+    expected next state, and whether it's a human-required branch (captcha / AI-recruiter / ...).
+    The 'where are we' readout so we stop holding tab/step state in our heads."""
+    import apply_recipe
+    session = db.get(TrainingSession, training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{browser_url}/json")
+            r.raise_for_status()
+            targets = [t for t in r.json() if t.get("type") == "page"]
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"session Chrome not reachable: {exc}")
+    tabs = [apply_recipe.describe_tab(t.get("url", "")) for t in targets
+            if "localhost:5173" not in (t.get("url", "") or "")]
+    apply_tabs = [t for t in tabs if t["role"] == "apply"]
+    return {
+        "training_session_id": training_session_id,
+        "tab_count": len(tabs),
+        "tabs": tabs,
+        "active_apply_state": apply_tabs[0] if apply_tabs else None,
+        "needs_human": any(t["human_required"] for t in tabs),
+    }
+
+
+@app.get("/api/runtime/apply_recipe")
+def apply_recipe_spec():
+    """The Indeed apply recipe (expected state machine + branches). Teachable: states are
+    page_state_registry ids; transitions are what the state_transition model learns."""
+    import apply_recipe
+    return apply_recipe.recipe_spec()
 
 
 @app.get("/api/search/cadence")
