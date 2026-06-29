@@ -1830,6 +1830,8 @@ async def session_state(training_session_id: int, scan_form: bool = True,
         "logged_in": authed,
         "needs_human": bb_dict["needs_human"],
         "search_state": bb_dict["search_state"],
+        # context-bound validity: is the current search/triage data valid to act on (approve/apply)?
+        "search_actionable": store.search_data_actionable(bb),
         # the blackboard: phase, plan progress, form_state, code-enforced gate, blockers, event log
         "blackboard": bb_dict,
         "proceed_decision": store.proceed_decision(bb),

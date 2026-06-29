@@ -155,6 +155,13 @@ class Event:
 # The search analogue of form_state: the "written down" facts the search/triage phase would
 # otherwise hold in a model's head — the active query/location, which results page we're on,
 # how many jobs we've seen, and the shortlist/approved/in-flight job refs.
+#
+# PROVENANCE INVARIANT (context-bound validity): a blackboard value is not self-validating — it
+# only means something relative to the CONTEXT it was produced in. `approved`/`shortlist` are valid
+# to act on ONLY if they were gathered in the CURRENT cadence run AND while authenticated. The same
+# session is not the same cadence run, and data gathered logged-out is provenance-invalid for an
+# apply decision. So a run id + auth-at-gather + a `stale` flag travel WITH the data; see
+# `start_cadence_run` and `search_data_actionable`. This stops "looks valid but isn't" thought-bubbles.
 @dataclass
 class SearchState:
     query: str = ""
@@ -164,6 +171,11 @@ class SearchState:
     shortlist: list[str] = field(default_factory=list)   # job refs the operator shortlisted
     approved: list[str] = field(default_factory=list)    # refs approved to apply to
     current_job: Optional[str] = None                    # the ref currently in the apply flow
+    # provenance — what context produced this data (without it the data isn't actionable):
+    cadence_run_id: str = ""                              # which search-cadence run gathered it
+    run_started_at: str = ""
+    gathered_authenticated: bool = False                 # was the session logged in when gathered?
+    stale: bool = False                                  # provenance invalidated (e.g. auth flipped)
 
 
 # Phases. search→triage share the search plan (triage is just "on a posting, deciding"); apply
@@ -302,6 +314,34 @@ def new_blackboard(session_id: int, goal: Optional[str] = None,
     return bb
 
 
+def start_cadence_run(bb: Blackboard, *, query: str = "", location: str = "",
+                      authed: bool = False) -> Blackboard:
+    """Open a NEW search-cadence run and stamp its provenance onto search_state. A run is the
+    context that makes gathered data actionable: it resets observed/shortlist/approved (last run's
+    findings don't carry into this one) and records WHEN it started and WHETHER the session was
+    authenticated. Triage/approve are only valid within a current, authenticated run — see
+    `search_data_actionable`. This is what stops a logged-out / prior-run shortlist from being
+    treated as a valid apply decision."""
+    import uuid
+    ss = bb.search_state
+    ss.cadence_run_id = uuid.uuid4().hex[:12]
+    ss.run_started_at = _utcnow()
+    if query:
+        ss.query = query
+    if location:
+        ss.location = location
+    ss.page = 1
+    ss.observed_count = 0
+    ss.shortlist = []
+    ss.approved = []
+    ss.current_job = None
+    ss.gathered_authenticated = bool(authed)
+    ss.stale = False
+    bb.log("cadence_run_start",
+           f"run {ss.cadence_run_id} query={ss.query!r} location={ss.location!r} authed={authed}")
+    return bb
+
+
 # --- Reconciliation: deterministic prev + observation -> next ----------------------
 def blockers_for(world: dict[str, Any], gate: GateResult,
                  block: Optional[dict[str, Any]] = None) -> list[Blocker]:
@@ -413,6 +453,14 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
     }
     if authed is not None and authed != prev_authed:
         bb.log("auth_change", f"authed {prev_authed} -> {authed}")
+        # Provenance: data gathered while logged-out is invalid once we authenticate — it must be
+        # re-gathered in an authenticated run before it can drive an apply decision.
+        ss = bb.search_state
+        if authed and not ss.gathered_authenticated and not ss.stale and (
+                ss.shortlist or ss.approved or ss.observed_count):
+            ss.stale = True
+            bb.log("provenance_stale",
+                   "search data gathered logged-out; invalid after login — re-gather authenticated")
     if active and active.get("state") != prev_state:
         bb.log("state_change", f"{prev_state} -> {active.get('state')}")
 
@@ -439,6 +487,33 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
 # --- Layer 3 made ACTIVE: the proceed/submit decision + the loop gate --------------
 def current_subtask(bb: Blackboard) -> Optional[Subtask]:
     return next((s for s in bb.plan if s.id == bb.current_subtask_id), None)
+
+
+def search_data_actionable(bb: Blackboard) -> dict[str, Any]:
+    """Is the current search/triage data valid to ACT on (approve a job / start applying)? Context-
+    bound validity: yes only if there's a current cadence run, the data was gathered while
+    authenticated, the session is authenticated NOW, and the data hasn't been marked stale. Names the
+    failing reason so the readout/operator sees exactly why a shortlist can't be acted on yet."""
+    ss = bb.search_state
+    authed_now = bb.world.get("authed") is True
+    if not ss.cadence_run_id:
+        reason = "no_cadence_run"
+    elif ss.stale:
+        reason = "provenance_stale"
+    elif not ss.gathered_authenticated:
+        reason = "gathered_unauthenticated"
+    elif not authed_now:
+        reason = "not_authenticated_now"
+    else:
+        reason = "ok"
+    return {
+        "ok": reason == "ok",
+        "reason": reason,
+        "cadence_run_id": ss.cadence_run_id,
+        "gathered_authenticated": ss.gathered_authenticated,
+        "authed_now": authed_now,
+        "stale": ss.stale,
+    }
 
 
 def proceed_decision(bb: Blackboard) -> dict[str, Any]:

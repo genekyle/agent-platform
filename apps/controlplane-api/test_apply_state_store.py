@@ -310,6 +310,47 @@ def test_auth_state_persists_across_reconciles_until_reprobed():
     assert bb.world.get("authed") is True
 
 
+# --- provenance: blackboard state is only actionable within its valid context ---------------------
+def test_start_cadence_run_stamps_provenance_and_resets():
+    bb = store.new_blackboard(session_id=50, query="reporting analyst", location="Nashua, NH")
+    bb.search_state.shortlist = ["old"]; bb.search_state.approved = ["old"]; bb.search_state.observed_count = 9
+    store.start_cadence_run(bb, authed=True)
+    ss = bb.search_state
+    assert ss.cadence_run_id and ss.run_started_at
+    assert ss.shortlist == [] and ss.approved == [] and ss.observed_count == 0  # last run doesn't carry
+    assert ss.gathered_authenticated is True and ss.stale is False
+
+
+def test_actionable_requires_authenticated_current_run():
+    bb = store.new_blackboard(session_id=51, query="q", location="l")
+    store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=True)
+    assert store.search_data_actionable(bb)["reason"] == "no_cadence_run"   # no run yet
+    store.start_cadence_run(bb, authed=True)
+    store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=True)
+    a = store.search_data_actionable(bb)
+    assert a["ok"] and a["reason"] == "ok"
+
+
+def test_logged_out_gathered_data_is_not_actionable_and_goes_stale_on_login():
+    bb = store.new_blackboard(session_id=52, query="q", location="l")
+    store.start_cadence_run(bb, authed=False)            # gathered logged-out
+    bb.search_state.shortlist = ["j1", "j2"]
+    store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=False)
+    assert store.search_data_actionable(bb)["reason"] == "gathered_unauthenticated"
+    # logging in does NOT bless the logged-out data — it's marked stale, still not actionable
+    store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=True)
+    assert bb.search_state.stale is True
+    assert any(e.kind == "provenance_stale" for e in bb.events)
+    assert store.search_data_actionable(bb)["reason"] == "provenance_stale"
+
+
+def test_actionable_blocks_when_deauthed_even_with_good_run():
+    bb = store.new_blackboard(session_id=53, query="q", location="l")
+    store.start_cadence_run(bb, authed=True)
+    store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=False)
+    assert store.search_data_actionable(bb)["reason"] == "not_authenticated_now"
+
+
 def test_persistence_load_or_create(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_store_dir", lambda: tmp_path)
     bb = store.load_or_create(99)
