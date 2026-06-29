@@ -190,4 +190,11 @@ def get_driver(name: Optional[str] = None) -> TrajectoryDriver:
         except Exception:
             logger.warning("minimum_jerk driver unavailable — falling back to direct")
             return DirectDriver()
+    if choice == "humanized":
+        try:
+            from .humanized import HumanizedDriver
+            return HumanizedDriver()
+        except Exception:
+            logger.warning("humanized driver unavailable — falling back to direct")
+            return DirectDriver()
     return DirectDriver()

@@ -639,6 +639,54 @@ async def navigate(body: NavigateRequest):
         return {"ok": False, "detail": str(exc), "requested_url": body.url}
 
 
+class LocateRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    css: Optional[str] = None        # CSS selector to find
+    text: Optional[str] = None       # OR visible text / aria-label / placeholder substring
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+
+
+@app.post("/locate")
+async def locate(body: LocateRequest):
+    """Find a clickable element by CSS selector or visible text, scroll it into view, and return its
+    bbox in SCREENSHOT px (+ dpr) — the 'find a thing to click' primitive that lets us drive by
+    CLICKING (humanized coordinate path) instead of forcing URLs (principle 3). Returns
+    {found, bbox, dpr, tag, text}. Best-effort."""
+    import json as _json
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    sel = _json.dumps(body.css or "")
+    txt = _json.dumps((body.text or "").lower())
+    expr = (
+        "(() => {"
+        f"  const sel={sel}, txt={txt};"
+        "  let el = sel ? document.querySelector(sel) : null;"
+        "  if (!el && txt) {"
+        "    const c=[...document.querySelectorAll('a,button,input,textarea,[role=button],[role=link],[role=searchbox]')];"
+        "    el=c.find(e=>((e.innerText||e.value||e.getAttribute('aria-label')||e.placeholder||'').trim().toLowerCase().includes(txt)) && e.offsetParent!==null);"
+        "  }"
+        "  if(!el) return {found:false};"
+        "  el.scrollIntoView({block:'center',inline:'center'});"
+        "  const r=el.getBoundingClientRect(); const dpr=window.devicePixelRatio||1;"
+        "  return {found:true,dpr,bbox:{x:r.x*dpr,y:r.y*dpr,width:r.width*dpr,height:r.height*dpr},"
+        "          tag:el.tagName,text:(el.innerText||el.value||el.getAttribute('aria-label')||'').slice(0,60)};"
+        "})()"
+    )
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {"found": False}
+        data["ok"] = True
+        data["tab_id"] = target.get("id")
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("locate failed: %s", exc)
+        return {"ok": False, "found": False, "detail": str(exc)}
+
+
 class ScreenshotRequest(BaseModel):
     browser_url: str = "http://127.0.0.1:9222"
     tab_id: Optional[str] = None
