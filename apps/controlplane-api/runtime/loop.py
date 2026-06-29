@@ -4,7 +4,7 @@ The loop is a pure orchestrator over PORTS:
 
   * `Proposer`  — observe the current page → an `Observation` (url, page text, AX
                   candidates, screenshot, a verifier `Snapshot`). The live adapter
-                  drives mcp-mock's AX proposer; tests inject a fake.
+                  drives mcp's AX proposer; tests inject a fake.
   * `Actor`     — perform (or record) the decided action. The default
                   `RecordOnlyActor` logs the intent and executes NOTHING — the safe
                   mode for first live runs and supervised data collection.
@@ -65,6 +65,13 @@ class Observation:
 # executed action, to produce the AFTER snapshot for verification).
 Proposer = Callable[[], Observation]
 
+# A Gate inspects a DECIDED action against the live invariants BEFORE it fires (the
+# Layer-3 code-enforced check). It returns a block dict (e.g. {reason, blockers}) to
+# refuse the action and escalate to a human, or None to allow it through. This is what
+# makes the loop structurally unable to e.g. submit a form with an empty required field,
+# regardless of how confident the selector was.
+Gate = Callable[["SelectionResult", Observation], Optional[dict[str, Any]]]
+
 
 @dataclass
 class ActResult:
@@ -92,7 +99,7 @@ class RecordOnlyActor:
     """Default-safe Actor: records the decided intent, executes nothing.
 
     This is the controlplane-side record of the loop's DECISION (distinct from the
-    mcp-mock executor, which performs real CDP input once autonomous action is
+    mcp executor, which performs real CDP input once autonomous action is
     trusted). It writes the intent to the loop-step corpus implicitly via the
     `StepRecord`; here it only marks the action un-executed so the loop skips verify.
     """
@@ -140,6 +147,7 @@ class StepRecord:
     driver: str
     status: str
     verify: Optional[dict[str, Any]] = None
+    gate: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -192,6 +200,7 @@ def run_loop(
     max_steps: int = 10,
     is_done: Optional[Callable[[Observation], bool]] = None,
     value_for: Optional[Callable[[SelectionResult, Observation], Optional[str]]] = None,
+    gate: Optional[Gate] = None,
     log_corpus: bool = True,
 ) -> LoopResult:
     """Run the per-step loop until done, escalation, a recorded intent, or budget.
@@ -199,6 +208,9 @@ def run_loop(
     `actor` defaults to `RecordOnlyActor` (safe). `is_done(observation)` lets the
     caller declare task success. `value_for(result, observation)` supplies the text
     for `type`/`select` actions (used both as the input value and the verify oracle).
+    `gate(result, observation)` is the Layer-3 invariant check: it runs AFTER select and
+    BEFORE act, and if it returns a block dict the action is refused and the loop escalates
+    to a human — the structural stop that keeps a confident-but-wrong submit from firing.
     """
     actor = actor or RecordOnlyActor()
     steps: list[StepRecord] = []
@@ -207,7 +219,8 @@ def run_loop(
 
     def record(result: SelectionResult, observation: Observation, candidate_count: int,
                executed: bool, driver: str, status: StepStatus, step_index: int,
-               verify_info: Optional[dict[str, Any]] = None) -> StepRecord:
+               verify_info: Optional[dict[str, Any]] = None,
+               gate_info: Optional[dict[str, Any]] = None) -> StepRecord:
         rec = StepRecord(
             step_index=step_index, retry=retry,
             ts=datetime.now(timezone.utc).isoformat(),
@@ -219,6 +232,7 @@ def run_loop(
             confidence=result.confidence, reason_code=result.reason_code.value,
             layer=result.layer, cost_usd=result.cost_usd, needs_human=result.needs_human,
             executed=executed, driver=driver, status=status.value, verify=verify_info,
+            gate=gate_info,
         )
         steps.append(rec)
         if log_corpus:
@@ -275,6 +289,18 @@ def run_loop(
             return LoopResult(LoopStatus.ESCALATED, steps,
                               reason=f"select escalated: {result.reason_code.value}",
                               escalation_reason=result.reason_code.value)
+
+        # --- GATE: Layer-3 invariant check before the action fires --------------
+        # Even a high-confidence pick is refused if it would violate an invariant (e.g.
+        # proceed past a form with an empty required field). The action never runs.
+        if gate is not None:
+            block = gate(result, observation)
+            if block is not None:
+                record(result, observation, len(candidates), False, "",
+                       StepStatus.ESCALATED, step_index, gate_info=block)
+                return LoopResult(LoopStatus.ESCALATED, steps,
+                                  reason=f"gate blocked: {block.get('reason', 'invariant')}",
+                                  escalation_reason="gate_blocked")
 
         cand = _resolve_candidate(result, candidates)
         target_bbox = cand.bbox if cand else {}

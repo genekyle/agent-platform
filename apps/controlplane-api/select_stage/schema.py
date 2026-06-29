@@ -84,7 +84,7 @@ class SelectionResult:
 @dataclass(frozen=True)
 class TrajectoryRequest:
     """Selector -> executor handoff. Carries intent + target ONLY — no pointer
-    path. The executor (mcp-mock) decides center-click vs synthesized path."""
+    path. The executor (mcp) decides center-click vs synthesized path."""
     backend_node_id: int
     target_bbox: dict[str, float]
     action_id: ActionId

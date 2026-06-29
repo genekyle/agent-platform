@@ -17,9 +17,9 @@ from app.observer.ax_proposer import AXProposerStats, propose_ax_candidates
 from app.observer.vision_proposer import MODEL_VERSION, propose_candidates
 
 
-logger = logging.getLogger("mcp-mock.proposer")
+logger = logging.getLogger("mcp.proposer")
 
-app = FastAPI(title="MCP Mock Capture Server", version="0.0.1")
+app = FastAPI(title="Agent Platform MCP — CDP browser driver + capture server", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -361,6 +361,132 @@ async def autofill_form(body: AutofillFormRequest):
         return {"ok": False, "detail": str(exc), "report": [], "combos": []}
 
 
+class ScanFormRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_url: Optional[str] = "smartapply"
+
+
+# READ-ONLY form scanner (Layer 1 observation). It reports each field's required/filled/valid
+# and acts on NOTHING, so the state store's invariant gate can refuse to mark a form subtask
+# done while a required field is empty/invalid. required = required attr / aria-required / a
+# "*" or "required" in the label; filled = non-empty value / a checked radio-or-checkbox /
+# a non-placeholder select; valid = not aria-invalid and not :invalid.
+#
+# It must EARN ITS PLACE on the live page, so it is multi-strategy + self-diagnosing: it tries
+# Indeed's question-item container first, falls back to generic form groupings, then to flat
+# controls, and ALWAYS returns a `diagnostics` block (url, strategy that matched, container
+# count, a control inventory, sample class names). A live run is therefore never a silent
+# "0 fields" — when a selector misses we can see the real DOM shape and fix it.
+_SCAN_FORM_JS = r"""
+() => {
+  const txt = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g,' ').trim();
+  const vis = el => { try { return el.offsetParent !== null || el.getClientRects().length > 0; } catch (e) { return true; } };
+  const isReq = (el, c) => {
+    if (el.required || el.getAttribute('aria-required') === 'true') return true;
+    const lbl = txt(c.querySelector('label,legend')) || txt(c);
+    return /\*/.test(lbl) || /\brequired\b/i.test(lbl);
+  };
+  const isInvalid = el => el.getAttribute('aria-invalid') === 'true'
+    || (el.matches && (() => { try { return el.matches(':invalid'); } catch (e) { return false; } })());
+  const SEL = {
+    select: 'select', radio: '[role=radio],input[type=radio]', combobox: '[role=combobox]',
+    text: 'input[type=text],input[type=number],input[type=email],input[type=tel],input:not([type]),textarea',
+    checkbox: 'input[type=checkbox]',
+  };
+
+  function scan(containers) {
+    const fields = []; let idx = 0;
+    for (const c of containers) {
+      const q = txt(c).slice(0, 120) || '(unlabeled)';
+      const selects = [...c.querySelectorAll(SEL.select)].filter(vis);
+      const radios  = [...c.querySelectorAll(SEL.radio)].filter(vis);
+      const aria    = [...c.querySelectorAll(SEL.combobox)].filter(vis);
+      const texts   = [...c.querySelectorAll(SEL.text)].filter(vis);
+      const checks  = [...c.querySelectorAll(SEL.checkbox)].filter(vis);
+      if (!(selects.length || radios.length || aria.length || texts.length || checks.length)) continue;
+      // SELECTS: per-element (multi-field aware — the Country+State case).
+      for (const s of selects) fields.push({ field_id: 'f' + (idx++), label: q, kind: 'select',
+        required: isReq(s, c), filled: s.selectedIndex > 0 && s.value !== '',
+        valid: !isInvalid(s), value_preview: (s.value || '').slice(0, 40) });
+      // RADIOS: one logical field per container.
+      if (radios.length) {
+        const ck = radios.find(r => r.checked || r.getAttribute('aria-checked') === 'true');
+        fields.push({ field_id: 'f' + (idx++), label: q, kind: 'radio',
+          required: isReq(radios[0], c), filled: !!ck, valid: true,
+          value_preview: ck ? txt(ck.closest('label')).slice(0, 40) : '' });
+      }
+      for (const t of texts) fields.push({ field_id: 'f' + (idx++), label: q, kind: 'text',
+        required: isReq(t, c), filled: !!(t.value && t.value.trim()),
+        valid: !isInvalid(t), value_preview: (t.value || '').slice(0, 40) });
+      for (const a of aria) { const v = txt(a) || (a.value || '').trim();
+        fields.push({ field_id: 'f' + (idx++), label: q, kind: 'combobox',
+          required: isReq(a, c), filled: !!v && !/^select\b/i.test(v), valid: true,
+          value_preview: v.slice(0, 40) }); }
+      for (const ch of checks) fields.push({ field_id: 'f' + (idx++), label: q, kind: 'checkbox',
+        required: isReq(ch, c), filled: ch.checked, valid: true,
+        value_preview: ch.checked ? 'checked' : '' });
+    }
+    return fields;
+  }
+
+  const strategies = [
+    ['ia-questions',  '.ia-Questions-item,[class*=Questions-item]'],
+    ['fieldset/group', 'fieldset,[role=group],[role=radiogroup]'],
+    ['question-class', '[class*=question],[class*=Question],[data-testid*=question]'],
+  ];
+  let used = 'none', containers = [], fields = [];
+  for (const [name, sel] of strategies) {
+    containers = [...document.querySelectorAll(sel)].filter(vis);
+    if (containers.length) { const f = scan(containers); if (f.length) { used = name; fields = f; break; } }
+  }
+  // Last resort: enumerate visible controls and group by nearest plausible wrapper.
+  if (!fields.length) {
+    const all = [...document.querySelectorAll('select,input,textarea,[role=combobox],[role=radio]')].filter(vis);
+    const seen = new Set(); const pseudo = [];
+    for (const el of all) {
+      const c = el.closest('label,fieldset,[role=group],li,section,div') || el.parentElement || el;
+      if (!seen.has(c)) { seen.add(c); pseudo.push(c); }
+    }
+    fields = scan(pseudo);
+    used = fields.length ? 'flat-controls' : 'none';
+    containers = pseudo;
+  }
+
+  const inv = sel => document.querySelectorAll(sel).length;
+  const diagnostics = {
+    url: (location.href || '').slice(0, 140),
+    strategy: used,
+    container_count: containers.length,
+    controls: { select: inv(SEL.select), radio: inv(SEL.radio), text: inv(SEL.text),
+      checkbox: inv(SEL.checkbox), combobox: inv(SEL.combobox) },
+    sample_classes: [...document.querySelectorAll('[class*=Questions],[class*=question],fieldset')]
+      .slice(0, 5).map(e => (e.className || '').toString().slice(0, 70)),
+  };
+  return { fields, diagnostics };
+}
+"""
+
+
+@app.post("/scan_form")
+async def scan_form(body: ScanFormRequest):
+    """Read-only form scan: report each field's required/filled/valid (no writes), plus a
+    diagnostics block so a live run is never a silent "0 fields". The live source for the
+    state store's form_state + invariant gate."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=None, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            r = await cdp.send("Runtime.evaluate", {
+                "expression": f"({_SCAN_FORM_JS})()", "returnByValue": True})
+            out = (r.get("result") or {}).get("value") or {"fields": [], "diagnostics": {}}
+        return {"ok": True, **out}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("scan_form failed: %s", exc)
+        return {"ok": False, "detail": str(exc), "fields": [], "diagnostics": {}}
+
+
 class JobDescriptionRequest(BaseModel):
     external_id: str                     # Indeed jk
     browser_url: str = "http://127.0.0.1:9222"
@@ -408,9 +534,114 @@ async def fetch_job_description(body: JobDescriptionRequest):
         return {"ok": False, "detail": str(exc)}
 
 
+# Is a captcha challenge ACTUALLY SHOWN, or just preloaded invisibly? Sites (Indeed) preload the
+# reCAPTCHA Enterprise anchor+bframe iframes hidden on every page, so "frame present" over-triggers
+# a human stop. We can read each iframe ELEMENT's visibility from the host document (no cross-origin
+# access needed): walk its ancestors for display:none / visibility:hidden / opacity:0, and check the
+# rect is non-trivial and on-screen (the hidden challenge is parked off-screen at top:-10000px).
+_CHALLENGE_VISIBILITY_JS = r"""
+(() => {
+  const shown = (el) => {
+    let n = el;
+    while (n && n.nodeType === 1) {
+      const s = getComputedStyle(n);
+      if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') === 0) return false;
+      n = n.parentElement;
+    }
+    const r = el.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) return false;
+    const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+    if (r.bottom < 0 || r.right < 0 || r.top > vh + 200 || r.left > vw + 200) return false;
+    return true;
+  };
+  const ifr = Array.from(document.querySelectorAll('iframe'));
+  const match = (re) => ifr.filter(f => re.test(f.src || ''));
+  const bframes  = match(/recaptcha\/(enterprise|api2)\/bframe/);   // the image-challenge popup
+  const anchors  = match(/recaptcha\/(enterprise|api2)\/anchor/);   // the "I'm not a robot" checkbox
+  const hcap     = match(/hcaptcha\.com\/(captcha|challenge)/);
+  const challenge_visible = bframes.some(shown) || hcap.some(shown);
+  const checkbox_visible  = anchors.some(shown);                    // v2 checkbox the user must click
+  return {
+    challenge_visible, checkbox_visible,
+    bframe_count: bframes.length, anchor_count: anchors.length, hcaptcha_count: hcap.length,
+  };
+})()
+"""
+
+
+class ChallengeVisibilityRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+
+
+@app.post("/challenge_visibility")
+async def challenge_visibility(body: ChallengeVisibilityRequest):
+    """Probe whether a captcha challenge is ACTUALLY SHOWN to the user (vs an invisible preload) by
+    reading the captcha iframe elements' visibility from the host document over CDP. This is the
+    signal `detect_block_frames` (URL-only, $0) can't have — it turns "a bframe exists" into "a
+    human is actually being challenged", killing the false-positive hard stop on every Indeed search.
+    Returns {ok, challenge_visible, checkbox_visible, counts}. Best-effort; never raises."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate",
+                                 {"expression": _CHALLENGE_VISIBILITY_JS, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {}
+        data["ok"] = True
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("challenge_visibility failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
+class NavigateRequest(BaseModel):
+    url: str
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None      # substring to pick the tab to drive (e.g. "indeed.com")
+    settle_seconds: float = 2.0        # let the page settle before reading back where we landed
+
+
+@app.post("/navigate")
+async def navigate(body: NavigateRequest):
+    """Drive a tab to a URL over raw CDP — the foundational 'move the browser' primitive of OUR
+    driver (reuses _CDPSession + Page.navigate, same plumbing as /fetch_job_description). Teacher-
+    teaches: the operator/agent navigates the existing tab human-paced; the capture loop records
+    the resulting state. Returns where we actually landed (final url + title) so the caller can
+    confirm. Best-effort; never raises into the caller.
+
+    Note on safety: this is a generic primitive. The job-search BOUNDS (search-results URLs only,
+    never job-detail URL-jumps, no tab churn) are policy enforced by the control plane / cadence —
+    not re-implemented here."""
+    import asyncio
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id,
+                                        tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.navigate", {"url": body.url})
+            await asyncio.sleep(max(0.0, min(body.settle_seconds, 10.0)))
+            res = await cdp.send("Runtime.evaluate",
+                                 {"expression": "({url: location.href, title: document.title})",
+                                  "returnByValue": True})
+        landed = (res.get("result") or {}).get("value") or {}
+        return {"ok": True, "requested_url": body.url,
+                "landed_url": landed.get("url", ""), "title": landed.get("title", ""),
+                "tab_id": target.get("id")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("navigate failed: %s", exc)
+        return {"ok": False, "detail": str(exc), "requested_url": body.url}
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "mcp-mock-capture-server"}
+    return {"ok": True, "service": "mcp-capture-server"}
 
 
 @app.post("/capture")

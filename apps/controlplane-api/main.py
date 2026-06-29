@@ -1633,12 +1633,20 @@ async def autofill_form(training_session_id: int, db: Session = Depends(get_db))
 
 
 @app.get("/api/runtime/apply_state")
-async def apply_state(training_session_id: int, db: Session = Depends(get_db)):
-    """Live state manager for the apply task: read every tab in the session's Chrome and map
-    each onto the Indeed apply recipe — role (search/apply), current state, recipe step,
-    expected next state, and whether it's a human-required branch (captcha / AI-recruiter / ...).
-    The 'where are we' readout so we stop holding tab/step state in our heads."""
+async def apply_state(training_session_id: int, scan_form: bool = True,
+                      db: Session = Depends(get_db)):
+    """Live state manager for the apply task. Reads every tab in the session's Chrome, folds
+    the observation into the PERSISTENT per-session blackboard (apply_state_store), and runs
+    the invariant gates — so the readout carries not just "which tab is what" but the live
+    plan progress, per-field form_state, the code-enforced completion gate, and the blockers
+    (human branches + unsatisfied required fields). This is the store that stops us holding
+    tab/step/field state in our heads; it persists between calls instead of recomputing blind.
+
+    `scan_form=true` (default) additionally reads the active apply form's per-field
+    required/filled/valid from the capture server; set false to skip the form read."""
     import apply_recipe
+    import apply_state_store as store
+    import escalation_rules
     session = db.get(TrainingSession, training_session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Training session not found")
@@ -1647,18 +1655,167 @@ async def apply_state(training_session_id: int, db: Session = Depends(get_db)):
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(f"{browser_url}/json")
             r.raise_for_status()
-            targets = [t for t in r.json() if t.get("type") == "page"]
+            all_targets = r.json()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"session Chrome not reachable: {exc}")
+    targets = [t for t in all_targets if t.get("type") == "page"]
+    # Block detection scans EVERY frame/target (incl. iframes), where an in-page captcha
+    # actually lives — the gap that left a reCAPTCHA'd page reading needs_human=false.
+    block = escalation_rules.detect_block_frames([t.get("url", "") for t in all_targets])
+    # ...but a preloaded-yet-hidden reCAPTCHA must NOT hard-stop the apply flow either; confirm it's
+    # actually shown before treating it as human-required (same refinement as session_state).
+    block = await _refine_block_visibility(browser_url, block)
     tabs = [apply_recipe.describe_tab(t.get("url", "")) for t in targets
             if "localhost:5173" not in (t.get("url", "") or "")]
     apply_tabs = [t for t in tabs if t["role"] == "apply"]
+
+    # Read the live form (read-only) only when we're actually on an apply tab — the gate has
+    # nothing to check otherwise, and we avoid a wasted CDP round-trip on search pages.
+    form_fields = None
+    if scan_form and apply_tabs:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                fr = await client.post(f"{settings.capture_server_url}/scan_form",
+                                       json={"browser_url": browser_url, "tab_url": "smartapply"})
+                fr.raise_for_status()
+                body = fr.json()
+                if body.get("ok"):
+                    form_fields = body.get("fields", [])
+        except httpx.HTTPError:
+            form_fields = None  # scan unreachable → leave prior form_state; don't crash the readout
+
+    bb = store.load_or_create(training_session_id)
+    store.reconcile(bb, tabs=tabs, form_fields=form_fields, block=block)
+    store.save(bb)
+    bb_dict = bb.to_dict()
+
     return {
         "training_session_id": training_session_id,
         "tab_count": len(tabs),
         "tabs": tabs,
         "active_apply_state": apply_tabs[0] if apply_tabs else None,
-        "needs_human": any(t["human_required"] for t in tabs),
+        "needs_human": bb_dict["needs_human"],
+        # the blackboard: plan progress, form_state, code-enforced gate, blockers, event log
+        "blackboard": bb_dict,
+        # Layer-3 made active: "is it safe to proceed/submit from here?" off the live gate
+        "proceed_decision": store.proceed_decision(bb),
+    }
+
+
+def _search_page_from_url(url: str) -> Optional[int]:
+    """Indeed paginates results with ?start=0/10/20… — map that to a 1-based page number for the
+    search_state readout. Returns None when the URL has no start offset (treat as page 1)."""
+    try:
+        from urllib.parse import parse_qs, urlparse
+        start = parse_qs(urlparse(url or "").query).get("start", [None])[0]
+        return (int(start) // 10) + 1 if start is not None else None
+    except Exception:
+        return None
+
+
+_VISIBILITY_PROBE_PROVIDERS = {"recaptcha", "hcaptcha"}
+
+
+async def _refine_block_visibility(browser_url: str, block: Optional[dict]) -> Optional[dict]:
+    """Confirm an ACTIVE iframe-captcha is actually SHOWN before we hard-stop on it. detect_block_frames
+    is URL-only ($0) and flags a reCAPTCHA bframe as active on mere presence — but Indeed preloads
+    reCAPTCHA Enterprise invisibly on every page, so that over-triggers a human stop. This probes the
+    captcha iframe elements' real visibility (capture server /challenge_visibility) and downgrades the
+    block to PASSIVE (advisory) when nothing is visibly challenging. Only the iframe-based providers we
+    can introspect are probed; others (turnstile/datadome/...) pass through unchanged. Fail-safe: if the
+    probe is unreachable or errors, keep the conservative active stop."""
+    if not block or block.get("strength") != "active":
+        return block
+    if block.get("provider") not in _VISIBILITY_PROBE_PROVIDERS:
+        return block
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(f"{settings.capture_server_url}/challenge_visibility",
+                                  json={"browser_url": browser_url})
+            r.raise_for_status()
+            vis = r.json()
+    except httpx.HTTPError:
+        return block  # probe unreachable → keep the conservative active stop
+    import escalation_rules
+    return escalation_rules.downgrade_block_if_hidden(block, vis)
+
+
+@app.get("/api/runtime/session_state")
+async def session_state(training_session_id: int, scan_form: bool = True,
+                        db: Session = Depends(get_db)):
+    """Session-spanning state manager: the generalized sibling of /api/runtime/apply_state that
+    tracks the WHOLE flow, not just apply. Same read→detect→describe→reconcile→save flow, but the
+    persistent blackboard carries the PHASE (search/triage/apply), the search target + progress
+    (query/location/page/observed), the phase-aware plan, and the blockers. Captcha detection runs
+    over every iframe in every phase, so a challenge during search halts proceed just like one at
+    submit. Seeds the search target from job_search_targets on first creation only."""
+    import apply_recipe
+    import apply_state_store as store
+    import escalation_rules
+    import job_search_targets as jst
+    session = db.get(TrainingSession, training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{browser_url}/json")
+            r.raise_for_status()
+            all_targets = r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"session Chrome not reachable: {exc}")
+    targets = [t for t in all_targets if t.get("type") == "page"]
+    block = escalation_rules.detect_block_frames([t.get("url", "") for t in all_targets])
+    # Visibility refinement: an "active" iframe-captcha is only a real human stop if it's actually
+    # shown (Indeed preloads reCAPTCHA invisibly). Downgrade preloaded-but-hidden hits to passive.
+    block = await _refine_block_visibility(browser_url, block)
+    tabs = [apply_recipe.describe_tab(t.get("url", "")) for t in targets
+            if "localhost:5173" not in (t.get("url", "") or "")]
+    apply_tabs = [t for t in tabs if t["role"] == "apply"]
+    search_tabs = [t for t in tabs if t["role"] == "search"]
+
+    # Read the live apply form only when we're actually on an apply tab — search pages have no
+    # form gate to check, and we avoid a wasted CDP round-trip.
+    form_fields = None
+    if scan_form and apply_tabs:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                fr = await client.post(f"{settings.capture_server_url}/scan_form",
+                                       json={"browser_url": browser_url, "tab_url": "smartapply"})
+                fr.raise_for_status()
+                body = fr.json()
+                if body.get("ok"):
+                    form_fields = body.get("fields", [])
+        except httpx.HTTPError:
+            form_fields = None
+
+    # Fold the results-page number off the active search tab's ?start= offset (best-effort).
+    search_update = None
+    if search_tabs and not apply_tabs:
+        page = _search_page_from_url(next((t["url"] for t in search_tabs
+                                           if t["state"] == "indeed_search_results"), ""))
+        if page is not None:
+            search_update = {"page": page}
+
+    target = jst.active_target() or {}
+    bb = store.load_or_create(training_session_id,
+                              query=target.get("query", ""), location=target.get("location", ""))
+    store.reconcile(bb, tabs=tabs, form_fields=form_fields, block=block, search_update=search_update)
+    store.save(bb)
+    bb_dict = bb.to_dict()
+
+    return {
+        "training_session_id": training_session_id,
+        "phase": bb_dict["phase"],
+        "tab_count": len(tabs),
+        "tabs": tabs,
+        "active_search_state": search_tabs[0] if search_tabs else None,
+        "active_apply_state": apply_tabs[0] if apply_tabs else None,
+        "needs_human": bb_dict["needs_human"],
+        "search_state": bb_dict["search_state"],
+        # the blackboard: phase, plan progress, form_state, code-enforced gate, blockers, event log
+        "blackboard": bb_dict,
+        "proceed_decision": store.proceed_decision(bb),
     }
 
 
@@ -1668,6 +1825,33 @@ def apply_recipe_spec():
     page_state_registry ids; transitions are what the state_transition model learns."""
     import apply_recipe
     return apply_recipe.recipe_spec()
+
+
+class SearchTargetCreate(BaseModel):
+    query: str
+    location: str = ""
+    status: str = "active"  # active | paused
+
+
+@app.get("/api/search/targets")
+def list_search_targets():
+    """The persisted (query, location) targets the search cadence runs against — the written-down
+    'what/where' so it isn't held in a Claude/Haiku context. Seeded on first use."""
+    import job_search_targets as jst
+    targets = jst.load_targets()
+    return {"targets": targets, "active": jst.active_target()}
+
+
+@app.post("/api/search/targets")
+def add_search_target(body: SearchTargetCreate):
+    """Add a search target (e.g. 'reporting analyst' / 'Nashua, NH'). Idempotent — a
+    case-insensitive duplicate returns the existing row rather than adding a second."""
+    import job_search_targets as jst
+    try:
+        row = jst.add_target(body.query, body.location, body.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return row
 
 
 @app.get("/api/search/cadence")
@@ -2324,7 +2508,7 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
     except httpx.ConnectError:
         raise HTTPException(
             status_code=503,
-            detail=f"mcp-mock capture server not reachable at {settings.capture_server_url}",
+            detail=f"mcp capture server not reachable at {settings.capture_server_url}",
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -2440,7 +2624,7 @@ def get_observation(filename: str, db: Session = Depends(get_db)):
     # fill this slot ONLY when AX yields zero candidates (canvas/icon-only). Choice
     # is TBD and parked until we actually hit that case. Returned empty so the labeler
     # renders nothing for this source. (OmniParser code still backs the dropped
-    # two-stage EVAL baseline via mcp-mock /proposer/predict — that's separate.)
+    # two-stage EVAL baseline via mcp /proposer/predict — that's separate.)
     data["vision_candidates"] = []
 
     return data
@@ -3565,7 +3749,7 @@ def _delete_observation_files(filename: str) -> bool:
     if meta_path.exists():
         meta_path.unlink()
 
-    # Delete vision-proposer sidecar (written by mcp-mock async backfill)
+    # Delete vision-proposer sidecar (written by mcp async backfill)
     vision_path = traces_dir / f"{filename}.vision.json"
     if vision_path.exists():
         vision_path.unlink()

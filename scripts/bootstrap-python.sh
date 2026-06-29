@@ -7,7 +7,7 @@ VENV_PYTHON="$VENV_DIR/bin/python"
 STAMP_FILE="$VENV_DIR/.requirements.stamp"
 REQUIREMENTS_FILES=(
   "$ROOT_DIR/apps/controlplane-api/requirements.txt"
-  "$ROOT_DIR/apps/mcp-mock/requirements.txt"
+  "$ROOT_DIR/apps/mcp/requirements.txt"
 )
 
 require_cmd() {
@@ -44,7 +44,7 @@ if requirements_changed; then
   "$VENV_PYTHON" -m pip install --upgrade pip
   "$VENV_PYTHON" -m pip install \
     -r "$ROOT_DIR/apps/controlplane-api/requirements.txt" \
-    -r "$ROOT_DIR/apps/mcp-mock/requirements.txt"
+    -r "$ROOT_DIR/apps/mcp/requirements.txt"
   touch "$STAMP_FILE"
 fi
 

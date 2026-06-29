@@ -1,6 +1,6 @@
 """Florence-2-base zero-shot grounding wrapper.
 
-Lazy-loaded singleton, mirroring apps/mcp-mock/app/observer/vision_proposer.py.
+Lazy-loaded singleton, mirroring apps/mcp/app/observer/vision_proposer.py.
 fp32 on MPS (matches the proposer's captioner choice for stability).
 
 Inference uses the `<CAPTION_TO_PHRASE_GROUNDING>` task: the element_query is

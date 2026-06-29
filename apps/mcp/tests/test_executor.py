@@ -3,7 +3,7 @@
 DirectDriver's live click needs a browser, so it's not exercised here; the
 coordinate conversion it relies on is tested directly.
 
-Run from apps/mcp-mock:  ../../.venv/bin/python -m pytest tests/test_executor.py -q
+Run from apps/mcp:  ../../.venv/bin/python -m pytest tests/test_executor.py -q
 """
 
 import asyncio

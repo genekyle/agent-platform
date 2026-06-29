@@ -104,7 +104,7 @@ def _resolve_candidate_id(fn, backend_node_id):
     import os
     # sidecar lives under the capture artifacts dir; read via the API's observation? simplest: read file
     # The control-plane exposes it indirectly; here we read the on-disk sidecar.
-    base = os.environ.get("AX_TRACES", "apps/mcp-mock/output/observer-traces")
+    base = os.environ.get("AX_TRACES", "apps/mcp/output/observer-traces")
     path = f"{base}/{fn}.ax.json"
     try:
         props = json.load(open(path)).get("proposals", [])

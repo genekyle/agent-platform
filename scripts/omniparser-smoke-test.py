@@ -21,7 +21,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_SCREENSHOT_DIR = REPO_ROOT / "apps" / "mcp-mock" / "output" / "observer-screenshots"
+DEFAULT_SCREENSHOT_DIR = REPO_ROOT / "apps" / "mcp" / "output" / "observer-screenshots"
 
 # OmniParser v2 — YOLO icon detector. Ships as model.pt (ultralytics-loadable).
 # v1 ships icon_detect/ as safetensors, less directly loadable. Use v2.

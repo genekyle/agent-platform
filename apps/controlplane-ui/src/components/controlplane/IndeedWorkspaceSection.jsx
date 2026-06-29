@@ -17,7 +17,152 @@ const EMPTY_DRAFT = {
 export function IndeedWorkspaceSection({ section }) {
   if (section === "application-answers") return <ApplicationAnswers />;
   if (section === "jobs-dashboard") return <JobsDashboard />;
+  if (section === "apply-state") return <ApplyStatePanel />;
   return <IndeedOverview />;
+}
+
+const STATUS_COLOR = {
+  done: "#3fb950", active: "#58a6ff", blocked: "#f85149", pending: "#8b949e",
+};
+
+/** The live apply blackboard. Polls /api/runtime/apply_state for the selected session and
+ *  shows the four layers made visible: plan progress (the recipe spine + subtask status),
+ *  per-field form_state (required/filled/valid), the code-enforced proceed/submit gate, and
+ *  the blockers (human branches + empty required fields). This is the "where are we" readout
+ *  so tab/step/field state lives on screen, not in someone's head. */
+function ApplyStatePanel() {
+  const [sessions, setSessions] = useState([]);
+  const [sessionId, setSessionId] = useState(null);
+  const [state, setState] = useState(null);
+  const [err, setErr] = useState("");
+  const [live, setLive] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API}/api/training/sessions`).then((r) => r.json()).then((rows) => {
+      const indeed = (rows || []).filter((s) => s.domain_id === "indeed");
+      setSessions(indeed);
+      setSessionId((cur) => cur ?? indeed.find((s) => s.status === "active")?.id ?? indeed[0]?.id ?? null);
+    }).catch(() => {});
+  }, []);
+
+  const load = useCallback(() => {
+    if (!sessionId) return;
+    fetch(`${API}/api/runtime/apply_state?training_session_id=${sessionId}`)
+      .then(async (r) => {
+        if (!r.ok) { setErr((await r.json().catch(() => ({})))?.detail || `HTTP ${r.status}`); setState(null); return; }
+        setErr(""); setState(await r.json());
+      })
+      .catch((e) => setErr(String(e.message || e)));
+  }, [sessionId]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!live || !sessionId) return undefined;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [live, sessionId, load]);
+
+  const bb = state?.blackboard;
+  const decision = state?.proceed_decision;
+
+  return (
+    <div className="section-body">
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <select className="input" value={sessionId ?? ""} onChange={(e) => setSessionId(Number(e.target.value) || null)}>
+          {sessions.length === 0 && <option value="">No Indeed sessions</option>}
+          {sessions.map((s) => (
+            <option key={s.id} value={s.id}>#{s.id} · {s.status} · {s.goal?.slice(0, 40) || "session"}</option>
+          ))}
+        </select>
+        <button className="btn" onClick={load}>Refresh</button>
+        <label className="muted" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} /> Live (4s)
+        </label>
+      </div>
+
+      {err && (
+        <div className="muted" style={{ marginTop: 10, color: "#f0883e" }}>
+          {err.includes("not reachable") ? "Session Chrome isn't reachable — start the session and open the apply tab." : err}
+        </div>
+      )}
+
+      {decision && (
+        <div style={{
+          marginTop: 12, padding: "10px 12px", borderRadius: 8,
+          border: `1px solid ${decision.ok ? "#238636" : "#da3633"}`,
+          background: decision.ok ? "rgba(46,160,67,0.12)" : "rgba(218,54,51,0.12)",
+        }}>
+          <strong>{decision.ok ? "✓ Clear to proceed" : "✕ Gate is holding"}</strong>
+          <span className="muted" style={{ marginLeft: 8 }}>{decision.reason}</span>
+          {!decision.ok && (decision.blockers || []).length > 0 && (
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {decision.blockers.map((b, i) => (
+                <li key={i}>{b.label || b.note || b.field_id || b.source} {b.reason ? `(${b.reason})` : ""}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {bb && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 14 }}>
+          <div>
+            <h4 style={{ margin: "0 0 6px" }}>Plan</h4>
+            <ol style={{ margin: 0, paddingLeft: 18 }}>
+              {bb.plan.map((s) => (
+                <li key={s.id} style={{ color: STATUS_COLOR[s.status] || "#c9d1d9", fontWeight: s.id === bb.current_subtask_id ? 700 : 400 }}>
+                  {s.label} <span className="muted" style={{ fontSize: 12 }}>· {s.status}{s.gate ? " · gated" : ""}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+          <div>
+            <h4 style={{ margin: "0 0 6px" }}>Form state {bb.gate_ok ? "✓" : "✕"}</h4>
+            {(bb.form_state || []).length === 0
+              ? <p className="muted" style={{ margin: 0 }}>No form fields scanned on the active tab.</p>
+              : (
+                <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                  <thead><tr style={{ textAlign: "left", color: "#8b949e" }}>
+                    <th>Field</th><th>Kind</th><th>Req</th><th>Filled</th><th>Valid</th>
+                  </tr></thead>
+                  <tbody>
+                    {bb.form_state.map((f) => (
+                      <tr key={f.field_id} style={{ background: f.required && !(f.filled && f.valid) ? "rgba(248,81,73,0.12)" : "transparent" }}>
+                        <td title={f.label}>{(f.label || f.field_id).slice(0, 26)}</td>
+                        <td className="muted">{f.kind}</td>
+                        <td>{f.required ? "●" : "—"}</td>
+                        <td>{f.filled ? "✓" : "—"}</td>
+                        <td>{f.valid ? "✓" : "✕"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+          </div>
+          <div>
+            <h4 style={{ margin: "0 0 6px" }}>Tabs ({bb.world?.tabs?.length || 0})</h4>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {(bb.world?.tabs || []).map((t, i) => (
+                <li key={i} className="muted" style={{ fontWeight: i === bb.world?.active_tab_index ? 700 : 400, color: t.human_required ? "#f85149" : undefined }}>
+                  [{t.role}] {t.state}{t.human_required ? " · human" : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <h4 style={{ margin: "0 0 6px" }}>Recent events</h4>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+              {(bb.events || []).slice(-6).reverse().map((e, i) => (
+                <li key={i} className="muted">{e.kind}: {e.detail}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {!state && !err && <p className="muted" style={{ marginTop: 12 }}>Select a session to load its apply state.</p>}
+    </div>
+  );
 }
 
 function JobsDashboard() {

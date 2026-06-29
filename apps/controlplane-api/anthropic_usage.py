@@ -38,7 +38,7 @@ _write_lock = threading.Lock()
 
 
 def _usage_path() -> Path:
-    # observer_artifacts_dir defaults to a RELATIVE path ("../mcp-mock/output"),
+    # observer_artifacts_dir defaults to a RELATIVE path ("../mcp/output"),
     # which resolves differently depending on CWD (the server runs from
     # apps/controlplane-api, but a script may run from repo root). Anchor relative
     # paths to this package dir so every writer/reader hits the same file.

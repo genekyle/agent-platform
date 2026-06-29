@@ -38,7 +38,7 @@ if ! "$VENV_PYTHON" -c "import fastapi, uvicorn, sqlalchemy, psycopg, pydantic_s
 fi
 
 if ! "$VENV_PYTHON" -c "import fastapi, uvicorn, httpx" >/dev/null 2>&1; then
-  echo "Capture server dependencies are missing. Run: python3 -m pip install -r apps/mcp-mock/requirements.txt" >&2
+  echo "Capture server dependencies are missing. Run: python3 -m pip install -r apps/mcp/requirements.txt" >&2
   exit 1
 fi
 
@@ -78,7 +78,7 @@ start_service \
 
 start_service \
   "capture-server" \
-  "$ROOT_DIR/apps/mcp-mock" \
+  "$ROOT_DIR/apps/mcp" \
   "$VENV_PYTHON" -m uvicorn app.main_server:app --host 0.0.0.0 --port 8082 --reload
 
 start_service \

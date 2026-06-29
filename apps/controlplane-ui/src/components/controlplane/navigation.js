@@ -86,6 +86,11 @@ export const CONTROL_PLANE_NAV = {
         label: "Jobs Dashboard",
         subtitle: "Jobs found across searches — counts, duplicates, and applied status. Drives what to apply to next.",
       },
+      {
+        id: "apply-state",
+        label: "Apply State",
+        subtitle: "The live apply blackboard: where we are in the recipe, per-field form state, the code-enforced submit gate, and blockers — so nobody holds tab/step/field state in their head.",
+      },
     ],
   },
   lab: {

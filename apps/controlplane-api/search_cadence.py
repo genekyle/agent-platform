@@ -23,6 +23,26 @@ BOUNDS = {
     "apply_requires": "explicit user approval per job before the final Submit",
 }
 
+# Structured SEARCH/triage spine — the search-phase analogue of apply_recipe.INDEED_APPLY_RECIPE.
+# The blackboard's search plan is built from this. State ids are the LIVE states the tab classifier
+# emits (apply_recipe.map_url_to_state), NOT the registry's short ids — they must match exactly or
+# the plan can't advance. Step 2 is the handoff: opening a posting / clicking Apply leaves the
+# search phase and the apply spine (INDEED_APPLY_RECIPE) takes over.
+SEARCH_RECIPE = [
+    {"step": 0, "state": "indeed_home",           "action": "enter query + location, run the search",
+     "expect": ["indeed_search_results"]},
+    {"step": 1, "state": "indeed_search_results", "action": "triage the page (shortlist fits); page forward within bounds",
+     "expect": ["indeed_search_results", "indeed_job_posting"]},
+    {"step": 2, "state": "indeed_job_posting",    "action": "open posting / click Apply (handoff to the apply flow)",
+     "expect": ["indeed_job_posting", "indeed_apply_resume_selection", "indeed_apply_questions"]},
+]
+
+
+def search_recipe_states() -> list[str]:
+    """The state ids the search spine advances through (for validation + the planner)."""
+    return [entry["state"] for entry in SEARCH_RECIPE]
+
+
 CADENCE_MODES = {
     # ---- TASK 1: pure data gathering ----------------------------------------
     "extraction_sweep": {
@@ -130,6 +150,7 @@ def cadence_spec() -> dict:
     return {
         "bounds": BOUNDS,
         "modes": CADENCE_MODES,
+        "search_recipe": SEARCH_RECIPE,
         "known_platforms": sorted(set(_PLATFORM_HOSTS.values()) | {"company_site"}),
         "apply_outcomes": [{"outcome": o, "human_required": h} for o, h, _ in _APPLY_OUTCOMES],
         "note": "Two search tasks: extraction_sweep (record everything) vs apply_triage "

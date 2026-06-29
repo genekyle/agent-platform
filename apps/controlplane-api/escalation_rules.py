@@ -14,10 +14,74 @@ capture (the labeled screenshot) so the eventual classifier has training data.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
 
 from settings import settings
+
+# Challenge widgets render in their OWN iframe with a recognizable host, so even when the
+# top-level page (e.g. an Indeed search-results URL) shows no captcha signal in its url/text,
+# the browser's target/frame list does. This is the gap that left a reCAPTCHA'd page reading
+# needs_human=false: url/text checks see only the main document, never the iframe.
+#
+# strength distinguishes an ACTIVE challenge (a popup/interactive frame is up → a human must
+# act → hard block) from a PASSIVE widget (an invisible/enterprise badge that's on many pages
+# and isn't blocking → just slow down). That split is the semi-supervised "by the book →
+# proceed; real challenge → stop" line, and it avoids alert-fatigue from invisible badges.
+_CHALLENGE_FRAME_PATTERNS: list[tuple[str, str, str]] = [
+    # (provider, strength, regex over the frame URL)
+    ("recaptcha",           "active",  r"recaptcha/(enterprise|api2)/bframe"),  # the image-challenge popup
+    ("hcaptcha",            "active",  r"hcaptcha\.com/(captcha|challenge)"),
+    ("cloudflare_turnstile", "active", r"challenges\.cloudflare\.com"),
+    ("arkose_funcaptcha",   "active",  r"(funcaptcha|arkoselabs)\.com"),
+    ("datadome",            "active",  r"datadome"),
+    ("perimeterx",          "active",  r"perimeterx|/px\.js|px-cdn"),
+    ("recaptcha_checkbox",  "passive", r"recaptcha/(enterprise|api2)/anchor"),  # the "I'm not a robot" widget
+]
+
+
+def detect_block_frames(frame_urls: Optional[list[str]]) -> Optional[dict[str, Any]]:
+    """Scan the browser's full frame/target URL list for a challenge widget. Returns
+    {provider, strength, url, reason} for the strongest match (active beats passive), or
+    None. Deterministic, $0 — the iframe host is the signal AX and the top-level url/text
+    both miss. ACTIVE = a human must solve it now (hard block); PASSIVE = a widget is present
+    but not necessarily blocking (slow down, don't stop)."""
+    best: Optional[dict[str, Any]] = None
+    for u in frame_urls or []:
+        ul = (u or "").lower()
+        for provider, strength, pattern in _CHALLENGE_FRAME_PATTERNS:
+            if re.search(pattern, ul):
+                hit = {"provider": provider, "strength": strength, "url": (u or "")[:120],
+                       "reason": f"{provider} challenge frame present "
+                                 f"({'a human must solve it — never auto-solve' if strength == 'active' else 'passive widget — proceed with care'})."}
+                if strength == "active":
+                    return hit  # active is decisive
+                best = best or hit
+    return best
+
+def downgrade_block_if_hidden(block: Optional[dict[str, Any]],
+                              visibility: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Refine a detect_block_frames hit with a live visibility probe. detect_block_frames is URL-only
+    ($0) and calls a reCAPTCHA bframe 'active' on mere presence — but Indeed preloads the reCAPTCHA
+    Enterprise iframes invisibly on every page, so that over-triggers a human stop. `visibility` is the
+    driver's /challenge_visibility result ({ok, challenge_visible, checkbox_visible, ...}). An ACTIVE
+    block whose challenge/checkbox isn't actually shown is downgraded to PASSIVE (advisory). Pure +
+    conservative: missing/ambiguous visibility, or anything visibly shown, stays ACTIVE. The caller
+    only supplies a probe for the iframe providers we can introspect (recaptcha/hcaptcha)."""
+    if not block or block.get("strength") != "active":
+        return block
+    if not visibility or not visibility.get("ok"):
+        return block
+    if visibility.get("challenge_visible") or visibility.get("checkbox_visible"):
+        return block
+    out = dict(block)
+    out["strength"] = "passive"
+    out["reason"] = (f"{block.get('provider')} preloaded but not shown "
+                     f"(no visible challenge/checkbox) — advisory, not blocking.")
+    out["visibility"] = visibility
+    return out
+
 
 # Built-in seed rules. `signals` is OR-matched: any matching signal escalates.
 #   url_contains      — substring(s) in the page URL

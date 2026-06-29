@@ -20,7 +20,7 @@ from app.artifacts import ARTIFACTS_DIR
 
 from .driver import ActionRequest, ExecResult, TrajectoryDriver, target_css_point
 
-logger = logging.getLogger("mcp-mock.executor.record_only")
+logger = logging.getLogger("mcp.executor.record_only")
 
 
 def _log_path() -> Path:

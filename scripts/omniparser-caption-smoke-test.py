@@ -11,7 +11,7 @@ Pass condition: prints a non-empty caption for the cropped region. The caption
 does not need to be correct — this script surfaces dependency / weight-download
 problems before integrating the captioner into the live proposer.
 
-Throwaway: does NOT import from controlplane-api or mcp-mock packages.
+Throwaway: does NOT import from controlplane-api or mcp packages.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_SCREENSHOT_DIR = REPO_ROOT / "apps" / "mcp-mock" / "output" / "observer-screenshots"
+DEFAULT_SCREENSHOT_DIR = REPO_ROOT / "apps" / "mcp" / "output" / "observer-screenshots"
 
 OMNI_REPO = "microsoft/OmniParser-v2.0"
 OMNI_DETECT_WEIGHTS = "icon_detect/model.pt"

@@ -176,7 +176,7 @@ Nothing in the loop is a trained model *yet* — that's by design (collect data 
 
 ### Repo layout
 - `apps/controlplane-api` — FastAPI control plane, training & runtime APIs
-- `apps/mcp-mock` — capture server + observer pipeline (CDP-AX proposer)
+- `apps/mcp` — capture server + observer pipeline (CDP-AX proposer)
 - `apps/controlplane-ui` — Vite/React frontend
 - `infra` — local Postgres & Redis via Docker Compose
 - `scripts` — dev startup, shutdown, health-check helpers

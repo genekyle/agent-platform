@@ -49,7 +49,7 @@ if os.environ.get("AGENT_MODEL_DOWNLOAD") != "1":
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-logger = logging.getLogger("mcp-mock.vision_proposer")
+logger = logging.getLogger("mcp.vision_proposer")
 
 
 OMNI_REPO = "microsoft/OmniParser-v2.0"

@@ -196,6 +196,37 @@ def test_select_stage_exception_escalates_not_crashes(monkeypatch):
     assert res.steps[-1].status == StepStatus.ESCALATED.value
 
 
+def test_gate_blocks_action_and_escalates(monkeypatch):
+    """A gate that returns a block dict refuses the action: it never fires, the loop
+    escalates with reason 'gate_blocked', and the block is recorded on the step."""
+    _patch_select(monkeypatch, _resolved())
+    actor = ExecutingActor()
+    block = {"reason": "form_incomplete", "blockers": [{"field_id": "state", "reason": "empty"}]}
+    res = run_loop(task_goal="x", proposer=SequenceProposer([_obs()]), actor=actor,
+                   gate=lambda r, o: block, max_steps=3, log_corpus=False)
+
+    assert res.status is LoopStatus.ESCALATED
+    assert res.escalation_reason == "gate_blocked"
+    assert "form_incomplete" in res.reason
+    assert actor.calls == 0                       # the action was never performed
+    assert res.steps[-1].status == StepStatus.ESCALATED.value
+    assert res.steps[-1].gate == block            # block detail captured on the record
+
+
+def test_gate_allows_action_through(monkeypatch):
+    """A gate returning None is transparent — the action fires and verifies as usual."""
+    _patch_select(monkeypatch, _resolved())
+    before = _obs(page_text="hello", snap=_snap("hello"))
+    after = _obs(page_text="world", snap=_snap("world"))
+    res = run_loop(task_goal="x", proposer=SequenceProposer([before, after]),
+                   actor=ExecutingActor(), gate=lambda r, o: None,
+                   is_done=lambda o: o.page_text == "world", max_steps=3, log_corpus=False)
+
+    assert res.status is LoopStatus.COMPLETED
+    assert res.steps[0].status == StepStatus.EXECUTED_VERIFIED.value
+    assert res.steps[0].gate is None
+
+
 def test_type_action_uses_value_for_oracle(monkeypatch):
     """value_for supplies the typed text; verify confirms it appears in the page."""
     _patch_select(monkeypatch, _resolved(action=ActionId.TYPE))

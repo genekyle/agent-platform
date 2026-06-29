@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-logger = logging.getLogger("mcp-mock.ax_proposer")
+logger = logging.getLogger("mcp.ax_proposer")
 
 DEFAULT_BROWSER_URL = "http://127.0.0.1:9222"
 MODEL_VERSION = "cdp-ax/getFullAXTree+getBoxModel"

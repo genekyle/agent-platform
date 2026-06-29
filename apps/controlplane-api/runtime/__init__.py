@@ -1,7 +1,7 @@
 """The runtime loop — drives the five per-step stages end-to-end.
 
-The stages exist as independent units (classify=escalation_rules, propose=mcp-mock
-AX proposer, select=select_stage.selector, act=mcp-mock executor, verify=
+The stages exist as independent units (classify=escalation_rules, propose=mcp
+AX proposer, select=select_stage.selector, act=mcp executor, verify=
 select_stage.verifier). This package is the orchestrator that runs them as a loop:
 
     classify → propose → select → act → verify → repeat

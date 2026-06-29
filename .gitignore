@@ -18,7 +18,7 @@ dist/
 dist-ssr/
 
 # Local app output
-apps/mcp-mock/output/
+apps/mcp/output/
 .claude/
 .claude/worktrees/determined-fermi-f915bc
 .claude/worktrees/practical-ritchie-8fbd83

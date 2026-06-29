@@ -19,9 +19,9 @@ resource-efficient (solo founder) — a **$5/week autonomous spend cap** is enfo
 | Stage | What it does | Status | Where |
 |---|---|---|---|
 | **classify** | Is this a STOP screen (captcha/2FA/checkpoint)? → escalate to human, $0 | ✅ built | `escalation_rules.py` |
-| **propose** | CDP accessibility tree → candidate elements (role+name+bbox+backend_node_id) | ✅ built | `mcp-mock/app/observer/ax_proposer.py` |
+| **propose** | CDP accessibility tree → candidate elements (role+name+bbox+backend_node_id) | ✅ built | `mcp/app/observer/ax_proposer.py` |
 | **select** | Pick the target element, cheapest-first: cache → Haiku SoM | ✅ built | `select_stage/` |
-| **act** | Move + click in the live browser (pluggable cursor drivers) | ✅ built (not yet fired live) | `mcp-mock/app/executor/` |
+| **act** | Move + click in the live browser (pluggable cursor drivers) | ✅ built (not yet fired live) | `mcp/app/executor/` |
 | **verify** | Did the page change as predicted? retry once → escalate | ✅ built | `select_stage/verifier.py` |
 
 **Guardrails (all built):** $5/week budget cap (`anthropic_usage.enforce_budget`),
