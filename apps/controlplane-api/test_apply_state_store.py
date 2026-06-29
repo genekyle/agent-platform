@@ -274,6 +274,42 @@ def test_search_state_survives_roundtrip_and_reload():
     assert back.search_state.shortlist == ["vjk1", "vjk2"]
 
 
+# --- login gate: no task automation until authenticated -----------------------------
+def test_logged_out_session_gates_automation():
+    bb = store.new_blackboard(session_id=40, query="reporting analyst", location="Nashua, NH")
+    bb = store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=False)
+    assert any(b.kind == "auth_required" and b.human_required for b in bb.blockers)
+    assert bb.to_dict()["needs_human"] is True
+    d = store.proceed_decision(bb)
+    assert d["ok"] is False and d["reason"] == "auth_required"
+
+
+def test_login_opens_the_gate():
+    bb = store.new_blackboard(session_id=41, query="reporting analyst", location="Nashua, NH")
+    store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=False)
+    # logging in clears the auth blocker; proceed becomes clear
+    bb = store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=True)
+    assert not any(b.kind == "auth_required" for b in bb.blockers)
+    assert store.proceed_decision(bb)["ok"] is True
+    assert any(e.kind == "auth_change" for e in bb.events)
+
+
+def test_unprobed_auth_does_not_gate():
+    # authed=None (not probed) must NOT block — avoids false-gating unprobed/non-Indeed states.
+    bb = store.new_blackboard(session_id=42, query="q", location="l")
+    bb = store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=None)
+    assert not any(b.kind == "auth_required" for b in bb.blockers)
+    assert store.proceed_decision(bb)["ok"] is True
+
+
+def test_auth_state_persists_across_reconciles_until_reprobed():
+    bb = store.new_blackboard(session_id=43, query="q", location="l")
+    store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=True)
+    # a later cycle that didn't probe (authed=None) keeps the last known auth state
+    bb = store.reconcile(bb, tabs=[_search_tab("indeed_search_results")], authed=None)
+    assert bb.world.get("authed") is True
+
+
 def test_persistence_load_or_create(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_store_dir", lambda: tmp_path)
     bb = store.load_or_create(99)

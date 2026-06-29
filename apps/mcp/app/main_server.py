@@ -639,6 +639,88 @@ async def navigate(body: NavigateRequest):
         return {"ok": False, "detail": str(exc), "requested_url": body.url}
 
 
+class ScreenshotRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+
+
+@app.post("/screenshot")
+async def screenshot(body: ScreenshotRequest):
+    """Capture the visible page as a PNG over CDP (Page.captureScreenshot), save to a temp file, and
+    return the path — the 'eyes' of our driver, for supervising multi-step flows (login) and
+    confirming where we landed. Best-effort; never raises."""
+    import base64
+    import tempfile
+    import time
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=32 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.enable", {})
+            await cdp.send("Page.bringToFront", {})  # surface an occluded window so capture works
+            res = await cdp.send("Page.captureScreenshot", {"format": "png", "fromSurface": True,
+                                                            "captureBeyondViewport": False})
+        data = (res.get("result") or {}).get("data")
+        if not data:
+            return {"ok": False, "detail": "no screenshot data"}
+        out_dir = Path(tempfile.gettempdir()) / "agent-mcp-live-shots"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"shot_{int(time.time() * 1000)}.png"
+        path.write_bytes(base64.b64decode(data))
+        return {"ok": True, "path": str(path), "tab_id": target.get("id")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("screenshot failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
+# Indeed auth-state probe: deterministic logged-in vs login-wall signal — the basis for the
+# login GATE (no search/automation until authenticated). Reads gnav affordances + body text.
+_INDEED_AUTH_JS = r"""
+(() => {
+  const url = location.href, path = location.pathname || '', title = document.title || '';
+  const txt = (document.body && document.body.innerText || '').slice(0, 6000);
+  const q = (sel) => !!document.querySelector(sel);
+  // In the auth FLOW specifically — by PATH, not host. secure.indeed.com also serves logged-in
+  // pages like /settings/account, so a host check wrongly marks those as "signing in".
+  const on_auth = /\/auth\b|\/account\/login/.test(path) || /\bSign In\b/i.test(title);
+  const has_sign_in = q('a[href*="/account/login"]') || q('a[href*="secure.indeed.com/auth"]')
+                      || /\bSign in\b/.test(txt);
+  // Logged-IN requires an account affordance on a NON-auth page (the gnav account menu / Sign out).
+  const has_account = q('[data-gnav-element-name="AccountMenu"]')
+                      || q('[data-gnav-element-name="UserMenu"]')
+                      || /\bSign out\b/i.test(txt);
+  return {
+    logged_in: !on_auth && has_account && !has_sign_in,
+    on_auth, has_sign_in, has_account,
+    url, title,
+  };
+})()
+"""
+
+
+@app.post("/auth_state")
+async def auth_state(body: ScreenshotRequest):
+    """Deterministic Indeed login-state probe (logged_in + raw signals). Feeds the state manager's
+    login gate: search/automation stays blocked until logged_in. Best-effort."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate",
+                                 {"expression": _INDEED_AUTH_JS, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {}
+        data["ok"] = True
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("auth_state failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "mcp-capture-server"}

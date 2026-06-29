@@ -1797,10 +1797,26 @@ async def session_state(training_session_id: int, scan_form: bool = True,
         if page is not None:
             search_update = {"page": page}
 
+    # Login gate: probe whether the session is authenticated so the blackboard can refuse
+    # task automation on a logged-out session (search/triage/apply require login). None = probe
+    # failed/unknown → don't gate (avoids false-blocking).
+    authed: Optional[bool] = None
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            ar = await client.post(f"{settings.capture_server_url}/auth_state",
+                                   json={"browser_url": browser_url})
+            ar.raise_for_status()
+            abody = ar.json()
+            if abody.get("ok"):
+                authed = bool(abody.get("logged_in"))
+    except httpx.HTTPError:
+        authed = None
+
     target = jst.active_target() or {}
     bb = store.load_or_create(training_session_id,
                               query=target.get("query", ""), location=target.get("location", ""))
-    store.reconcile(bb, tabs=tabs, form_fields=form_fields, block=block, search_update=search_update)
+    store.reconcile(bb, tabs=tabs, form_fields=form_fields, block=block,
+                    search_update=search_update, authed=authed)
     store.save(bb)
     bb_dict = bb.to_dict()
 
@@ -1811,6 +1827,7 @@ async def session_state(training_session_id: int, scan_form: bool = True,
         "tabs": tabs,
         "active_search_state": search_tabs[0] if search_tabs else None,
         "active_apply_state": apply_tabs[0] if apply_tabs else None,
+        "logged_in": authed,
         "needs_human": bb_dict["needs_human"],
         "search_state": bb_dict["search_state"],
         # the blackboard: phase, plan progress, form_state, code-enforced gate, blockers, event log

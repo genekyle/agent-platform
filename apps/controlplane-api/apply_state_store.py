@@ -308,8 +308,18 @@ def blockers_for(world: dict[str, Any], gate: GateResult,
     """Lift the blocker sources into one list: an in-page challenge frame (captcha / anti-bot,
     detected from the browser's frame list — the iframe url/text checks miss), human-required
     branches seen in the world (AI-recruiter / company-site / ...), and unsatisfied required
-    fields. An ACTIVE challenge is human_required; a PASSIVE widget is a slow-down advisory."""
+    fields. An ACTIVE challenge is human_required; a PASSIVE widget is a slow-down advisory.
+
+    The LOGIN GATE: if the session is known-unauthenticated (world['authed'] is False), task
+    automation is blocked until a human logs in — search/triage/apply must not run on a logged-out
+    session. `authed is None` means 'not probed / not applicable' and does NOT gate (avoids
+    false-blocking non-Indeed or unprobed states)."""
     blockers: list[Blocker] = []
+    if world.get("authed") is False:
+        blockers.append(Blocker(
+            kind="auth_required",
+            note="session is not logged in — automation gated until authenticated (log in first).",
+            human_required=True, source="auth"))
     if block:
         active = block.get("strength") == "active"
         blockers.append(Blocker(
@@ -366,6 +376,7 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
               form_fields: Optional[list[dict[str, Any]]] = None,
               block: Optional[dict[str, Any]] = None,
               search_update: Optional[dict[str, Any]] = None,
+              authed: Optional[bool] = None,
               last_action: Optional[str] = None,
               last_result: Optional[str] = None) -> Blackboard:
     """Fold a fresh observation into the blackboard. World is overwritten from ground truth;
@@ -389,13 +400,19 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
     apply_tabs = [t for t in tabs if t.get("role") == "apply"]
     active = apply_tabs[0] if apply_tabs else (tabs[0] if tabs else None)
     prev_state = bb.world.get("page_state")
+    prev_authed = bb.world.get("authed")
     bb.world = {
         "tabs": tabs,
         "active_tab_index": tabs.index(active) if active in tabs else None,
         "page_state": active.get("state") if active else None,
         "role": active.get("role") if active else None,
         "block": block,
+        # Login gate: carry the known auth state forward; only overwrite when a fresh probe
+        # supplied one (None = not probed this cycle → keep the last known value).
+        "authed": authed if authed is not None else prev_authed,
     }
+    if authed is not None and authed != prev_authed:
+        bb.log("auth_change", f"authed {prev_authed} -> {authed}")
     if active and active.get("state") != prev_state:
         bb.log("state_change", f"{prev_state} -> {active.get('state')}")
 
@@ -429,6 +446,11 @@ def proceed_decision(bb: Blackboard) -> dict[str, Any]:
     the live blackboard. NOT ok if a human-required branch is up (captcha / AI-recruiter)
     or the current subtask is form-gated and a required field is still empty/invalid.
     Names the blockers so the readout/UI can show exactly what's missing."""
+    # Login gate first: a logged-out session must not run task automation at all.
+    auth = [b for b in bb.blockers if b.kind == "auth_required"]
+    if auth:
+        return {"ok": False, "reason": "auth_required",
+                "blockers": [{"kind": b.kind, "note": b.note, "source": b.source} for b in auth]}
     human = [b for b in bb.blockers if b.human_required]
     if human:
         return {"ok": False, "reason": "human_required",
