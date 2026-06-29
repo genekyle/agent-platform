@@ -1838,6 +1838,42 @@ async def session_state(training_session_id: int, scan_form: bool = True,
     }
 
 
+@app.post("/api/runtime/session/{training_session_id}/start_run")
+async def start_cadence_run_endpoint(training_session_id: int, db: Session = Depends(get_db)):
+    """Open a NEW authenticated search-cadence run on the session's blackboard and stamp its
+    provenance (run id, started_at, gathered_authenticated). This is the context that makes data
+    gathered AFTER it actionable — call it right before extracting, so the extraction is attributable
+    to a current, authenticated run. Refuses to mark gathered_authenticated unless the live auth
+    probe says we're logged in (provenance must be honest)."""
+    import apply_state_store as store
+    import job_search_targets as jst
+    session = db.get(TrainingSession, training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    authed = False
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            ar = await client.post(f"{settings.capture_server_url}/auth_state",
+                                   json={"browser_url": browser_url})
+            ar.raise_for_status()
+            ab = ar.json()
+            authed = bool(ab.get("ok") and ab.get("logged_in"))
+    except httpx.HTTPError:
+        authed = False
+    target = jst.active_target() or {}
+    bb = store.load_or_create(training_session_id,
+                              query=target.get("query", ""), location=target.get("location", ""))
+    store.start_cadence_run(bb, query=target.get("query", ""),
+                            location=target.get("location", ""), authed=authed)
+    # fold the live auth into world so search_data_actionable sees authed_now immediately
+    bb.world["authed"] = authed
+    store.save(bb)
+    return {"training_session_id": training_session_id, "authed": authed,
+            "search_state": bb.search_state.__dict__,
+            "search_actionable": store.search_data_actionable(bb)}
+
+
 @app.get("/api/runtime/apply_recipe")
 def apply_recipe_spec():
     """The Indeed apply recipe (expected state machine + branches). Teachable: states are
