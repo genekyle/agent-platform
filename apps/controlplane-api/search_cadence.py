@@ -129,6 +129,10 @@ def classify_apply_platform(url: str) -> str:
 # of blindly clicking. See project_apply_random_events.
 _APPLY_OUTCOMES = [
     ("submitted",          False, r"application (has been )?submitted|your application was sent|application sent|thanks for applying"),
+    # ATS job no longer available: the Indeed listing outlived the source posting, so the company
+    # ATS 404s / says the req is gone. NON-human — just skip this prospect and move on (don't
+    # escalate, don't retry). Observed live on State Street Workday (req R-788153) 2026-06-30.
+    ("ats_unavailable",    False, r"page you are looking for doesn'?t exist|no longer (accepting|available|posted)|this (job|posting|requisition|position) (is no longer|has expired|has been filled|could not be found)|job not found"),
     # reCAPTCHA gate at submit (often EXPIRES if the form sat too long) — HUMAN must (re)check
     # the box; never auto-solve. Submit button stays disabled until then.
     ("captcha",            True,  r"i'm not a robot|verification expired|recaptcha challenge|check the checkbox again|select all images"),
