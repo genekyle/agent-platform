@@ -79,6 +79,33 @@ def add_target(query: str, location: str, status: str = "active",
     return row
 
 
+def record_outcome(query: str, location: str, *, status: str | None = None,
+                   outcome: str | None = None, radius_miles: int | None = None) -> dict[str, Any]:
+    """Record the RESULT of a search run on its target — the durable 'this query has been searched'
+    decision log (e.g. human-override: 'no good matches found, committed to searching'). Updates
+    status (active|paused|searched), an outcome note, last_searched_at, and optionally radius. Creates
+    the target if it isn't there yet. This is the planner's signal that a (query, location) was worked
+    and what came of it, so we don't silently re-run or lose the human's call."""
+    from datetime import datetime, timezone
+    targets = load_targets()
+    key = _norm(query, location)
+    row = next((t for t in targets
+                if _norm(t.get("query", ""), t.get("location", "")) == key), None)
+    if row is None:
+        row = {"query": (query or "").strip(), "location": (location or "").strip(),
+               "status": "active", "radius_miles": max(int(radius_miles or 50), 50)}
+        targets.append(row)
+    if status:
+        row["status"] = status
+    if outcome is not None:
+        row["last_outcome"] = outcome
+    if radius_miles is not None:
+        row["radius_miles"] = max(int(radius_miles), 50)
+    row["last_searched_at"] = datetime.now(timezone.utc).isoformat()
+    save_targets(targets)
+    return row
+
+
 def active_targets() -> list[dict[str, Any]]:
     """The targets the cadence should actually run, in order."""
     return [t for t in load_targets() if t.get("status", "active") == "active"]

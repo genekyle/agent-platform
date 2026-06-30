@@ -1919,6 +1919,14 @@ class SearchTargetCreate(BaseModel):
     radius_miles: int = 50  # floored at 50 by the sweep regardless
 
 
+class SearchOutcome(BaseModel):
+    query: str
+    location: str = ""
+    status: Optional[str] = None    # e.g. 'searched' to close a query out
+    outcome: Optional[str] = None   # the human/teacher decision note
+    radius_miles: Optional[int] = None
+
+
 @app.get("/api/search/targets")
 def list_search_targets():
     """The persisted (query, location) targets the search cadence runs against — the written-down
@@ -1938,6 +1946,17 @@ def add_search_target(body: SearchTargetCreate):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return row
+
+
+@app.post("/api/search/targets/outcome")
+def record_search_outcome(body: SearchOutcome):
+    """Record the RESULT of a search run on its (query, location) target — the durable decision log
+    (e.g. status='searched', outcome='human override: no good matches found, committed to searching').
+    Lets us close a query out with WHY, so the planner doesn't blindly re-run it and the human's call
+    is remembered across sessions."""
+    import job_search_targets as jst
+    return jst.record_outcome(body.query, body.location, status=body.status,
+                              outcome=body.outcome, radius_miles=body.radius_miles)
 
 
 @app.get("/api/search/cadence")
@@ -2080,6 +2099,7 @@ class SearchSweepRequest(BaseModel):
     max_pages: Optional[int] = None      # clamped to BOUNDS["max_pages_per_query"]
     min_miles: int = 50                  # floored at BOUNDS["min_radius_miles"]
     max_details_per_page: int = 8        # cap on click-into-card detail fetches per page
+    min_pause_seconds: Optional[float] = None  # base human pace between actions (slower runs)
 
 
 def _sweep_stop(reason: str, **extra) -> dict:
@@ -2141,9 +2161,13 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
         return _sweep_stop("distance_filter_failed", distance=dist)
     await asyncio.sleep(1.0)
 
+    # Human pace between actions. Defaults to the cadence bound; min_pause_seconds lets a run go
+    # SLOWER (longer, more human-like pauses) on request — floored at the bound, never faster.
+    pace_base = max(float(body.min_pause_seconds or 0),
+                    float(search_cadence.BOUNDS["min_seconds_between_navigations"]))
+
     def _jitter(extra: float) -> float:
-        base = search_cadence.BOUNDS["min_seconds_between_navigations"]
-        return random.uniform(base, base + extra)
+        return random.uniform(pace_base, pace_base + extra)
 
     pages_swept = total_found = total_new = total_short = total_desc = 0
     shortlist_refs: list[str] = list(bb.search_state.shortlist or [])

@@ -57,6 +57,28 @@ def test_add_target_requires_query(tmp_path, monkeypatch):
         pass
 
 
+def test_record_outcome_closes_a_query_with_a_note(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    jst.load_targets()
+    jst.add_target("data analytics", "Lowell, MA")
+    row = jst.record_outcome("data analytics", "Lowell, MA", status="searched",
+                             outcome="human override: no good matches found, committed to searching")
+    assert row["status"] == "searched"
+    assert "no good matches" in row["last_outcome"]
+    assert row["last_searched_at"]
+    # a 'searched' target drops out of the active rotation but is still remembered
+    assert all(t["query"] != "data analytics" for t in jst.active_targets())
+    assert any(t["query"] == "data analytics" for t in jst.load_targets())
+
+
+def test_record_outcome_creates_target_if_missing(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    jst.load_targets()
+    row = jst.record_outcome("warehouse ops", "Boston, MA", status="searched",
+                             outcome="none found", radius_miles=100)
+    assert row["radius_miles"] == 100 and row["status"] == "searched"
+
+
 def test_active_target_is_first_active(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     jst.load_targets()
