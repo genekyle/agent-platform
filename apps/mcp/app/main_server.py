@@ -505,12 +505,16 @@ _JOB_DESC_JS = r"""
   // Plain h1 is LAST — on the results page h1 is the search title ("reporting analyst jobs in …"),
   // not the job, so it must not win over the pane header.
   const titleEl = document.querySelector(
-    'h2.jobsearch-JobInfoHeader-title, [data-testid="jobsearch-JobInfoHeader-title"],'
+    '#vjs-jobtitle, [data-testid="jobsearch-JobInfoHeader-title"], h2.jobsearch-JobInfoHeader-title,'
     + ' .jobsearch-RightPane h1, .jobsearch-JobComponent h1, h1');
   const title = titleEl ? titleEl.innerText.trim() : '';
-  const btnText = Array.from(document.querySelectorAll('button, a')).map(b => (b.innerText||'').trim()).join(' | ');
-  const apply_type = /apply on company site|apply on/i.test(btnText) ? 'company_site'
-                   : /easily apply|apply now/i.test(btnText) ? 'quick_apply' : 'unknown';
+  // apply_type drives the routing: 'company_site' → cross-site ATS (Workday/...), 'quick_apply' →
+  // Indeed-native (smartapply, end-to-end driveable). "Apply with Indeed" is quick-apply too — the
+  // earlier omission read those as 'unknown'. Match button/aria text; check company-site first.
+  const btnText = Array.from(document.querySelectorAll('button, a'))
+    .map(b => (b.innerText || b.getAttribute('aria-label') || '').trim()).join(' | ').toLowerCase();
+  const apply_type = /apply on company site|apply on employer|you are leaving indeed/.test(btnText) ? 'company_site'
+                   : /apply with indeed|easily apply|apply now/.test(btnText) ? 'quick_apply' : 'unknown';
   return { description, salary, title, apply_type };
 })()
 """
@@ -688,13 +692,17 @@ class OpenJobCardRequest(BaseModel):
     settle_seconds: float = 1.6
 
 
-_CLICK_CARD_JS = r"""
+# Return the card's title-anchor center (screenshot/CSS px) so the caller can TRUSTED-click it.
+# A plain JS .click() does NOT reliably switch Indeed's detail pane (React-handled; isTrusted gated —
+# same lesson as the distance widget). It only "worked" on a page where the card was a native anchor.
+_CARD_BBOX_JS = r"""
 (jk) => {
-  const card = document.querySelector(`a[data-jk="${jk}"], [data-jk="${jk}"]`);
-  if (!card) return {clicked:false};
-  card.scrollIntoView({block:'center', inline:'center'});
-  card.click();
-  return {clicked:true};
+  const card = document.querySelector(`[data-jk="${jk}"]`);
+  if (!card) return {found:false};
+  const el = card.matches('a') ? card : (card.querySelector('a') || card);
+  el.scrollIntoView({block:'center', inline:'center'});
+  const r = el.getBoundingClientRect();
+  return {found:true, x:r.x + r.width/2, y:r.y + r.height/2};
 }
 """
 
@@ -703,25 +711,42 @@ _CLICK_CARD_JS = r"""
 async def open_job_card(body: OpenJobCardRequest):
     """Click a result card by its data-jk to open the IN-PAGE right-hand detail pane, then scrape
     its description/salary/apply_type from that pane (reuses _JOB_DESC_JS — #jobDescriptionText is
-    present in the pane). This is the bot-safe 'click into the listing' the 2024 bot did, replacing
-    the viewjob URL-jump. Same tab, no navigation. Best-effort."""
+    present in the pane). Uses a TRUSTED CDP mouse click (a synthetic .click() doesn't switch the
+    React pane), and CONFIRMS the pane actually changed by polling the description (Indeed auto-opens
+    the first result, so a no-op click would silently return the wrong job). Same tab, no navigation."""
     import asyncio
-    import json as _json
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
-        jk = _json.dumps(body.external_id)
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
-            rc = await cdp.send("Runtime.evaluate", {
-                "expression": f"({_CLICK_CARD_JS})({jk})", "returnByValue": True})
-            if not ((rc.get("result") or {}).get("value") or {}).get("clicked"):
+            await cdp.send("Page.bringToFront", {})
+            box = (await cdp.send("Runtime.evaluate", {
+                "expression": f"({_CARD_BBOX_JS})({json.dumps(body.external_id)})",
+                "returnByValue": True})).get("result", {}).get("value") or {}
+            if not box.get("found"):
                 return {"ok": False, "detail": f"card data-jk={body.external_id} not found"}
-            await asyncio.sleep(max(0.4, min(body.settle_seconds, 8.0)))
-            res = await cdp.send("Runtime.evaluate", {"expression": _JOB_DESC_JS, "returnByValue": True})
-        data = (res.get("result") or {}).get("value") or {}
+            before = (await cdp.send("Runtime.evaluate", {
+                "expression": "(document.querySelector('#jobDescriptionText')||{}).innerText||''",
+                "returnByValue": True})).get("result", {}).get("value") or ""
+            for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+                ev = {"type": typ, "x": box["x"], "y": box["y"]}
+                if typ != "mouseMoved":
+                    ev.update({"button": "left", "clickCount": 1})
+                await cdp.send("Input.dispatchMouseEvent", ev)
+            # Poll until the pane's description changes (the job loaded), bounded by settle_seconds.
+            deadline = max(0.6, min(body.settle_seconds, 8.0))
+            waited, data = 0.0, {}
+            while waited < deadline:
+                await asyncio.sleep(0.4)
+                waited += 0.4
+                data = (await cdp.send("Runtime.evaluate", {
+                    "expression": _JOB_DESC_JS, "returnByValue": True})).get("result", {}).get("value") or {}
+                if data.get("description") and data["description"] != before:
+                    break
         data["ok"] = bool(data.get("description"))
+        data["switched"] = bool(data.get("description") and data.get("description") != before)
         data["external_id"] = body.external_id
         return data
     except Exception as exc:  # noqa: BLE001
