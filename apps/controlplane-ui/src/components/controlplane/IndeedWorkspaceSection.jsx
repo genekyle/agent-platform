@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
@@ -10,15 +10,15 @@ const EMPTY_DRAFT = {
   question_patterns: [], input_hint: "text", options: [], notes: "",
 };
 
-/** The Indeed job-seeking workspace. Two sections:
- *  - indeed-overview: at-a-glance counts (the seed of the eventual jobs dashboard)
+/** The Indeed job-seeking workspace.
+ *  - indeed-overview / jobs-dashboard: the Notion-like database hub (click a database → its table)
  *  - application-answers: editable store of reusable application answers
+ *  - apply-state: the live apply blackboard
  */
 export function IndeedWorkspaceSection({ section }) {
   if (section === "application-answers") return <ApplicationAnswers />;
-  if (section === "jobs-dashboard") return <JobsDashboard />;
   if (section === "apply-state") return <ApplyStatePanel />;
-  return <IndeedOverview />;
+  return <JobsHub />;
 }
 
 const STATUS_COLOR = {
@@ -39,7 +39,7 @@ function ApplyStatePanel() {
 
   useEffect(() => {
     fetch(`${API}/api/training/sessions`).then((r) => r.json()).then((rows) => {
-      const indeed = (rows || []).filter((s) => s.domain_id === "indeed");
+      const indeed = (rows || []).filter((s) => (s.domain_id || "").startsWith("indeed"));
       setSessions(indeed);
       setSessionId((cur) => cur ?? indeed.find((s) => s.status === "active")?.id ?? indeed[0]?.id ?? null);
     }).catch(() => {});
@@ -165,22 +165,33 @@ function ApplyStatePanel() {
   );
 }
 
-function JobsDashboard() {
+/** Notion-like database hub for the Indeed workspace. The landing is a gallery of "databases"
+ *  (All Jobs, Searches, Job Descriptions, Applied); click one to open its full table, with a
+ *  breadcrumb back to the gallery. The sweep/extract controls + headline stats sit on top. */
+function JobsHub() {
   const [data, setData] = useState(null);
+  const [targets, setTargets] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [sweeping, setSweeping] = useState(false);
   const [msg, setMsg] = useState("");
+  const [sweep, setSweep] = useState(null);
+  const [open, setOpen] = useState(null);   // null = gallery; else a database id
 
   const load = useCallback(() => {
     fetch(`${API}/api/dashboards/indeed_jobs`).then((r) => r.json()).then(setData).catch(() => {});
+    fetch(`${API}/api/search/targets`).then((r) => r.json()).then((d) => setTargets(d.targets || [])).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const activeSession = useCallback(async () => {
+    const sessions = await fetch(`${API}/api/training/sessions`).then((r) => r.json());
+    return sessions.find((x) => (x.domain_id || "").startsWith("indeed") && x.status === "active");
+  }, []);
 
   const extract = useCallback(async () => {
     setBusy(true); setMsg("");
     try {
-      // find an active Indeed session with a results tab open
-      const sessions = await fetch(`${API}/api/training/sessions`).then((r) => r.json());
-      const s = sessions.find((x) => x.domain_id === "indeed" && x.status === "active");
+      const s = await activeSession();
       if (!s) { setMsg("No active Indeed session — start one and open a search."); return; }
       const r = await fetch(`${API}/api/jobs/extract`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -189,7 +200,22 @@ function JobsDashboard() {
       setMsg(r.ok ? `Scraped ${r.scraped} · ${r.new} new · ${r.duplicates} duplicates` : `Failed: ${r.detail || "?"}`);
       load();
     } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
-  }, [load]);
+  }, [activeSession, load]);
+
+  // The bounded auto-sweep: distance >=50mi → extract → click shortlisted cards → paginate.
+  const runSweep = useCallback(async () => {
+    setSweeping(true); setMsg(""); setSweep(null);
+    try {
+      const s = await activeSession();
+      if (!s) { setMsg("No active Indeed session — start one and open a search."); return; }
+      const r = await fetch(`${API}/api/search/sweep`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ training_session_id: s.id, min_miles: 50 }),
+      }).then((x) => x.json());
+      setSweep(r);
+      load();
+    } catch (e) { setMsg(String(e.message || e)); } finally { setSweeping(false); }
+  }, [activeSession, load]);
 
   const mark = useCallback(async (jobId, status) => {
     await fetch(`${API}/api/jobs/${encodeURIComponent(jobId)}`, {
@@ -201,30 +227,191 @@ function JobsDashboard() {
 
   if (!data) return <div className="section-body"><p className="muted">Loading…</p></div>;
   const t = data.totals;
+  const STOP_OK = new Set(["max_pages", "no_next_page"]);
+
+  // The databases shown as clickable cards (Notion-style). Each renders its own table when opened.
+  const DATABASES = [
+    { id: "jobs", icon: "💼", name: "All Jobs", count: data.jobs_seen.length,
+      desc: "Every job seen across searches, deduped by identity." },
+    { id: "searches", icon: "🔎", name: "Searches", count: targets.length || (data.by_query || []).length,
+      desc: "Search targets (query · location · radius) and how each is doing." },
+    { id: "descriptions", icon: "📄", name: "Job Descriptions", count: (data.descriptions || []).length,
+      desc: "Full descriptions captured by clicking into shortlisted listings." },
+    { id: "applied", icon: "✅", name: "Applied", count: data.jobs_applied.length,
+      desc: "Jobs marked applied (incl. cross-platform identity matches)." },
+  ];
+  const current = DATABASES.find((d) => d.id === open);
 
   return (
     <div className="section-body">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <p className="muted" style={{ margin: 0 }}>
-          Jobs the agent has seen, deduped by identity. Re-seen jobs collapse into one row
-          (seen count) so duplicates are easy to find and the corpus stays manageable.
+      {/* --- action bar + headline stats (always visible) --- */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <p className="muted" style={{ margin: 0, flex: 1, minWidth: 240 }}>
+          Your Indeed databases. The sweep forces ≥50 mi, walks each results page, clicks shortlisted
+          cards for full descriptions, and pages forward — human-paced. Click a database to open it.
         </p>
-        <button className="btn" disabled={busy} onClick={extract}>{busy ? "Extracting…" : "Extract from active search"}</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary" disabled={sweeping} onClick={runSweep}>
+            {sweeping ? "Sweeping…" : "Run sweep (≥50 mi)"}
+          </button>
+          <button className="btn" disabled={busy} onClick={extract}>{busy ? "Extracting…" : "Extract page"}</button>
+        </div>
       </div>
       {msg && <div className="muted" style={{ marginTop: 6 }}>{msg}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginTop: 12 }}>
+      {sweep && (
+        <div style={{
+          marginTop: 10, padding: "10px 12px", borderRadius: 8,
+          border: `1px solid ${sweep.ok && STOP_OK.has(sweep.stopped_reason) ? "#238636" : "#da3633"}`,
+          background: sweep.ok && STOP_OK.has(sweep.stopped_reason) ? "rgba(46,160,67,0.12)" : "rgba(218,54,51,0.12)",
+        }}>
+          {sweep.ok ? (
+            <span>
+              <strong>Sweep done</strong> · {sweep.pages_swept} pages · {sweep.jobs_found} found ·
+              {" "}{sweep.new} new · {sweep.shortlisted} shortlisted · {sweep.descriptions_captured} descriptions ·
+              {" "}{sweep.distance_selected ?? "?"} mi · stopped: {sweep.stopped_reason}
+            </span>
+          ) : (
+            <span><strong>Sweep stopped:</strong> {sweep.stopped_reason}
+              {sweep.stopped_reason === "not_authenticated" && " — log the session in first."}
+              {sweep.stopped_reason === "captcha" && " — a challenge is showing; a human must clear it."}
+              {sweep.stopped_reason === "distance_filter_failed" && " — couldn't set the distance filter."}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 10, marginTop: 12 }}>
         <Stat label="Jobs found" value={t.jobs_found} />
         <Stat label="Companies" value={t.distinct_companies} />
         <Stat label="Searches" value={t.searches_performed} />
+        <Stat label="With description" value={t.with_description ?? 0} />
         <Stat label="Duplicates collapsed" value={t.duplicates_collapsed} />
         <Stat label="Applied" value={t.applied} />
       </div>
 
-      {data.jobs_applied.length > 0 && (
-        <JobTable title="Jobs Applied" jobs={data.jobs_applied} mark={mark} />
+      {/* --- gallery vs. opened database --- */}
+      {!open ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12, marginTop: 16 }}>
+          {DATABASES.map((d) => (
+            <DatabaseCard key={d.id} db={d} onOpen={() => setOpen(d.id)} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <button className="btn btn-sm" onClick={() => setOpen(null)}>← Databases</button>
+            <span className="muted">/</span>
+            <strong>{current?.icon} {current?.name}</strong>
+            <span className="muted">({current?.count})</span>
+          </div>
+          {open === "jobs" && <JobTable title="All Jobs" jobs={data.jobs_seen} mark={mark} />}
+          {open === "applied" && (
+            data.jobs_applied.length
+              ? <JobTable title="Applied" jobs={data.jobs_applied} mark={mark} />
+              : <EmptyDb text="Nothing applied yet. Mark a job 'Applied' from the All Jobs table." />
+          )}
+          {open === "descriptions" && (
+            (data.descriptions || []).length
+              ? <DescriptionsTable jobs={data.descriptions} />
+              : <EmptyDb text="No descriptions captured yet. Run a sweep to click into shortlisted listings." />
+          )}
+          {open === "searches" && <SearchesTable targets={targets} byQuery={data.by_query || []} />}
+        </div>
       )}
-      <JobTable title="Jobs Seen" jobs={data.jobs_seen} mark={mark} />
+    </div>
+  );
+}
+
+function DatabaseCard({ db, onOpen }) {
+  return (
+    <button className="panel" onClick={onOpen}
+      style={{ textAlign: "left", cursor: "pointer", padding: "14px 16px", border: "1px solid var(--border, #30363d)",
+               background: "transparent", display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 20 }}>{db.icon}</span>
+        <span style={{ fontSize: 20, fontWeight: 700 }}>{db.count}</span>
+      </div>
+      <div style={{ fontWeight: 600 }}>{db.name}</div>
+      <div className="muted" style={{ fontSize: 12 }}>{db.desc}</div>
+    </button>
+  );
+}
+
+function EmptyDb({ text }) {
+  return <div className="panel" style={{ marginTop: 4, padding: "18px 16px" }}><p className="muted" style={{ margin: 0 }}>{text}</p></div>;
+}
+
+function SearchesTable({ targets, byQuery }) {
+  // Merge the configured targets (query · location · radius · status) with the live per-query
+  // rollup (found / with-description / applied) so one table answers "what are we searching and
+  // how is each doing". Queries seen in results but not configured are appended.
+  const byQ = new Map(byQuery.map((r) => [r.query, r]));
+  const rows = targets.map((t) => ({
+    query: t.query, location: t.location || "—", radius: t.radius_miles ?? 50, status: t.status || "active",
+    ...(byQ.get(t.query) || { found: 0, with_description: 0, applied: 0 }),
+  }));
+  for (const r of byQuery) {
+    if (!targets.some((t) => t.query === r.query)) {
+      rows.push({ query: r.query, location: "—", radius: "—", status: "ad-hoc", ...r });
+    }
+  }
+  return (
+    <div className="panel">
+      <div className="panel-header"><div>Searches <span className="muted">({rows.length})</span></div></div>
+      <div className="table-wrap">
+        <table className="runs-table">
+          <thead><tr><th>Query</th><th>Location</th><th>Radius</th><th>Status</th><th>Found</th><th>With desc</th><th>Applied</th></tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={`${r.query}-${i}`}>
+                <td>{r.query}</td>
+                <td>{r.location}</td>
+                <td style={{ textAlign: "center" }}>{r.radius === "—" ? "—" : `${r.radius} mi`}</td>
+                <td>{r.status}</td>
+                <td style={{ textAlign: "center" }}>{r.found}</td>
+                <td style={{ textAlign: "center" }}>{r.with_description}</td>
+                <td style={{ textAlign: "center" }}>{r.applied}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DescriptionsTable({ jobs }) {
+  const [open, setOpen] = useState(null);
+  return (
+    <div className="panel" style={{ marginTop: 14 }}>
+      <div className="panel-header"><div>Job Descriptions <span className="muted">({jobs.length})</span></div></div>
+      <div className="table-wrap">
+        <table className="runs-table">
+          <thead><tr><th>Title</th><th>Company</th><th>Apply</th><th>Salary</th><th>Chars</th><th></th></tr></thead>
+          <tbody>
+            {jobs.map((j) => (
+              <Fragment key={j.job_id}>
+                <tr>
+                  <td>{j.url ? <a href={j.url} target="_blank" rel="noreferrer">{j.title || j.external_id}</a> : (j.title || j.external_id)}</td>
+                  <td>{j.company || <span className="muted">—</span>}</td>
+                  <td className="muted">{j.apply_type || "—"}</td>
+                  <td className="muted">{j.salary || "—"}</td>
+                  <td style={{ textAlign: "center" }}>{j.desc_chars}</td>
+                  <td><button className="btn btn-sm" onClick={() => setOpen(open === j.job_id ? null : j.job_id)}>{open === j.job_id ? "Hide" : "Read"}</button></td>
+                </tr>
+                {open === j.job_id && (
+                  <tr><td colSpan={6}>
+                    <div style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 300, overflow: "auto", padding: "6px 2px" }}>
+                      {j.description || <span className="muted">No description captured.</span>}
+                    </div>
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -252,48 +439,6 @@ function JobTable({ title, jobs, mark }) {
             ))}
           </tbody>
         </table>
-      </div>
-    </div>
-  );
-}
-
-function IndeedOverview() {
-  const [answers, setAnswers] = useState(null);
-  const [coverage, setCoverage] = useState(null);
-
-  useEffect(() => {
-    fetch(`${API}/api/application-answers`).then((r) => r.json()).then(setAnswers).catch(() => {});
-    fetch(`${API}/api/training/coverage?target_per_state=10`).then((r) => r.json()).then(setCoverage).catch(() => {});
-  }, []);
-
-  const indeedStates = useMemo(() => {
-    if (!coverage?.states) return [];
-    // The coverage feed isn't domain-tagged in the row; filter by the indeed_ prefix
-    // we use for Indeed-scoped state ids (best-effort until coverage carries domain_id).
-    return coverage.states.filter((s) => (s.state_id || "").startsWith("indeed"));
-  }, [coverage]);
-
-  const covered = indeedStates.filter((s) => s.status === "covered").length;
-
-  return (
-    <div className="section-body">
-      <p className="muted" style={{ marginTop: 0 }}>
-        The job-seeking workspace. Application answers power the (future) form-fill executor;
-        the jobs dashboard (searches, jobs found, duplicates, applied) lands here next.
-      </p>
-      <div className="stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: "12px" }}>
-        <Stat label="Stored answers" value={answers?.total ?? "—"} />
-        <Stat label="Answer categories" value={answers ? Object.keys(answers.by_category).length : "—"} />
-        <Stat label="Indeed states seen" value={indeedStates.length || "—"} />
-        <Stat label="Indeed states covered (≥10)" value={indeedStates.length ? covered : "—"} />
-      </div>
-      <div className="panel" style={{ marginTop: 16 }}>
-        <div className="panel-header"><div>Coming soon — Jobs Dashboard</div></div>
-        <ul className="muted" style={{ margin: "8px 0 0", paddingLeft: 18 }}>
-          <li>Searches performed · jobs found · duplicates · jobs applied</li>
-          <li>Jobs Seen + Jobs Applied tables (from an observed_jobs store)</li>
-          <li>Populated automatically once job-extraction + the task runner land</li>
-        </ul>
       </div>
     </div>
   );

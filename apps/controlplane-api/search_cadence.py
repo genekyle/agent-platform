@@ -19,7 +19,12 @@ BOUNDS = {
     "max_queries_per_session": 12,
     "max_pages_per_query": 5,
     "min_seconds_between_navigations": 3,
+    # Distance floor: every search runs at >= this radius. Enforced by /api/search/sweep clicking
+    # the Indeed distance filter (not a radius= URL param) up to this value before extracting.
+    "min_radius_miles": 50,
     "navigate_by": "search results only — NEVER job-detail URLs or new/closed tabs",
+    "interact_by": "CLICK like a human — click cards to open the in-page detail pane, click "
+                   "pagination numbers to page forward; scroll the page; never URL-jump",
     "apply_requires": "explicit user approval per job before the final Submit",
 }
 
@@ -31,7 +36,8 @@ BOUNDS = {
 SEARCH_RECIPE = [
     {"step": 0, "state": "indeed_home",           "action": "enter query + location, run the search",
      "expect": ["indeed_search_results"]},
-    {"step": 1, "state": "indeed_search_results", "action": "triage the page (shortlist fits); page forward within bounds",
+    {"step": 1, "state": "indeed_search_results", "action": "set distance >= min_radius_miles (click filter); "
+     "extract cards; click shortlisted cards to read the detail pane; click pagination to page forward (bounded)",
      "expect": ["indeed_search_results", "indeed_job_posting"]},
     {"step": 2, "state": "indeed_job_posting",    "action": "open posting / click Apply (handoff to the apply flow)",
      "expect": ["indeed_job_posting", "indeed_apply_resume_selection", "indeed_apply_questions"]},
@@ -46,17 +52,23 @@ def search_recipe_states() -> list[str]:
 CADENCE_MODES = {
     # ---- TASK 1: pure data gathering ----------------------------------------
     "extraction_sweep": {
-        "goal": "Breadth — run through options and record EVERYTHING found. No applying.",
+        "goal": "Breadth — run through options and record EVERYTHING found. No applying. This is the "
+                "bounded auto-sweep behind POST /api/search/sweep.",
         "steps": [
             "Pick a query from the target preferences (job_preference profile).",
-            "Navigate the existing tab to the results page (human-paced, single nav).",
+            "Run the search on the existing tab (enter query + location), human-paced.",
+            "Set the DISTANCE filter to >= min_radius_miles by CLICKING the filter pill and picking "
+            "the option (never a radius= URL param). Refuse to gather sub-floor results.",
             "Capture + classify the results page (trains L3 along the way).",
             "Extract all job cards → observed_jobs (deduped by platform:external_id).",
-            "If more pages add value (new>0), page forward within bounds; else next query.",
+            "Shortlist the cards that match the query, and CLICK INTO each (opens the in-page detail "
+            "pane) to read the full description — like a human, no viewjob URL-jump.",
+            "Scroll to the bottom and CLICK the pagination number to page forward within bounds; "
+            "else next query.",
         ],
-        "records": ["observed_jobs (deduped)", "search_query", "page"],
-        "stops_when": "queries exhausted or max_queries_per_session hit",
-        "does_not": ["apply", "open job-detail URLs", "open/close tabs"],
+        "records": ["observed_jobs (deduped)", "job descriptions (shortlisted)", "search_query", "page"],
+        "stops_when": "queries/pages exhausted, bounds hit, a live captcha, or logout",
+        "does_not": ["apply", "open job-detail URLs", "open/close tabs", "gather below min_radius_miles"],
     },
     # ---- TASK 2: act on good fits -------------------------------------------
     "apply_triage": {

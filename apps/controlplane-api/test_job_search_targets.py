@@ -31,6 +31,15 @@ def test_add_target_persists(tmp_path, monkeypatch):
     assert any(t["query"] == "data analyst" for t in on_disk)
 
 
+def test_add_target_floors_radius_at_50(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    jst.load_targets()
+    low = jst.add_target("qa analyst", "Boston, MA", radius_miles=25)
+    assert low["radius_miles"] == 50  # floored — every search is >=50mi
+    high = jst.add_target("ml engineer", "Boston, MA", radius_miles=100)
+    assert high["radius_miles"] == 100  # explicit larger radius is kept
+
+
 def test_add_target_is_idempotent_case_insensitive(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     jst.load_targets()

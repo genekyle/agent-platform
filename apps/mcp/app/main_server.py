@@ -501,7 +501,12 @@ _JOB_DESC_JS = r"""
   const description = descEl ? descEl.innerText.trim() : '';
   const salEl = document.querySelector('#salaryInfoAndJobType, [id*=salaryInfo], [class*=salary]');
   const salary = salEl ? salEl.innerText.trim() : '';
-  const titleEl = document.querySelector('h1, h2.jobsearch-JobInfoHeader-title');
+  // Prefer the posting's own header (present on both the in-pane SERP view and the viewjob page).
+  // Plain h1 is LAST — on the results page h1 is the search title ("reporting analyst jobs in …"),
+  // not the job, so it must not win over the pane header.
+  const titleEl = document.querySelector(
+    'h2.jobsearch-JobInfoHeader-title, [data-testid="jobsearch-JobInfoHeader-title"],'
+    + ' .jobsearch-RightPane h1, .jobsearch-JobComponent h1, h1');
   const title = titleEl ? titleEl.innerText.trim() : '';
   const btnText = Array.from(document.querySelectorAll('button, a')).map(b => (b.innerText||'').trim()).join(' | ');
   const apply_type = /apply on company site|apply on/i.test(btnText) ? 'company_site'
@@ -532,6 +537,245 @@ async def fetch_job_description(body: JobDescriptionRequest):
     except Exception as exc:  # noqa: BLE001
         logger.warning("fetch_job_description failed: %s", exc)
         return {"ok": False, "detail": str(exc)}
+
+
+# --- Indeed search-results interaction: distance filter, card-walk, pagination -------
+# These are the human-like SERP primitives the bounded sweep drives (project: card-walk +
+# pagination). All operate on the SAME results tab (no URL-jumping / no tab churn — bot-safe):
+# set the distance filter by clicking the pill, open a posting by clicking its card (opens the
+# in-page right pane), and page forward by clicking the pagination number — exactly what a human
+# does. Selectors are Indeed-fragile, so each tries several selectors + a visible-text fallback.
+
+class SetDistanceRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    min_miles: int = 50
+
+
+# Indeed's distance control is a Downshift-style React combobox (#radius_filter_button → a listbox of
+# li[role=option] "Within N miles"). Live findings on the CDP-observed training Chrome:
+#   * The OPTION only selects when its OWN React onClick handler is invoked off the fiber props
+#     (synthetic + trusted DOM clicks / keyboard all no-op on it).
+#   * OPENING the menu via input gestures is unreliable here (the MCP-drive vs CDP-observe gap):
+#     a trusted mouse click opens it sometimes, not deterministically.
+# So set_distance is a CASCADE: (1) already >= min via URL → done; (2) try the human widget path —
+# trusted-mouse open + fiber-select, poll the URL; (3) if the menu wouldn't open / didn't take, fall
+# back to a same-tab radius= rewrite (one param on the SAME search — not a job-detail URL-jump) so the
+# floor is guaranteed and the sweep is never blocked. Reports which method actually applied it.
+
+# Prep + idempotency: radius already satisfied? options already open? where's the button to click?
+_DISTANCE_PREP_JS = r"""
+(min_miles) => {
+  const r = parseInt(new URLSearchParams(location.search).get('radius') || '', 10);
+  if (!isNaN(r) && r >= min_miles) return {already:true, current:r};
+  const OPT = '[data-testid^="selection-pill-option-"], li[role=option]';
+  const opts_present = !!document.querySelector(OPT);
+  const btn = document.querySelector('#radius_filter_button, button[id*=radius], [aria-label*="Distance" i]');
+  if (!btn) return {already:false, btn:false, opts_present};
+  btn.scrollIntoView({block:'center'});
+  const b = btn.getBoundingClientRect();
+  return {already:false, btn:true, opts_present, x:b.x + b.width/2, y:b.y + b.height/2};
+}
+"""
+
+# Select the smallest option >= min by invoking its React handler, then poll the URL for radius.
+_PICK_DISTANCE_JS = r"""
+(min_miles) => new Promise((resolve) => {
+  const OPT = '[data-testid^="selection-pill-option-"], li[role=option]';
+  const opts = [...document.querySelectorAll(OPT)].map(el => {
+    const t = (el.innerText || el.getAttribute('aria-label') || '').trim();
+    const m = t.match(/(\d+)\s*mile/i);
+    return {el, miles: m ? parseInt(m[1], 10) : null, text: t};
+  }).filter(o => o.miles !== null);
+  if (!opts.length) { resolve({applied:false, detail:'menu did not open'}); return; }
+  const atLeast = opts.filter(o => o.miles >= min_miles).sort((a,b)=>a.miles-b.miles);
+  const choice = atLeast[0] || opts.sort((a,b)=>b.miles-a.miles)[0];
+  const key = Object.keys(choice.el).find(k => k.startsWith('__reactProps$'));
+  if (key) {
+    const p = choice.el[key];
+    const ev = {target:choice.el, currentTarget:choice.el, preventDefault(){}, stopPropagation(){}, nativeEvent:{}, type:'click', button:0};
+    try { if (p.onMouseDown) p.onMouseDown(ev); if (p.onClick) p.onClick(ev); } catch (e) { choice.el.click(); }
+  } else { choice.el.click(); }
+  let tries = 0;
+  const iv = setInterval(() => {
+    const r = parseInt(new URLSearchParams(location.search).get('radius') || '', 10);
+    if ((!isNaN(r) && r >= min_miles) || ++tries > 9) {
+      clearInterval(iv);
+      resolve({applied: (!isNaN(r) && r >= min_miles), selected: choice.miles, detail: choice.text});
+    }
+  }, 280);
+})
+"""
+
+# Same-tab radius= rewrite — the guaranteed fallback when the widget won't open. Returns the URL to
+# navigate to (current search + radius=min), preserving every other param.
+_DISTANCE_URL_JS = r"""
+(min_miles) => {
+  const u = new URL(location.href);
+  u.searchParams.set('radius', String(min_miles));
+  u.searchParams.delete('vjk');   // drop any open-posting anchor so we land on the clean list
+  return u.toString();
+}
+"""
+
+
+@app.post("/set_distance")
+async def set_distance(body: SetDistanceRequest):
+    """Force the search radius to >= min_miles. Cascade: (1) already >= min in the URL → done;
+    (2) the human widget path — trusted-mouse open of the distance pill + invoke the option's React
+    handler, poll the URL; (3) if the widget won't open in this observed Chrome, fall back to a
+    same-tab radius= rewrite (one param on the same search, not a job-detail URL-jump). Returns
+    {applied, selected_miles, method, detail}. `applied` is true only once radius>=min is in the URL."""
+    import asyncio
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.enable", {})
+            await cdp.send("Page.bringToFront", {})
+
+            prep = (await cdp.send("Runtime.evaluate", {
+                "expression": f"({_DISTANCE_PREP_JS})({body.min_miles})",
+                "returnByValue": True})).get("result", {}).get("value") or {}
+            if prep.get("already"):
+                return {"ok": True, "applied": True, "selected_miles": prep.get("current"),
+                        "method": "already", "detail": "radius already >= min via URL"}
+
+            # (2) Human widget path: open via trusted mouse click, then fiber-select the option.
+            if prep.get("btn") and not prep.get("opts_present"):
+                x, y = prep["x"], prep["y"]
+                for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+                    ev = {"type": typ, "x": x, "y": y}
+                    if typ != "mouseMoved":
+                        ev.update({"button": "left", "clickCount": 1})
+                    await cdp.send("Input.dispatchMouseEvent", ev)
+                await asyncio.sleep(0.7)  # let the listbox render
+            picked = (await cdp.send("Runtime.evaluate", {
+                "expression": f"({_PICK_DISTANCE_JS})({body.min_miles})",
+                "returnByValue": True, "awaitPromise": True})).get("result", {}).get("value") or {}
+            if picked.get("applied"):
+                return {"ok": True, "applied": True, "selected_miles": picked.get("selected"),
+                        "method": "widget", "detail": picked.get("detail", "")}
+
+            # (3) Guaranteed fallback: same-tab radius= rewrite of the current search.
+            url = (await cdp.send("Runtime.evaluate", {
+                "expression": f"({_DISTANCE_URL_JS})({body.min_miles})",
+                "returnByValue": True})).get("result", {}).get("value")
+            if not url:
+                return {"ok": True, "applied": False, "method": "none",
+                        "detail": "widget would not open and no URL to rewrite"}
+            await cdp.send("Page.navigate", {"url": url})
+            await asyncio.sleep(2.4)
+            r = (await cdp.send("Runtime.evaluate", {
+                "expression": "parseInt(new URLSearchParams(location.search).get('radius')||'',10)",
+                "returnByValue": True})).get("result", {}).get("value")
+            ok = isinstance(r, (int, float)) and r >= body.min_miles
+            return {"ok": True, "applied": bool(ok), "selected_miles": (r if ok else None),
+                    "method": "url_fallback", "detail": f"radius={r} via same-tab rewrite"}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("set_distance failed: %s", exc)
+        return {"ok": False, "applied": False, "method": "error", "detail": str(exc)}
+
+
+class OpenJobCardRequest(BaseModel):
+    external_id: str                     # Indeed jk
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    settle_seconds: float = 1.6
+
+
+_CLICK_CARD_JS = r"""
+(jk) => {
+  const card = document.querySelector(`a[data-jk="${jk}"], [data-jk="${jk}"]`);
+  if (!card) return {clicked:false};
+  card.scrollIntoView({block:'center', inline:'center'});
+  card.click();
+  return {clicked:true};
+}
+"""
+
+
+@app.post("/open_job_card")
+async def open_job_card(body: OpenJobCardRequest):
+    """Click a result card by its data-jk to open the IN-PAGE right-hand detail pane, then scrape
+    its description/salary/apply_type from that pane (reuses _JOB_DESC_JS — #jobDescriptionText is
+    present in the pane). This is the bot-safe 'click into the listing' the 2024 bot did, replacing
+    the viewjob URL-jump. Same tab, no navigation. Best-effort."""
+    import asyncio
+    import json as _json
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        jk = _json.dumps(body.external_id)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            rc = await cdp.send("Runtime.evaluate", {
+                "expression": f"({_CLICK_CARD_JS})({jk})", "returnByValue": True})
+            if not ((rc.get("result") or {}).get("value") or {}).get("clicked"):
+                return {"ok": False, "detail": f"card data-jk={body.external_id} not found"}
+            await asyncio.sleep(max(0.4, min(body.settle_seconds, 8.0)))
+            res = await cdp.send("Runtime.evaluate", {"expression": _JOB_DESC_JS, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {}
+        data["ok"] = bool(data.get("description"))
+        data["external_id"] = body.external_id
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("open_job_card failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
+class NextPageRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+
+
+# Scroll to the bottom (also satisfies "move down the page" + triggers lazy load), then click the
+# pagination control for the NEXT page. Indeed renders pagination as a row of numbered links
+# (a[data-testid=pagination-page-N]) plus an explicit Next link; we prefer the exact next number,
+# falling back to the Next-labeled control. Searches the whole doc (top + bottom).
+_NEXT_PAGE_JS = r"""
+(() => {
+  window.scrollTo(0, document.body.scrollHeight);
+  const cur = (() => {
+    const s = parseInt(new URLSearchParams(location.search).get('start') || '0', 10);
+    return isNaN(s) ? 1 : Math.floor(s / 10) + 1;
+  })();
+  const byNum = document.querySelector(`a[data-testid="pagination-page-${cur + 1}"]`)
+             || [...document.querySelectorAll('nav[aria-label*="pag" i] a, [role=navigation] a')]
+                  .find(a => (a.innerText || '').trim() === String(cur + 1));
+  const next = document.querySelector('a[data-testid="pagination-page-next"], [aria-label*="Next" i]');
+  const el = byNum || next;
+  if (!el) return {clicked:false, current:cur, has_next:false};
+  el.scrollIntoView({block:'center'}); el.click();
+  return {clicked:true, current:cur, next_page:cur + 1, has_next:true};
+})()
+"""
+
+
+@app.post("/next_page")
+async def next_page(body: NextPageRequest):
+    """Page the results forward by CLICKING the pagination control (never a ?start= URL-jump):
+    scroll to the bottom, then click the next page number (or the Next link). Returns whether a
+    next page existed and was clicked, and the new page number. Best-effort."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate", {"expression": _NEXT_PAGE_JS, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {"clicked": False, "has_next": False}
+        data["ok"] = True
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("next_page failed: %s", exc)
+        return {"ok": False, "clicked": False, "has_next": False, "detail": str(exc)}
 
 
 # Is a captcha challenge ACTUALLY SHOWN, or just preloaded invisibly? Sites (Indeed) preload the

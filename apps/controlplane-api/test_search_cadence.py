@@ -41,3 +41,16 @@ def test_recipe_is_ordered_and_unique():
 def test_cadence_spec_exposes_recipe():
     spec = sc.cadence_spec()
     assert spec["search_recipe"] == sc.SEARCH_RECIPE
+
+
+def test_bounds_enforce_50mi_distance_floor():
+    assert sc.BOUNDS["min_radius_miles"] == 50
+
+
+def test_extraction_sweep_documents_distance_cardwalk_pagination():
+    steps = " ".join(sc.CADENCE_MODES["extraction_sweep"]["steps"]).lower()
+    assert "distance" in steps           # set the radius filter
+    assert "click into" in steps         # walk the cards (in-page pane)
+    assert "pagination" in steps         # page forward by clicking
+    # and it explicitly refuses sub-floor results
+    assert any("min_radius_miles" in d for d in sc.CADENCE_MODES["extraction_sweep"]["does_not"])

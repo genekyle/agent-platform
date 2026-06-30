@@ -1535,21 +1535,34 @@ async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"extractor unreachable: {exc}")
 
+    new_count, dup_count = _upsert_observed_jobs(db, raw.get("jobs", []),
+                                                 body.platform, body.search_query)
+    db.commit()
+    return {"ok": True, "scraped": raw.get("count", 0), "new": new_count,
+            "duplicates": dup_count, "search_query": body.search_query}
+
+
+def _upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
+                          search_query: Optional[str]) -> tuple[int, int]:
+    """UPSERT scraped job cards into observed_jobs, deduped by job_id = '{platform}:{external_id}'.
+    A re-seen job bumps seen_count + last_seen_at (and records the search) instead of duplicating;
+    blank fields are backfilled. Returns (new, duplicate) counts. Does NOT commit — the caller does,
+    so a multi-page sweep commits once per page. Shared by /api/jobs/extract and /api/search/sweep."""
     now = utcnow()
     new_count = dup_count = 0
-    for j in raw.get("jobs", []):
+    for j in jobs:
         ext = (j.get("external_id") or "").strip()
         if not ext:
             continue
-        job_id = f"{body.platform}:{ext}"
+        job_id = f"{platform}:{ext}"
         row = db.get(ObservedJob, job_id)
         if row is None:
             row = ObservedJob(
-                job_id=job_id, platform=body.platform, external_id=ext,
+                job_id=job_id, platform=platform, external_id=ext,
                 title=(j.get("title") or "")[:400], company=(j.get("company") or "")[:300],
                 location=(j.get("location") or "")[:300], url=(j.get("url") or "")[:1200],
                 salary=(j.get("salary") or "")[:200] or None,
-                search_queries=[body.search_query] if body.search_query else [],
+                search_queries=[search_query] if search_query else [],
                 first_seen_at=now, last_seen_at=now, seen_count=1,
             )
             db.add(row)
@@ -1557,16 +1570,14 @@ async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
         else:
             row.seen_count += 1
             row.last_seen_at = now
-            if body.search_query and body.search_query not in (row.search_queries or []):
-                row.search_queries = (row.search_queries or []) + [body.search_query]
+            if search_query and search_query not in (row.search_queries or []):
+                row.search_queries = (row.search_queries or []) + [search_query]
             # backfill any fields that were blank before
             row.title = row.title or (j.get("title") or "")[:400]
             row.company = row.company or (j.get("company") or "")[:300]
             row.location = row.location or (j.get("location") or "")[:300]
             dup_count += 1
-    db.commit()
-    return {"ok": True, "scraped": raw.get("count", 0), "new": new_count,
-            "duplicates": dup_count, "search_query": body.search_query}
+    return new_count, dup_count
 
 
 _SENIORITY = {"senior", "sr", "junior", "jr", "lead", "principal", "staff", "associate",
@@ -1589,6 +1600,25 @@ def _applied_key(company: str, title: str) -> str:
     whether seen on Indeed, Workday, or applied externally by hand. Lets 'already applied'
     suppress a job we (or the user) applied to anywhere — not just by Indeed jk."""
     return f"{_norm_company(company)}|{_norm_title(title)}"
+
+
+def _shortlist_jobs(jobs: list[dict], query: str, applied_keys: Optional[set] = None) -> list[dict]:
+    """Pick which scraped cards are worth clicking into for a full description — the cheap,
+    deterministic 'shortlist only' filter (no model; resource-efficiency). A card is shortlisted
+    when its normalized title shares a token with the query AND it isn't already applied (directly
+    or cross-platform). An empty query keeps everything that isn't already applied (no signal to
+    filter on). Returns the shortlisted card dicts in input order."""
+    q_tokens = set(_norm_title(query).split())
+    out = []
+    for j in jobs:
+        title = j.get("title") or ""
+        company = j.get("company") or ""
+        if applied_keys is not None and _applied_key(company, title) in applied_keys:
+            continue
+        if q_tokens and not (q_tokens & set(_norm_title(title).split())):
+            continue
+        out.append(j)
+    return out
 
 
 def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None) -> dict[str, Any]:
@@ -1886,6 +1916,7 @@ class SearchTargetCreate(BaseModel):
     query: str
     location: str = ""
     status: str = "active"  # active | paused
+    radius_miles: int = 50  # floored at 50 by the sweep regardless
 
 
 @app.get("/api/search/targets")
@@ -1903,7 +1934,7 @@ def add_search_target(body: SearchTargetCreate):
     case-insensitive duplicate returns the existing row rather than adding a second."""
     import job_search_targets as jst
     try:
-        row = jst.add_target(body.query, body.location, body.status)
+        row = jst.add_target(body.query, body.location, body.status, body.radius_miles)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return row
@@ -1932,6 +1963,20 @@ def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
     applied_keys = {_applied_key(j.company, j.title) for j in applied}
     searches = sorted({q for j in jobs for q in (j.search_queries or [])})
     already_applied = [j for j in jobs if _job_dict(j, applied_keys)["already_applied"]]
+    with_desc = [j for j in jobs if (j.description or "").strip()]
+
+    # Per-query rollup: how each search is doing (found / descriptions captured / applied) — the
+    # table that answers "did the multi-page sweep actually work for this query".
+    by_query: dict[str, dict[str, int]] = {}
+    for j in jobs:
+        for q in (j.search_queries or []):
+            row = by_query.setdefault(q, {"found": 0, "with_description": 0, "applied": 0})
+            row["found"] += 1
+            if (j.description or "").strip():
+                row["with_description"] += 1
+            if j.application_status == "applied":
+                row["applied"] += 1
+
     return {
         "platform": platform,
         "totals": {
@@ -1940,12 +1985,19 @@ def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
             "duplicates_collapsed": sum((j.seen_count or 1) - 1 for j in jobs),
             "distinct_companies": len({j.company for j in jobs if j.company}),
             "applied": len(applied),
+            "with_description": len(with_desc),
             "already_applied_incl_cross_platform": len(already_applied),
             "by_status": by_status,
         },
         "searches": searches,
+        "by_query": [{"query": q, **counts} for q, counts in sorted(by_query.items())],
         "jobs_seen": [_job_dict(j, applied_keys) for j in jobs[:100]],
         "jobs_applied": [_job_dict(j, applied_keys) for j in applied],
+        "descriptions": [
+            {**_job_dict(j, applied_keys), "salary": j.salary,
+             "desc_chars": len(j.description or ""), "description": (j.description or "")[:6000]}
+            for j in with_desc[:60]
+        ],
         "most_seen": [_job_dict(j, applied_keys) for j in sorted(jobs, key=lambda x: x.seen_count or 1, reverse=True)[:10]],
     }
 
@@ -1995,6 +2047,159 @@ async def fetch_job_descriptions(body: FetchDescriptionsRequest, db: Session = D
             await asyncio.sleep(0.6)
     db.commit()
     return {"ok": True, "fetched": fetched, "results": results}
+
+
+async def _list_session_tabs(browser_url: str) -> list[dict]:
+    """List a session Chrome's open targets (GET /json). Raises 503 if unreachable — the sweep's
+    pre-gate needs a live look at the tabs to detect a captcha frame. A seam for tests."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{browser_url}/json")
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"session Chrome not reachable: {exc}")
+
+
+async def _capture_post(path: str, payload: dict, timeout: float = 40.0) -> dict:
+    """POST to the capture server and return parsed JSON (or {ok:False, detail} on transport error).
+    The single seam the sweep loop goes through, so the whole multi-page orchestration is unit-testable
+    by monkeypatching this one function (no browser needed)."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(f"{settings.capture_server_url}{path}", json=payload)
+            return r.json()
+    except httpx.HTTPError as exc:
+        return {"ok": False, "detail": str(exc)}
+
+
+class SearchSweepRequest(BaseModel):
+    training_session_id: int
+    query: Optional[str] = None          # defaults to the active job-search target
+    location: Optional[str] = None
+    max_pages: Optional[int] = None      # clamped to BOUNDS["max_pages_per_query"]
+    min_miles: int = 50                  # floored at BOUNDS["min_radius_miles"]
+    max_details_per_page: int = 8        # cap on click-into-card detail fetches per page
+
+
+def _sweep_stop(reason: str, **extra) -> dict:
+    base = {"ok": False, "stopped_reason": reason, "pages_swept": 0, "jobs_found": 0,
+            "new": 0, "shortlisted": 0, "descriptions_captured": 0}
+    base.update(extra)
+    return base
+
+
+@app.post("/api/search/sweep")
+async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
+    """The bounded auto-sweep — the 'multi-page' Indeed task, end to end and human-paced:
+    force the radius to >= min_miles by CLICKING the distance filter, then per results page extract
+    every card, shortlist the ones matching the query (cheap/deterministic), CLICK INTO each
+    shortlisted card to read its in-page detail pane (no viewjob URL-jump), and CLICK pagination to
+    the next page — stopping at BOUNDS / a live captcha / logout. Stamps a fresh authenticated cadence
+    run for provenance and persists incrementally, so a mid-sweep stop keeps the data already gathered.
+    Returns the run summary; the dashboard tables read the persisted results."""
+    import random
+    import apply_state_store as store
+    import escalation_rules
+    import job_search_targets as jst
+    import search_cadence
+
+    session = db.get(TrainingSession, body.training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+
+    target = jst.active_target() or {}
+    query = (body.query or target.get("query") or "").strip()
+    location = (body.location or target.get("location") or "").strip()
+    min_miles = max(int(body.min_miles or 0), search_cadence.BOUNDS["min_radius_miles"])
+    max_pages = min(int(body.max_pages or search_cadence.BOUNDS["max_pages_per_query"]),
+                    search_cadence.BOUNDS["max_pages_per_query"])
+
+    # --- PRE-GATE: never sweep under a live captcha or logged-out (bot-safety) -------------
+    all_targets = await _list_session_tabs(browser_url)
+    block = escalation_rules.detect_block_frames([t.get("url", "") for t in all_targets])
+    block = await _refine_block_visibility(browser_url, block)
+    if block and block.get("strength") == "active":
+        return _sweep_stop("captcha", blocker=block)
+    ab = await _capture_post("/auth_state", {"browser_url": browser_url}, timeout=8.0)
+    if not (ab.get("ok") and ab.get("logged_in")):
+        return _sweep_stop("not_authenticated")
+
+    # provenance: a fresh authenticated run makes this sweep's data actionable downstream
+    bb = store.load_or_create(body.training_session_id, query=query, location=location)
+    store.start_cadence_run(bb, query=query, location=location, authed=True)
+    bb.world["authed"] = True
+
+    # --- DISTANCE: force >= min_miles by clicking the filter. If it can't be set, STOP — we never
+    # gather sub-floor results (honors the always->=50mi rule). ---------------------------------
+    dist = await _capture_post("/set_distance",
+                               {"browser_url": browser_url, "tab_url": "indeed.com/jobs",
+                                "min_miles": min_miles})
+    if not dist.get("applied"):
+        store.save(bb)
+        return _sweep_stop("distance_filter_failed", distance=dist)
+    await asyncio.sleep(1.0)
+
+    def _jitter(extra: float) -> float:
+        base = search_cadence.BOUNDS["min_seconds_between_navigations"]
+        return random.uniform(base, base + extra)
+
+    pages_swept = total_found = total_new = total_short = total_desc = 0
+    shortlist_refs: list[str] = list(bb.search_state.shortlist or [])
+    stopped_reason = "max_pages"
+    for _ in range(max_pages):
+        ex = await _capture_post("/extract_jobs",
+                                 {"browser_url": browser_url, "tab_url": "indeed.com/jobs"})
+        cards = ex.get("jobs", []) if ex.get("ok") else []
+        new_c, _dup = _upsert_observed_jobs(db, cards, "indeed", query)
+        db.commit()
+        pages_swept += 1
+        total_found += len(cards)
+        total_new += new_c
+
+        applied = db.scalars(
+            select(ObservedJob).where(ObservedJob.application_status == "applied")).all()
+        applied_keys = {_applied_key(j.company, j.title) for j in applied}
+        shortlisted = _shortlist_jobs(cards, query, applied_keys)
+        total_short += len(shortlisted)
+
+        # CLICK INTO each shortlisted card (in-page pane) to grab the full description.
+        for card in shortlisted[:body.max_details_per_page]:
+            jid = f"indeed:{card.get('external_id')}"
+            row = db.get(ObservedJob, jid)
+            if row is None or (row.description or "").strip():
+                continue  # missing or already captured — don't re-click
+            d = await _capture_post("/open_job_card",
+                                    {"browser_url": browser_url, "external_id": card.get("external_id")})
+            if d.get("ok"):
+                row.description = (d.get("description") or "")[:20000]
+                row.salary = row.salary or (d.get("salary") or "")[:200] or None
+                row.apply_type = d.get("apply_type") or row.apply_type
+                total_desc += 1
+                if jid not in shortlist_refs:
+                    shortlist_refs.append(jid)
+                db.commit()
+            await asyncio.sleep(_jitter(2.0))
+
+        nxt = await _capture_post("/next_page",
+                                  {"browser_url": browser_url, "tab_url": "indeed.com/jobs"})
+        if not nxt.get("has_next"):
+            stopped_reason = "no_next_page"
+            break
+        await asyncio.sleep(_jitter(2.5))
+
+    # fold sweep progress onto the blackboard's search_state (written-down, not re-derived)
+    bb.search_state.page = pages_swept
+    bb.search_state.observed_count = total_found
+    bb.search_state.shortlist = shortlist_refs
+    bb.log("sweep", f"{query!r} @ {min_miles}mi: {pages_swept}p, {total_found} found, "
+                    f"{total_desc} descriptions ({stopped_reason})")
+    store.save(bb)
+    return {"ok": True, "stopped_reason": stopped_reason, "pages_swept": pages_swept,
+            "jobs_found": total_found, "new": total_new, "shortlisted": total_short,
+            "descriptions_captured": total_desc, "min_miles": min_miles,
+            "distance_selected": dist.get("selected_miles"), "query": query, "location": location}
 
 
 @app.patch("/api/jobs/{job_id:path}")

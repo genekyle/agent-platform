@@ -20,8 +20,10 @@ from settings import settings
 
 # Seeded from the live session we're standing up. status='active' = part of the current cadence;
 # 'paused' targets are remembered but skipped. Order is run order.
+# radius_miles is the per-target search radius; the sweep floors it at BOUNDS["min_radius_miles"]
+# (50), so it's always >= 50 even if a target is saved lower.
 _SEED_TARGETS: list[dict[str, Any]] = [
-    {"query": "reporting analyst", "location": "Nashua, NH", "status": "active"},
+    {"query": "reporting analyst", "location": "Nashua, NH", "status": "active", "radius_miles": 50},
 ]
 
 
@@ -55,9 +57,11 @@ def save_targets(targets: list[dict[str, Any]]) -> None:
     _targets_path().write_text(json.dumps(targets, indent=2), encoding="utf-8")
 
 
-def add_target(query: str, location: str, status: str = "active") -> dict[str, Any]:
+def add_target(query: str, location: str, status: str = "active",
+               radius_miles: int = 50) -> dict[str, Any]:
     """Add a (query, location) target, or return the existing one if a case-insensitive
-    duplicate is already present (no duplicate rows — the store stays the source of truth)."""
+    duplicate is already present (no duplicate rows — the store stays the source of truth).
+    radius_miles is the desired search radius (floored at 50 by the sweep regardless)."""
     query = (query or "").strip()
     location = (location or "").strip()
     if not query:
@@ -68,7 +72,8 @@ def add_target(query: str, location: str, status: str = "active") -> dict[str, A
         if _norm(t.get("query", ""), t.get("location", "")) == key:
             return t  # already known — idempotent add
     row = {"query": query, "location": location,
-           "status": status if status in {"active", "paused"} else "active"}
+           "status": status if status in {"active", "paused"} else "active",
+           "radius_miles": max(int(radius_miles or 50), 50)}
     targets.append(row)
     save_targets(targets)
     return row
