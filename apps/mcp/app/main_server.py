@@ -803,11 +803,17 @@ async def next_page(body: NextPageRequest):
         return {"ok": False, "clicked": False, "has_next": False, "detail": str(exc)}
 
 
-# Is a captcha challenge ACTUALLY SHOWN, or just preloaded invisibly? Sites (Indeed) preload the
-# reCAPTCHA Enterprise anchor+bframe iframes hidden on every page, so "frame present" over-triggers
-# a human stop. We can read each iframe ELEMENT's visibility from the host document (no cross-origin
-# access needed): walk its ancestors for display:none / visibility:hidden / opacity:0, and check the
-# rect is non-trivial and on-screen (the hidden challenge is parked off-screen at top:-10000px).
+# Is a captcha challenge ACTUALLY SHOWN + BLOCKING, or just preloaded invisibly / already solved?
+# Sites (Indeed) preload the reCAPTCHA Enterprise anchor+bframe iframes hidden on every page, so
+# "frame present" over-triggers a human stop. We read from the host document (no cross-origin access):
+#   1. iframe ELEMENT visibility (walk ancestors for display:none/visibility:hidden/opacity:0; rect
+#      non-trivial + on-screen — the hidden challenge is parked off-screen at top:-10000px).
+#   2. the SITE WRAPPER (Indeed reveals #captcha-wrapper only when the challenge goes live) — the
+#      cleanest "it fired NOW" signal on this very-clever preloaded system.
+#   3. the g-recaptcha-response TOKEN textarea: EMPTY = unsolved, FILLED = the human passed it. This is
+#      the definitive cross-site "is it actually gating / has it been solved (resume)" signal.
+# blocking = (something visibly challenging) AND (not yet solved). That is the one flag the apply loop
+# gates on; `solved` flipping true is the resume signal after a human checks the box.
 _CHALLENGE_VISIBILITY_JS = r"""
 (() => {
   const shown = (el) => {
@@ -828,10 +834,27 @@ _CHALLENGE_VISIBILITY_JS = r"""
   const bframes  = match(/recaptcha\/(enterprise|api2)\/bframe/);   // the image-challenge popup
   const anchors  = match(/recaptcha\/(enterprise|api2)\/anchor/);   // the "I'm not a robot" checkbox
   const hcap     = match(/hcaptcha\.com\/(captcha|challenge)/);
-  const challenge_visible = bframes.some(shown) || hcap.some(shown);
-  const checkbox_visible  = anchors.some(shown);                    // v2 checkbox the user must click
+  const visBframes = bframes.filter(shown), visAnchors = anchors.filter(shown), visHcap = hcap.filter(shown);
+  const challenge_visible = visBframes.length > 0 || visHcap.length > 0;   // image challenge up
+  const checkbox_visible  = visAnchors.length > 0;                         // v2 checkbox on screen
+  // CRITICAL: a page can host MULTIPLE reCAPTCHAs — an invisible Enterprise SCORER (whose
+  // g-recaptcha-response holds a token from the passive check) AND the visible v2 CHECKBOX (whose
+  // token stays EMPTY until the human clicks it). A global token check false-reads the scorer's
+  // token as "solved". So scope the token to the VISIBLE checkbox's own wrapper.
+  const tokenLenFor = (f) => {
+    const w = f.closest('#captcha-wrapper, [id*="captcha" i], .g-recaptcha') || f.parentElement;
+    const ta = w && w.querySelector('textarea.g-recaptcha-response, textarea[name="g-recaptcha-response"]');
+    return ta ? (((ta.value || '') + '').trim().length) : 0;
+  };
+  const checkbox_unsolved = visAnchors.some(f => tokenLenFor(f) === 0);
+  const checkbox_solved   = visAnchors.length > 0 && visAnchors.every(f => tokenLenFor(f) > 0);
+  // THE gate: an image challenge is open, OR a visible checkbox that hasn't been passed yet.
+  const blocking = challenge_visible || checkbox_unsolved;
   return {
-    challenge_visible, checkbox_visible,
+    blocking,
+    // solved only makes sense once something WAS challenging; a page with no visible gate is "n/a".
+    solved: !blocking && (checkbox_solved || (!checkbox_visible && !challenge_visible)),
+    challenge_visible, checkbox_visible, checkbox_unsolved, checkbox_solved,
     bframe_count: bframes.length, anchor_count: anchors.length, hcaptcha_count: hcap.length,
   };
 })()

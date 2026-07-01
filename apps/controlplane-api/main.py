@@ -1732,6 +1732,44 @@ async def apply_state(training_session_id: int, scan_form: bool = True,
     }
 
 
+@app.get("/api/runtime/captcha_gate")
+async def captcha_gate(training_session_id: int, db: Session = Depends(get_db)):
+    """CAPTCHA-FIRST CHECK — the very first thing to consult when an action is blocked/disabled/no-ops.
+    Because our only eyes are CDP-AX (which can't SEE a reCAPTCHA in its iframe), this probes each of
+    the session's tabs for a LIVE, BLOCKING challenge: a visible v2 checkbox whose OWN token is still
+    empty, or an open image challenge. It is NOT fooled by Indeed's invisible Enterprise scorer (which
+    holds a passed token on every page) — the token is scoped to the visible widget's wrapper. Returns
+    `blocking` + the gated tab(s). When blocking: STOP and hand to the human; poll this until `blocking`
+    flips false (the human checked the box → the widget's token filled), then resume. Never auto-solve."""
+    session = db.get(TrainingSession, training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    targets = await _list_session_tabs(browser_url)
+    pages = [t for t in targets if t.get("type") == "page"
+             and "localhost:5173" not in (t.get("url", "") or "")]
+    per_tab = []
+    for t in pages:
+        vis = await _capture_post("/challenge_visibility",
+                                  {"browser_url": browser_url, "tab_id": t.get("id")}, timeout=8.0)
+        if vis.get("ok"):
+            per_tab.append({"url": (t.get("url", "") or "")[:90],
+                            "blocking": bool(vis.get("blocking")), "solved": bool(vis.get("solved")),
+                            "checkbox_visible": bool(vis.get("checkbox_visible")),
+                            "challenge_visible": bool(vis.get("challenge_visible"))})
+    gated = [p for p in per_tab if p["blocking"]]
+    return {
+        "training_session_id": training_session_id,
+        "blocking": bool(gated),
+        "needs_human": bool(gated),
+        "gated_tabs": gated,
+        "per_tab": per_tab,
+        "guidance": ("STOP — a human must solve the captcha (check the box). Poll this endpoint until "
+                     "blocking=false, then resume. Never auto-solve." if gated
+                     else "clear — no live captcha gate."),
+    }
+
+
 def _search_page_from_url(url: str) -> Optional[int]:
     """Indeed paginates results with ?start=0/10/20… — map that to a 1-based page number for the
     search_state readout. Returns None when the URL has no start offset (treat as page 1)."""

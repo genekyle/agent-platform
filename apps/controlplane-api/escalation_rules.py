@@ -73,6 +73,19 @@ def downgrade_block_if_hidden(block: Optional[dict[str, Any]],
         return block
     if not visibility or not visibility.get("ok"):
         return block
+    # Preferred signal: the probe's derived `blocking` flag (a visible challenge/checkbox whose OWN
+    # token is still empty — not fooled by an invisible Enterprise scorer's passed token, and it flips
+    # to not-blocking the instant the human solves it). Keep ACTIVE only while genuinely blocking.
+    if "blocking" in visibility:
+        if visibility.get("blocking"):
+            return block
+        out = dict(block)
+        out["strength"] = "passive"
+        out["reason"] = (f"{block.get('provider')} present but not blocking "
+                         f"({'solved' if visibility.get('solved') else 'preloaded/hidden'}) — advisory.")
+        out["visibility"] = visibility
+        return out
+    # Back-compat: an older probe without `blocking` — fall back to raw visibility.
     if visibility.get("challenge_visible") or visibility.get("checkbox_visible"):
         return block
     out = dict(block)
