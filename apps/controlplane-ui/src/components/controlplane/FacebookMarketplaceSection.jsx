@@ -1,363 +1,37 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
-/** The Facebook Marketplace workspace.
- *  - fb-overview: the seeded login + create-listing recipes the runner will drive.
- *  - listings:    draft a listing from operator inputs, then run the loop to create it.
- *  - fb-handoffs: the loop's "needs help" queue — why it stopped + what it tried.
- */
-export function FacebookMarketplaceSection({ section }) {
-  if (section === "listings") return <ListingsPanel />;
-  if (section === "fb-handoffs") return <HandoffsPanel />;
-  return <OverviewPanel />;
+async function api(path, opts) {
+  const r = await fetch(`${API}${path}`, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail || `HTTP ${r.status}`);
+  return r.json();
 }
+const jpost = (path, body) =>
+  api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+const jpatch = (path, body) =>
+  api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-// Facebook sessions the loop can be pointed at (needs a live Chrome debug port).
-function useFacebookSessions() {
-  const [sessions, setSessions] = useState([]);
-  const [sessionId, setSessionId] = useState(null);
-  useEffect(() => {
-    fetch(`${API}/api/training/sessions`).then((r) => r.json()).then((rows) => {
-      const fb = (rows || []).filter((s) => (s.domain_id || "").startsWith("facebook"));
-      setSessions(fb);
-      setSessionId((cur) => cur ?? fb.find((s) => s.status === "active")?.id ?? fb[0]?.id ?? null);
-    }).catch(() => {});
-  }, []);
-  return { sessions, sessionId, setSessionId };
-}
+const ITEM_STATUS_COLOR = {
+  draft: "#8b949e", ready_to_post: "#58a6ff", queued: "#d29922", posting: "#d29922",
+  posted: "#3fb950", active: "#3fb950", needs_attention: "#f85149", sold: "#a371f7",
+  error: "#f85149", archived: "#6e7681",
+};
+const TASK_STATUS_COLOR = {
+  waiting: "#8b949e", running: "#d29922", posted: "#3fb950", failed: "#f85149",
+  skipped: "#6e7681", needs_review: "#f0883e",
+};
+const ITEM_STATUSES = ["draft", "ready_to_post", "queued", "posting", "posted", "active",
+  "needs_attention", "sold", "error", "archived"];
 
-function SessionPicker({ sessions, sessionId, setSessionId }) {
+function Pill({ value, colors = ITEM_STATUS_COLOR }) {
+  if (!value) return <span className="muted">—</span>;
+  const c = colors[value] || "#8b949e";
   return (
-    <select className="input" value={sessionId ?? ""} onChange={(e) => setSessionId(Number(e.target.value) || null)}>
-      {sessions.length === 0 && <option value="">No Facebook sessions</option>}
-      {sessions.map((s) => (
-        <option key={s.id} value={s.id}>#{s.id} · {s.status} · {s.goal?.slice(0, 40) || "session"}</option>
-      ))}
-    </select>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Overview — the seeded recipes rendered as flows                            */
-/* -------------------------------------------------------------------------- */
-function OverviewPanel() {
-  const [recipe, setRecipe] = useState(null);
-  useEffect(() => {
-    fetch(`${API}/api/runtime/facebook_recipe`).then((r) => r.json()).then(setRecipe).catch(() => {});
-  }, []);
-  if (!recipe) return <div className="section-body"><p className="muted">Loading…</p></div>;
-
-  return (
-    <div className="section-body">
-      <div className="panel" style={{ padding: "10px 12px", borderLeft: "3px solid #f0883e" }}>
-        <strong>Seeded, not yet live-verified.</strong>
-        <span className="muted" style={{ marginLeft: 8 }}>{recipe.status}</span>
-      </div>
-      <RecipeFlow title="Login" spine={recipe.login} />
-      <RecipeFlow title="Create listing" spine={recipe.create_listing} />
-    </div>
-  );
-}
-
-function RecipeFlow({ title, spine }) {
-  if (!spine) return null;
-  const branches = Object.entries(spine.branches || {});
-  return (
-    <div className="panel" style={{ marginTop: 14 }}>
-      <div className="panel-header">
-        <div>{title} <span className="muted">· terminal: {spine.terminal_state}</span></div>
-      </div>
-      <ol style={{ margin: "6px 0", paddingLeft: 20 }}>
-        {(spine.recipe || []).map((s) => (
-          <li key={s.step} style={{ marginBottom: 4 }}>
-            <strong>{s.state}</strong>
-            <span className="muted"> — {s.action}</span>
-          </li>
-        ))}
-      </ol>
-      {branches.length > 0 && (
-        <div style={{ padding: "4px 4px 8px" }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Human-required branches:</div>
-          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-            {branches.map(([id, b]) => (
-              <li key={id} style={{ color: b.human_required ? "#f85149" : "#8b949e" }}>
-                <strong>{id}</strong> — {b.note}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Listings — draft the inputs, then run the loop to create the listing        */
-/* -------------------------------------------------------------------------- */
-const EMPTY_DRAFT = { title: "", price: "", category: "", condition: "", description: "", location: "", photos: [] };
-
-function ListingsPanel() {
-  const { sessions, sessionId, setSessionId } = useFacebookSessions();
-  const [drafts, setDrafts] = useState([]);
-  const [draft, setDraft] = useState({ ...EMPTY_DRAFT });
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  const [run, setRun] = useState(null);
-
-  const load = useCallback(() => {
-    fetch(`${API}/api/facebook/listings`).then((r) => r.json()).then((d) => setDrafts(d.drafts || [])).catch(() => {});
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  const missing = useMemo(() => {
-    const m = [];
-    if (!draft.title.trim()) m.push("title");
-    if (!String(draft.price).trim()) m.push("price");
-    return m;
-  }, [draft]);
-
-  const save = useCallback(async () => {
-    setBusy(true); setMsg("");
-    try {
-      const r = await fetch(`${API}/api/facebook/listings`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
-      }).then((x) => x.json());
-      setDraft({ ...EMPTY_DRAFT, ...r.draft });
-      setMsg(r.missing_required?.length ? `Saved · still need: ${r.missing_required.join(", ")}` : "Saved.");
-      load();
-    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
-  }, [draft, load]);
-
-  // Fire the runner loop against the live FB tab. Execute-by-default; the consequential gate
-  // holds the final Publish for approval, so a run stops at the review/publish step with a handoff.
-  const runCreate = useCallback(async () => {
-    if (!sessionId) { setMsg("Pick a Facebook session first (needs a live Chrome)."); return; }
-    if (!draft.id) { setMsg("Save the draft first."); return; }
-    setBusy(true); setMsg(""); setRun(null);
-    try {
-      const r = await fetch(`${API}/api/runtime/run_live`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          training_session_id: sessionId,
-          task: "facebook_create_listing",
-          task_goal: "Create a Facebook Marketplace listing",
-          listing_draft_id: draft.id,
-          tab_url: "facebook.com",
-          max_steps: 14,
-        }),
-      }).then((x) => x.json());
-      setRun(r);
-      load();
-    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
-  }, [sessionId, draft, load]);
-
-  const edit = (d) => setDraft({ ...EMPTY_DRAFT, ...d });
-
-  return (
-    <div className="section-body">
-      <AuthProfileCard sessionId={sessionId} setSessionId={setSessionId} />
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-        <SessionPicker sessions={sessions} sessionId={sessionId} setSessionId={setSessionId} />
-        <button className="btn" onClick={() => setDraft({ ...EMPTY_DRAFT })}>+ New draft</button>
-      </div>
-
-      <div className="panel" style={{ marginTop: 12 }}>
-        <div className="panel-header"><div>{draft.id ? `Edit draft ${draft.id}` : "New listing"}</div></div>
-        <div style={{ display: "grid", gap: 10, padding: "10px 4px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
-            <Field label="Title *"><input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Trek hybrid bike" /></Field>
-            <Field label="Price *"><input value={draft.price} onChange={(e) => setDraft({ ...draft, price: e.target.value })} placeholder="450" /></Field>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            <Field label="Category"><input value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} placeholder="Bicycles" /></Field>
-            <Field label="Condition"><input value={draft.condition} onChange={(e) => setDraft({ ...draft, condition: e.target.value })} placeholder="Used - Good" /></Field>
-            <Field label="Location"><input value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} placeholder="Nashua, NH" /></Field>
-          </div>
-          <Field label="Description">
-            <textarea rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Great commuter bike, barely used." />
-          </Field>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "…" : "Save draft"}</button>
-            <button className="btn" disabled={busy || !draft.id || missing.length > 0} onClick={runCreate}
-              title={missing.length ? `Fill: ${missing.join(", ")}` : "Run the loop to create this listing"}>
-              {busy ? "Running…" : "Run create-listing (test loop)"}
-            </button>
-            {missing.length > 0 && <span className="muted" style={{ fontSize: 12 }}>needs: {missing.join(", ")}</span>}
-          </div>
-          {msg && <div className="muted">{msg}</div>}
-        </div>
-      </div>
-
-      {run && <RunResult run={run} />}
-
-      <div className="panel" style={{ marginTop: 14 }}>
-        <div className="panel-header"><div>Drafts <span className="muted">({drafts.length})</span></div></div>
-        <div className="table-wrap">
-          <table className="runs-table">
-            <thead><tr><th>Title</th><th>Price</th><th>Condition</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              {drafts.map((d) => (
-                <tr key={d.id}>
-                  <td>{d.title || <span className="muted">—</span>}</td>
-                  <td>{d.price ? `$${d.price}` : "—"}</td>
-                  <td className="muted">{d.condition || "—"}</td>
-                  <td>{d.status}</td>
-                  <td><button className="btn btn-sm" onClick={() => edit(d)}>Edit</button></td>
-                </tr>
-              ))}
-              {drafts.length === 0 && <tr><td colSpan={5} className="muted">No drafts yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// The auth/profile step: launch a PERSISTENT Facebook browser (login survives), log in once,
-// and see whether the session is signed in. A create-listing run's auth pre-flight refuses to
-// drive a logged-out session, so this is the gate to a real run.
-function AuthProfileCard({ sessionId, setSessionId }) {
-  const [auth, setAuth] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  const check = useCallback(async (sid) => {
-    const id = sid ?? sessionId;
-    if (!id) return;
-    try {
-      const r = await fetch(`${API}/api/runtime/auth_status?training_session_id=${id}&tab_url=facebook.com`).then((x) => x.json());
-      setAuth(r);
-    } catch (e) { setMsg(String(e.message || e)); }
-  }, [sessionId]);
-
-  const launch = useCallback(async () => {
-    setBusy(true); setMsg(""); setAuth(null);
-    try {
-      const s = await fetch(`${API}/api/facebook/session`, { method: "POST" }).then((x) => x.json());
-      if (s?.id) {
-        setSessionId(s.id);
-        setMsg("Chrome opened at facebook.com — log in there once (do any 2FA/checkpoint by hand). This profile stays signed in.");
-        setTimeout(() => check(s.id), 2500);
-      } else {
-        setMsg(s?.detail || "Could not launch the session.");
-      }
-    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
-  }, [setSessionId, check]);
-
-  const authed = auth?.authed;
-  const badge = authed === true ? { t: "Signed in", c: "#3fb950" }
-    : authed === false ? { t: "Not signed in", c: "#f85149" }
-    : { t: "Unknown", c: "#8b949e" };
-
-  return (
-    <div className="panel" style={{ padding: "12px 14px", borderLeft: "3px solid #58a6ff" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <div>
-          <strong>Sign in once</strong>
-          <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
-            The loop can’t create a listing until this browser is logged in.
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ color: badge.c, fontWeight: 600, fontSize: 13 }}>● {badge.t}</span>
-          <button className="btn btn-primary" disabled={busy} onClick={launch}>
-            {busy ? "Launching…" : "Launch persistent FB browser"}
-          </button>
-          <button className="btn" disabled={!sessionId} onClick={() => check()}>Check sign-in</button>
-        </div>
-      </div>
-      {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
-      {authed === false && auth?.guidance && (
-        <div style={{ marginTop: 6, color: "#f0883e", fontSize: 12 }}>{auth.guidance}</div>
-      )}
-    </div>
-  );
-}
-
-function RunResult({ run }) {
-  const ok = run.completed;
-  const color = ok ? "#238636" : run.handoff ? "#f0883e" : "#da3633";
-  return (
-    <div className="panel" style={{ marginTop: 12, borderLeft: `3px solid ${color}` }}>
-      <div style={{ padding: "10px 12px" }}>
-        <strong>{ok ? "✓ Listing task completed" : `Stopped: ${run.status}`}</strong>
-        <span className="muted" style={{ marginLeft: 8 }}>
-          {run.executed_steps} step(s) executed{run.reason ? ` · ${run.reason}` : ""}
-        </span>
-        {run.handoff && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ color: "#f0883e", fontWeight: 600 }}>Needs you: {run.handoff.why}</div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{run.handoff.suggestion}</div>
-          </div>
-        )}
-        {run.detail && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{run.detail}</div>}
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Handoffs — the loop's "needs help" queue                                    */
-/* -------------------------------------------------------------------------- */
-function HandoffsPanel() {
-  const [rows, setRows] = useState([]);
-  const [openOnly, setOpenOnly] = useState(true);
-
-  const load = useCallback(() => {
-    fetch(`${API}/api/runtime/handoffs?open_only=${openOnly}`).then((r) => r.json())
-      .then((d) => setRows(d.handoffs || [])).catch(() => {});
-  }, [openOnly]);
-  useEffect(() => { load(); }, [load]);
-
-  const resolve = useCallback(async (id) => {
-    await fetch(`${API}/api/runtime/handoffs/${encodeURIComponent(id)}/resolve`, { method: "POST" });
-    load();
-  }, [load]);
-
-  return (
-    <div className="section-body">
-      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-        <label className="muted" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} /> Open only
-        </label>
-        <button className="btn" onClick={load}>Refresh</button>
-      </div>
-      {rows.length === 0 && <p className="muted" style={{ marginTop: 12 }}>Nothing waiting on you. 🎉</p>}
-      {rows.map((h) => (
-        <div key={h.id} className="panel" style={{ marginTop: 12, borderLeft: `3px solid ${h.status === "resolved" ? "#3fb950" : "#f0883e"}` }}>
-          <div style={{ padding: "10px 12px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <strong>{h.why}</strong>
-              {h.status !== "resolved"
-                ? <button className="btn btn-sm" onClick={() => resolve(h.id)}>Mark resolved</button>
-                : <span className="muted" style={{ fontSize: 12 }}>resolved</span>}
-            </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-              {h.task_goal} · {h.escalation_reason || h.loop_status}
-            </div>
-            <div style={{ marginTop: 4 }}>{h.suggestion}</div>
-            {h.tried?.length > 0 && (
-              <details style={{ marginTop: 6 }}>
-                <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>What it tried ({h.tried.length})</summary>
-                <ul style={{ margin: "4px 0", paddingLeft: 18, fontSize: 12 }}>
-                  {h.tried.map((t, i) => (
-                    <li key={i} className="muted">
-                      #{t.step} {t.action} · {t.layer}
-                      {t.confidence != null ? ` · conf ${Number(t.confidence).toFixed(2)}` : ""}
-                      {" · "}{t.outcome}{t.verified === false ? " · unverified" : ""}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
-            {h.url && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{h.url}</div>}
-          </div>
-        </div>
-      ))}
-    </div>
+    <span style={{ color: c, border: `1px solid ${c}55`, background: `${c}18`, borderRadius: 20,
+      padding: "1px 8px", fontSize: 11, whiteSpace: "nowrap", textTransform: "capitalize" }}>
+      {String(value).replace(/_/g, " ")}
+    </span>
   );
 }
 
@@ -367,5 +41,590 @@ function Field({ label, children }) {
       <div className="muted" style={{ fontSize: 12, marginBottom: 3 }}>{label}</div>
       {children}
     </label>
+  );
+}
+
+function Thumb({ photos }) {
+  const src = (photos || [])[0];
+  if (src) return <img src={src} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6 }} />;
+  return <div style={{ width: 34, height: 34, borderRadius: 6, background: "#21262d",
+    display: "grid", placeItems: "center", color: "#6e7681" }}><i className="ti ti-photo" /></div>;
+}
+
+const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "—");
+
+/** The Marketplace selling workspace — inventory-first, channel-agnostic. */
+export function FacebookMarketplaceSection({ section }) {
+  if (section === "inventory") return <InventoryPanel />;
+  if (section === "queue") return <QueuePanel />;
+  if (section === "listings") return <ActiveListingsPanel />;
+  if (section === "messages") return <MessagesPanel />;
+  if (section === "activity") return <ActivityPanel />;
+  if (section === "settings") return <SettingsPanel />;
+  return <OverviewPanel />;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Overview                                                                    */
+/* -------------------------------------------------------------------------- */
+function OverviewPanel() {
+  const [ov, setOv] = useState(null);
+  const load = useCallback(() => api("/api/inventory/overview").then(setOv).catch(() => {}), []);
+  useEffect(() => { load(); }, [load]);
+  if (!ov) return <div className="section-body"><p className="muted">Loading…</p></div>;
+
+  const cards = [
+    { label: "Inventory items", value: ov.total_items, icon: "ti-box" },
+    { label: "Drafts", value: ov.draft, icon: "ti-file-pencil" },
+    { label: "Queued", value: ov.queued, icon: "ti-clock" },
+    { label: "Active listings", value: ov.active_listings, icon: "ti-broadcast" },
+    { label: "New responses", value: ov.items_with_responses, icon: "ti-message" },
+    { label: "Needs attention", value: ov.needs_attention, icon: "ti-alert-triangle" },
+    { label: "Sold", value: ov.sold, icon: "ti-checks" },
+  ];
+  return (
+    <div className="section-body">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+        {cards.map((c) => (
+          <div key={c.label} className="panel" style={{ padding: "14px 16px" }}>
+            <div className="muted" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+              <i className={`ti ${c.icon}`} /> {c.label}
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>{c.value ?? 0}</div>
+          </div>
+        ))}
+      </div>
+      <p className="muted" style={{ marginTop: 14, fontSize: 12 }}>
+        Last marketplace check: {fmtTime(ov.last_checked_at)}. Your inventory is the source of truth;
+        Facebook Marketplace is one sales channel — the model is built to add eBay/OfferUp/Shopify later.
+      </p>
+      <ManualControls onDone={load} />
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Inventory                                                                   */
+/* -------------------------------------------------------------------------- */
+const EMPTY_ITEM = { title: "", description: "", category: "", price: "", condition: "",
+  pickup_location: "", photos: [], notes: "" };
+
+function InventoryPanel() {
+  const [items, setItems] = useState([]);
+  const [filters, setFilters] = useState({ status: "", category: "", search: "", price_min: "", price_max: "" });
+  const [selected, setSelected] = useState(() => new Set());
+  const [editing, setEditing] = useState(null);   // item being added/edited (or null)
+  const [drawerId, setDrawerId] = useState(null);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(() => {
+    const qs = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => { if (v !== "" && v != null) qs.set(k, v); });
+    api(`/api/inventory/items?${qs}`).then((d) => setItems(d.items || [])).catch(() => {});
+  }, [filters]);
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = (id) => setSelected((s) => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+
+  const queueSelected = useCallback(async () => {
+    if (!selected.size) return;
+    setMsg("");
+    try {
+      const r = await jpost("/api/inventory/queue", { item_ids: [...selected] });
+      setMsg(`Queued ${r.count} item(s).`);
+      setSelected(new Set());
+      load();
+    } catch (e) { setMsg(String(e.message || e)); }
+  }, [selected, load]);
+
+  return (
+    <div className="section-body">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input className="input" placeholder="Search title…" value={filters.search}
+            onChange={(e) => setFilters({ ...filters, search: e.target.value })} style={{ width: 160 }} />
+          <select className="input" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
+            <option value="">All statuses</option>
+            {ITEM_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
+          </select>
+          <input className="input" placeholder="Category" value={filters.category}
+            onChange={(e) => setFilters({ ...filters, category: e.target.value })} style={{ width: 110 }} />
+          <input className="input" placeholder="Min $" value={filters.price_min}
+            onChange={(e) => setFilters({ ...filters, price_min: e.target.value })} style={{ width: 70 }} />
+          <input className="input" placeholder="Max $" value={filters.price_max}
+            onChange={(e) => setFilters({ ...filters, price_max: e.target.value })} style={{ width: 70 }} />
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" disabled={!selected.size} onClick={queueSelected}>
+            Add to queue{selected.size ? ` (${selected.size})` : ""}
+          </button>
+          <button className="btn btn-primary" onClick={() => setEditing({ ...EMPTY_ITEM })}>+ Add item</button>
+        </div>
+      </div>
+      {msg && <div className="muted" style={{ marginTop: 8 }}>{msg}</div>}
+
+      <div className="panel" style={{ marginTop: 12 }}>
+        <div className="table-wrap">
+          <table className="runs-table">
+            <thead><tr>
+              <th></th><th></th><th>Item</th><th>Category</th><th>Price</th><th>Condition</th>
+              <th>Status</th><th>Listing</th><th>Resp.</th><th>Last checked</th><th></th>
+            </tr></thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.id} style={{ cursor: "pointer" }}>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />
+                  </td>
+                  <td onClick={() => setDrawerId(it.id)}><Thumb photos={it.photos} /></td>
+                  <td onClick={() => setDrawerId(it.id)}>{it.title || <span className="muted">Untitled</span>}</td>
+                  <td onClick={() => setDrawerId(it.id)} className="muted">{it.category || "—"}</td>
+                  <td onClick={() => setDrawerId(it.id)}>{it.price ? `$${it.price}` : "—"}</td>
+                  <td onClick={() => setDrawerId(it.id)} className="muted">{it.condition || "—"}</td>
+                  <td onClick={() => setDrawerId(it.id)}><Pill value={it.internal_status} /></td>
+                  <td onClick={() => setDrawerId(it.id)}><Pill value={it.listing_status} /></td>
+                  <td onClick={() => setDrawerId(it.id)} style={{ textAlign: "center" }}>
+                    {it.response_count || 0}{it.unread_response_count ? ` (${it.unread_response_count} new)` : ""}
+                  </td>
+                  <td onClick={() => setDrawerId(it.id)} className="muted" style={{ fontSize: 12 }}>{fmtTime(it.last_checked_at)}</td>
+                  <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                    <button className="btn btn-sm" onClick={() => setEditing(it)}>Edit</button>
+                  </td>
+                </tr>
+              ))}
+              {items.length === 0 && <tr><td colSpan={11} className="muted" style={{ padding: 16 }}>
+                No items yet. Add your first item to inventory.
+              </td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {editing && <ItemForm item={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {drawerId && <ItemDrawer itemId={drawerId} onClose={() => setDrawerId(null)}
+        onChanged={load} onEdit={(it) => { setDrawerId(null); setEditing(it); }} />}
+    </div>
+  );
+}
+
+function ItemForm({ item, onClose, onSaved }) {
+  const [d, setD] = useState({ ...EMPTY_ITEM, ...item, photos: (item.photos || []).join("\n") });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const save = useCallback(async () => {
+    if (!d.title.trim()) { setErr("Title is required"); return; }
+    setBusy(true); setErr("");
+    const payload = { ...d, photos: String(d.photos || "").split("\n").map((s) => s.trim()).filter(Boolean) };
+    delete payload.id; delete payload.channels;
+    try {
+      if (item.id) await jpatch(`/api/inventory/items/${item.id}`, payload);
+      else await jpost("/api/inventory/items", payload);
+      onSaved();
+    } catch (e) { setErr(String(e.message || e)); } finally { setBusy(false); }
+  }, [d, item, onSaved]);
+
+  return (
+    <div className="panel" style={{ marginTop: 12 }}>
+      <div className="panel-header"><div>{item.id ? "Edit item" : "New item"}</div></div>
+      <div style={{ display: "grid", gap: 10, padding: "10px 4px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+          <Field label="Title *"><input className="input" value={d.title} onChange={(e) => setD({ ...d, title: e.target.value })} placeholder="Nike Tech Hoodie, black, M" /></Field>
+          <Field label="Price"><input className="input" value={d.price} onChange={(e) => setD({ ...d, price: e.target.value })} placeholder="45" /></Field>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          <Field label="Category"><input className="input" value={d.category} onChange={(e) => setD({ ...d, category: e.target.value })} placeholder="Apparel" /></Field>
+          <Field label="Condition"><input className="input" value={d.condition} onChange={(e) => setD({ ...d, condition: e.target.value })} placeholder="Used - Good" /></Field>
+          <Field label="Pickup location"><input className="input" value={d.pickup_location} onChange={(e) => setD({ ...d, pickup_location: e.target.value })} placeholder="Nashua, NH" /></Field>
+        </div>
+        <Field label="Description"><textarea rows={3} className="input" value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} /></Field>
+        <Field label="Photo URLs (one per line)"><textarea rows={2} className="input" value={d.photos} onChange={(e) => setD({ ...d, photos: e.target.value })} placeholder="https://…" /></Field>
+        <Field label="Notes"><input className="input" value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Field>
+        {err && <div className="error-banner">{err}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save"}</button>
+          <button className="btn" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
+  const [item, setItem] = useState(null);
+  const [busy, setBusy] = useState("");
+  const load = useCallback(() => api(`/api/inventory/items/${itemId}`).then((d) => setItem(d.item)).catch(() => {}), [itemId]);
+  useEffect(() => { load(); }, [load]);
+
+  const act = useCallback(async (label, fn) => {
+    setBusy(label);
+    try { await fn(); await load(); onChanged?.(); } catch { /* surfaced in the activity log */ } finally { setBusy(""); }
+  }, [load, onChanged]);
+
+  const postNow = () => act("post", async () => {
+    await jpost("/api/inventory/queue", { item_ids: [itemId] });
+    await jpost("/api/inventory/queue/run?dry_run=true");
+  });
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 40 }} />
+      <div style={{ position: "fixed", top: 0, right: 0, height: "100%", width: 440, maxWidth: "92vw",
+        background: "#0d1117", borderLeft: "1px solid #30363d", zIndex: 50, overflowY: "auto", padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <strong style={{ fontSize: 16 }}>{item?.title || "Item"}</strong>
+          <button className="btn btn-sm" onClick={onClose}><i className="ti ti-x" /></button>
+        </div>
+        {!item ? <p className="muted" style={{ marginTop: 12 }}>Loading…</p> : (
+          <>
+            <div style={{ display: "flex", gap: 8, margin: "12px 0", flexWrap: "wrap" }}>
+              <Pill value={item.internal_status} />
+              {item.listing_status && <Pill value={item.listing_status} />}
+            </div>
+            {(item.photos || []).length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {item.photos.map((p, i) => <img key={i} src={p} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />)}
+              </div>
+            )}
+            <table style={{ width: "100%", fontSize: 13 }}><tbody>
+              {[["Price", item.price ? `$${item.price}` : "—"], ["Category", item.category || "—"],
+                ["Condition", item.condition || "—"], ["Pickup", item.pickup_location || "—"],
+                ["Responses", `${item.response_count || 0}${item.unread_response_count ? ` (${item.unread_response_count} new)` : ""}`],
+                ["Last checked", fmtTime(item.last_checked_at)]].map(([k, v]) => (
+                <tr key={k}><td className="muted" style={{ padding: "3px 8px 3px 0", verticalAlign: "top", width: 90 }}>{k}</td><td>{v}</td></tr>
+              ))}
+            </tbody></table>
+            {item.description && <p style={{ fontSize: 13, marginTop: 8, whiteSpace: "pre-wrap" }}>{item.description}</p>}
+
+            {(item.channels || []).length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Channel listings</div>
+                {item.channels.map((l) => (
+                  <div key={l.id} className="panel" style={{ padding: "8px 10px", marginBottom: 6, fontSize: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span>{l.channel}{l.simulated ? " · simulated" : ""}</span>
+                      <Pill value={l.listing_status} />
+                    </div>
+                    {l.listing_url && <a href={l.listing_url} target="_blank" rel="noreferrer">{l.listing_url}</a>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {item.notes && <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Notes: {item.notes}</p>}
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
+              <button className="btn btn-sm" onClick={() => onEdit(item)}>Edit</button>
+              <button className="btn btn-sm" disabled={busy} onClick={() => act("queue", () => jpost("/api/inventory/queue", { item_ids: [itemId] }))}>Add to queue</button>
+              <button className="btn btn-sm btn-primary" disabled={busy} onClick={postNow}>{busy === "post" ? "Posting…" : "Post now"}</button>
+              <button className="btn btn-sm" disabled={busy} onClick={() => act("check", () => jpost("/api/inventory/check-responses"))}>Check responses</button>
+              <button className="btn btn-sm" disabled={busy} onClick={() => act("sold", () => jpost(`/api/inventory/items/${itemId}/sold`))}>Mark sold</button>
+              <button className="btn btn-sm" disabled={busy} onClick={() => act("archive", () => jpost(`/api/inventory/items/${itemId}/archive`))}>Archive</button>
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Posting Queue                                                               */
+/* -------------------------------------------------------------------------- */
+function QueuePanel() {
+  const [queue, setQueue] = useState([]);
+  const [selected, setSelected] = useState(() => new Set());
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => api("/api/inventory/queue").then((d) => setQueue(d.queue || [])).catch(() => {}), []);
+  useEffect(() => { load(); }, [load]);
+
+  const run = async (path, label) => {
+    setBusy(true); setMsg("");
+    try { const r = await jpost(path, selected.size ? { task_ids: [...selected] } : undefined);
+      setMsg(`${label}: ${JSON.stringify(r)}`); setSelected(new Set()); load();
+    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
+  };
+  const toggle = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  return (
+    <div className="section-body">
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="btn btn-primary" disabled={busy} onClick={() => run("/api/inventory/queue/run?dry_run=true", "Ran queue")}>
+          {busy ? "Running…" : "Run queue"}
+        </button>
+        <button className="btn" disabled={busy} onClick={() => run("/api/inventory/queue/retry", "Retried failed")}>Retry failed</button>
+        <button className="btn" disabled={busy} onClick={() => run("/api/inventory/queue/clear", "Cleared completed")}>Clear completed</button>
+        <button className="btn" disabled={busy || !selected.size} onClick={() => run("/api/inventory/queue/remove", "Removed")}>Remove selected</button>
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+        Posting is <strong>simulated</strong> for now (listings are flagged simulated) — the runner loop
+        plugs in here once a channel is signed in. Sign in under Settings.
+      </p>
+      {msg && <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{msg}</div>}
+
+      <div className="panel" style={{ marginTop: 12 }}>
+        <div className="table-wrap">
+          <table className="runs-table">
+            <thead><tr><th></th><th>#</th><th>Item</th><th>Price</th><th>Channel</th><th>Status</th><th>Attempts</th><th>Last attempt</th><th>Error</th></tr></thead>
+            <tbody>
+              {queue.map((t) => (
+                <tr key={t.id}>
+                  <td><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} /></td>
+                  <td>{t.position}</td>
+                  <td>{t.item_title || t.item_id}</td>
+                  <td>{t.item_price ? `$${t.item_price}` : "—"}</td>
+                  <td className="muted">{t.channel}</td>
+                  <td><Pill value={t.status} colors={TASK_STATUS_COLOR} /></td>
+                  <td style={{ textAlign: "center" }}>{t.attempts}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{fmtTime(t.last_attempt_at)}</td>
+                  <td className="muted" style={{ fontSize: 12, color: t.error_message ? "#f85149" : undefined }}>{t.error_message || "—"}</td>
+                </tr>
+              ))}
+              {queue.length === 0 && <tr><td colSpan={9} className="muted" style={{ padding: 16 }}>Queue is empty. Select items in Inventory and “Add to queue”.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Active Listings + Messages                                                  */
+/* -------------------------------------------------------------------------- */
+function useListings(activeOnly) {
+  const [listings, setListings] = useState([]);
+  const load = useCallback(() => api(`/api/inventory/listings?active_only=${activeOnly}`)
+    .then((d) => setListings(d.listings || [])).catch(() => {}), [activeOnly]);
+  useEffect(() => { load(); }, [load]);
+  return [listings, load];
+}
+
+function CheckResponsesButton({ onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <button className="btn btn-primary" disabled={busy} onClick={async () => {
+        setBusy(true); setMsg("");
+        try { const r = await jpost("/api/inventory/check-responses");
+          setMsg(`Checked ${r.checked} listing(s), ${r.new_responses} new.`); onDone?.();
+        } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
+      }}>{busy ? "Checking…" : "Check responses now"}</button>
+      {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+    </div>
+  );
+}
+
+function ActiveListingsPanel() {
+  const [listings, load] = useListings(true);
+  return (
+    <div className="section-body">
+      <CheckResponsesButton onDone={load} />
+      <div className="panel" style={{ marginTop: 12 }}>
+        <div className="table-wrap">
+          <table className="runs-table">
+            <thead><tr><th>Item</th><th>Price</th><th>Channel</th><th>Status</th><th>Responses</th><th>Unread</th><th>URL</th><th>Last checked</th></tr></thead>
+            <tbody>
+              {listings.map((l) => (
+                <tr key={l.id}>
+                  <td>{l.item_title || l.item_id}</td>
+                  <td>{l.item_price ? `$${l.item_price}` : "—"}</td>
+                  <td className="muted">{l.channel}{l.simulated ? " · sim" : ""}</td>
+                  <td><Pill value={l.listing_status} /></td>
+                  <td style={{ textAlign: "center" }}>{l.response_count || 0}</td>
+                  <td style={{ textAlign: "center" }}>{l.unread_response_count || 0}</td>
+                  <td>{l.listing_url ? <a href={l.listing_url} target="_blank" rel="noreferrer">open</a> : <span className="muted">—</span>}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{fmtTime(l.last_checked_at)}</td>
+                </tr>
+              ))}
+              {listings.length === 0 && <tr><td colSpan={8} className="muted" style={{ padding: 16 }}>No active listings yet. Post items from the queue.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessagesPanel() {
+  const [listings, load] = useListings(true);
+  const withMsgs = listings.filter((l) => (l.unread_response_count || 0) > 0 || (l.response_count || 0) > 0);
+  return (
+    <div className="section-body">
+      <CheckResponsesButton onDone={load} />
+      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        Reading actual buyer messages is a future runner task; today “Check responses” records the check.
+        Listings with responses appear here.
+      </p>
+      <div className="panel" style={{ marginTop: 8 }}>
+        <div className="panel-header"><div>Responses <span className="muted">({withMsgs.length})</span></div></div>
+        {withMsgs.length === 0 ? <p className="muted" style={{ padding: "12px 14px", margin: 0 }}>No buyer responses yet.</p> : (
+          <table className="runs-table">
+            <thead><tr><th>Item</th><th>Channel</th><th>Unread</th><th>Total</th><th>Last checked</th></tr></thead>
+            <tbody>
+              {withMsgs.map((l) => (
+                <tr key={l.id}><td>{l.item_title}</td><td className="muted">{l.channel}</td>
+                  <td style={{ textAlign: "center", color: l.unread_response_count ? "#f0883e" : undefined }}>{l.unread_response_count || 0}</td>
+                  <td style={{ textAlign: "center" }}>{l.response_count || 0}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{fmtTime(l.last_checked_at)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Agent Activity (log + loop handoffs)                                         */
+/* -------------------------------------------------------------------------- */
+function ActivityPanel() {
+  const [log, setLog] = useState([]);
+  const [handoffs, setHandoffs] = useState([]);
+  const load = useCallback(() => {
+    api("/api/inventory/log?limit=80").then((d) => setLog(d.log || [])).catch(() => {});
+    api("/api/runtime/handoffs?open_only=true").then((d) => setHandoffs(d.handoffs || [])).catch(() => {});
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const resolve = async (id) => { await jpost(`/api/runtime/handoffs/${id}/resolve`); load(); };
+
+  return (
+    <div className="section-body">
+      <button className="btn" onClick={load}>Refresh</button>
+      {handoffs.length > 0 && (
+        <div className="panel" style={{ marginTop: 12, borderLeft: "3px solid #f0883e" }}>
+          <div className="panel-header"><div>The loop needs you <span className="muted">({handoffs.length})</span></div></div>
+          {handoffs.map((h) => (
+            <div key={h.id} style={{ padding: "8px 12px", borderTop: "1px solid #21262d" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <strong style={{ fontSize: 13 }}>{h.why}</strong>
+                <button className="btn btn-sm" onClick={() => resolve(h.id)}>Resolve</button>
+              </div>
+              <div className="muted" style={{ fontSize: 12 }}>{h.suggestion}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="panel" style={{ marginTop: 12 }}>
+        <div className="panel-header"><div>Activity log</div></div>
+        <table className="runs-table">
+          <thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Message</th></tr></thead>
+          <tbody>
+            {log.map((e) => (
+              <tr key={e.id}>
+                <td className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{fmtTime(e.timestamp)}</td>
+                <td className="muted">{e.action_type}</td>
+                <td><Pill value={e.status} colors={{ ok: "#3fb950", error: "#f85149", info: "#58a6ff" }} /></td>
+                <td>{e.message}</td>
+              </tr>
+            ))}
+            {log.length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No activity yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Settings — channel sign-in + manual agent controls                          */
+/* -------------------------------------------------------------------------- */
+function ManualControls({ onDone }) {
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState("");
+  const run = async (label, path) => {
+    setBusy(label); setMsg("");
+    try { const r = await jpost(path); setMsg(`${label} → ${JSON.stringify(r)}`); onDone?.(); }
+    catch (e) { setMsg(String(e.message || e)); } finally { setBusy(""); }
+  };
+  const ctrls = [
+    ["Post queued items", "/api/inventory/queue/run?dry_run=true"],
+    ["Check responses", "/api/inventory/check-responses"],
+    ["Retry failed", "/api/inventory/queue/retry"],
+  ];
+  return (
+    <div className="panel" style={{ marginTop: 14, padding: "12px 14px" }}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        Manual agent controls — each button is a placeholder for a future scheduled agent task.
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {ctrls.map(([label, path]) => (
+          <button key={label} className="btn btn-sm" disabled={!!busy} onClick={() => run(label, path)}>
+            {busy === label ? "…" : label}
+          </button>
+        ))}
+      </div>
+      {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
+    </div>
+  );
+}
+
+function SettingsPanel() {
+  return (
+    <div className="section-body">
+      <AuthProfileCard />
+      <ManualControls />
+      <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>
+        Channel: <strong>Facebook Marketplace</strong>. The inventory model is channel-agnostic —
+        eBay, OfferUp, or a Shopify-style storefront can be added as channels without duplicating items.
+      </p>
+    </div>
+  );
+}
+
+// Launch a PERSISTENT Facebook browser (login survives) and log in once, so real posting runs
+// against an authenticated session. A create-listing run's auth pre-flight refuses a logged-out session.
+function AuthProfileCard() {
+  const [auth, setAuth] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    fetch(`${API}/api/training/sessions`).then((r) => r.json()).then((rows) => {
+      const fb = (rows || []).filter((s) => (s.domain_id || "").startsWith("facebook") && s.status === "active");
+      if (fb[0]) setSessionId(fb[0].id);
+    }).catch(() => {});
+  }, []);
+
+  const check = useCallback(async (sid) => {
+    const id = sid ?? sessionId; if (!id) return;
+    try { setAuth(await api(`/api/runtime/auth_status?training_session_id=${id}&tab_url=facebook.com`)); }
+    catch (e) { setMsg(String(e.message || e)); }
+  }, [sessionId]);
+
+  const launch = useCallback(async () => {
+    setBusy(true); setMsg(""); setAuth(null);
+    try {
+      const s = await jpost("/api/facebook/session");
+      if (s?.id) { setSessionId(s.id);
+        setMsg("Chrome opened at facebook.com — log in once (do any 2FA/checkpoint by hand). This profile stays signed in.");
+        setTimeout(() => check(s.id), 2500);
+      } else setMsg(s?.detail || "Could not launch.");
+    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
+  }, [check]);
+
+  const authed = auth?.authed;
+  const badge = authed === true ? { t: "Signed in", c: "#3fb950" }
+    : authed === false ? { t: "Not signed in", c: "#f85149" } : { t: "Unknown", c: "#8b949e" };
+
+  return (
+    <div className="panel" style={{ padding: "12px 14px", borderLeft: "3px solid #58a6ff" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div><strong>Sign in once</strong>
+          <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>Real posting needs the channel browser logged in.</span></div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ color: badge.c, fontWeight: 600, fontSize: 13 }}>● {badge.t}</span>
+          <button className="btn btn-primary" disabled={busy} onClick={launch}>{busy ? "Launching…" : "Launch persistent FB browser"}</button>
+          <button className="btn" disabled={!sessionId} onClick={() => check()}>Check sign-in</button>
+        </div>
+      </div>
+      {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
+      {authed === false && auth?.guidance && <div style={{ marginTop: 6, color: "#f0883e", fontSize: 12 }}>{auth.guidance}</div>}
+    </div>
   );
 }

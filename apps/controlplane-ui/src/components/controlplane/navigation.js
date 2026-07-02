@@ -94,25 +94,17 @@ export const CONTROL_PLANE_NAV = {
     ],
   },
   facebook: {
-    label: "Facebook",
-    title: "Facebook Marketplace",
-    subtitle: "The Marketplace workspace: login + create-listing recipes, listing drafts, and the loop's needs-help queue.",
+    label: "Selling",
+    title: "Marketplace Inventory",
+    subtitle: "An inventory-first selling workspace: your items are the source of truth; Facebook Marketplace (and later eBay/OfferUp) is a sales channel.",
     sections: [
-      {
-        id: "fb-overview",
-        label: "Overview",
-        subtitle: "The seeded login + create-listing flows the runner drives, and this domain at a glance.",
-      },
-      {
-        id: "listings",
-        label: "Listings",
-        subtitle: "Draft a Marketplace listing from your inputs, then run the loop to create it (execute-by-default; publish is gated for your approval).",
-      },
-      {
-        id: "fb-handoffs",
-        label: "Handoffs",
-        subtitle: "When the loop needs you: why it stopped and what it tried first. Resolve one once you've unblocked it.",
-      },
+      { id: "overview", label: "Overview", subtitle: "High-level counts: inventory, drafts, queue, active listings, responses, sold." },
+      { id: "inventory", label: "Inventory", subtitle: "Every item you own. Add, edit, select, and queue items to post." },
+      { id: "queue", label: "Posting Queue", subtitle: "Items waiting to be posted to a channel — run, retry, or clear the queue." },
+      { id: "listings", label: "Active Listings", subtitle: "Items currently posted to a marketplace channel, with response counts." },
+      { id: "messages", label: "Messages", subtitle: "Buyer responses on active listings; check for new messages." },
+      { id: "activity", label: "Agent Activity", subtitle: "A log of every action taken, plus the loop's needs-help handoffs." },
+      { id: "settings", label: "Settings", subtitle: "Channel sign-in (persistent browser) and manual agent controls." },
     ],
   },
   lab: {
