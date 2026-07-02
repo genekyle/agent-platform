@@ -49,9 +49,12 @@ TASK_SPECS: list[TaskSpec] = [
         name="facebook_login",
         description="Log in to Facebook — done once the authed home/feed is shown.",
         goal_aliases=("facebook login", "log in to facebook", "sign in to facebook"),
-        # authed home has no /login|/checkpoint segment; the composer text is the fallback.
-        terminal_url_patterns=(r"facebook\.com/(\?sk=|home|$)", r"facebook\.com/?\?",),
-        terminal_text=("what's on your mind", "create a post"),
+        # NOTE: facebook.com/ serves BOTH the logged-out login wall AND the logged-in feed, so
+        # the URL cannot tell them apart (a live run proved a bare-domain URL pattern falsely
+        # reports "done" on the login wall). The composer text is the only reliable authed signal;
+        # /home.php is an authed-only URL, kept as a narrow secondary.
+        terminal_url_patterns=(r"facebook\.com/home\.php", r"facebook\.com/home/"),
+        terminal_text=("what's on your mind", "create a post", "create story"),
     ),
     TaskSpec(
         name="facebook_create_listing",

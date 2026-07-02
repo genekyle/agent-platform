@@ -50,3 +50,16 @@ def test_is_done_for_builds_predicate():
 
 def test_is_done_for_none_is_none():
     assert task_spec.is_done_for(None) is None
+
+
+def test_facebook_login_bare_domain_is_not_terminal():
+    """Regression (found live 2026-07-02): facebook.com/ serves BOTH the logged-out login
+    wall and the logged-in feed, so a bare-domain URL must NOT count as 'logged in' — only
+    the authed composer text (or an authed-only URL) does."""
+    spec = task_spec.spec_for(task="facebook_login")
+    # login wall — bare domain, no composer text → NOT complete
+    assert spec.is_complete("https://www.facebook.com/") is False
+    assert spec.is_complete("https://www.facebook.com/?stype=lo") is False
+    # authed feed — composer text present → complete
+    assert spec.is_complete("https://www.facebook.com/", page_text="What's on your mind?") is True
+    assert spec.is_complete("https://www.facebook.com/home.php") is True
