@@ -104,32 +104,92 @@ def describe_tab(url: str, page_text: str = "") -> dict[str, Any]:
     }
 
 
-# --- CROSS-SITE: Workday apply recipe seed (project_application_is_cross_site) -----------------
-# Seeded from a live teacher probe (2026-06-30, "data analytics"/Lowell): clicking Indeed's
-# "Apply on company site" opens indeed.com/applystart → the employer ATS in a NEW TAB. Two shapes
-# observed for Workday:
-#   * DIRECT: lands on *.myworkdayjobs.com/.../job/... (State Street).
-#   * BRANDED WRAPPER: lands on the employer's careers site (e.g. jobs.takeda.com) whose "APPLY NOW"
-#     href IS the Workday URL (takeda.wd3.myworkdayjobs.com/.../apply) — so detect the wrapper by the
-#     APPLY-button href, not the visible host.
-# The Workday apply itself gates on Sign In / Create Account — HUMAN-required, and needs a PERSISTENT
-# pre-authed Workday profile per employer (a fresh profile hits the account wall). So the autonomous
-# spine ends at the auth gate; everything past it is captured-and-taught once an authed profile exists.
+# --- CROSS-SITE: Workday apply recipe (project_application_is_cross_site) ----------------------
+# Upgraded 2026-07-01 from a probe-seed to a LIVE-VERIFIED driving recipe: driven end-to-end on
+# State Street (statestreet.wd1.myworkdayjobs.com) with the operator's real candidate account,
+# through sign-in and a fully prefilled My Information step. Two landing shapes:
+#   * DIRECT: *.myworkdayjobs.com/.../job/... (State Street).
+#   * BRANDED WRAPPER: employer careers site (jobs.takeda.com) whose APPLY-NOW href IS the Workday
+#     URL — detect by the APPLY-button href, not the visible host.
+# Selectors are Workday `data-automation-id`s — STABLE across tenants (Workday renders them from the
+# same component library), which is what makes this recipe transferable, not State-Street-specific.
 WORKDAY_APPLY_RECIPE = [
-    {"step": 0, "state": "ats_landing",          "action": "detect Workday (host *.myworkdayjobs.com OR an APPLY-NOW href to it); accept cookies if shown",
-     "expect": ["ats_landing", "workday_apply_auth"]},
-    {"step": 1, "state": "workday_apply_auth",   "action": "Sign In with the employer-specific Workday account (HUMAN / pre-authed profile)",
-     "expect": ["workday_apply_form", "account_creation"]},
-    {"step": 2, "state": "workday_apply_form",   "action": "autofill (My Information / Experience / Questions); often 'Autofill with Resume'",
-     "expect": ["workday_apply_form", "workday_apply_review"]},
-    {"step": 3, "state": "workday_apply_review",  "action": "Review + Submit (HUMAN approval at the final Submit)",
+    {"step": 0, "state": "ats_landing",
+     "action": "detect Workday; accept cookies if shown. If the deep-linked req 404s "
+               "(\"doesn't exist\"), DON'T trust ats_unavailable yet: search the TENANT "
+               "(?q=<title>) — Indeed links go stale while the re-posted req is live "
+               "(saw R-791270 dead → R-791273 live, same title/location).",
+     "selectors": {"job_title_link": "a[data-automation-id=jobTitle]",
+                   "not_found_text": r"doesn't exist|no longer"},
+     "expect": ["ats_landing", "workday_job_posting"]},
+    {"step": 1, "state": "workday_job_posting",
+     "action": "click Apply → choose the apply method. 'Use My Last Application' is the BEST path "
+               "when the candidate account exists (prefills everything); else 'Autofill with Resume' "
+               "(needs the resume file); 'Apply Manually' is the fallback.",
+     "selectors": {"apply": "[data-automation-id=adventureButton]",
+                   "use_last": "[data-automation-id=useMyLastApplication]",
+                   "autofill_resume": "[data-automation-id=autofillWithResume]",
+                   "apply_manually": "[data-automation-id=applyManually]"},
+     "expect": ["workday_apply_auth"]},
+    {"step": 2, "state": "workday_apply_auth",
+     "action": "the flow shows Create Account even when tenant-nav is signed in — click its Sign In "
+               "link and authenticate with the per-employer candidate account. NEVER fill "
+               "'beecatcher' (bot honeypot). Verify advance: progress bar re-numbers (8→7 steps).",
+     "selectors": {"sign_in_link": "[data-automation-id=signInLink]",
+                   "email": "[data-automation-id=email]",
+                   "password": "[data-automation-id=password]",
+                   "submit": "[data-automation-id=signInSubmitButton]",
+                   "honeypot_do_not_fill": "[data-automation-id=beecatcher]",
+                   "signed_in_marker": "[data-automation-id=utilityButtonAccount]"},
+     "expect": ["workday_my_information", "account_creation"]},
+    {"step": 3, "state": "workday_my_information",
+     "action": "mostly PREFILLED by Use-My-Last-Application (legal name, address, phone, country). "
+               "Usually one required gap: 'How Did You Hear About Us' (formField-source) — a nested "
+               "prompt (Online Source → Indeed). KNOWN AUTOMATION GAP: see WORKDAY_LESSONS.",
+     "selectors": {"source": "[data-automation-id=formField-source]",
+                   "first_name": "[data-automation-id='legalName--firstName']",
+                   "previous_worker": "[data-automation-id=candidateIsPreviousWorker]",
+                   "next": "button[data-automation-id=bottom-navigation-next-button]"},
+     "expect": ["workday_my_experience"]},
+    {"step": 4, "state": "workday_my_experience",
+     "action": "work history / resume section — verify prefill, fill gaps, Save and Continue",
+     "expect": ["workday_questions"]},
+    {"step": 5, "state": "workday_questions",
+     "action": "Application Questions (State Street: 2 pages) — autofill from the answer profile; "
+               "ASK THE OPERATOR for unmatched/sensitive ones (expected branch, not a failure)",
+     "expect": ["workday_questions", "workday_voluntary_disclosures"]},
+    {"step": 6, "state": "workday_voluntary_disclosures",
+     "action": "Voluntary Disclosures + Self Identify — decline/leave blank per operator preference",
+     "expect": ["workday_review"]},
+    {"step": 7, "state": "workday_review",
+     "action": "Review — PAUSE: run the captcha gate check, then the OPERATOR approves Submit",
      "expect": ["submitted"]},
 ]
 
 WORKDAY_APPLY_BRANCHES = {
-    "ats_unavailable":  {"human_required": False, "note": "req 404'd on the ATS (Indeed listing outlived it) — skip, next prospect"},
-    "account_creation": {"human_required": True,  "note": "Workday account signup — needs a persistent pre-authed profile per employer"},
-    "captcha":          {"human_required": True,  "note": "anti-bot challenge — human clears it"},
+    "ats_unavailable":  {"human_required": False, "note": "req 404'd on the ATS — but if AUTHED, tenant-search the title first (stale-re-post pattern); only then skip"},
+    "account_creation": {"human_required": True,  "note": "no candidate account for this employer — needs the operator (persistent per-employer profile)"},
+    "captcha":          {"human_required": True,  "note": "anti-bot challenge — human clears it (captcha-first check on any blocked action)"},
+    "nested_prompt_gap": {"human_required": True, "note": "Workday nested-prompt multiselect resists CDP input — hand the single field to the operator, continue after"},
+}
+
+# What the live teacher LEARNED driving Workday — the planner's seed knowledge. `works` are proven
+# paths to prefer; `gaps` are steps automation cannot yet do (route to operator, or build the tool).
+WORKDAY_LESSONS = {
+    "works": [
+        "trusted CDP mouse clicks (Input.dispatchMouseEvent) drive Workday buttons/links reliably",
+        "Input.insertText typing works for text/password fields (email, password)",
+        "data-automation-id selectors are the stable handle — prefer them over classes/text",
+        "'Use My Last Application' prefills the whole My Information step from the candidate profile",
+        "stale Indeed deep-link ≠ dead req: tenant ?q= search finds the live re-post",
+        "page navigations kill the CDP websocket — reconnect and re-discover the target (expected)",
+    ],
+    "gaps": [
+        "nested-prompt multiselect (formField-source): promptOption/menuItem/checkbox coordinate "
+        "clicks, keyboard Arrow+Enter, and type-to-filter (no text input) ALL fail to register — "
+        "needs an OS-level input path or a Workday-specific executor; until then: operator fills it",
+        "flow-level auth is separate from tenant-nav auth (sign-in may be needed twice)",
+    ],
 }
 
 
@@ -140,6 +200,7 @@ def recipe_spec() -> dict[str, Any]:
         "branches": APPLY_BRANCHES,
         "cross_site": {
             "workday": {"recipe": WORKDAY_APPLY_RECIPE, "branches": WORKDAY_APPLY_BRANCHES,
+                        "lessons": WORKDAY_LESSONS,
                         "detect": "host matches *.myworkdayjobs.com, OR a branded careers wrapper whose "
                                   "APPLY-NOW href targets *.myworkdayjobs.com (e.g. Takeda)"},
         },

@@ -1732,19 +1732,11 @@ async def apply_state(training_session_id: int, scan_form: bool = True,
     }
 
 
-@app.get("/api/runtime/captcha_gate")
-async def captcha_gate(training_session_id: int, db: Session = Depends(get_db)):
-    """CAPTCHA-FIRST CHECK — the very first thing to consult when an action is blocked/disabled/no-ops.
-    Because our only eyes are CDP-AX (which can't SEE a reCAPTCHA in its iframe), this probes each of
-    the session's tabs for a LIVE, BLOCKING challenge: a visible v2 checkbox whose OWN token is still
-    empty, or an open image challenge. It is NOT fooled by Indeed's invisible Enterprise scorer (which
-    holds a passed token on every page) — the token is scoped to the visible widget's wrapper. Returns
-    `blocking` + the gated tab(s). When blocking: STOP and hand to the human; poll this until `blocking`
-    flips false (the human checked the box → the widget's token filled), then resume. Never auto-solve."""
-    session = db.get(TrainingSession, training_session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Training session not found")
-    browser_url = _session_browser_url(session)
+async def _captcha_gate_for(browser_url: str) -> dict[str, Any]:
+    """Probe every session tab for a LIVE, BLOCKING captcha and aggregate. Shared by the captcha_gate
+    check and the await_captcha handoff. Uses the token-scoped `blocking` flag (a visible v2 checkbox
+    whose OWN wrapper token is empty, or an open image challenge) — NOT fooled by Indeed's invisible
+    Enterprise scorer's passed token. Best-effort per tab."""
     targets = await _list_session_tabs(browser_url)
     pages = [t for t in targets if t.get("type") == "page"
              and "localhost:5173" not in (t.get("url", "") or "")]
@@ -1758,16 +1750,57 @@ async def captcha_gate(training_session_id: int, db: Session = Depends(get_db)):
                             "checkbox_visible": bool(vis.get("checkbox_visible")),
                             "challenge_visible": bool(vis.get("challenge_visible"))})
     gated = [p for p in per_tab if p["blocking"]]
-    return {
-        "training_session_id": training_session_id,
-        "blocking": bool(gated),
-        "needs_human": bool(gated),
-        "gated_tabs": gated,
-        "per_tab": per_tab,
-        "guidance": ("STOP — a human must solve the captcha (check the box). Poll this endpoint until "
-                     "blocking=false, then resume. Never auto-solve." if gated
-                     else "clear — no live captcha gate."),
-    }
+    return {"blocking": bool(gated), "needs_human": bool(gated), "gated_tabs": gated, "per_tab": per_tab}
+
+
+@app.get("/api/runtime/captcha_gate")
+async def captcha_gate(training_session_id: int, db: Session = Depends(get_db)):
+    """CAPTCHA-FIRST CHECK — the very first thing to consult when an action is blocked/disabled/no-ops.
+    Because our only eyes are CDP-AX (which can't SEE a reCAPTCHA in its iframe), this probes each of
+    the session's tabs for a LIVE, BLOCKING challenge: a visible v2 checkbox whose OWN token is still
+    empty, or an open image challenge. It is NOT fooled by Indeed's invisible Enterprise scorer (which
+    holds a passed token on every page) — the token is scoped to the visible widget's wrapper. Returns
+    `blocking` + the gated tab(s). When blocking: STOP and hand to the human; poll this (or use
+    /await_captcha) until `blocking` flips false (human checked the box → token filled), then resume."""
+    session = db.get(TrainingSession, training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    gate = await _captcha_gate_for(_session_browser_url(session))
+    gate["training_session_id"] = training_session_id
+    gate["guidance"] = ("STOP — a human must solve the captcha (check the box). Poll until "
+                        "blocking=false, then resume. Never auto-solve." if gate["blocking"]
+                        else "clear — no live captcha gate.")
+    return gate
+
+
+class AwaitCaptchaRequest(BaseModel):
+    training_session_id: int
+    timeout_s: int = 240        # how long to wait for the human to solve it
+    interval_s: float = 3.0     # poll cadence
+
+
+@app.post("/api/runtime/await_captcha")
+async def await_captcha(body: AwaitCaptchaRequest, db: Session = Depends(get_db)):
+    """HANDOFF + RESUME primitive: poll the captcha gate until the human has solved it (blocking flips
+    false because the visible widget's token filled) or we time out. This is what the apply loop calls
+    after it detects a blocking captcha — it parks, the human checks the box, and this returns `cleared`
+    so the loop can resume the blocked action. Never auto-solves; it only waits for the human."""
+    session = db.get(TrainingSession, body.training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    import time as _time
+    deadline = _time.monotonic() + max(5, min(body.timeout_s, 600))
+    polls = 0
+    last = await _captcha_gate_for(browser_url)
+    while last.get("blocking") and _time.monotonic() < deadline:
+        await asyncio.sleep(max(1.0, min(body.interval_s, 10.0)))
+        polls += 1
+        last = await _captcha_gate_for(browser_url)
+    return {"training_session_id": body.training_session_id,
+            "cleared": not last.get("blocking"),
+            "timed_out": bool(last.get("blocking")),
+            "polls": polls, "gate": last}
 
 
 def _search_page_from_url(url: str) -> Optional[int]:

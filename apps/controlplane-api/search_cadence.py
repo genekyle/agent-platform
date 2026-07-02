@@ -70,6 +70,32 @@ CADENCE_MODES = {
         "stops_when": "queries/pages exhausted, bounds hit, a live captcha, or logout",
         "does_not": ["apply", "open job-detail URLs", "open/close tabs", "gather below min_radius_miles"],
     },
+    # ---- TASK 1.5: the operator's day-to-day loop — TARGETED search-and-apply ----
+    # Neither pure search (scrape everything, apply to nothing) nor pure apply (apply to every
+    # result). A page-by-page HUMAN-IN-THE-LOOP loop: the teacher shortlists per page, the operator
+    # handpicks, we apply to the picks, THEN advance to the next page. Defined live with the
+    # operator 2026-07-01 (see user_job_application_preferences: handpick = approval for that job).
+    "targeted_search_and_apply": {
+        "goal": "Page-by-page: shortlist per page → operator handpicks → apply to picks → next page.",
+        "steps": [
+            "Enter the query + location on the existing tab and run the search (human-paced).",
+            "Set the DISTANCE filter to the target radius (>= min_radius_miles) before anything else.",
+            "READ THE SEARCH META off page 1: total result count + visible page numbers — both are "
+            "findable on the first results page and are recorded with the query (sizing the loop).",
+            "Per page: extract all cards → observed_jobs; the teacher builds the page's shortlist "
+            "(good matches AND semi-relevant, ~10 results/page) and SENDS it to the operator.",
+            "The operator handpicks which (if any) of that page's shortlist to apply to — final say.",
+            "For each pick: verify the pane shows the INTENDED job, then run the apply cadence "
+            "(quick-apply drive, or cross-site recipe) — captcha/submit gates per the apply rules.",
+            "Only after the page's picks are handled: CLICK pagination to the next page. Repeat "
+            "until the query's pages are exhausted, then record_outcome on the target.",
+        ],
+        "records": ["observed_jobs", "search meta (total results + page count) per query",
+                    "per-page shortlist + operator picks", "application_status + provenance"],
+        "stops_when": "all pages done, bounds hit, a live captcha gate, or the operator pauses",
+        "does_not": ["apply without the operator's per-job pick", "skip the distance filter",
+                     "advance a page while its picks are unfinished", "auto-solve captchas"],
+    },
     # ---- TASK 2: act on good fits -------------------------------------------
     "apply_triage": {
         "goal": "Find good fits on a page, get user approval, apply, record provenance.",
@@ -128,7 +154,7 @@ def classify_apply_platform(url: str) -> str:
 # Lets the apply loop RECOGNIZE the branch and route (autofill vs escalate to human) instead
 # of blindly clicking. See project_apply_random_events.
 _APPLY_OUTCOMES = [
-    ("submitted",          False, r"application (has been )?submitted|your application was sent|application sent|thanks for applying"),
+    ("submitted",          False, r"application (has been |was |successfully )?submitted|your application was sent|application sent|application received|thanks for applying|successfully applied"),
     # ATS job no longer available: the Indeed listing outlived the source posting, so the company
     # ATS 404s / says the req is gone. NON-human — just skip this prospect and move on (don't
     # escalate, don't retry). Observed live on State Street Workday (req R-788153) 2026-06-30.

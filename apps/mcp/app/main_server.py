@@ -209,7 +209,27 @@ _INDEED_JOBS_JS = r"""
     const url = a.href || (a.querySelector('a[href]') || {}).href || '';
     out.push({ external_id: jk, title, company, location, salary, url });
   }
-  return out;
+  // SEARCH META — the query's size, findable on the first results page (targeted_search_and_apply
+  // records it per query): the "N jobs" total + the pagination numbers visible on this page.
+  const countEl = document.querySelector(
+    '.jobsearch-JobCountAndSortPane-jobCount, [class*="jobCount"], [data-testid="searchResults-header"]');
+  let totalText = countEl ? (countEl.innerText || '').trim() : '';
+  if (!totalText) {
+    const m = (document.body.innerText || '').match(/[\d,]+\+?\s+jobs?\b/i);
+    totalText = m ? m[0] : '';
+  }
+  const totalMatch = totalText.match(/([\d,]+)\s*\+?/);
+  const total_results = totalMatch ? parseInt(totalMatch[1].replace(/,/g, ''), 10) : null;
+  const pageEls = [...document.querySelectorAll('a[data-testid^="pagination-page-"], nav[aria-label*="pag" i] a')];
+  const visible_pages = [...new Set(pageEls.map(e => parseInt((e.innerText || '').trim(), 10))
+    .filter(n => !isNaN(n)))].sort((a, b) => a - b);
+  const start = parseInt(new URLSearchParams(location.search).get('start') || '0', 10);
+  const meta = {
+    total_results, total_text: totalText.slice(0, 40),
+    current_page: isNaN(start) ? 1 : Math.floor(start / 10) + 1,
+    visible_pages, has_next: !!document.querySelector('a[data-testid="pagination-page-next"]'),
+  };
+  return { jobs: out, meta };
 })()
 """
 
@@ -226,8 +246,11 @@ async def extract_jobs(body: ExtractJobsRequest):
             cdp = _CDPSession(ws)
             res = await cdp.send("Runtime.evaluate",
                                  {"expression": _INDEED_JOBS_JS, "returnByValue": True})
-        jobs = (res.get("result") or {}).get("value") or []
-        return {"ok": True, "jobs": jobs, "count": len(jobs), "url": target.get("url", "")}
+        val = (res.get("result") or {}).get("value") or {}
+        jobs = val.get("jobs", val if isinstance(val, list) else [])
+        meta = val.get("meta") if isinstance(val, dict) else None
+        return {"ok": True, "jobs": jobs, "count": len(jobs), "meta": meta,
+                "url": target.get("url", "")}
     except Exception as exc:  # noqa: BLE001
         logger.warning("extract_jobs failed: %s", exc)
         return {"ok": False, "jobs": [], "count": 0, "detail": str(exc)}
