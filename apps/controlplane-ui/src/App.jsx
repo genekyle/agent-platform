@@ -15,6 +15,7 @@ import { ScorecardSection } from "./components/controlplane/ScorecardSection";
 import { TrainingSpaceSection } from "./components/controlplane/TrainingSpaceSection";
 import { StateGraphSection } from "./components/controlplane/StateGraphSection";
 import { IndeedWorkspaceSection } from "./components/controlplane/IndeedWorkspaceSection";
+import { FacebookMarketplaceSection } from "./components/controlplane/FacebookMarketplaceSection";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 
@@ -99,7 +100,7 @@ export default function App() {
   const currentNav = CONTROL_PLANE_NAV[activePrimaryView];
   const activeSectionId = activeSecondaryViewByPrimary[activePrimaryView] ?? currentNav.sections[0]?.id;
   const activeSection = currentNav.sections.find((section) => section.id === activeSectionId) ?? currentNav.sections[0];
-  const canEnterSecondary = ["training", "system", "lab", "indeed"].includes(activePrimaryView);
+  const canEnterSecondary = ["training", "system", "lab", "indeed", "facebook"].includes(activePrimaryView);
   const selectedTrainingSession = useMemo(
     () => sessions.find((session) => session.id === selectedTrainingSessionId) ?? null,
     [sessions, selectedTrainingSessionId],
@@ -1106,6 +1107,8 @@ export default function App() {
     sectionContent = <ModelsSection section={activeSectionId} />;
   } else if (activePrimaryView === "indeed") {
     sectionContent = <IndeedWorkspaceSection section={activeSectionId} />;
+  } else if (activePrimaryView === "facebook") {
+    sectionContent = <FacebookMarketplaceSection section={activeSectionId} />;
   } else {
     sectionContent = (
       <DomainsSection

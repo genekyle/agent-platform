@@ -15,6 +15,7 @@ live runs and for supervised data collection.
 
 from .loop import (  # noqa: F401
     Actor,
+    Gate,
     LoopResult,
     LoopStatus,
     Observation,
@@ -24,3 +25,10 @@ from .loop import (  # noqa: F401
     StepStatus,
     run_loop,
 )
+from .live import (  # noqa: F401
+    LiveActor,
+    LiveProposer,
+    observation_from_trace,
+)
+from . import gate as gate  # noqa: F401
+from . import handoff as handoff  # noqa: F401

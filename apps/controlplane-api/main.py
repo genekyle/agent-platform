@@ -139,6 +139,7 @@ REGISTRY_SEED = {
         {"goal_id": "log_in", "domain_id": None, "display_name": "Log In", "action_type_hints": ["type", "click"]},
         {"goal_id": "review_posted_items", "domain_id": "facebook_marketplace", "display_name": "Review Posted Items", "action_type_hints": ["click"]},
         {"goal_id": "reply_to_buyer", "domain_id": "facebook_marketplace", "display_name": "Reply to Buyer", "action_type_hints": ["click", "type"]},
+        {"goal_id": "create_listing", "domain_id": "facebook_marketplace", "display_name": "Create Marketplace Listing", "action_type_hints": ["click", "type", "select"]},
         {"goal_id": "search_jobs", "domain_id": "indeed_jobs", "display_name": "Search Jobs", "action_type_hints": ["type", "click"]},
         {"goal_id": "open_job_posting", "domain_id": "indeed_jobs", "display_name": "Open Job Posting", "action_type_hints": ["click"]},
         {"goal_id": "apply_to_job", "domain_id": "indeed_jobs", "display_name": "Apply to Job", "action_type_hints": ["click", "type", "select"]},
@@ -148,6 +149,7 @@ REGISTRY_SEED = {
     "tasks": [
         {"task_id": "browser_open_tab", "scope_level": "browser", "domain_id": None, "goal_id": None, "display_name": "Open target tab"},
         {"task_id": "marketplace_open_inbox", "scope_level": "domain", "domain_id": "facebook_marketplace", "goal_id": None, "display_name": "Open marketplace inbox"},
+        {"task_id": "facebook_create_listing_flow", "scope_level": "goal", "domain_id": "facebook_marketplace", "goal_id": "create_listing", "display_name": "Create a Marketplace listing"},
         {"task_id": "indeed_apply_flow", "scope_level": "goal", "domain_id": "indeed_jobs", "goal_id": "apply_to_job", "display_name": "Complete Indeed apply flow"},
     ],
     "scenarios": [
@@ -218,6 +220,28 @@ def seed_training_registry(db: Session) -> None:
     for payload in REGISTRY_SEED["scenarios"]:
         db.add(ScenarioRegistry(status="active", **payload))
     db.commit()
+
+
+def seed_facebook_extras(db: Session) -> None:
+    """Idempotent top-up for the Facebook create-listing goal/task on an ALREADY-seeded DB.
+    `seed_training_registry` only runs on an empty registry, so a DB seeded before the
+    create-listing flow existed would miss these rows — add just the missing ones."""
+    want_goals = [g for g in REGISTRY_SEED["goals"] if g["goal_id"] == "create_listing"]
+    want_tasks = [t for t in REGISTRY_SEED["tasks"] if t["task_id"] == "facebook_create_listing_flow"]
+    if not db.scalar(select(DomainRegistry.domain_id).where(
+            DomainRegistry.domain_id == "facebook_marketplace")):
+        return  # domain not seeded at all → the full seeder will handle it on a fresh DB
+    changed = False
+    for payload in want_goals:
+        if not db.scalar(select(GoalRegistry.goal_id).where(GoalRegistry.goal_id == payload["goal_id"])):
+            db.add(GoalRegistry(status="active", **payload))
+            changed = True
+    for payload in want_tasks:
+        if not db.scalar(select(TaskRegistry.task_id).where(TaskRegistry.task_id == payload["task_id"])):
+            db.add(TaskRegistry(status="active", **payload))
+            changed = True
+    if changed:
+        db.commit()
 
 
 def seed_application_answers(db: Session) -> None:
@@ -672,6 +696,7 @@ def on_startup():
     Base.metadata.create_all(bind=engine)
     with Session(engine) as db:
         seed_training_registry(db)
+        seed_facebook_extras(db)
         seed_page_states(db)
         seed_actions(db)
         backfill_goal_stages(db)
@@ -3077,34 +3102,16 @@ def _observation_from_capture(filename: str):
     capture time (`task_context.goal`), used as the batch default. Raises 404 if the
     capture file is missing. A capture with no `.ax.json` sidecar yields an empty
     candidate list — the select stage will escalate (no_match), which is itself a
-    valid corpus row (it tells us the propose stage produced nothing to pick)."""
-    from runtime import Observation
-    from select_stage import verifier
+    valid corpus row (it tells us the propose stage produced nothing to pick).
+
+    The artifact→Observation build is shared with the LiveProposer (runtime.live)."""
+    from runtime import observation_from_trace
 
     traces_dir = _artifacts_dir() / "observer-traces"
-    artifact_path = traces_dir / filename
-    if not artifact_path.exists():
+    try:
+        return observation_from_trace(traces_dir, filename)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Observation not found")
-    artifact = json.loads(artifact_path.read_text())
-
-    ax_sidecar = traces_dir / f"{filename}.ax.json"
-    ax_candidates = json.loads(ax_sidecar.read_text()).get("proposals", []) if ax_sidecar.exists() else []
-
-    acq = artifact.get("acquisition", {}) or {}
-    url = (acq.get("page_identity", {}) or {}).get("url", "")
-    page_text = (acq.get("js_state", {}) or {}).get("body_text_preview", "") or ""
-    viewport = acq.get("viewport_state", {}) or acq.get("training_metadata", {}) or {}
-    shots = acq.get("screenshots") or []
-    screenshot_path = (shots[0].get("path") if shots else "") or ""
-    capture_goal = (acq.get("task_context", {}) or {}).get("goal", "") or ""
-
-    observation = Observation(
-        url=url, page_text=page_text, ax_candidates=ax_candidates,
-        screenshot_path=screenshot_path, viewport=viewport,
-        dom_clickables=acq.get("actionable_elements", []) or [],
-        snapshot=verifier.snapshot_from_artifact(artifact, ax_candidates),
-    )
-    return observation, capture_goal
 
 
 @app.post("/api/runtime/run")
@@ -3134,6 +3141,195 @@ def runtime_run(filename: str, task_goal: str, max_steps: int = 1):
         "total_cost_usd": result.total_cost_usd,
         "steps": [asdict(s) for s in result.steps],
     }
+
+
+class RunLiveRequest(BaseModel):
+    """Drive the runtime loop against a session's LIVE tab, re-observing between steps.
+
+    Unlike `/api/runtime/run` (a single static capture, record-only), this observes the
+    real page, executes each decided action via the CDP driver, checks the captcha gate
+    before every action, and repeats until the task is done, the budget/steps run out, or
+    it escalates to a human (which writes a handoff record + fires a notification).
+
+    Execution is ON by default (humanized driver). Set `record_only=True` for a dry run
+    that logs intents without firing input. `tab_url`/`tab_id` pick which existing tab to
+    drive — continue from the tab that's already open (never churn tabs)."""
+    training_session_id: int
+    task_goal: str
+    task: Optional[str] = None          # explicit TaskSpec name; else inferred from task_goal
+    max_steps: int = 12
+    max_retries: int = 2                # attempts per step before giving up (initial + N retries)
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    driver: str = "humanized"           # humanized (default) | direct | record_only
+    record_only: bool = False           # dry run: decide + log intents, fire nothing
+    captcha_diagnostic: bool = True     # after a step's attempts fail, probe for a captcha last
+    allow_submit: bool = False          # allow irreversible submit/final-apply without a handoff
+    listing_draft_id: Optional[str] = None   # create-listing runs fill form fields from this draft
+
+
+@app.post("/api/runtime/run_live")
+def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
+    """Run the loop live: observe → select (cache/practiced → Haiku) → gate → act → verify,
+    repeating until done/escalation/budget. Practiced states resolve FREE from the selection
+    cache (no Claude); the loop only pings a human at a gate. On escalation it emits a durable
+    handoff (why + what it tried) and a macOS notification."""
+    from dataclasses import asdict
+
+    import task_spec
+    from runtime import LiveActor, LiveProposer, LoopStatus, run_loop
+    from runtime import gate as gate_mod
+    from runtime import handoff as handoff_mod
+    from runtime.live import observation_from_trace
+
+    session = db.get(TrainingSession, body.training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    traces_dir = _artifacts_dir() / "observer-traces"
+    server = settings.capture_server_url
+
+    proposer = LiveProposer(
+        capture_server_url=server, browser_url=browser_url, traces_dir=traces_dir,
+        tab_id=body.tab_id, tab_url=body.tab_url, goal=body.task_goal,
+    )
+    actor = LiveActor(
+        capture_server_url=server, browser_url=browser_url,
+        tab_id=body.tab_id, tab_url=body.tab_url,
+        driver=body.driver, record_only=body.record_only,
+    )
+    # Only the submit-approval gate runs pre-act now (the structural stop that keeps
+    # execute-by-default safe). The captcha check is no longer a per-step proactive gate —
+    # it's a cheaper LAST-CALL diagnostic run after a step's attempts fail (below), since a
+    # stall could be a captcha OR a different problem.
+    gate = gate_mod.consequential_gate(allow=body.allow_submit)
+
+    # Terminal-state spec: lets the loop return COMPLETED on success instead of running to
+    # max_steps. A MAX_STEPS result then means "did not reach the goal — review", not "done".
+    spec = task_spec.spec_for(task=body.task, task_goal=body.task_goal)
+    is_done = task_spec.is_done_for(spec)
+
+    # value_for: for a create-listing run, each text/select field's value comes from the
+    # operator's ListingDraft, matched by the target field's accessible name. None → the loop
+    # escalates that field rather than typing a guess.
+    value_for = None
+    if body.listing_draft_id:
+        import listing_draft as ld
+        draft = ld.get_draft(body.listing_draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="listing_draft_id not found")
+
+        def value_for(result, observation, _draft=draft):
+            bid = result.target_backend_node_id
+            name = ""
+            for c in observation.ax_candidates:
+                cid = c.get("backend_node_id") or (c.get("_debug") or {}).get("backend_node_id")
+                if cid is not None and bid is not None and int(cid) == int(bid):
+                    name = (c.get("caption") or c.get("name") or "").strip()
+                    break
+            return ld.value_for_field(_draft, name)
+
+    result = run_loop(task_goal=body.task_goal, proposer=proposer, actor=actor,
+                      gate=gate, is_done=is_done, value_for=value_for,
+                      max_steps=body.max_steps, max_retries=body.max_retries)
+
+    def _last_obs():
+        if proposer.last_filename:
+            try:
+                return observation_from_trace(traces_dir, proposer.last_filename)[0]
+            except Exception:
+                return None
+        return None
+
+    # Captcha diagnostic — the LAST CALL before a human. Only when a stall could plausibly be
+    # a hidden captcha (action fired but nothing changed / page went unreadable / no match),
+    # not for a low-confidence pick or an approval gate. Runs one cheap probe.
+    _CAPTCHA_SUSPECT = {"verifier_failed", "no_match", "unknown_state", "stage_error"}
+    diagnostic = None
+    if (result.status is LoopStatus.ESCALATED and body.captcha_diagnostic
+            and result.escalation_reason in _CAPTCHA_SUSPECT):
+        diagnostic = gate_mod.probe_captcha(capture_server_url=server, browser_url=browser_url,
+                                            tab_id=body.tab_id, tab_url=body.tab_url)
+
+    # Hand off on a hard escalation, and also when we ran out of steps WITHOUT completing the
+    # task (an incomplete run should surface for review, not vanish). A COMPLETED run is silent.
+    handoff = None
+    incomplete = result.status is LoopStatus.MAX_STEPS
+    if result.status is LoopStatus.ESCALATED or incomplete:
+        handoff = handoff_mod.emit(
+            result, task_goal=body.task_goal, training_session_id=session.id,
+            last_observation=_last_obs(), tab_url=body.tab_url, diagnostic=diagnostic,
+        )
+
+    return {
+        "status": result.status.value,
+        "completed": result.status is LoopStatus.COMPLETED,
+        "task": spec.name if spec else None,
+        "reason": result.reason,
+        "escalation_reason": result.escalation_reason,
+        "captcha_diagnostic": diagnostic,
+        "total_cost_usd": result.total_cost_usd,
+        "executed_steps": sum(1 for s in result.steps if s.executed),
+        "steps": [asdict(s) for s in result.steps],
+        "handoff": asdict(handoff) if handoff else None,
+    }
+
+
+@app.get("/api/runtime/handoffs")
+def runtime_handoffs(open_only: bool = False, limit: int = 50):
+    """List handoff records (newest first) — the operator's 'what needs me' queue. Each row
+    carries WHY the agent stopped and WHAT it tried before giving up."""
+    from runtime import handoff as handoff_mod
+    rows = handoff_mod.list_handoffs(open_only=open_only, limit=limit)
+    return {"handoffs": rows, "open_count": sum(1 for r in rows if r.get("status") != "resolved")}
+
+
+@app.post("/api/runtime/handoffs/{handoff_id}/resolve")
+def runtime_resolve_handoff(handoff_id: str):
+    """Mark a handoff resolved once the operator has unblocked/finished the step."""
+    from runtime import handoff as handoff_mod
+    if not handoff_mod.resolve(handoff_id):
+        raise HTTPException(status_code=404, detail="Handoff not found")
+    return {"ok": True, "id": handoff_id, "status": "resolved"}
+
+
+# ---------------------------------------------------------------------------
+# Facebook Marketplace — recipe + listing drafts (the create-listing inputs)
+# ---------------------------------------------------------------------------
+@app.get("/api/runtime/facebook_recipe")
+def facebook_recipe_spec():
+    """Serve the seeded Facebook login + create-listing recipes (the dashboard renders these
+    as the flow the loop will drive). Seeded, not yet live-verified."""
+    import facebook_recipe
+    return facebook_recipe.recipe_spec()
+
+
+class ListingDraftBody(BaseModel):
+    id: Optional[str] = None            # omit to create; include to update
+    title: str = ""
+    price: str = ""
+    category: str = ""
+    condition: str = ""
+    description: str = ""
+    location: str = ""
+    photos: list[str] = []
+    status: Optional[str] = None
+
+
+@app.get("/api/facebook/listings")
+def facebook_list_drafts():
+    """The operator's Marketplace listing drafts — the inputs a create-listing run fills from."""
+    import listing_draft
+    return {"drafts": listing_draft.list_drafts()}
+
+
+@app.post("/api/facebook/listings")
+def facebook_upsert_draft(body: ListingDraftBody):
+    """Create or update a listing draft. Required to run a create-listing flow: title + price."""
+    import listing_draft
+    draft = listing_draft.upsert(body.model_dump(exclude_none=True))
+    from dataclasses import asdict as _asdict
+    return {"draft": _asdict(draft), "missing_required": draft.missing_required()}
 
 
 @app.post("/api/runtime/run_batch")

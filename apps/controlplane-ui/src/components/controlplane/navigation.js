@@ -93,6 +93,28 @@ export const CONTROL_PLANE_NAV = {
       },
     ],
   },
+  facebook: {
+    label: "Facebook",
+    title: "Facebook Marketplace",
+    subtitle: "The Marketplace workspace: login + create-listing recipes, listing drafts, and the loop's needs-help queue.",
+    sections: [
+      {
+        id: "fb-overview",
+        label: "Overview",
+        subtitle: "The seeded login + create-listing flows the runner drives, and this domain at a glance.",
+      },
+      {
+        id: "listings",
+        label: "Listings",
+        subtitle: "Draft a Marketplace listing from your inputs, then run the loop to create it (execute-by-default; publish is gated for your approval).",
+      },
+      {
+        id: "fb-handoffs",
+        label: "Handoffs",
+        subtitle: "When the loop needs you: why it stopped and what it tried first. Resolve one once you've unblocked it.",
+      },
+    ],
+  },
   lab: {
     label: "Lab",
     title: "Lab",

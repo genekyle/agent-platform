@@ -141,11 +141,13 @@ def verify(
     return VerificationResult(ok=ok, predicted=predicted, observed=observed, reason=reason)
 
 
-def next_step(result: VerificationResult, retry_count: int) -> str:
+def next_step(result: VerificationResult, retry_count: int, max_retries: int = MAX_RETRIES) -> str:
     """Bounded-retry policy. 'ok' | 'retry' | 'escalate'. The runtime steps down a
-    modality on 'retry' and hands to a human on 'escalate' (never loops forever)."""
+    modality on 'retry' and hands to a human on 'escalate' (never loops forever).
+    `max_retries` lets the caller widen the budget (e.g. live runs try a few times
+    before giving up / running the captcha diagnostic)."""
     if result.ok:
         return "ok"
-    if retry_count < MAX_RETRIES:
+    if retry_count < max_retries:
         return "retry"
     return "escalate"

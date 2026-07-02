@@ -201,6 +201,7 @@ def run_loop(
     is_done: Optional[Callable[[Observation], bool]] = None,
     value_for: Optional[Callable[[SelectionResult, Observation], Optional[str]]] = None,
     gate: Optional[Gate] = None,
+    max_retries: int = verifier.MAX_RETRIES,
     log_corpus: bool = True,
 ) -> LoopResult:
     """Run the per-step loop until done, escalation, a recorded intent, or budget.
@@ -331,7 +332,7 @@ def run_loop(
             expected_value=value,
         )
         verify_info = {"ok": vres.ok, "predicted": vres.predicted, "observed": vres.observed}
-        decision = verifier.next_step(vres, retry)
+        decision = verifier.next_step(vres, retry, max_retries)
 
         if decision == "ok":
             record(result, observation, len(candidates), True, act.driver,
