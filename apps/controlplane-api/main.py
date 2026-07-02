@@ -3455,6 +3455,144 @@ async def facebook_persistent_session(db: Session = Depends(get_db)):
     return session
 
 
+# ---------------------------------------------------------------------------
+# Inventory — channel-agnostic selling model (items / listings / queue / log).
+# Internal inventory is the source of truth; a marketplace is a sales channel.
+# ---------------------------------------------------------------------------
+class ItemBody(BaseModel):
+    title: str = ""
+    description: str = ""
+    category: str = ""
+    price: str = ""
+    condition: str = ""
+    photos: list[str] = []
+    pickup_location: str = ""
+    internal_status: Optional[str] = None
+    notes: str = ""
+
+
+class QueueAddBody(BaseModel):
+    item_ids: list[str]
+    channel: str = "facebook_marketplace"
+    task_type: str = "post"
+
+
+class IdsBody(BaseModel):
+    task_ids: list[str] = []
+
+
+@app.get("/api/inventory/overview")
+def inventory_overview():
+    import inventory
+    return inventory.overview()
+
+
+@app.get("/api/inventory/items")
+def inventory_items(status: Optional[str] = None, category: Optional[str] = None,
+                    channel_status: Optional[str] = None, price_min: Optional[float] = None,
+                    price_max: Optional[float] = None, search: Optional[str] = None):
+    import inventory
+    return {"items": inventory.list_items(status=status, category=category,
+                                          channel_status=channel_status, price_min=price_min,
+                                          price_max=price_max, search=search)}
+
+
+@app.post("/api/inventory/items")
+def inventory_create_item(body: ItemBody):
+    import inventory
+    return {"item": inventory.create_item(body.model_dump(exclude_none=True))}
+
+
+@app.get("/api/inventory/items/{item_id}")
+def inventory_get_item(item_id: str):
+    import inventory
+    item = inventory.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item": item}
+
+
+@app.patch("/api/inventory/items/{item_id}")
+def inventory_update_item(item_id: str, body: ItemBody):
+    import inventory
+    item = inventory.update_item(item_id, body.model_dump(exclude_none=True))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item": item}
+
+
+@app.post("/api/inventory/items/{item_id}/sold")
+def inventory_mark_sold(item_id: str):
+    import inventory
+    item = inventory.mark_sold(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item": item}
+
+
+@app.post("/api/inventory/items/{item_id}/archive")
+def inventory_archive(item_id: str):
+    import inventory
+    item = inventory.archive_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item": item}
+
+
+@app.get("/api/inventory/queue")
+def inventory_queue():
+    import inventory
+    return {"queue": inventory.list_queue()}
+
+
+@app.post("/api/inventory/queue")
+def inventory_queue_add(body: QueueAddBody):
+    import inventory
+    return inventory.add_to_queue(body.item_ids, channel=body.channel, task_type=body.task_type)
+
+
+@app.post("/api/inventory/queue/run")
+def inventory_queue_run(dry_run: bool = True, limit: int = 0):
+    import inventory
+    return inventory.run_queue(dry_run=dry_run, limit=limit)
+
+
+@app.post("/api/inventory/queue/retry")
+def inventory_queue_retry():
+    import inventory
+    return inventory.retry_failed()
+
+
+@app.post("/api/inventory/queue/remove")
+def inventory_queue_remove(body: IdsBody):
+    import inventory
+    return inventory.remove_tasks(body.task_ids)
+
+
+@app.post("/api/inventory/queue/clear")
+def inventory_queue_clear():
+    import inventory
+    return inventory.clear_completed()
+
+
+@app.get("/api/inventory/listings")
+def inventory_listings(active_only: bool = False, channel: Optional[str] = None):
+    import inventory
+    return {"listings": inventory.list_listings(active_only=active_only, channel=channel)}
+
+
+@app.post("/api/inventory/check-responses")
+def inventory_check_responses(channel: Optional[str] = None):
+    import inventory
+    return inventory.check_responses(channel=channel)
+
+
+@app.get("/api/inventory/log")
+def inventory_log(limit: int = 50):
+    import inventory
+    return {"log": inventory.list_log(limit=limit)}
+
+
 @app.post("/api/runtime/run_batch")
 def runtime_run_batch(only_with_sidecar: bool = True, force: bool = False, limit: int = 0):
     """Replay every stored capture through the record-only loop to FILL THE CORPORA.
