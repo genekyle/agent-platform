@@ -185,11 +185,19 @@ WORKDAY_LESSONS = {
         "page navigations kill the CDP websocket — reconnect and re-discover the target (expected)",
     ],
     "gaps": [
-        "nested-prompt multiselect (formField-source): promptOption/menuItem/checkbox coordinate "
-        "clicks, keyboard Arrow+Enter, and type-to-filter (no text input) ALL fail to register — "
-        "needs an OS-level input path or a Workday-specific executor; until then: operator fills it",
+        "nested-prompt multiselect (formField-source 'How Did You Hear'): promptOption/menuItem/"
+        "checkbox coordinate clicks, keyboard Arrow+Enter, and type-to-filter (no text input) ALL "
+        "fail to register — operator fills it (seconds by hand)",
+        "3-spinner DATE widget (dateSectionMonth/Day/Year-input): inputs are linked and auto-advance; "
+        "CDP click+type+backspace scrambles across sub-fields (got '12//', '//2012'). Operator fills it",
         "flow-level auth is separate from tenant-nav auth (sign-in may be needed twice)",
     ],
+    # PROVEN full-drive (State Street BA, submitted 2026-07-02): single-select listbox dropdowns,
+    # checkboxes, and TEXT fields all work with trusted-click + Input.insertText (NOT the React
+    # value-setter — that leaves aria-invalid=true; must TYPE). Clear text fields with Backspace*N
+    # before typing (value-setter left stale values). 2 of ~20 fields needed the operator (above).
+    "field_types_that_work": ["single-select listbox dropdown", "checkbox", "typed text (insertText after clearing)"],
+    "field_types_route_to_operator": ["nested/hierarchical multiselect prompt", "3-spinner date widget"],
 }
 
 
