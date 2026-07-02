@@ -366,6 +366,22 @@ def _training_profiles_root() -> Path:
     return root
 
 
+def _persistent_profiles_root() -> Path:
+    """Root for SHARED, surviving Chrome profiles (one dir per named profile). These are
+    NOT deleted between sessions, so a supervised login persists (cookies/session stay)."""
+    root = _training_profiles_root() / "persistent"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _profile_dir_for(session: TrainingSession) -> Path:
+    """Where this session's Chrome keeps its user-data-dir: a shared persistent profile when
+    attached (login survives), else a throwaway per-session dir (fresh every time)."""
+    if session.persistent_profile:
+        return _persistent_profiles_root() / _slugify(session.persistent_profile)
+    return _training_profiles_root() / f"training-session-{session.id}"
+
+
 def _next_training_port(db: Session) -> int:
     active_ports = db.scalars(
         select(TrainingSession.chrome_debug_port).where(
@@ -468,8 +484,25 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
     if session.status == "active" and session.chrome_process_pid:
         return session
 
+    # A persistent profile dir can back only ONE Chrome at a time (Chrome locks it), so refuse
+    # to launch a second session on a profile another active session already holds.
+    if session.persistent_profile:
+        clash = db.scalar(
+            select(TrainingSession.id).where(
+                TrainingSession.persistent_profile == session.persistent_profile,
+                TrainingSession.status.in_(["active", "starting"]),
+                TrainingSession.id != session.id,
+            ).limit(1)
+        )
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Persistent profile '{session.persistent_profile}' is already in use by "
+                       f"session #{clash}. Stop it first.",
+            )
+
     port = _next_training_port(db)
-    profile_dir = _training_profiles_root() / f"training-session-{session.id}"
+    profile_dir = _profile_dir_for(session)
     profile_dir.mkdir(parents=True, exist_ok=True)
     _seed_training_chrome_prefs(profile_dir)
     process = subprocess.Popen(
@@ -639,6 +672,8 @@ def _migrate_schema() -> None:
         ("observed_jobs", "apply_type", "VARCHAR(30)"),
         # observed_jobs cross-site apply routing (v13)
         ("observed_jobs", "application_platform", "VARCHAR(40)"),
+        # training_sessions persistent (pre-authed) profile attach (v14)
+        ("training_sessions", "persistent_profile", "VARCHAR(120)"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -2495,6 +2530,7 @@ def create_training_session(body: TrainingSessionCreate, db: Session = Depends(g
         task_id=scenario.task_id,
         capture_profile=scenario.capture_profile_override or (domain.capture_defaults or {}).get("profile", "viewport"),
         purpose=purpose,
+        persistent_profile=(body.persistent_profile or None),
         notes=body.notes,
         status="draft",
     )
@@ -3176,8 +3212,9 @@ def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
     handoff (why + what it tried) and a macOS notification."""
     from dataclasses import asdict
 
+    import auth_gate
     import task_spec
-    from runtime import LiveActor, LiveProposer, LoopStatus, run_loop
+    from runtime import LiveActor, LiveProposer, LoopResult, LoopStatus, PrimedProposer, run_loop
     from runtime import gate as gate_mod
     from runtime import handoff as handoff_mod
     from runtime.live import observation_from_trace
@@ -3193,6 +3230,27 @@ def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
         capture_server_url=server, browser_url=browser_url, traces_dir=traces_dir,
         tab_id=body.tab_id, tab_url=body.tab_url, goal=body.task_goal,
     )
+
+    # --- AUTH PRE-FLIGHT: observe once; if the domain plainly isn't signed in, hand off
+    # ("log in first") instead of driving the loop into a login wall. Unknown/authed → proceed,
+    # and PRIME the loop with this observation so it doesn't re-capture the same page.
+    first_obs = proposer()
+    authed = auth_gate.is_authenticated(session.domain_id, first_obs.url, first_obs.page_text)
+    if authed is False:
+        result = LoopResult(LoopStatus.ESCALATED, [],
+                            reason="not authenticated — sign in to the site first",
+                            escalation_reason="not_authenticated")
+        handoff = handoff_mod.emit(result, task_goal=body.task_goal, training_session_id=session.id,
+                                   last_observation=first_obs, tab_url=body.tab_url)
+        return {
+            "status": result.status.value, "completed": False, "authenticated": False,
+            "task": (task_spec.spec_for(task=body.task, task_goal=body.task_goal) or None)
+                    and task_spec.spec_for(task=body.task, task_goal=body.task_goal).name,
+            "reason": result.reason, "escalation_reason": "not_authenticated",
+            "total_cost_usd": 0.0, "executed_steps": 0, "steps": [],
+            "handoff": asdict(handoff),
+        }
+    proposer_for_loop = PrimedProposer(first_obs, proposer)
     actor = LiveActor(
         capture_server_url=server, browser_url=browser_url,
         tab_id=body.tab_id, tab_url=body.tab_url,
@@ -3229,7 +3287,7 @@ def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
                     break
             return ld.value_for_field(_draft, name)
 
-    result = run_loop(task_goal=body.task_goal, proposer=proposer, actor=actor,
+    result = run_loop(task_goal=body.task_goal, proposer=proposer_for_loop, actor=actor,
                       gate=gate, is_done=is_done, value_for=value_for,
                       max_steps=body.max_steps, max_retries=body.max_retries)
 
@@ -3293,6 +3351,31 @@ def runtime_resolve_handoff(handoff_id: str):
     return {"ok": True, "id": handoff_id, "status": "resolved"}
 
 
+def _observe_once(session: TrainingSession, tab_url: Optional[str] = None):
+    """One live capture of the session's browser → Observation (best-effort)."""
+    from runtime import LiveProposer
+    p = LiveProposer(capture_server_url=settings.capture_server_url,
+                     browser_url=_session_browser_url(session),
+                     traces_dir=_artifacts_dir() / "observer-traces", tab_url=tab_url)
+    return p()
+
+
+@app.get("/api/runtime/auth_status")
+def runtime_auth_status(training_session_id: int, tab_url: Optional[str] = None,
+                        db: Session = Depends(get_db)):
+    """Domain-aware "is this session signed in?" — observes the live page and reads the
+    auth signal for the session's domain (the gate run_live applies before a real run)."""
+    import auth_gate
+    session = db.get(TrainingSession, training_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    obs = _observe_once(session, tab_url)
+    status = auth_gate.auth_status(session.domain_id, obs.url, obs.page_text)
+    status["training_session_id"] = training_session_id
+    status["domain_id"] = session.domain_id
+    return status
+
+
 # ---------------------------------------------------------------------------
 # Facebook Marketplace — recipe + listing drafts (the create-listing inputs)
 # ---------------------------------------------------------------------------
@@ -3330,6 +3413,46 @@ def facebook_upsert_draft(body: ListingDraftBody):
     draft = listing_draft.upsert(body.model_dump(exclude_none=True))
     from dataclasses import asdict as _asdict
     return {"draft": _asdict(draft), "missing_required": draft.missing_required()}
+
+
+@app.post("/api/facebook/session", response_model=TrainingSessionRead)
+async def facebook_persistent_session(db: Session = Depends(get_db)):
+    """One-click: get (or create) the PERSISTENT Facebook session, launch its surviving Chrome
+    profile, and open facebook.com so the operator can log in ONCE. The profile keeps the login,
+    so future create-listing runs start already authenticated. Reuses an existing active one."""
+    profile = "facebook"
+    session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.persistent_profile == profile,
+            TrainingSession.status.in_(["active", "starting", "draft"]),
+        ).order_by(TrainingSession.id.desc()).limit(1)
+    )
+    if session is None:
+        scenario = db.scalar(
+            select(ScenarioRegistry).where(ScenarioRegistry.domain_id == "facebook_marketplace").limit(1)
+        )
+        if scenario is None:
+            raise HTTPException(status_code=400, detail="No facebook_marketplace scenario to attach")
+        session = TrainingSession(
+            domain_id="facebook_marketplace", scenario_id=scenario.scenario_id,
+            goal_id=scenario.goal_id, task_id=scenario.task_id,
+            capture_profile="viewport", purpose="production",
+            persistent_profile=profile, status="draft",
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+    _launch_training_chrome(db, session)
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            await client.post(f"{settings.capture_server_url}/navigate",
+                              json={"url": "https://www.facebook.com/",
+                                    "browser_url": _session_browser_url(session), "settle_seconds": 3.0})
+    except httpx.HTTPError:
+        pass  # navigation is a convenience; the browser is up either way
+    db.refresh(session)
+    return session
 
 
 @app.post("/api/runtime/run_batch")

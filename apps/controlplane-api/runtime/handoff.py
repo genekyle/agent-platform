@@ -74,6 +74,11 @@ _REASON_GUIDANCE: dict[str, dict[str, str]] = {
         "why": "The agent couldn't read the page (no candidates — possibly a failed observation).",
         "suggestion": "Confirm the tab is on the expected page and reachable, then resume.",
     },
+    "not_authenticated": {
+        "why": "The browser isn't signed in to this site, so the task can't run yet.",
+        "suggestion": "Log in to the site in the session's browser window (do any 2FA/checkpoint "
+                      "by hand), then run again — a persistent profile keeps you signed in after.",
+    },
 }
 
 

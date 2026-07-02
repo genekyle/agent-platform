@@ -230,6 +230,9 @@ class TrainingSessionCreate(BaseModel):
     # "data_collection" (full proposer incl. vision catchall) or "production"
     # (cheapest-first cascade, vision only on AX gaps). Defaults to data_collection.
     purpose: str = "data_collection"
+    # Attach to a SHARED persistent (pre-authed) Chrome profile that survives across
+    # sessions. None = a fresh throwaway profile each launch (the data-collection default).
+    persistent_profile: Optional[str] = None
 
 
 class TrainingSessionRead(BaseModel):
@@ -241,6 +244,7 @@ class TrainingSessionRead(BaseModel):
     task_id: Optional[str] = None
     capture_profile: str
     purpose: str = "data_collection"
+    persistent_profile: Optional[str] = None
     notes: Optional[str] = None
     browser_session_id: Optional[str] = None
     chrome_debug_port: Optional[int] = None

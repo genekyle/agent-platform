@@ -28,6 +28,7 @@ from .loop import (  # noqa: F401
 from .live import (  # noqa: F401
     LiveActor,
     LiveProposer,
+    PrimedProposer,
     observation_from_trace,
 )
 from . import gate as gate  # noqa: F401

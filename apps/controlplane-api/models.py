@@ -210,6 +210,11 @@ class TrainingSession(Base):
     purpose: Mapped[str] = mapped_column(String(30), default="data_collection", index=True)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     browser_session_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    # When set, the session attaches to a SHARED, persistent Chrome user-data-dir
+    # (persistent-profiles/<name>) that survives across sessions — so a one-time supervised
+    # login stays authenticated for future runs. When None, each session gets a fresh
+    # throwaway profile (the default for data-collection captures).
+    persistent_profile: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     chrome_debug_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     chrome_user_data_dir: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     chrome_process_pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

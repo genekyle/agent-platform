@@ -157,7 +157,8 @@ function ListingsPanel() {
 
   return (
     <div className="section-body">
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      <AuthProfileCard sessionId={sessionId} setSessionId={setSessionId} />
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
         <SessionPicker sessions={sessions} sessionId={sessionId} setSessionId={setSessionId} />
         <button className="btn" onClick={() => setDraft({ ...EMPTY_DRAFT })}>+ New draft</button>
       </div>
@@ -211,6 +212,67 @@ function ListingsPanel() {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+// The auth/profile step: launch a PERSISTENT Facebook browser (login survives), log in once,
+// and see whether the session is signed in. A create-listing run's auth pre-flight refuses to
+// drive a logged-out session, so this is the gate to a real run.
+function AuthProfileCard({ sessionId, setSessionId }) {
+  const [auth, setAuth] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const check = useCallback(async (sid) => {
+    const id = sid ?? sessionId;
+    if (!id) return;
+    try {
+      const r = await fetch(`${API}/api/runtime/auth_status?training_session_id=${id}&tab_url=facebook.com`).then((x) => x.json());
+      setAuth(r);
+    } catch (e) { setMsg(String(e.message || e)); }
+  }, [sessionId]);
+
+  const launch = useCallback(async () => {
+    setBusy(true); setMsg(""); setAuth(null);
+    try {
+      const s = await fetch(`${API}/api/facebook/session`, { method: "POST" }).then((x) => x.json());
+      if (s?.id) {
+        setSessionId(s.id);
+        setMsg("Chrome opened at facebook.com — log in there once (do any 2FA/checkpoint by hand). This profile stays signed in.");
+        setTimeout(() => check(s.id), 2500);
+      } else {
+        setMsg(s?.detail || "Could not launch the session.");
+      }
+    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
+  }, [setSessionId, check]);
+
+  const authed = auth?.authed;
+  const badge = authed === true ? { t: "Signed in", c: "#3fb950" }
+    : authed === false ? { t: "Not signed in", c: "#f85149" }
+    : { t: "Unknown", c: "#8b949e" };
+
+  return (
+    <div className="panel" style={{ padding: "12px 14px", borderLeft: "3px solid #58a6ff" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div>
+          <strong>Sign in once</strong>
+          <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
+            The loop can’t create a listing until this browser is logged in.
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ color: badge.c, fontWeight: 600, fontSize: 13 }}>● {badge.t}</span>
+          <button className="btn btn-primary" disabled={busy} onClick={launch}>
+            {busy ? "Launching…" : "Launch persistent FB browser"}
+          </button>
+          <button className="btn" disabled={!sessionId} onClick={() => check()}>Check sign-in</button>
+        </div>
+      </div>
+      {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
+      {authed === false && auth?.guidance && (
+        <div style={{ marginTop: 6, color: "#f0883e", fontSize: 12 }}>{auth.guidance}</div>
+      )}
     </div>
   );
 }

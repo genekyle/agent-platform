@@ -172,3 +172,25 @@ def test_live_actor_executor_error_returns_not_executed(monkeypatch):
                     value=None, observation=_obs_with_candidate())
     assert res.executed is False
     assert "cdp boom" in res.detail
+
+
+def test_primed_proposer_serves_prefetched_then_delegates():
+    from runtime.live import PrimedProposer
+
+    calls = {"n": 0}
+
+    class _Base:
+        last_filename = "cap_2.json"
+
+        def __call__(self):
+            calls["n"] += 1
+            return Observation(url="https://second", page_text="", ax_candidates=[], screenshot_path="")
+
+    primed = Observation(url="https://first", page_text="", ax_candidates=[], screenshot_path="")
+    base = _Base()
+    p = PrimedProposer(primed, base)
+    assert p().url == "https://first"          # first call: the pre-fetched observation
+    assert calls["n"] == 0                       # base NOT called yet
+    assert p().url == "https://second"          # second call delegates to base
+    assert calls["n"] == 1
+    assert p.last_filename == "cap_2.json"       # proxies the base's latest filename

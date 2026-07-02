@@ -138,6 +138,29 @@ class LiveProposer:
             return self._empty()
 
 
+class PrimedProposer:
+    """Serve a pre-fetched observation on the FIRST call, then delegate to the base proposer.
+
+    Lets a caller do a pre-flight observation (e.g. an auth check) and hand that same
+    observation to the loop as its first step — so the loop doesn't pay for a duplicate
+    capture. Proxies `last_filename` so handoffs still resolve the latest page."""
+
+    def __init__(self, primed: Observation, base: LiveProposer):
+        self._primed = primed
+        self._base = base
+        self._used = False
+
+    def __call__(self) -> Observation:
+        if not self._used:
+            self._used = True
+            return self._primed
+        return self._base()
+
+    @property
+    def last_filename(self) -> Optional[str]:
+        return getattr(self._base, "last_filename", None)
+
+
 # --- Live actor --------------------------------------------------------------
 class LiveActor:
     """Perform the loop's decided action against the live tab via mcp `/execute`.
