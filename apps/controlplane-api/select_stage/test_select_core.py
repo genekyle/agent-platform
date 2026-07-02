@@ -52,6 +52,40 @@ def test_fingerprint_stable_across_content_but_not_layout():
     assert fp_a != fp_c           # different candidate set -> different fingerprint
 
 
+def test_normalize_ax_name_strips_volatile_tokens():
+    n = fingerprint._normalize_ax_name
+    assert n("Messages (3)") == n("Messages (7)") == "messages"
+    assert n("5 new notifications") == n("99 new notifications") == "new notifications"
+    assert n("$1,299.00") == ""             # a bare price -> no stable identity
+    assert n("Log In") == "log in"          # a plain label is untouched (beyond lowercasing)
+
+
+def test_fingerprint_robust_to_volatile_labels_and_scroll():
+    """The core sticky-cache win: the SAME screen whose only differences are churny counts/
+    prices and a scrolled DOM position must fingerprint identically (so the cache hits)."""
+    vp = {"viewport_width": 1200, "viewport_height": 700}
+    a = [_ax(1, "link", "Messages (3)"), _ax(2, "button", "Log In"), _ax(3, "link", "$1,299")]
+    b = [_ax(1, "link", "Messages (18)"), _ax(2, "button", "Log In"), _ax(3, "link", "$2,050")]
+    dom_top = [{"tag": "a", "role": "link", "rect": {"x": 10, "y": 20}}]
+    dom_scrolled = [{"tag": "a", "role": "link", "rect": {"x": 10, "y": 980}}]  # scrolled 960px
+    fp_a = fingerprint.compute(url="https://fb.com/", viewport=vp, candidates=a,
+                               task_goal="g", dom_clickables=dom_top)
+    fp_b = fingerprint.compute(url="https://fb.com/", viewport=vp, candidates=b,
+                               task_goal="g", dom_clickables=dom_scrolled)
+    assert fp_a == fp_b
+
+
+def test_fingerprint_still_discriminates_real_state_change():
+    """Robustness must not collapse genuinely different screens: a different stable label
+    set (login wall vs the marketplace composer) must still fingerprint differently."""
+    vp = {"viewport_width": 1200, "viewport_height": 700}
+    login = [_ax(1, "textbox", "Email"), _ax(2, "button", "Log In")]
+    market = [_ax(1, "textbox", "Search Marketplace"), _ax(2, "button", "Create new listing")]
+    fp_login = fingerprint.compute(url="https://fb.com/", viewport=vp, candidates=login, task_goal="g")
+    fp_market = fingerprint.compute(url="https://fb.com/", viewport=vp, candidates=market, task_goal="g")
+    assert fp_login != fp_market
+
+
 # --- Phase 2: cache ----------------------------------------------------------
 def test_cache_roundtrip_and_version():
     from select_stage.schema import candidates_from_ax

@@ -19,10 +19,37 @@ import re
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
+# Bumping this re-hashes every state, so old cache entries cleanly miss and re-seed
+# from live runs (the cache is a cache). Bump on any change to how the payload is built.
+_FINGERPRINT_VERSION = "v2"
+
 # Path segments that are clearly content ids, not route structure.
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 _LONGHEX = re.compile(r"^[0-9a-f]{12,}$", re.I)
 _DIGITS = re.compile(r"^\d+$")
+
+# Volatile bits INSIDE an accessible name that shouldn't change a screen's identity:
+# notification badges/counts ("(3)", "[12]"), currency amounts, and any bare number run
+# (counts, timestamps, prices, ids baked into a label). Stripping these is what makes
+# "Messages (3)" and "Messages (7)" the SAME screen so the cache stops missing on churn.
+_COUNT_PAREN = re.compile(r"[(\[]\s*\d[\d.,]*\s*[)\]]")   # (3)  [12]
+_CURRENCY = re.compile(r"[$€£¥]\s?\d[\d.,]*")             # $1,299.00
+_NUMRUN = re.compile(r"\d[\d.,:]*")                        # any remaining number run
+_WS = re.compile(r"\s+")
+_TRIM_CHARS = " ·•|,:-–—\t"
+
+
+def _normalize_ax_name(name: str) -> str:
+    """Lowercase + strip volatile tokens (counts, currency, numbers) so the same control
+    keeps one stable identity across visits. Returns '' for a purely-volatile label
+    (a bare count/price), which the summary then drops."""
+    s = (name or "").strip().lower()
+    if not s:
+        return ""
+    s = _COUNT_PAREN.sub(" ", s)
+    s = _CURRENCY.sub(" ", s)
+    s = _NUMRUN.sub(" ", s)
+    return _WS.sub(" ", s).strip(_TRIM_CHARS)
 
 
 def _template_segment(seg: str) -> str:
@@ -61,29 +88,34 @@ def viewport_class(width: int, height: int) -> str:
 
 
 def ax_summary(candidates: list[dict[str, Any]]) -> list[str]:
-    """Sorted role|name identities of the candidate set (order-independent)."""
-    out = []
+    """Sorted, de-duplicated role|normalized-name identities of the candidate set
+    (order-independent). Names are normalized to strip volatile tokens, and purely-volatile
+    labels (bare counts/prices) are dropped — so incidental churn (a badge count ticking up,
+    a new price) no longer busts the fingerprint, while the stable label set still identifies
+    the screen."""
+    seen: set[str] = set()
     for c in candidates:
         role = str(c.get("role", ""))
-        name = (c.get("caption") or c.get("name") or "").strip()
-        out.append(f"{role}|{name}")
-    return sorted(out)
+        name = _normalize_ax_name(c.get("caption") or c.get("name") or "")
+        if not name:
+            continue  # a bare count/number/icon carries no stable identity
+        seen.add(f"{role}|{name}")
+    return sorted(seen)
 
 
 def dom_summary(clickables: Optional[list[dict[str, Any]]]) -> list[str]:
-    """Optional: compact summary of DOM clickable nodes (tag|role|coarse-pos).
-    Coarse 100px position bucket keeps it stable against minor layout shifts."""
+    """Optional secondary signal: the POSITION-FREE structural set of DOM clickables
+    (de-duplicated tag|role). Absolute coordinates were dropped from the fingerprint on
+    purpose — scroll and reflow move elements >100px and were busting the key on dynamic
+    pages; the tag/role composition is the stable part worth keeping."""
     if not clickables:
         return []
-    out = []
+    seen: set[str] = set()
     for el in clickables:
         tag = str(el.get("tag", ""))
         role = str(el.get("role", ""))
-        rect = el.get("rect") or el.get("bbox") or {}
-        gx = int(float(rect.get("x", 0)) // 100) if rect else 0
-        gy = int(float(rect.get("y", 0)) // 100) if rect else 0
-        out.append(f"{tag}|{role}|{gx},{gy}")
-    return sorted(out)
+        seen.add(f"{tag}|{role}")
+    return sorted(seen)
 
 
 def compute(
@@ -96,6 +128,7 @@ def compute(
 ) -> str:
     """Stable sha256 fingerprint of the page state for cache keying."""
     payload = {
+        "v": _FINGERPRINT_VERSION,
         "route": route_template(url),
         "viewport": viewport_class(viewport.get("viewport_width", 0), viewport.get("viewport_height", 0)),
         "ax": ax_summary(candidates),
