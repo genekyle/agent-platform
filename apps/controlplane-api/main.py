@@ -481,25 +481,35 @@ def _seed_training_chrome_prefs(profile_dir: Path) -> None:
 
 
 def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSession:
-    if session.status == "active" and session.chrome_process_pid:
+    import channel_browser
+
+    # ATTACH if the browser is genuinely alive (CDP answers) — not merely if we once stored a pid.
+    # A stale "active" row pointing at a dead port is what made connecting feel impossible.
+    if channel_browser.cdp_reachable(session.chrome_debug_port):
         return session
 
-    # A persistent profile dir can back only ONE Chrome at a time (Chrome locks it), so refuse
-    # to launch a second session on a profile another active session already holds.
+    # A persistent profile dir can back only ONE live Chrome at a time (Chrome locks it). Reap any
+    # sibling sessions on the same profile whose browser is actually DEAD (so a stale row can't
+    # falsely block us); only a genuinely-alive sibling is a real conflict.
     if session.persistent_profile:
-        clash = db.scalar(
-            select(TrainingSession.id).where(
+        siblings = db.scalars(
+            select(TrainingSession).where(
                 TrainingSession.persistent_profile == session.persistent_profile,
                 TrainingSession.status.in_(["active", "starting"]),
                 TrainingSession.id != session.id,
-            ).limit(1)
-        )
-        if clash is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Persistent profile '{session.persistent_profile}' is already in use by "
-                       f"session #{clash}. Stop it first.",
             )
+        ).all()
+        for other in siblings:
+            if channel_browser.cdp_reachable(other.chrome_debug_port):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Persistent profile '{session.persistent_profile}' is already in use by "
+                           f"a live session #{other.id}. Stop it first.",
+                )
+            other.status = "stopped"
+            other.chrome_stopped_at = utcnow()
+        if siblings:
+            db.commit()
 
     port = _next_training_port(db)
     profile_dir = _profile_dir_for(session)
@@ -529,6 +539,12 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
     session.completed_at = None
     db.commit()
     db.refresh(session)
+
+    # Wait until the CDP endpoint actually answers before returning, so callers get a browser
+    # that's truly ready to drive (not one still starting up).
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline and not channel_browser.cdp_reachable(port):
+        time.sleep(0.4)
     return session
 
 
@@ -3415,125 +3431,151 @@ def facebook_upsert_draft(body: ListingDraftBody):
     return {"draft": _asdict(draft), "missing_required": draft.missing_required()}
 
 
-@app.post("/api/facebook/session", response_model=TrainingSessionRead)
-async def facebook_persistent_session(db: Session = Depends(get_db)):
-    """One-click: get (or create) the PERSISTENT Facebook session, launch its surviving Chrome
-    profile, and open facebook.com so the operator can log in ONCE. The profile keeps the login,
-    so future create-listing runs start already authenticated. Reuses an existing active one."""
-    profile = "facebook"
+# ---------------------------------------------------------------------------
+# Channel browser — one persistent, health-checked, auto-healing browser per sales
+# channel that agents ATTACH to. Login is a supervised task through it (observe → drive
+# → verify → escalate at a gate), not a bespoke one-shot.
+# ---------------------------------------------------------------------------
+def _ensure_channel_browser(db: Session, channel: str):
+    """Find-or-create the channel's single persistent session and make sure its browser is live
+    (attach if CDP answers, else relaunch + wait for ready). Returns (session, cfg)."""
+    import channel_browser
+    cfg = channel_browser.channel_config(channel)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"Unknown channel '{channel}'")
     session = db.scalar(
         select(TrainingSession).where(
-            TrainingSession.persistent_profile == profile,
-            TrainingSession.status.in_(["active", "starting", "draft"]),
+            TrainingSession.persistent_profile == cfg["profile"]
         ).order_by(TrainingSession.id.desc()).limit(1)
     )
     if session is None:
         scenario = db.scalar(
-            select(ScenarioRegistry).where(ScenarioRegistry.domain_id == "facebook_marketplace").limit(1)
+            select(ScenarioRegistry).where(ScenarioRegistry.domain_id == cfg["domain_id"]).limit(1)
         )
         if scenario is None:
-            raise HTTPException(status_code=400, detail="No facebook_marketplace scenario to attach")
+            raise HTTPException(status_code=400, detail=f"No scenario for channel {cfg['domain_id']}")
         session = TrainingSession(
-            domain_id="facebook_marketplace", scenario_id=scenario.scenario_id,
-            goal_id=scenario.goal_id, task_id=scenario.task_id,
-            capture_profile="viewport", purpose="production",
-            persistent_profile=profile, status="draft",
+            domain_id=cfg["domain_id"], scenario_id=scenario.scenario_id,
+            goal_id=scenario.goal_id, task_id=scenario.task_id, capture_profile="viewport",
+            purpose="production", persistent_profile=cfg["profile"], status="draft",
         )
         db.add(session)
         db.commit()
         db.refresh(session)
+    _launch_training_chrome(db, session)   # attaches if alive, else relaunches + waits for readiness
+    return session, cfg
 
-    _launch_training_chrome(db, session)
+
+def _channel_creds(channel: str):
+    """(username, password) for a channel from the gitignored .env, or None. Never logged."""
+    if channel == "facebook_marketplace" and settings.fb_username and settings.fb_password:
+        return settings.fb_username, settings.fb_password
+    return None
+
+
+def _blocking_challenge(browser_url: str):
+    """The live captcha probe (mcp /challenge_visibility) → the block dict if a challenge is
+    actually blocking, else None."""
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            await client.post(f"{settings.capture_server_url}/navigate",
-                              json={"url": "https://www.facebook.com/",
-                                    "browser_url": _session_browser_url(session), "settle_seconds": 3.0})
-    except httpx.HTTPError:
-        pass  # navigation is a convenience; the browser is up either way
-    db.refresh(session)
-    return session
+        with httpx.Client(timeout=8.0) as client:
+            cv = client.post(f"{settings.capture_server_url}/challenge_visibility",
+                             json={"browser_url": browser_url}).json()
+        return cv if (cv.get("ok") and cv.get("blocking")) else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
-@app.post("/api/facebook/login")
-async def facebook_auto_login(training_session_id: Optional[int] = None, db: Session = Depends(get_db)):
-    """Attempt the Facebook login automatically: type the stored credentials + submit, then check
-    the result. This is the loop doing the work and STOPPING ONLY AT A GATE — if Facebook throws a
-    captcha / 2FA / 'is this you' checkpoint, we never touch it; we emit a handoff + notification so
-    the operator clears that one human step. Once in, the persistent profile stays signed in.
+@app.get("/api/channels/{channel}/status")
+def channel_status(channel: str, db: Session = Depends(get_db)):
+    """Cheap, honest connection status (a CDP probe — no capture). Poll this for the UI badge."""
+    import channel_browser
+    cfg = channel_browser.channel_config(channel)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"Unknown channel '{channel}'")
+    session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.persistent_profile == cfg["profile"]
+        ).order_by(TrainingSession.id.desc()).limit(1)
+    )
+    connected = bool(session) and channel_browser.cdp_reachable(session.chrome_debug_port)
+    return {"channel": channel, "label": cfg["label"], "connected": connected,
+            "session_id": session.id if session else None,
+            "port": session.chrome_debug_port if session else None}
 
-    Credentials come from the gitignored .env (settings.fb_username/password) and are NEVER logged."""
+
+@app.post("/api/channels/{channel}/connect")
+def channel_connect(channel: str, db: Session = Depends(get_db)):
+    """Attach to (or heal) the channel browser and sit it on the channel home. Returns honest
+    connected + authed so the UI can show real state instead of hoping."""
+    import auth_gate
+    import channel_browser
+    session, cfg = _ensure_channel_browser(db, channel)
+    browser_url = _session_browser_url(session)
+    try:
+        with httpx.Client(timeout=25.0) as client:
+            client.post(f"{settings.capture_server_url}/navigate",
+                        json={"url": cfg["home"], "browser_url": browser_url, "settle_seconds": 2.0})
+    except Exception:  # noqa: BLE001
+        pass  # navigation is a convenience; attachment is what matters
+    connected = channel_browser.cdp_reachable(session.chrome_debug_port)
+    authed = None
+    if connected:
+        obs = _observe_once(session, tab_url=cfg["tab_url"])
+        authed = auth_gate.is_authenticated(cfg["domain_id"], obs.url, obs.page_text)
+    return {"channel": channel, "connected": connected, "authed": authed,
+            "session_id": session.id, "port": session.chrome_debug_port}
+
+
+@app.post("/api/channels/{channel}/login")
+def channel_login(channel: str, db: Session = Depends(get_db)):
+    """Supervised login: ensure a healthy browser, observe, drive the login form, re-verify, and
+    escalate ONLY at a real gate (captcha / 2FA / checkpoint) — never auto-solving it. The loop
+    doing the work and stopping only when it needs a human."""
     from dataclasses import asdict
 
     import auth_gate
+    import channel_browser
     from runtime import handoff as handoff_mod
     from runtime.loop import LoopResult, LoopStatus
 
-    if training_session_id:
-        session = db.get(TrainingSession, training_session_id)
-    else:
-        session = db.scalar(
-            select(TrainingSession).where(
-                TrainingSession.persistent_profile == "facebook",
-                TrainingSession.status.in_(["active", "starting"]),
-            ).order_by(TrainingSession.id.desc()).limit(1)
-        )
-    if session is None:
-        raise HTTPException(status_code=400, detail="Launch the Facebook browser first (Settings → Launch).")
-    if not (settings.fb_username and settings.fb_password):
-        raise HTTPException(status_code=400,
-                            detail="Set FB_USERNAME and FB_PASSWORD in apps/controlplane-api/.env")
+    session, cfg = _ensure_channel_browser(db, channel)
     browser_url = _session_browser_url(session)
+    creds = _channel_creds(channel)
+    if creds is None:
+        raise HTTPException(status_code=400, detail="Channel credentials are not set in .env")
 
-    # Already signed in? (persistent profile may already hold the session.)
-    obs = _observe_once(session, tab_url="facebook.com")
-    if auth_gate.is_authenticated(session.domain_id, obs.url, obs.page_text) is True:
-        return {"logged_in": True, "message": "Already signed in."}
+    obs = _observe_once(session, tab_url=cfg["tab_url"])
+    if auth_gate.is_authenticated(cfg["domain_id"], obs.url, obs.page_text) is True:
+        return {"logged_in": True, "connected": True, "message": "Already signed in."}
 
-    # Attempt the login form (credentials passed to the local driver, never logged).
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(f"{settings.capture_server_url}/facebook_login",
-                                  json={"email": settings.fb_username, "password": settings.fb_password,
-                                        "browser_url": browser_url, "tab_url": "facebook.com"})
-            r.raise_for_status()
-            attempt = r.json()
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"login driver unreachable: {exc}")
+    challenge = _blocking_challenge(browser_url)
+    if not challenge:
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                client.post(f"{settings.capture_server_url}{cfg['login_path']}",
+                            json={"email": creds[0], "password": creds[1],
+                                  "browser_url": browser_url, "tab_url": cfg["tab_url"]})
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"login driver error: {exc}")
+        obs = _observe_once(session, tab_url=cfg["tab_url"])
+        if auth_gate.is_authenticated(cfg["domain_id"], obs.url, obs.page_text) is True:
+            return {"logged_in": True, "connected": True, "message": "Signed in."}
+        challenge = _blocking_challenge(browser_url)
 
-    # Re-check: are we in, or is a human gate showing?
-    obs2 = _observe_once(session, tab_url="facebook.com")
-    authed = auth_gate.is_authenticated(session.domain_id, obs2.url, obs2.page_text)
-    challenge = None
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            cr = await client.post(f"{settings.capture_server_url}/challenge_visibility",
-                                   json={"browser_url": browser_url})
-            cv = cr.json()
-            if cv.get("ok") and cv.get("blocking"):
-                challenge = cv
-    except httpx.HTTPError:
-        pass
-
-    if authed is True:
-        return {"logged_in": True, "message": "Signed in.", "attempt": attempt}
-
-    # Needs a human gate cleared — hand off + notify (never auto-solve a captcha/2FA).
     gate = "captcha" if challenge else "checkpoint_or_2fa"
-    result = LoopResult(LoopStatus.ESCALATED, [], reason="Facebook login needs a human gate cleared",
+    result = LoopResult(LoopStatus.ESCALATED, [], reason="login needs a human gate cleared",
                         escalation_reason="not_authenticated")
     handoff = handoff_mod.emit(
-        result, task_goal="log in to facebook", training_session_id=session.id,
-        last_observation=obs2, tab_url="facebook.com",
+        result, task_goal=f"log in to {channel}", training_session_id=session.id,
+        last_observation=obs, tab_url=cfg["tab_url"],
         diagnostic={"reason": gate, "guidance":
-                    "Facebook is asking for a human step (captcha / 2FA code / 'is this you?'). "
-                    "Complete it in the browser window that's open, then click Check sign-in."})
+                    "Facebook wants a human step (captcha / 2FA code / 'is this you?'). Complete it "
+                    "in the browser window that's open, then click Check sign-in."})
     return {
-        "logged_in": False, "needs_human": True, "gate": gate,
-        "message": "Typed your credentials and submitted — Facebook wants you to clear a "
+        "logged_in": False, "needs_human": True, "connected": True, "gate": gate,
+        "message": "Typed your credentials — clear the "
                    f"{'captcha' if challenge else 'checkpoint / 2FA'} in the window, then Check sign-in.",
-        "landed_url": (obs2.url or "")[:120],
-        "handoff": asdict(handoff) if handoff else None,
+        "handoff": asdict(handoff),
     }
 
 

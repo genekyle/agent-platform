@@ -586,7 +586,7 @@ function ManualControls() {
 function SettingsPanel() {
   return (
     <div className="section-body">
-      <AuthProfileCard />
+      <ChannelCard />
       <ManualControls />
       <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>
         Channel: <strong>Facebook Marketplace</strong>. The inventory model is channel-agnostic —
@@ -596,63 +596,79 @@ function SettingsPanel() {
   );
 }
 
-function AuthProfileCard() {
+const CHANNEL = "facebook_marketplace";
+
+// The channel: one persistent, health-checked browser that agents attach to. Honest status
+// (Browser connected? Auth signed in?), a Connect that heals a dead browser, and a supervised
+// Sign in that types saved creds and stops only at a captcha/2FA gate.
+function ChannelCard() {
+  const [status, setStatus] = useState({ connected: false, session_id: null });
   const [auth, setAuth] = useState(null);
-  const [sessionId, setSessionId] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
 
-  useEffect(() => {
-    fetch(`${API}/api/training/sessions`).then((r) => r.json()).then((rows) => {
-      const fb = (rows || []).filter((s) => (s.domain_id || "").startsWith("facebook") && s.status === "active");
-      if (fb[0]) setSessionId(fb[0].id);
-    }).catch(() => {});
+  const pollStatus = useCallback(() => {
+    api(`/api/channels/${CHANNEL}/status`).then(setStatus).catch(() => {});
+  }, []);
+  useEffect(() => { pollStatus(); const t = setInterval(pollStatus, 5000); return () => clearInterval(t); }, [pollStatus]);
+
+  const checkAuth = useCallback((sid) => {
+    const id = sid ?? status.session_id;
+    if (!id) return;
+    api(`/api/runtime/auth_status?training_session_id=${id}&tab_url=facebook.com`).then(setAuth).catch(() => {});
+  }, [status.session_id]);
+
+  const connect = useCallback(async () => {
+    setBusy("connect"); setMsg("Connecting to the browser…");
+    try {
+      const r = await jpost(`/api/channels/${CHANNEL}/connect`);
+      setStatus((s) => ({ ...s, connected: r.connected, session_id: r.session_id, port: r.port }));
+      setAuth({ authed: r.authed });
+      setMsg(r.connected ? (r.authed ? "Connected · signed in." : "Connected. Not signed in yet — click Sign in.") : "Could not connect.");
+    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(""); }
   }, []);
 
-  const check = useCallback(async (sid) => {
-    const id = sid ?? sessionId; if (!id) return;
-    try { setAuth(await api(`/api/runtime/auth_status?training_session_id=${id}&tab_url=facebook.com`)); }
-    catch (e) { setMsg(String(e.message || e)); }
-  }, [sessionId]);
-
-  const launch = useCallback(async () => {
-    setBusy(true); setMsg(""); setAuth(null);
+  const signIn = useCallback(async () => {
+    setBusy("login"); setMsg("Signing in…");
     try {
-      const s = await jpost("/api/facebook/session");
-      if (s?.id) { setSessionId(s.id);
-        setMsg("Chrome opened at facebook.com. Click “Log in automatically”, or log in yourself in the window.");
-        setTimeout(() => check(s.id), 2500);
-      } else setMsg(s?.detail || "Could not launch.");
-    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
-  }, [check]);
-
-  const autoLogin = useCallback(async () => {
-    setBusy(true); setMsg("");
-    try {
-      const r = await jpost(`/api/facebook/login${sessionId ? `?training_session_id=${sessionId}` : ""}`);
+      const r = await jpost(`/api/channels/${CHANNEL}/login`);
       setMsg(r.message || (r.logged_in ? "Signed in." : "Needs you."));
-      setTimeout(() => check(sessionId), 1800);
-    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
-  }, [sessionId, check]);
+      setAuth({ authed: !!r.logged_in });
+      setTimeout(() => { pollStatus(); checkAuth(r.session_id ?? status.session_id); }, 1600);
+    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(""); }
+  }, [pollStatus, checkAuth, status.session_id]);
 
+  const bBadge = status.connected ? { t: "Connected", c: "#16a34a" } : { t: "Disconnected", c: "#8b949e" };
   const authed = auth?.authed;
-  const badge = authed === true ? { t: "Signed in", c: "#16a34a" }
+  const aBadge = authed === true ? { t: "Signed in", c: "#16a34a" }
     : authed === false ? { t: "Not signed in", c: "#dc2626" } : { t: "Unknown", c: "#8b949e" };
 
   return (
-    <div className="panel" style={{ padding: "12px 14px", borderLeft: "3px solid #3b82f6" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <div><strong>Sign in once</strong>
-          <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>Real posting needs the channel browser logged in.</span></div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ color: badge.c, fontWeight: 600, fontSize: 13 }}>● {badge.t}</span>
-          <button className="btn btn-primary" disabled={busy} onClick={launch}>{busy ? "Launching…" : "Launch persistent FB browser"}</button>
-          <button className="btn" disabled={busy || !sessionId} onClick={autoLogin}>Log in automatically</button>
-          <button className="btn" disabled={!sessionId} onClick={() => check()}>Check sign-in</button>
+    <div className="panel" style={{ padding: "14px 16px", borderLeft: "3px solid #3b82f6" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <strong>Facebook channel</strong>
+          <div style={{ display: "flex", gap: 16, marginTop: 4, fontSize: 13 }}>
+            <span>Browser: <span style={{ color: bBadge.c, fontWeight: 600 }}>● {bBadge.t}</span></span>
+            <span>Auth: <span style={{ color: aBadge.c, fontWeight: 600 }}>● {aBadge.t}</span></span>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="btn" disabled={!!busy} onClick={connect}>
+            {busy === "connect" ? "Connecting…" : status.connected ? "Reconnect" : "Connect"}
+          </button>
+          <button className="btn btn-primary" disabled={!!busy || !status.connected} onClick={signIn}>
+            {busy === "login" ? "Signing in…" : "Sign in"}
+          </button>
+          <button className="btn" disabled={!status.session_id} onClick={() => checkAuth()}>Check sign-in</button>
         </div>
       </div>
       {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
       {authed === false && auth?.guidance && <div style={{ marginTop: 6, color: "#ea580c", fontSize: 12 }}>{auth.guidance}</div>}
+      <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+        The browser stays up and signed in — agents attach to it. “Sign in” types your saved credentials and
+        stops only if Facebook asks for a captcha/2FA, which you clear once in the window.
+      </p>
     </div>
   );
 }
