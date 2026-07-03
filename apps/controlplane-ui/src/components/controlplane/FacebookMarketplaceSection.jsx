@@ -11,15 +11,16 @@ const jpost = (path, body) =>
   api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
 const jpatch = (path, body) =>
   api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const jdelete = (path) => api(path, { method: "DELETE" });
 
 const ITEM_STATUS_COLOR = {
-  draft: "#8b949e", ready_to_post: "#58a6ff", queued: "#d29922", posting: "#d29922",
-  posted: "#3fb950", active: "#3fb950", needs_attention: "#f85149", sold: "#a371f7",
-  error: "#f85149", archived: "#6e7681",
+  draft: "#8b949e", ready_to_post: "#3b82f6", queued: "#d29922", posting: "#d29922",
+  posted: "#16a34a", active: "#16a34a", needs_attention: "#dc2626", sold: "#7c3aed",
+  error: "#dc2626", archived: "#6e7681",
 };
 const TASK_STATUS_COLOR = {
-  waiting: "#8b949e", running: "#d29922", posted: "#3fb950", failed: "#f85149",
-  skipped: "#6e7681", needs_review: "#f0883e",
+  waiting: "#8b949e", running: "#d29922", posted: "#16a34a", failed: "#dc2626",
+  skipped: "#6e7681", needs_review: "#ea580c",
 };
 const ITEM_STATUSES = ["draft", "ready_to_post", "queued", "posting", "posted", "active",
   "needs_attention", "sold", "error", "archived"];
@@ -29,7 +30,7 @@ function Pill({ value, colors = ITEM_STATUS_COLOR }) {
   const c = colors[value] || "#8b949e";
   return (
     <span style={{ color: c, border: `1px solid ${c}55`, background: `${c}18`, borderRadius: 20,
-      padding: "1px 8px", fontSize: 11, whiteSpace: "nowrap", textTransform: "capitalize" }}>
+      padding: "1px 9px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", textTransform: "capitalize" }}>
       {String(value).replace(/_/g, " ")}
     </span>
   );
@@ -44,61 +45,85 @@ function Field({ label, children }) {
   );
 }
 
-function Thumb({ photos }) {
+function Thumb({ photos, size = 34 }) {
   const src = (photos || [])[0];
-  if (src) return <img src={src} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6 }} />;
-  return <div style={{ width: 34, height: 34, borderRadius: 6, background: "#21262d",
-    display: "grid", placeItems: "center", color: "#6e7681" }}><i className="ti ti-photo" /></div>;
+  if (src) return <img src={src} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 6 }} />;
+  return <div style={{ width: size, height: size, borderRadius: 6, background: "#e6e8eb",
+    display: "grid", placeItems: "center", color: "#9aa0a6" }}><i className="ti ti-photo" /></div>;
+}
+
+function SectionHeading({ title, right }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end",
+      borderBottom: "2px solid var(--border, #d0d7de)", paddingBottom: 6, margin: "26px 0 12px" }}>
+      <h3 style={{ margin: 0, fontSize: 16 }}>{title}</h3>
+      {right}
+    </div>
+  );
 }
 
 const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "—");
 
-/** The Marketplace selling workspace — inventory-first, channel-agnostic. */
+/** The Marketplace selling workspace — inventory-first, channel-agnostic. Default view is the
+ *  single-page dashboard (cards → inventory → queue → activity); the nav sub-sections are
+ *  focused deep-dives that reuse the same building blocks. */
 export function FacebookMarketplaceSection({ section }) {
-  if (section === "inventory") return <InventoryPanel />;
-  if (section === "queue") return <QueuePanel />;
+  if (section === "inventory") return <div className="section-body"><InventoryBody /></div>;
+  if (section === "queue") return <div className="section-body"><QueueBody /></div>;
   if (section === "listings") return <ActiveListingsPanel />;
   if (section === "messages") return <MessagesPanel />;
-  if (section === "activity") return <ActivityPanel />;
+  if (section === "activity") return <div className="section-body"><ActivityBody /></div>;
   if (section === "settings") return <SettingsPanel />;
-  return <OverviewPanel />;
+  return <DashboardPanel />;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Overview                                                                    */
+/* Combined dashboard (the v1 single page)                                     */
 /* -------------------------------------------------------------------------- */
-function OverviewPanel() {
-  const [ov, setOv] = useState(null);
-  const load = useCallback(() => api("/api/inventory/overview").then(setOv).catch(() => {}), []);
-  useEffect(() => { load(); }, [load]);
-  if (!ov) return <div className="section-body"><p className="muted">Loading…</p></div>;
-
-  const cards = [
-    { label: "Inventory items", value: ov.total_items, icon: "ti-box" },
-    { label: "Drafts", value: ov.draft, icon: "ti-file-pencil" },
-    { label: "Queued", value: ov.queued, icon: "ti-clock" },
-    { label: "Active listings", value: ov.active_listings, icon: "ti-broadcast" },
-    { label: "New responses", value: ov.items_with_responses, icon: "ti-message" },
-    { label: "Needs attention", value: ov.needs_attention, icon: "ti-alert-triangle" },
-    { label: "Sold", value: ov.sold, icon: "ti-checks" },
-  ];
+function DashboardPanel() {
   return (
     <div className="section-body">
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-        {cards.map((c) => (
-          <div key={c.label} className="panel" style={{ padding: "14px 16px" }}>
-            <div className="muted" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-              <i className={`ti ${c.icon}`} /> {c.label}
-            </div>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>{c.value ?? 0}</div>
-          </div>
-        ))}
+      <OverviewCards />
+      <SectionHeading title="Inventory" />
+      <InventoryBody />
+      <SectionHeading title="Posting Queue" />
+      <QueueBody />
+      <SectionHeading title="Activity Log" />
+      <ActivityBody compact />
+    </div>
+  );
+}
+
+function StatCard({ label, value, icon, accent }) {
+  return (
+    <div className="panel" style={{ padding: "12px 16px", borderTop: `3px solid ${accent}` }}>
+      <div className="muted" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+        <i className={`ti ${icon}`} /> {label}
       </div>
-      <p className="muted" style={{ marginTop: 14, fontSize: 12 }}>
-        Last marketplace check: {fmtTime(ov.last_checked_at)}. Your inventory is the source of truth;
-        Facebook Marketplace is one sales channel — the model is built to add eBay/OfferUp/Shopify later.
-      </p>
-      <ManualControls onDone={load} />
+      <div style={{ fontSize: 28, fontWeight: 700, marginTop: 2 }}>{value ?? 0}</div>
+    </div>
+  );
+}
+
+function OverviewCards() {
+  const [ov, setOv] = useState(null);
+  useEffect(() => {
+    const load = () => api("/api/inventory/overview").then(setOv).catch(() => {});
+    load();
+    const t = setInterval(load, 8000);
+    return () => clearInterval(t);
+  }, []);
+  const cards = [
+    { label: "Total items", value: ov?.total_items, icon: "ti-box", accent: "#3b82f6" },
+    { label: "Queued", value: ov?.queued, icon: "ti-clock", accent: "#d29922" },
+    { label: "Active listings", value: ov?.active_listings, icon: "ti-broadcast", accent: "#16a34a" },
+    { label: "New responses", value: ov?.items_with_responses, icon: "ti-message", accent: "#0ea5e9" },
+    { label: "Needs attention", value: ov?.needs_attention, icon: "ti-alert-triangle", accent: "#dc2626" },
+    { label: "Sold", value: ov?.sold, icon: "ti-checks", accent: "#7c3aed" },
+  ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+      {cards.map((c) => <StatCard key={c.label} {...c} />)}
     </div>
   );
 }
@@ -109,11 +134,11 @@ function OverviewPanel() {
 const EMPTY_ITEM = { title: "", description: "", category: "", price: "", condition: "",
   pickup_location: "", photos: [], notes: "" };
 
-function InventoryPanel() {
+function InventoryBody() {
   const [items, setItems] = useState([]);
-  const [filters, setFilters] = useState({ status: "", category: "", search: "", price_min: "", price_max: "" });
+  const [filters, setFilters] = useState({ status: "", category: "", search: "" });
   const [selected, setSelected] = useState(() => new Set());
-  const [editing, setEditing] = useState(null);   // item being added/edited (or null)
+  const [editing, setEditing] = useState(null);
   const [drawerId, setDrawerId] = useState(null);
   const [msg, setMsg] = useState("");
 
@@ -124,37 +149,36 @@ function InventoryPanel() {
   }, [filters]);
   useEffect(() => { load(); }, [load]);
 
-  const toggle = (id) => setSelected((s) => {
-    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
-  });
+  const toggle = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const queueSelected = useCallback(async () => {
     if (!selected.size) return;
     setMsg("");
     try {
       const r = await jpost("/api/inventory/queue", { item_ids: [...selected] });
-      setMsg(`Queued ${r.count} item(s).`);
-      setSelected(new Set());
-      load();
+      setMsg(`Queued ${r.count} item(s).`); setSelected(new Set()); load();
     } catch (e) { setMsg(String(e.message || e)); }
   }, [selected, load]);
 
+  const rowAction = async (it) => {
+    // context action mirroring the mockup: post if ready, else check responses if active
+    if (it.internal_status === "active") { await jpost("/api/inventory/check-responses"); }
+    else { await jpost("/api/inventory/queue", { item_ids: [it.id] }); }
+    load();
+  };
+
   return (
-    <div className="section-body">
+    <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <input className="input" placeholder="Search title…" value={filters.search}
-            onChange={(e) => setFilters({ ...filters, search: e.target.value })} style={{ width: 160 }} />
+          <input className="input" placeholder="Search items…" value={filters.search}
+            onChange={(e) => setFilters({ ...filters, search: e.target.value })} style={{ width: 180 }} />
           <select className="input" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
-            <option value="">All statuses</option>
+            <option value="">Status: All</option>
             {ITEM_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
           </select>
           <input className="input" placeholder="Category" value={filters.category}
-            onChange={(e) => setFilters({ ...filters, category: e.target.value })} style={{ width: 110 }} />
-          <input className="input" placeholder="Min $" value={filters.price_min}
-            onChange={(e) => setFilters({ ...filters, price_min: e.target.value })} style={{ width: 70 }} />
-          <input className="input" placeholder="Max $" value={filters.price_max}
-            onChange={(e) => setFilters({ ...filters, price_max: e.target.value })} style={{ width: 70 }} />
+            onChange={(e) => setFilters({ ...filters, category: e.target.value })} style={{ width: 120 }} />
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn" disabled={!selected.size} onClick={queueSelected}>
@@ -169,33 +193,31 @@ function InventoryPanel() {
         <div className="table-wrap">
           <table className="runs-table">
             <thead><tr>
-              <th></th><th></th><th>Item</th><th>Category</th><th>Price</th><th>Condition</th>
-              <th>Status</th><th>Listing</th><th>Resp.</th><th>Last checked</th><th></th>
+              <th></th><th>Photo</th><th>Title</th><th>Price</th><th>Status</th><th>FB Status</th>
+              <th>Responses</th><th>Last checked</th><th>Actions</th>
             </tr></thead>
             <tbody>
               {items.map((it) => (
-                <tr key={it.id} style={{ cursor: "pointer" }}>
+                <tr key={it.id}>
                   <td onClick={(e) => e.stopPropagation()}>
                     <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />
                   </td>
-                  <td onClick={() => setDrawerId(it.id)}><Thumb photos={it.photos} /></td>
-                  <td onClick={() => setDrawerId(it.id)}>{it.title || <span className="muted">Untitled</span>}</td>
-                  <td onClick={() => setDrawerId(it.id)} className="muted">{it.category || "—"}</td>
-                  <td onClick={() => setDrawerId(it.id)}>{it.price ? `$${it.price}` : "—"}</td>
-                  <td onClick={() => setDrawerId(it.id)} className="muted">{it.condition || "—"}</td>
-                  <td onClick={() => setDrawerId(it.id)}><Pill value={it.internal_status} /></td>
-                  <td onClick={() => setDrawerId(it.id)}><Pill value={it.listing_status} /></td>
-                  <td onClick={() => setDrawerId(it.id)} style={{ textAlign: "center" }}>
-                    {it.response_count || 0}{it.unread_response_count ? ` (${it.unread_response_count} new)` : ""}
-                  </td>
-                  <td onClick={() => setDrawerId(it.id)} className="muted" style={{ fontSize: 12 }}>{fmtTime(it.last_checked_at)}</td>
-                  <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
-                    <button className="btn btn-sm" onClick={() => setEditing(it)}>Edit</button>
+                  <td onClick={() => setDrawerId(it.id)} style={{ cursor: "pointer" }}><Thumb photos={it.photos} /></td>
+                  <td onClick={() => setDrawerId(it.id)} style={{ cursor: "pointer", fontWeight: 600 }}>{it.title || <span className="muted">Untitled</span>}</td>
+                  <td>{it.price ? `$${it.price}` : "—"}</td>
+                  <td><Pill value={it.internal_status} /></td>
+                  <td>{it.listing_status ? <Pill value={it.listing_status} /> : <span className="muted">Not posted</span>}</td>
+                  <td style={{ textAlign: "center" }}>{it.response_count || 0}{it.unread_response_count ? ` (${it.unread_response_count} new)` : ""}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{fmtTime(it.last_checked_at)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="btn btn-sm" onClick={() => rowAction(it)}>
+                      {it.internal_status === "active" ? "Check responses" : it.internal_status === "error" ? "Retry" : "Add to Queue"}
+                    </button>
                   </td>
                 </tr>
               ))}
-              {items.length === 0 && <tr><td colSpan={11} className="muted" style={{ padding: 16 }}>
-                No items yet. Add your first item to inventory.
+              {items.length === 0 && <tr><td colSpan={9} className="muted" style={{ padding: 18, textAlign: "center" }}>
+                No items yet — click <strong>+ Add item</strong> to start your inventory.
               </td></tr>}
             </tbody>
           </table>
@@ -205,7 +227,7 @@ function InventoryPanel() {
       {editing && <ItemForm item={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {drawerId && <ItemDrawer itemId={drawerId} onClose={() => setDrawerId(null)}
         onChanged={load} onEdit={(it) => { setDrawerId(null); setEditing(it); }} />}
-    </div>
+    </>
   );
 }
 
@@ -240,7 +262,6 @@ function ItemForm({ item, onClose, onSaved }) {
         </div>
         <Field label="Description"><textarea rows={3} className="input" value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} /></Field>
         <Field label="Photo URLs (one per line)"><textarea rows={2} className="input" value={d.photos} onChange={(e) => setD({ ...d, photos: e.target.value })} placeholder="https://…" /></Field>
-        <Field label="Notes"><input className="input" value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Field>
         {err && <div className="error-banner">{err}</div>}
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save"}</button>
@@ -257,10 +278,11 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
   const load = useCallback(() => api(`/api/inventory/items/${itemId}`).then((d) => setItem(d.item)).catch(() => {}), [itemId]);
   useEffect(() => { load(); }, [load]);
 
-  const act = useCallback(async (label, fn) => {
+  const act = useCallback(async (label, fn, close = false) => {
     setBusy(label);
-    try { await fn(); await load(); onChanged?.(); } catch { /* surfaced in the activity log */ } finally { setBusy(""); }
-  }, [load, onChanged]);
+    try { await fn(); if (close) onClose(); else await load(); onChanged?.(); }
+    catch { /* surfaced in the activity log */ } finally { setBusy(""); }
+  }, [load, onChanged, onClose]);
 
   const postNow = () => act("post", async () => {
     await jpost("/api/inventory/queue", { item_ids: [itemId] });
@@ -271,10 +293,10 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 40 }} />
       <div style={{ position: "fixed", top: 0, right: 0, height: "100%", width: 440, maxWidth: "92vw",
-        background: "#0d1117", borderLeft: "1px solid #30363d", zIndex: 50, overflowY: "auto", padding: 18 }}>
+        background: "var(--surface-1, #fff)", borderLeft: "1px solid var(--border, #d0d7de)", zIndex: 50, overflowY: "auto", padding: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <strong style={{ fontSize: 16 }}>{item?.title || "Item"}</strong>
-          <button className="btn btn-sm" onClick={onClose}><i className="ti ti-x" /></button>
+          <button className="btn btn-sm" onClick={onClose} aria-label="Close"><i className="ti ti-x" /></button>
         </div>
         {!item ? <p className="muted" style={{ marginTop: 12 }}>Loading…</p> : (
           <>
@@ -311,7 +333,6 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
                 ))}
               </div>
             )}
-            {item.notes && <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Notes: {item.notes}</p>}
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
               <button className="btn btn-sm" onClick={() => onEdit(item)}>Edit</button>
@@ -320,6 +341,10 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
               <button className="btn btn-sm" disabled={busy} onClick={() => act("check", () => jpost("/api/inventory/check-responses"))}>Check responses</button>
               <button className="btn btn-sm" disabled={busy} onClick={() => act("sold", () => jpost(`/api/inventory/items/${itemId}/sold`))}>Mark sold</button>
               <button className="btn btn-sm" disabled={busy} onClick={() => act("archive", () => jpost(`/api/inventory/items/${itemId}/archive`))}>Archive</button>
+              <button className="btn btn-sm" disabled={busy}
+                onClick={() => { if (window.confirm("Delete this item?")) act("delete", () => jdelete(`/api/inventory/items/${itemId}`), true); }}>
+                Delete
+              </button>
             </div>
           </>
         )}
@@ -331,7 +356,7 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
 /* -------------------------------------------------------------------------- */
 /* Posting Queue                                                               */
 /* -------------------------------------------------------------------------- */
-function QueuePanel() {
+function QueueBody() {
   const [queue, setQueue] = useState([]);
   const [selected, setSelected] = useState(() => new Set());
   const [msg, setMsg] = useState("");
@@ -339,59 +364,107 @@ function QueuePanel() {
   const load = useCallback(() => api("/api/inventory/queue").then((d) => setQueue(d.queue || [])).catch(() => {}), []);
   useEffect(() => { load(); }, [load]);
 
-  const run = async (path, label) => {
+  const run = async (path, label, useSel) => {
     setBusy(true); setMsg("");
-    try { const r = await jpost(path, selected.size ? { task_ids: [...selected] } : undefined);
-      setMsg(`${label}: ${JSON.stringify(r)}`); setSelected(new Set()); load();
+    try {
+      const r = await jpost(path, useSel ? { task_ids: [...selected] } : undefined);
+      setMsg(`${label} — ${Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(", ")}`);
+      setSelected(new Set()); load();
     } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
   };
   const toggle = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   return (
-    <div className="section-body">
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+    <>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <button className="btn btn-primary" disabled={busy} onClick={() => run("/api/inventory/queue/run?dry_run=true", "Ran queue")}>
           {busy ? "Running…" : "Run queue"}
         </button>
         <button className="btn" disabled={busy} onClick={() => run("/api/inventory/queue/retry", "Retried failed")}>Retry failed</button>
         <button className="btn" disabled={busy} onClick={() => run("/api/inventory/queue/clear", "Cleared completed")}>Clear completed</button>
-        <button className="btn" disabled={busy || !selected.size} onClick={() => run("/api/inventory/queue/remove", "Removed")}>Remove selected</button>
+        <button className="btn" disabled={busy || !selected.size} onClick={() => run("/api/inventory/queue/remove", "Removed", true)}>Remove selected</button>
+        <span className="muted" style={{ fontSize: 12 }}>Posting is simulated until a channel is signed in (Settings).</span>
       </div>
-      <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-        Posting is <strong>simulated</strong> for now (listings are flagged simulated) — the runner loop
-        plugs in here once a channel is signed in. Sign in under Settings.
-      </p>
       {msg && <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{msg}</div>}
 
       <div className="panel" style={{ marginTop: 12 }}>
         <div className="table-wrap">
           <table className="runs-table">
-            <thead><tr><th></th><th>#</th><th>Item</th><th>Price</th><th>Channel</th><th>Status</th><th>Attempts</th><th>Last attempt</th><th>Error</th></tr></thead>
+            <thead><tr><th></th><th>#</th><th>Item</th><th>Status</th><th>Attempts</th><th>Last attempt</th><th>Error</th></tr></thead>
             <tbody>
               {queue.map((t) => (
                 <tr key={t.id}>
                   <td><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} /></td>
                   <td>{t.position}</td>
-                  <td>{t.item_title || t.item_id}</td>
-                  <td>{t.item_price ? `$${t.item_price}` : "—"}</td>
-                  <td className="muted">{t.channel}</td>
+                  <td>{t.item_title || t.item_id}{t.item_price ? ` · $${t.item_price}` : ""}</td>
                   <td><Pill value={t.status} colors={TASK_STATUS_COLOR} /></td>
                   <td style={{ textAlign: "center" }}>{t.attempts}</td>
                   <td className="muted" style={{ fontSize: 12 }}>{fmtTime(t.last_attempt_at)}</td>
-                  <td className="muted" style={{ fontSize: 12, color: t.error_message ? "#f85149" : undefined }}>{t.error_message || "—"}</td>
+                  <td className="muted" style={{ fontSize: 12, color: t.error_message ? "#dc2626" : undefined }}>{t.error_message || "—"}</td>
                 </tr>
               ))}
-              {queue.length === 0 && <tr><td colSpan={9} className="muted" style={{ padding: 16 }}>Queue is empty. Select items in Inventory and “Add to queue”.</td></tr>}
+              {queue.length === 0 && <tr><td colSpan={7} className="muted" style={{ padding: 18, textAlign: "center" }}>
+                Queue is empty — select items above and “Add to queue”.
+              </td></tr>}
             </tbody>
           </table>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Active Listings + Messages                                                  */
+/* Activity Log                                                                */
+/* -------------------------------------------------------------------------- */
+function ActivityBody({ compact }) {
+  const [log, setLog] = useState([]);
+  const [handoffs, setHandoffs] = useState([]);
+  const load = useCallback(() => {
+    api(`/api/inventory/log?limit=${compact ? 20 : 80}`).then((d) => setLog(d.log || [])).catch(() => {});
+    if (!compact) api("/api/runtime/handoffs?open_only=true").then((d) => setHandoffs(d.handoffs || [])).catch(() => {});
+  }, [compact]);
+  useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
+  const resolve = async (id) => { await jpost(`/api/runtime/handoffs/${id}/resolve`); load(); };
+
+  const statusDot = { ok: "#16a34a", error: "#dc2626", info: "#0ea5e9" };
+  return (
+    <>
+      {!compact && handoffs.length > 0 && (
+        <div className="panel" style={{ marginBottom: 12, borderLeft: "3px solid #ea580c" }}>
+          <div className="panel-header"><div>The loop needs you <span className="muted">({handoffs.length})</span></div></div>
+          {handoffs.map((h) => (
+            <div key={h.id} style={{ padding: "8px 12px", borderTop: "1px solid var(--border,#eee)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <strong style={{ fontSize: 13 }}>{h.why}</strong>
+                <button className="btn btn-sm" onClick={() => resolve(h.id)}>Resolve</button>
+              </div>
+              <div className="muted" style={{ fontSize: 12 }}>{h.suggestion}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="panel">
+        <div style={{ padding: "6px 4px" }}>
+          {log.length === 0 && <p className="muted" style={{ padding: 14, margin: 0, textAlign: "center" }}>No activity yet.</p>}
+          {log.map((e) => (
+            <div key={e.id} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "6px 12px",
+              borderBottom: "1px solid var(--border,#f0f0f0)" }}>
+              <span style={{ width: 7, height: 7, borderRadius: 7, background: statusDot[e.status] || "#8b949e", flex: "0 0 auto" }} />
+              <span className="muted" style={{ fontSize: 12, width: 150, flex: "0 0 auto" }}>
+                {new Date(e.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+              <span style={{ fontSize: 13 }}>{e.message}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Active Listings + Messages (focused sub-sections)                           */
 /* -------------------------------------------------------------------------- */
 function useListings(activeOnly) {
   const [listings, setListings] = useState([]);
@@ -439,7 +512,7 @@ function ActiveListingsPanel() {
                   <td className="muted" style={{ fontSize: 12 }}>{fmtTime(l.last_checked_at)}</td>
                 </tr>
               ))}
-              {listings.length === 0 && <tr><td colSpan={8} className="muted" style={{ padding: 16 }}>No active listings yet. Post items from the queue.</td></tr>}
+              {listings.length === 0 && <tr><td colSpan={8} className="muted" style={{ padding: 18, textAlign: "center" }}>No active listings yet. Post items from the queue.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -456,7 +529,6 @@ function MessagesPanel() {
       <CheckResponsesButton onDone={load} />
       <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
         Reading actual buyer messages is a future runner task; today “Check responses” records the check.
-        Listings with responses appear here.
       </p>
       <div className="panel" style={{ marginTop: 8 }}>
         <div className="panel-header"><div>Responses <span className="muted">({withMsgs.length})</span></div></div>
@@ -466,7 +538,7 @@ function MessagesPanel() {
             <tbody>
               {withMsgs.map((l) => (
                 <tr key={l.id}><td>{l.item_title}</td><td className="muted">{l.channel}</td>
-                  <td style={{ textAlign: "center", color: l.unread_response_count ? "#f0883e" : undefined }}>{l.unread_response_count || 0}</td>
+                  <td style={{ textAlign: "center", color: l.unread_response_count ? "#ea580c" : undefined }}>{l.unread_response_count || 0}</td>
                   <td style={{ textAlign: "center" }}>{l.response_count || 0}</td>
                   <td className="muted" style={{ fontSize: 12 }}>{fmtTime(l.last_checked_at)}</td></tr>
               ))}
@@ -479,66 +551,14 @@ function MessagesPanel() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Agent Activity (log + loop handoffs)                                         */
-/* -------------------------------------------------------------------------- */
-function ActivityPanel() {
-  const [log, setLog] = useState([]);
-  const [handoffs, setHandoffs] = useState([]);
-  const load = useCallback(() => {
-    api("/api/inventory/log?limit=80").then((d) => setLog(d.log || [])).catch(() => {});
-    api("/api/runtime/handoffs?open_only=true").then((d) => setHandoffs(d.handoffs || [])).catch(() => {});
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  const resolve = async (id) => { await jpost(`/api/runtime/handoffs/${id}/resolve`); load(); };
-
-  return (
-    <div className="section-body">
-      <button className="btn" onClick={load}>Refresh</button>
-      {handoffs.length > 0 && (
-        <div className="panel" style={{ marginTop: 12, borderLeft: "3px solid #f0883e" }}>
-          <div className="panel-header"><div>The loop needs you <span className="muted">({handoffs.length})</span></div></div>
-          {handoffs.map((h) => (
-            <div key={h.id} style={{ padding: "8px 12px", borderTop: "1px solid #21262d" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <strong style={{ fontSize: 13 }}>{h.why}</strong>
-                <button className="btn btn-sm" onClick={() => resolve(h.id)}>Resolve</button>
-              </div>
-              <div className="muted" style={{ fontSize: 12 }}>{h.suggestion}</div>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="panel" style={{ marginTop: 12 }}>
-        <div className="panel-header"><div>Activity log</div></div>
-        <table className="runs-table">
-          <thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Message</th></tr></thead>
-          <tbody>
-            {log.map((e) => (
-              <tr key={e.id}>
-                <td className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{fmtTime(e.timestamp)}</td>
-                <td className="muted">{e.action_type}</td>
-                <td><Pill value={e.status} colors={{ ok: "#3fb950", error: "#f85149", info: "#58a6ff" }} /></td>
-                <td>{e.message}</td>
-              </tr>
-            ))}
-            {log.length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No activity yet.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
 /* Settings — channel sign-in + manual agent controls                          */
 /* -------------------------------------------------------------------------- */
-function ManualControls({ onDone }) {
+function ManualControls() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");
   const run = async (label, path) => {
     setBusy(label); setMsg("");
-    try { const r = await jpost(path); setMsg(`${label} → ${JSON.stringify(r)}`); onDone?.(); }
+    try { const r = await jpost(path); setMsg(`${label} → ${JSON.stringify(r)}`); }
     catch (e) { setMsg(String(e.message || e)); } finally { setBusy(""); }
   };
   const ctrls = [
@@ -576,8 +596,6 @@ function SettingsPanel() {
   );
 }
 
-// Launch a PERSISTENT Facebook browser (login survives) and log in once, so real posting runs
-// against an authenticated session. A create-listing run's auth pre-flight refuses a logged-out session.
 function AuthProfileCard() {
   const [auth, setAuth] = useState(null);
   const [sessionId, setSessionId] = useState(null);
@@ -609,11 +627,11 @@ function AuthProfileCard() {
   }, [check]);
 
   const authed = auth?.authed;
-  const badge = authed === true ? { t: "Signed in", c: "#3fb950" }
-    : authed === false ? { t: "Not signed in", c: "#f85149" } : { t: "Unknown", c: "#8b949e" };
+  const badge = authed === true ? { t: "Signed in", c: "#16a34a" }
+    : authed === false ? { t: "Not signed in", c: "#dc2626" } : { t: "Unknown", c: "#8b949e" };
 
   return (
-    <div className="panel" style={{ padding: "12px 14px", borderLeft: "3px solid #58a6ff" }}>
+    <div className="panel" style={{ padding: "12px 14px", borderLeft: "3px solid #3b82f6" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <div><strong>Sign in once</strong>
           <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>Real posting needs the channel browser logged in.</span></div>
@@ -624,7 +642,7 @@ function AuthProfileCard() {
         </div>
       </div>
       {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
-      {authed === false && auth?.guidance && <div style={{ marginTop: 6, color: "#f0883e", fontSize: 12 }}>{auth.guidance}</div>}
+      {authed === false && auth?.guidance && <div style={{ marginTop: 6, color: "#ea580c", fontSize: 12 }}>{auth.guidance}</div>}
     </div>
   );
 }

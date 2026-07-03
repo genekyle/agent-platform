@@ -3539,6 +3539,14 @@ def inventory_archive(item_id: str):
     return {"item": item}
 
 
+@app.delete("/api/inventory/items/{item_id}")
+def inventory_delete_item(item_id: str):
+    import inventory
+    if not inventory.delete_item(item_id):
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"ok": True, "id": item_id}
+
+
 @app.get("/api/inventory/queue")
 def inventory_queue():
     import inventory

@@ -272,6 +272,21 @@ def archive_item(item_id: str) -> Optional[dict]:
     return set_item_status(item_id, "archived", message="Archived")
 
 
+def delete_item(item_id: str) -> bool:
+    """Hard-delete an item and everything attached to it (its channel listings + queue tasks)."""
+    with _lock:
+        doc = _load()
+        it = next((i for i in doc["items"] if i["id"] == item_id), None)
+        if it is None:
+            return False
+        doc["items"] = [i for i in doc["items"] if i["id"] != item_id]
+        doc["listings"] = [l for l in doc["listings"] if l["item_id"] != item_id]
+        doc["queue"] = [t for t in doc["queue"] if t["item_id"] != item_id]
+        _log_into(doc, "item_deleted", message=f"Deleted {it.get('title') or 'item'} from inventory")
+        _save(doc)
+    return True
+
+
 # --- Listings ----------------------------------------------------------------
 def _listings_by_item(doc: dict) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
