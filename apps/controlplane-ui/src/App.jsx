@@ -156,7 +156,7 @@ export default function App() {
 
   const openPrimaryView = useCallback((view) => {
     setActivePrimaryView(view);
-    if (view === "training" || view === "system" || view === "lab" || view === "indeed") {
+    if (view === "training" || view === "system" || view === "lab" || view === "indeed" || view === "facebook") {
       setSidebarLevel("secondary");
       return;
     }
