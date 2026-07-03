@@ -913,6 +913,87 @@ async def challenge_visibility(body: ChallengeVisibilityRequest):
         return {"ok": False, "detail": str(exc)}
 
 
+class FacebookLoginRequest(BaseModel):
+    email: str
+    password: str
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+
+
+# Facebook's login form selectors (stable on facebook.com/login for years), with fallbacks.
+_FB_EMAIL_SEL = "input[name=email], input#email, input[type=email]"
+_FB_PASS_SEL = "input[name=pass], input#pass, input[type=password]"
+_FB_LOGIN_SEL = "button[name=login], button[data-testid=royal_login_button], button[type=submit]"
+
+
+@app.post("/facebook_login")
+async def facebook_login(body: FacebookLoginRequest):
+    """Drive the Facebook login FORM: humanized-type the supplied credentials and submit, over CDP.
+    NEVER logs the credentials. Does NOT attempt any captcha / 2FA / checkpoint — those are human
+    gates the caller escalates. Returns where we landed so the caller can re-check auth / detect a
+    challenge. Best-effort; never raises into the caller."""
+    import asyncio
+    import json as _json
+    import random
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    async def _type_into(cdp, selector: str, text: str) -> bool:
+        sel = _json.dumps(selector)
+        focus = await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
+            f"(()=>{{const el=document.querySelector({sel}); if(!el) return false;"
+            " el.scrollIntoView({block:'center'}); el.focus(); return true;}})()"})
+        if not (focus.get("result") or {}).get("value"):
+            return False
+        for ch in text:  # per-char keystrokes → human cadence (keeps the reCAPTCHA score up)
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "char", "text": ch})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "text": ch})
+            await asyncio.sleep(random.uniform(0.05, 0.15))
+        v = _json.dumps(text)  # authoritative value-set for correctness (native setter + input event)
+        await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
+            f"(()=>{{const el=document.querySelector({sel}); if(!el) return false;"
+            " const d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');"
+            f" if(d&&d.set)d.set.call(el,{v}); el.dispatchEvent(new Event('input',{{bubbles:true}}));"
+            " el.dispatchEvent(new Event('change',{bubbles:true})); return true;}})()"})
+        return True
+
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            ok_email = await _type_into(cdp, _FB_EMAIL_SEL, body.email)
+            await asyncio.sleep(random.uniform(0.2, 0.5))
+            ok_pass = await _type_into(cdp, _FB_PASS_SEL, body.password)
+            if not (ok_email and ok_pass):
+                return {"ok": False, "reason": "login form not found (already logged in, or a different page)"}
+            await asyncio.sleep(random.uniform(0.3, 0.7))
+            rect = await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
+                f"(()=>{{const b=document.querySelector({_json.dumps(_FB_LOGIN_SEL)}); if(!b) return null;"
+                " b.scrollIntoView({block:'center'}); const r=b.getBoundingClientRect();"
+                " return {x:r.x+r.width/2, y:r.y+r.height/2};}})()"})
+            pt = (rect.get("result") or {}).get("value")
+            if pt:  # trusted mouse click on Log In
+                await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": pt["x"], "y": pt["y"]})
+                for t in ("mousePressed", "mouseReleased"):
+                    await cdp.send("Input.dispatchMouseEvent",
+                                   {"type": t, "x": pt["x"], "y": pt["y"], "button": "left", "clickCount": 1})
+            else:
+                await cdp.send("Runtime.evaluate", {"expression":
+                    f"document.querySelector({_json.dumps(_FB_PASS_SEL)})?.form?.submit()"})
+            await asyncio.sleep(4.0)  # let the submit navigate / a challenge render
+            res = await cdp.send("Runtime.evaluate", {"returnByValue": True,
+                "expression": "({url:location.href, title:document.title})"})
+        landed = (res.get("result") or {}).get("value") or {}
+        logger.info("facebook_login: submitted credentials; landed on %s", (landed.get("url") or "")[:80])
+        return {"ok": True, "landed_url": landed.get("url", ""), "title": landed.get("title", "")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("facebook_login failed: %s", exc)
+        return {"ok": False, "reason": str(exc)}
+
+
 class NavigateRequest(BaseModel):
     url: str
     browser_url: str = "http://127.0.0.1:9222"

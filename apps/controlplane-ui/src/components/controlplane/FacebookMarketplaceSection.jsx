@@ -620,11 +620,20 @@ function AuthProfileCard() {
     try {
       const s = await jpost("/api/facebook/session");
       if (s?.id) { setSessionId(s.id);
-        setMsg("Chrome opened at facebook.com — log in once (do any 2FA/checkpoint by hand). This profile stays signed in.");
+        setMsg("Chrome opened at facebook.com. Click “Log in automatically”, or log in yourself in the window.");
         setTimeout(() => check(s.id), 2500);
       } else setMsg(s?.detail || "Could not launch.");
     } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
   }, [check]);
+
+  const autoLogin = useCallback(async () => {
+    setBusy(true); setMsg("");
+    try {
+      const r = await jpost(`/api/facebook/login${sessionId ? `?training_session_id=${sessionId}` : ""}`);
+      setMsg(r.message || (r.logged_in ? "Signed in." : "Needs you."));
+      setTimeout(() => check(sessionId), 1800);
+    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
+  }, [sessionId, check]);
 
   const authed = auth?.authed;
   const badge = authed === true ? { t: "Signed in", c: "#16a34a" }
@@ -638,6 +647,7 @@ function AuthProfileCard() {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ color: badge.c, fontWeight: 600, fontSize: 13 }}>● {badge.t}</span>
           <button className="btn btn-primary" disabled={busy} onClick={launch}>{busy ? "Launching…" : "Launch persistent FB browser"}</button>
+          <button className="btn" disabled={busy || !sessionId} onClick={autoLogin}>Log in automatically</button>
           <button className="btn" disabled={!sessionId} onClick={() => check()}>Check sign-in</button>
         </div>
       </div>
