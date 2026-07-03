@@ -1,0 +1,132 @@
+import { useCallback, useEffect, useState } from "react";
+import { getJSON, putJSON } from "./api";
+import { StatusCard } from "./StatusCard";
+import { AutomationMode } from "./AutomationMode";
+import { GoalsPanel } from "./GoalsPanel";
+import { TasksPanel } from "./TasksPanel";
+import { AttentionInbox } from "./AttentionInbox";
+import { ActivityFeed } from "./ActivityFeed";
+import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
+import { IndeedWorkspaceSection } from "../IndeedWorkspaceSection";
+
+// The shared five-layer workspace shell. Every domain gets the SAME operating pattern — a
+// computed Status + one action, an Automation mode, and an Overview cockpit (Attention · Goals ·
+// Tasks · Activity) — while the extra tabs render that domain's own rich data views (inventory
+// tables, jobs hub) untouched.
+
+// Which existing section component + `section` prop each data tab maps to. The Overview tab is
+// the shared cockpit and is handled here directly.
+const TAB_TO_SECTION = {
+  facebook_marketplace: { inventory: "inventory", queue: "queue", listings: "listings", messages: "messages" },
+  indeed_jobs: { jobs: "jobs-dashboard", profile: "application-answers", "apply-state": "apply-state" },
+};
+
+function DataTab({ domain, tab }) {
+  const section = TAB_TO_SECTION[domain.id]?.[tab];
+  if (domain.id === "facebook_marketplace") return <FacebookMarketplaceSection section={section} />;
+  if (domain.id === "indeed_jobs") return <IndeedWorkspaceSection section={section} />;
+  return <div className="empty-hint">Nothing here yet.</div>;
+}
+
+function ComingSoon({ domain }) {
+  return (
+    <div className="layer">
+      <div className="layer__head"><div className="layer__title">{domain.icon} {domain.label}</div></div>
+      <p className="status-card__reason" style={{ maxWidth: "70ch" }}>{domain.responsibility}</p>
+      <p className="mode-hint" style={{ marginTop: 10 }}>
+        This domain is scaffolded in the cockpit so the operating pattern is consistent, but it isn't wired
+        to a backend yet. It reuses the same Status · Goals · Tasks · Attention · Activity layers once connected.
+      </p>
+    </div>
+  );
+}
+
+function Overview({ domain, mode, goalState, onToggleGoal }) {
+  const [activity, setActivity] = useState([]);
+
+  const loadActivity = useCallback(() => {
+    if (domain.kind === "selling") {
+      getJSON("/api/inventory/log?limit=20")
+        .then((d) => setActivity((d.log || []).map((e) => ({ ...e, ts: e.timestamp }))))
+        .catch(() => {});
+    } else if (domain.kind === "jobs") {
+      getJSON("/api/runtime/handoffs?limit=20")
+        .then((d) => setActivity((d.handoffs || []).map((h) => ({
+          ts: h.ts, message: h.why || h.detail, status: h.status === "resolved" ? "ok" : "error", kind: "handoff",
+        }))))
+        .catch(() => {});
+    }
+  }, [domain.kind]);
+  useEffect(() => { loadActivity(); const t = setInterval(loadActivity, 10000); return () => clearInterval(t); }, [loadActivity]);
+
+  if (domain.kind === "coming_soon") return <ComingSoon domain={domain} />;
+
+  return (
+    <div className="cockpit">
+      <AttentionInbox host={domain.host} />
+      <div className="cockpit-grid">
+        <GoalsPanel domain={domain} mode={mode} goalState={goalState} onToggleGoal={onToggleGoal} />
+        <TasksPanel domain={domain} mode={mode} />
+      </div>
+      <ActivityFeed items={activity} title="Recent activity" />
+    </div>
+  );
+}
+
+export function DomainWorkspace({ domain, activeTab, onChangeTab }) {
+  const [settings, setSettings] = useState({ automation_mode: "manual", goals: {} });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    getJSON(`/api/domains/${domain.id}/settings`).then(setSettings).catch(() => {});
+  }, [domain.id]);
+
+  const patch = useCallback(async (body) => {
+    setSaving(true);
+    try {
+      const next = await putJSON(`/api/domains/${domain.id}/settings`, body);
+      setSettings(next);
+    } catch {
+      /* best-effort */
+    } finally {
+      setSaving(false);
+    }
+  }, [domain.id]);
+
+  const onChangeMode = (mode) => patch({ automation_mode: mode });
+  const onToggleGoal = (goalId, enabled) => patch({ goals: { [goalId]: enabled } });
+
+  const tabs = domain.tabs || [{ id: "overview", label: "Overview" }];
+  const tab = tabs.find((t) => t.id === activeTab) ? activeTab : "overview";
+
+  return (
+    <div className="section-body">
+      <div className="workspace-head">
+        <StatusCard domain={domain} />
+        {domain.kind !== "coming_soon" && (
+          <div className="layer" style={{ padding: "14px 18px" }}>
+            <div className="layer__head" style={{ marginBottom: 8 }}>
+              <div className="layer__title">⚙️ Automation mode</div>
+              <span className="layer__sub">How autonomous this domain is</span>
+            </div>
+            <AutomationMode mode={settings.automation_mode} onChange={onChangeMode} saving={saving} />
+          </div>
+        )}
+      </div>
+
+      {tabs.length > 1 && (
+        <div className="workspace-tabs">
+          {tabs.map((t) => (
+            <button key={t.id} className={`workspace-tab ${t.id === tab ? "is-active" : ""}`} onClick={() => onChangeTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tab === "overview"
+        ? <Overview domain={domain} mode={settings.automation_mode} goalState={settings.goals || {}} onToggleGoal={onToggleGoal} />
+        : <DataTab domain={domain} tab={tab} />}
+    </div>
+  );
+}

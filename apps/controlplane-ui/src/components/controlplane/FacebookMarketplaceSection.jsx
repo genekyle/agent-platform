@@ -49,7 +49,7 @@ function Thumb({ photos, size = 34 }) {
   const src = (photos || [])[0];
   if (src) return <img src={src} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 6 }} />;
   return <div style={{ width: size, height: size, borderRadius: 6, background: "#e6e8eb",
-    display: "grid", placeItems: "center", color: "#9aa0a6" }}><i className="ti ti-photo" /></div>;
+    display: "grid", placeItems: "center", color: "#9aa0a6", fontSize: size * 0.5 }}>🖼</div>;
 }
 
 function SectionHeading({ title, right }) {
@@ -73,7 +73,6 @@ export function FacebookMarketplaceSection({ section }) {
   if (section === "listings") return <ActiveListingsPanel />;
   if (section === "messages") return <MessagesPanel />;
   if (section === "activity") return <div className="section-body"><ActivityBody /></div>;
-  if (section === "settings") return <SettingsPanel />;
   return <DashboardPanel />;
 }
 
@@ -98,7 +97,7 @@ function StatCard({ label, value, icon, accent }) {
   return (
     <div className="panel" style={{ padding: "12px 16px", borderTop: `3px solid ${accent}` }}>
       <div className="muted" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-        <i className={`ti ${icon}`} /> {label}
+        <span>{icon}</span> {label}
       </div>
       <div style={{ fontSize: 28, fontWeight: 700, marginTop: 2 }}>{value ?? 0}</div>
     </div>
@@ -114,12 +113,12 @@ function OverviewCards() {
     return () => clearInterval(t);
   }, []);
   const cards = [
-    { label: "Total items", value: ov?.total_items, icon: "ti-box", accent: "#3b82f6" },
-    { label: "Queued", value: ov?.queued, icon: "ti-clock", accent: "#d29922" },
-    { label: "Active listings", value: ov?.active_listings, icon: "ti-broadcast", accent: "#16a34a" },
-    { label: "New responses", value: ov?.items_with_responses, icon: "ti-message", accent: "#0ea5e9" },
-    { label: "Needs attention", value: ov?.needs_attention, icon: "ti-alert-triangle", accent: "#dc2626" },
-    { label: "Sold", value: ov?.sold, icon: "ti-checks", accent: "#7c3aed" },
+    { label: "Total items", value: ov?.total_items, icon: "📦", accent: "#3b82f6" },
+    { label: "Queued", value: ov?.queued, icon: "⏳", accent: "#d29922" },
+    { label: "Active listings", value: ov?.active_listings, icon: "📡", accent: "#16a34a" },
+    { label: "New responses", value: ov?.items_with_responses, icon: "💬", accent: "#0ea5e9" },
+    { label: "Needs attention", value: ov?.needs_attention, icon: "⚠️", accent: "#dc2626" },
+    { label: "Sold", value: ov?.sold, icon: "✅", accent: "#7c3aed" },
   ];
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
@@ -296,7 +295,7 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
         background: "var(--surface-1, #fff)", borderLeft: "1px solid var(--border, #d0d7de)", zIndex: 50, overflowY: "auto", padding: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <strong style={{ fontSize: 16 }}>{item?.title || "Item"}</strong>
-          <button className="btn btn-sm" onClick={onClose} aria-label="Close"><i className="ti ti-x" /></button>
+          <button className="btn btn-sm" onClick={onClose} aria-label="Close">✕</button>
         </div>
         {!item ? <p className="muted" style={{ marginTop: 12 }}>Loading…</p> : (
           <>
@@ -550,125 +549,3 @@ function MessagesPanel() {
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Settings — channel sign-in + manual agent controls                          */
-/* -------------------------------------------------------------------------- */
-function ManualControls() {
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState("");
-  const run = async (label, path) => {
-    setBusy(label); setMsg("");
-    try { const r = await jpost(path); setMsg(`${label} → ${JSON.stringify(r)}`); }
-    catch (e) { setMsg(String(e.message || e)); } finally { setBusy(""); }
-  };
-  const ctrls = [
-    ["Post queued items", "/api/inventory/queue/run?dry_run=true"],
-    ["Check responses", "/api/inventory/check-responses"],
-    ["Retry failed", "/api/inventory/queue/retry"],
-  ];
-  return (
-    <div className="panel" style={{ marginTop: 14, padding: "12px 14px" }}>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-        Manual agent controls — each button is a placeholder for a future scheduled agent task.
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {ctrls.map(([label, path]) => (
-          <button key={label} className="btn btn-sm" disabled={!!busy} onClick={() => run(label, path)}>
-            {busy === label ? "…" : label}
-          </button>
-        ))}
-      </div>
-      {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
-    </div>
-  );
-}
-
-function SettingsPanel() {
-  return (
-    <div className="section-body">
-      <ChannelCard />
-      <ManualControls />
-      <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>
-        Channel: <strong>Facebook Marketplace</strong>. The inventory model is channel-agnostic —
-        eBay, OfferUp, or a Shopify-style storefront can be added as channels without duplicating items.
-      </p>
-    </div>
-  );
-}
-
-const CHANNEL = "facebook_marketplace";
-
-// The channel: one persistent, health-checked browser that agents attach to. Honest status
-// (Browser connected? Auth signed in?), a Connect that heals a dead browser, and a supervised
-// Sign in that types saved creds and stops only at a captcha/2FA gate.
-function ChannelCard() {
-  const [status, setStatus] = useState({ connected: false, session_id: null });
-  const [auth, setAuth] = useState(null);
-  const [busy, setBusy] = useState("");
-  const [msg, setMsg] = useState("");
-
-  const pollStatus = useCallback(() => {
-    api(`/api/channels/${CHANNEL}/status`).then(setStatus).catch(() => {});
-  }, []);
-  useEffect(() => { pollStatus(); const t = setInterval(pollStatus, 5000); return () => clearInterval(t); }, [pollStatus]);
-
-  const checkAuth = useCallback((sid) => {
-    const id = sid ?? status.session_id;
-    if (!id) return;
-    api(`/api/runtime/auth_status?training_session_id=${id}&tab_url=facebook.com`).then(setAuth).catch(() => {});
-  }, [status.session_id]);
-
-  const connect = useCallback(async () => {
-    setBusy("connect"); setMsg("Connecting to the browser…");
-    try {
-      const r = await jpost(`/api/channels/${CHANNEL}/connect`);
-      setStatus((s) => ({ ...s, connected: r.connected, session_id: r.session_id, port: r.port }));
-      setAuth({ authed: r.authed });
-      setMsg(r.connected ? (r.authed ? "Connected · signed in." : "Connected. Not signed in yet — click Sign in.") : "Could not connect.");
-    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(""); }
-  }, []);
-
-  const signIn = useCallback(async () => {
-    setBusy("login"); setMsg("Signing in…");
-    try {
-      const r = await jpost(`/api/channels/${CHANNEL}/login`);
-      setMsg(r.message || (r.logged_in ? "Signed in." : "Needs you."));
-      setAuth({ authed: !!r.logged_in });
-      setTimeout(() => { pollStatus(); checkAuth(r.session_id ?? status.session_id); }, 1600);
-    } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(""); }
-  }, [pollStatus, checkAuth, status.session_id]);
-
-  const bBadge = status.connected ? { t: "Connected", c: "#16a34a" } : { t: "Disconnected", c: "#8b949e" };
-  const authed = auth?.authed;
-  const aBadge = authed === true ? { t: "Signed in", c: "#16a34a" }
-    : authed === false ? { t: "Not signed in", c: "#dc2626" } : { t: "Unknown", c: "#8b949e" };
-
-  return (
-    <div className="panel" style={{ padding: "14px 16px", borderLeft: "3px solid #3b82f6" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div>
-          <strong>Facebook channel</strong>
-          <div style={{ display: "flex", gap: 16, marginTop: 4, fontSize: 13 }}>
-            <span>Browser: <span style={{ color: bBadge.c, fontWeight: 600 }}>● {bBadge.t}</span></span>
-            <span>Auth: <span style={{ color: aBadge.c, fontWeight: 600 }}>● {aBadge.t}</span></span>
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn" disabled={!!busy} onClick={connect}>
-            {busy === "connect" ? "Connecting…" : status.connected ? "Reconnect" : "Connect"}
-          </button>
-          <button className="btn btn-primary" disabled={!!busy || !status.connected} onClick={signIn}>
-            {busy === "login" ? "Signing in…" : "Sign in"}
-          </button>
-          <button className="btn" disabled={!status.session_id} onClick={() => checkAuth()}>Check sign-in</button>
-        </div>
-      </div>
-      {msg && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{msg}</div>}
-      {authed === false && auth?.guidance && <div style={{ marginTop: 6, color: "#ea580c", fontSize: 12 }}>{auth.guidance}</div>}
-      <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-        The browser stays up and signed in — agents attach to it. “Sign in” types your saved credentials and
-        stops only if Facebook asks for a captcha/2FA, which you clear once in the window.
-      </p>
-    </div>
-  );
-}

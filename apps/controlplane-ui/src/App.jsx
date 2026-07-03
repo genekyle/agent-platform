@@ -5,7 +5,6 @@ import { ChatSection } from "./components/controlplane/ChatSection";
 import { CONTROL_PLANE_NAV, DEFAULT_SECTION_VIEW } from "./components/controlplane/navigation";
 import { LabSection } from "./components/controlplane/LabSection";
 import { DomainsSection } from "./components/controlplane/DomainsSection";
-import { HomeSection } from "./components/controlplane/HomeSection";
 import { ModelsSection } from "./components/controlplane/ModelsSection";
 import { SystemSection } from "./components/controlplane/SystemSection";
 import { TrainingSection } from "./components/controlplane/TrainingSection";
@@ -14,8 +13,10 @@ import { CoverageSection } from "./components/controlplane/CoverageSection";
 import { ScorecardSection } from "./components/controlplane/ScorecardSection";
 import { TrainingSpaceSection } from "./components/controlplane/TrainingSpaceSection";
 import { StateGraphSection } from "./components/controlplane/StateGraphSection";
-import { IndeedWorkspaceSection } from "./components/controlplane/IndeedWorkspaceSection";
-import { FacebookMarketplaceSection } from "./components/controlplane/FacebookMarketplaceSection";
+import { CommandCenter } from "./components/controlplane/workspace/CommandCenter";
+import { DomainsHub } from "./components/controlplane/workspace/DomainsHub";
+import { DomainWorkspace } from "./components/controlplane/workspace/DomainWorkspace";
+import { DOMAIN_CATALOG, DOMAINS_BY_ID } from "./components/controlplane/workspace/domains";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 
@@ -46,8 +47,11 @@ const mockWorkers = [
 
 export default function App() {
   const [sidebarLevel, setSidebarLevel] = useState("primary");
-  const [activePrimaryView, setActivePrimaryView] = useState("home");
+  const [activePrimaryView, setActivePrimaryView] = useState("command");
   const [activeSecondaryViewByPrimary, setActiveSecondaryViewByPrimary] = useState(DEFAULT_SECTION_VIEW);
+  // Which domain workspace is open (null = the Domains hub), and the active tab per domain.
+  const [activeDomainId, setActiveDomainId] = useState(null);
+  const [activeDomainTabByDomain, setActiveDomainTabByDomain] = useState({});
 
   const [health, setHealth] = useState({ loading: true, ok: false, error: null });
   const [systemStatus, setSystemStatus] = useState({ loading: false, data: null, error: null });
@@ -100,7 +104,9 @@ export default function App() {
   const currentNav = CONTROL_PLANE_NAV[activePrimaryView];
   const activeSectionId = activeSecondaryViewByPrimary[activePrimaryView] ?? currentNav.sections[0]?.id;
   const activeSection = currentNav.sections.find((section) => section.id === activeSectionId) ?? currentNav.sections[0];
-  const canEnterSecondary = ["training", "system", "lab", "indeed", "facebook"].includes(activePrimaryView);
+  const canEnterSecondary = ["domains", "training", "system", "lab"].includes(activePrimaryView);
+  const activeDomain = activeDomainId ? DOMAINS_BY_ID[activeDomainId] : null;
+  const activeDomainTab = activeDomainId ? (activeDomainTabByDomain[activeDomainId] ?? "overview") : "overview";
   const selectedTrainingSession = useMemo(
     () => sessions.find((session) => session.id === selectedTrainingSessionId) ?? null,
     [sessions, selectedTrainingSessionId],
@@ -156,15 +162,31 @@ export default function App() {
 
   const openPrimaryView = useCallback((view) => {
     setActivePrimaryView(view);
-    if (view === "training" || view === "system" || view === "lab" || view === "indeed" || view === "facebook") {
+    if (view === "domains") {
+      setActiveDomainId(null);           // land on the hub; the rail lets you pick a workspace
+      setSidebarLevel("secondary");
+      return;
+    }
+    if (view === "training" || view === "system" || view === "lab") {
       setSidebarLevel("secondary");
       return;
     }
     setSidebarLevel("primary");
   }, []);
 
+  // Open a specific domain workspace (from a hub tile, a Command Center tile, or the rail).
+  const openDomain = useCallback((domainId) => {
+    setActivePrimaryView("domains");
+    setActiveDomainId(domainId);
+    setSidebarLevel("secondary");
+  }, []);
+
+  const setDomainTab = useCallback((tabId) => {
+    setActiveDomainTabByDomain((current) => ({ ...current, [activeDomainId]: tabId }));
+  }, [activeDomainId]);
+
   const goHome = useCallback(() => {
-    setActivePrimaryView("home");
+    setActivePrimaryView("command");
     setSidebarLevel("primary");
   }, []);
 
@@ -828,11 +850,6 @@ export default function App() {
     await loadObservation(filename);
   }, [loadObservation]);
 
-  const openSystemView = useCallback(() => {
-    setActivePrimaryView("system");
-    setSidebarLevel("secondary");
-  }, []);
-
   const triggerCapture = useCallback(async () => {
     if (!selectedTrainingSessionId || !selectedTabId || !selectedTrainingSession) return null;
     setCaptureInProgress(true);
@@ -899,7 +916,7 @@ export default function App() {
   }, [activePrimaryView, activeSectionId, loadSystemStatus, loadUsage]);
 
   useEffect(() => {
-    if (activePrimaryView === "training" || activePrimaryView === "domains") {
+    if (activePrimaryView === "training") {
       loadTrainingRegistry();
     }
     if (activePrimaryView === "training") {
@@ -962,18 +979,12 @@ export default function App() {
     null;
 
   let sectionContent = null;
-  if (activePrimaryView === "home") {
-    sectionContent = (
-      <HomeSection
-        section={activeSectionId}
-        health={health}
-        activeRuns={activeRuns}
-        blockedRuns={blockedRuns}
-        completedRuns={completedRuns}
-        apiLabel={apiLabel}
-        openSystemView={openSystemView}
-      />
-    );
+  if (activePrimaryView === "command") {
+    sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} />;
+  } else if (activePrimaryView === "domains") {
+    sectionContent = activeDomain
+      ? <DomainWorkspace domain={activeDomain} activeTab={activeDomainTab} onChangeTab={setDomainTab} />
+      : <DomainsHub onOpenDomain={openDomain} />;
   } else if (activePrimaryView === "system" && activeSectionId === "api-usage") {
     sectionContent = <ApiUsageSection usage={usage} loadUsage={loadUsage} />;
   } else if (activePrimaryView === "system") {
@@ -1105,10 +1116,6 @@ export default function App() {
     }
   } else if (activePrimaryView === "models") {
     sectionContent = <ModelsSection section={activeSectionId} />;
-  } else if (activePrimaryView === "indeed") {
-    sectionContent = <IndeedWorkspaceSection section={activeSectionId} />;
-  } else if (activePrimaryView === "facebook") {
-    sectionContent = <FacebookMarketplaceSection section={activeSectionId} />;
   } else {
     sectionContent = (
       <DomainsSection
@@ -1136,11 +1143,11 @@ export default function App() {
           <div className={`sidebar-menu-stage ${sidebarLevel === "secondary" ? "is-secondary" : ""}`}>
             <div className="sidebar-menu-track">
               <div className="sidebar-menu-panel">
-                <button className={`nav-item nav-home ${activePrimaryView === "home" ? "active" : ""}`} onClick={goHome}>
-                  Home
+                <button className={`nav-item nav-home ${activePrimaryView === "command" ? "active" : ""}`} onClick={goHome}>
+                  Command Center
                 </button>
                 {Object.entries(CONTROL_PLANE_NAV)
-                  .filter(([key]) => key !== "home")
+                  .filter(([key]) => key !== "command")
                   .map(([key, entry]) => (
                     <button key={key} className={`nav-item ${activePrimaryView === key ? "active" : ""}`} onClick={() => openPrimaryView(key)}>
                       {entry.label}
@@ -1149,14 +1156,34 @@ export default function App() {
               </div>
 
               <div className="sidebar-menu-panel">
-                <button className={`nav-item nav-home ${activePrimaryView === "home" ? "active" : ""}`} onClick={goHome}>
-                  Home
+                <button className={`nav-item nav-home ${activePrimaryView === "command" ? "active" : ""}`} onClick={goHome}>
+                  Command Center
                 </button>
                 <button className="nav-item nav-back" onClick={returnToPrimaryRail}>
                   ← All Sections
                 </button>
                 <div className="nav-section-heading">{currentNav.label}</div>
-                {canEnterSecondary ? currentNav.sections.map((section) => (
+                {activePrimaryView === "domains" ? (
+                  <>
+                    <button
+                      className={`nav-item nav-subitem ${!activeDomainId ? "active" : ""}`}
+                      onClick={() => setActiveDomainId(null)}
+                    >
+                      <span className="nav-subitem-label">All Domains</span>
+                      <span className="nav-subitem-copy">Health at a glance across every domain.</span>
+                    </button>
+                    {DOMAIN_CATALOG.map((d) => (
+                      <button
+                        key={d.id}
+                        className={`nav-item nav-subitem ${activeDomainId === d.id ? "active" : ""}`}
+                        onClick={() => openDomain(d.id)}
+                      >
+                        <span className="nav-subitem-label">{d.icon} {d.label}</span>
+                        <span className="nav-subitem-copy">{d.kind === "coming_soon" ? "Coming soon." : d.blurb}</span>
+                      </button>
+                    ))}
+                  </>
+                ) : canEnterSecondary ? currentNav.sections.map((section) => (
                   <button key={section.id} className={`nav-item nav-subitem ${activeSectionId === section.id ? "active" : ""}`} onClick={() => setActiveSection(section.id)}>
                     <span className="nav-subitem-label">{section.label}</span>
                     <span className="nav-subitem-copy">{section.subtitle}</span>
@@ -1176,8 +1203,8 @@ export default function App() {
       <main className="main-panel">
         <header className="topbar">
           <div>
-            <h1 className="page-title">{currentNav.title}</h1>
-            <p className="page-subtitle">{activeSection?.subtitle || currentNav.subtitle}</p>
+            <h1 className="page-title">{activeDomain ? `${activeDomain.icon} ${activeDomain.label}` : currentNav.title}</h1>
+            <p className="page-subtitle">{activeDomain ? activeDomain.responsibility : (activeSection?.subtitle || currentNav.subtitle)}</p>
           </div>
 
           <div className="topbar-actions">

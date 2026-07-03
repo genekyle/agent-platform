@@ -1,23 +1,21 @@
-// Top-level nav, slimmed to 4 keys: Home · Training · Lab · System.
-// Folded in: Domains → Training; Models → Lab. Hidden for now (components kept
-// in code, just off the menu): Workers, Chat — restore by re-adding entries here.
+// Top-level nav: Command Center · Domains · Training · Lab · System.
+// Domains is a HUB — its secondary rail lists the domain workspaces (Facebook Marketplace,
+// Indeed, …) instead of static sections, so "Selling" and "Indeed" no longer sit loose in the
+// nav. Folded in: registry Domains → Training; Models → Lab. Hidden (components kept in code,
+// off the menu): Workers, Chat.
 export const CONTROL_PLANE_NAV = {
-  home: {
-    label: "Home",
-    title: "Home",
-    subtitle: "Platform overview, health, and operating posture.",
-    sections: [
-      {
-        id: "overview",
-        label: "Overview",
-        subtitle: "Top-level platform summary and current operating posture.",
-      },
-      {
-        id: "system-status",
-        label: "System Status",
-        subtitle: "API connectivity, environment status, and readiness signals.",
-      },
-    ],
+  command: {
+    label: "Command Center",
+    title: "Command Center",
+    subtitle: "What needs you across every domain, health at a glance, and what just happened.",
+    sections: [],
+  },
+  domains: {
+    label: "Domains",
+    title: "Domains",
+    subtitle: "Every domain the agents work — pick one to open its workspace.",
+    // sections are the domain workspaces themselves, rendered from the domain catalog.
+    sections: [],
   },
   training: {
     label: "Training",
@@ -64,47 +62,6 @@ export const CONTROL_PLANE_NAV = {
         label: "Domains",
         subtitle: "Registry: domains, allowed goals, scoped tasks, and scenarios used by sessions.",
       },
-    ],
-  },
-  indeed: {
-    label: "Indeed",
-    title: "Indeed Workspace",
-    subtitle: "The job-seeking workspace: stored application answers, coverage, and (soon) the jobs dashboard.",
-    sections: [
-      {
-        id: "indeed-overview",
-        label: "Overview",
-        subtitle: "Indeed workspace at a glance: states covered, stored answers, capture totals.",
-      },
-      {
-        id: "application-answers",
-        label: "Application Profile",
-        subtitle: "Your reusable autofill profile — identity/EEO, eligibility, compensation, logistics, and acknowledgments. Editable.",
-      },
-      {
-        id: "jobs-dashboard",
-        label: "Jobs Dashboard",
-        subtitle: "Jobs found across searches — counts, duplicates, and applied status. Drives what to apply to next.",
-      },
-      {
-        id: "apply-state",
-        label: "Apply State",
-        subtitle: "The live apply blackboard: where we are in the recipe, per-field form state, the code-enforced submit gate, and blockers — so nobody holds tab/step/field state in their head.",
-      },
-    ],
-  },
-  facebook: {
-    label: "Selling",
-    title: "Marketplace Inventory",
-    subtitle: "An inventory-first selling workspace: your items are the source of truth; Facebook Marketplace (and later eBay/OfferUp) is a sales channel.",
-    sections: [
-      { id: "overview", label: "Overview", subtitle: "High-level counts: inventory, drafts, queue, active listings, responses, sold." },
-      { id: "inventory", label: "Inventory", subtitle: "Every item you own. Add, edit, select, and queue items to post." },
-      { id: "queue", label: "Posting Queue", subtitle: "Items waiting to be posted to a channel — run, retry, or clear the queue." },
-      { id: "listings", label: "Active Listings", subtitle: "Items currently posted to a marketplace channel, with response counts." },
-      { id: "messages", label: "Messages", subtitle: "Buyer responses on active listings; check for new messages." },
-      { id: "activity", label: "Agent Activity", subtitle: "A log of every action taken, plus the loop's needs-help handoffs." },
-      { id: "settings", label: "Settings", subtitle: "Channel sign-in (persistent browser) and manual agent controls." },
     ],
   },
   lab: {
