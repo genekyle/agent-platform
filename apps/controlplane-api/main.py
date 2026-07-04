@@ -3400,6 +3400,73 @@ def put_domain_settings(domain_id: str, body: DomainSettingsBody):
     return domain_settings.put_settings(domain_id, body.model_dump(exclude_none=True))
 
 
+@app.get("/api/domains/{domain_id}/training_readiness")
+def domain_training_readiness(domain_id: str, db: Session = Depends(get_db)):
+    """The money-saving flywheel for ONE domain: how close its cheap local models are to
+    displacing the Haiku catchall. Composes the per-domain capture coverage (L3 page-state
+    classifier fuel) with the system-wide SELECT-stage telemetry (L4 selector fuel + the
+    live cache-hit / escalation / cost / Haiku-share the local layers are driving down).
+
+    Claude/Haiku stays the teacher — every paid pick also emits a page-state label and a
+    selection row the students distill from. This endpoint makes that progress legible and
+    points at the next gap to capture."""
+    import training
+    from select_stage import telemetry
+
+    cov = training_coverage(domain_id=domain_id, db=db)
+    states = cov["states"]
+
+    L3_MIN = training._L3_MIN_PER_STATE
+    L3_MIN_DEEP = training._L3_MIN_DEEP_STATES
+    deep = [s for s in states if s["count"] >= L3_MIN]
+    thin = [s for s in states if 0 < s["count"] < L3_MIN]
+    gaps = [s for s in states if s["count"] == 0]
+
+    # Next gap to capture: prefer the domain's OWN states (its create-listing / inbox
+    # screens), thinnest first; fall back to any gap/thin state. Skip nothing — even a
+    # global stop-state that's thin is fair game, just deprioritised.
+    capturable = [s for s in states if s["count"] < L3_MIN]
+    capturable.sort(key=lambda s: (s["scope"] == "global", s["count"]))
+    next_gap = capturable[0] if capturable else None
+
+    tele = telemetry.summarize()
+    totals = tele.get("totals", {})
+    by_layer = {row["layer"]: row["count"] for row in tele.get("by_layer", [])}
+    selections = totals.get("selections", 0) or 0
+    haiku_ct = by_layer.get("som_haiku", 0)
+    haiku_share = round(haiku_ct / selections, 4) if selections else 0.0
+
+    return {
+        "domain_id": domain_id,
+        "coverage": {
+            **cov["totals"],
+            "target_per_state": cov["target_per_state"],
+            "deep_states": len(deep),
+            "thin_states": len(thin),
+        },
+        "states": states,
+        "next_gap": next_gap,
+        "l3": {
+            # page-state classifier — "which Marketplace screen am I on?"
+            "min_per_state": L3_MIN,
+            "min_deep_states": L3_MIN_DEEP,
+            "deep_states": len(deep),
+            "relevant_states": len(states),
+            "enough_to_train": len(deep) >= L3_MIN_DEEP,
+        },
+        "l4": {
+            # selection model — "which element, given state + goal" — distilled from the
+            # selection-telemetry corpus (system-wide today; not yet domain-sharded).
+            "corpus_size": tele.get("corpus_size", 0),
+            "cache_hit_rate": tele.get("rates", {}).get("cache_hit", 0.0),
+            "escalation_rate": tele.get("rates", {}).get("escalation", 0.0),
+            "avg_cost_usd": tele.get("rates", {}).get("avg_cost_usd", 0.0),
+            "haiku_share": haiku_share,
+            "by_layer": tele.get("by_layer", []),
+        },
+    }
+
+
 def _observe_once(session: TrainingSession, tab_url: Optional[str] = None):
     """One live capture of the session's browser → Observation (best-effort)."""
     from runtime import LiveProposer

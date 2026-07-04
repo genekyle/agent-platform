@@ -26,6 +26,7 @@ export const DOMAIN_CATALOG = [
       { id: "queue", label: "Queue" },
       { id: "listings", label: "Listings" },
       { id: "messages", label: "Messages" },
+      { id: "training", label: "Training" },
     ],
   },
   {
@@ -44,6 +45,7 @@ export const DOMAIN_CATALOG = [
       { id: "jobs", label: "Jobs" },
       { id: "profile", label: "Application Profile" },
       { id: "apply-state", label: "Apply State" },
+      { id: "training", label: "Training" },
     ],
   },
   {

@@ -107,6 +107,8 @@ export default function App() {
   const canEnterSecondary = ["domains", "training", "system", "lab"].includes(activePrimaryView);
   const activeDomain = activeDomainId ? DOMAINS_BY_ID[activeDomainId] : null;
   const activeDomainTab = activeDomainId ? (activeDomainTabByDomain[activeDomainId] ?? "overview") : "overview";
+  // The topbar shows the domain header only while actually inside the Domains view.
+  const domainHeader = activePrimaryView === "domains" ? activeDomain : null;
   const selectedTrainingSession = useMemo(
     () => sessions.find((session) => session.id === selectedTrainingSessionId) ?? null,
     [sessions, selectedTrainingSessionId],
@@ -184,6 +186,13 @@ export default function App() {
   const setDomainTab = useCallback((tabId) => {
     setActiveDomainTabByDomain((current) => ({ ...current, [activeDomainId]: tabId }));
   }, [activeDomainId]);
+
+  // From a domain's Training tab, jump straight to Training → Coverage to run a capture sprint.
+  const openTrainingCoverage = useCallback(() => {
+    setActivePrimaryView("training");
+    setSidebarLevel("secondary");
+    setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "coverage" }));
+  }, []);
 
   const goHome = useCallback(() => {
     setActivePrimaryView("command");
@@ -983,7 +992,7 @@ export default function App() {
     sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} />;
   } else if (activePrimaryView === "domains") {
     sectionContent = activeDomain
-      ? <DomainWorkspace domain={activeDomain} activeTab={activeDomainTab} onChangeTab={setDomainTab} />
+      ? <DomainWorkspace domain={activeDomain} activeTab={activeDomainTab} onChangeTab={setDomainTab} onOpenTraining={openTrainingCoverage} />
       : <DomainsHub onOpenDomain={openDomain} />;
   } else if (activePrimaryView === "system" && activeSectionId === "api-usage") {
     sectionContent = <ApiUsageSection usage={usage} loadUsage={loadUsage} />;
@@ -1203,8 +1212,8 @@ export default function App() {
       <main className="main-panel">
         <header className="topbar">
           <div>
-            <h1 className="page-title">{activeDomain ? `${activeDomain.icon} ${activeDomain.label}` : currentNav.title}</h1>
-            <p className="page-subtitle">{activeDomain ? activeDomain.responsibility : (activeSection?.subtitle || currentNav.subtitle)}</p>
+            <h1 className="page-title">{domainHeader ? `${domainHeader.icon} ${domainHeader.label}` : currentNav.title}</h1>
+            <p className="page-subtitle">{domainHeader ? domainHeader.responsibility : (activeSection?.subtitle || currentNav.subtitle)}</p>
           </div>
 
           <div className="topbar-actions">
