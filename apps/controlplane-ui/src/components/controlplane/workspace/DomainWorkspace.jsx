@@ -7,6 +7,7 @@ import { TasksPanel } from "./TasksPanel";
 import { AttentionInbox } from "./AttentionInbox";
 import { ActivityFeed } from "./ActivityFeed";
 import { TrainingReadiness } from "./TrainingReadiness";
+import { AccountsPanel } from "./AccountsPanel";
 import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
 import { IndeedWorkspaceSection } from "../IndeedWorkspaceSection";
 
@@ -24,6 +25,7 @@ const TAB_TO_SECTION = {
 
 function DataTab({ domain, tab, onOpenTraining }) {
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
+  if (tab === "accounts") return <AccountsPanel domain={domain} />;
   const section = TAB_TO_SECTION[domain.id]?.[tab];
   if (domain.id === "facebook_marketplace") return <FacebookMarketplaceSection section={section} />;
   if (domain.id === "indeed_jobs") return <IndeedWorkspaceSection section={section} />;
