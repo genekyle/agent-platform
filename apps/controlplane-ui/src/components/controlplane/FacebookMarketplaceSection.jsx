@@ -64,6 +64,18 @@ function SectionHeading({ title, right }) {
 
 const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "—");
 
+// The Facebook accounts you can post as (from the account registry). One built-in
+// (facebook_default) ships out of the box; more are added in the Accounts panel.
+function useFbAccounts() {
+  const [accounts, setAccounts] = useState([]);
+  useEffect(() => {
+    api("/api/accounts?domain_id=facebook_marketplace")
+      .then((d) => setAccounts(d.accounts || []))
+      .catch(() => setAccounts([]));
+  }, []);
+  return accounts;
+}
+
 /** The Marketplace selling workspace — inventory-first, channel-agnostic. Default view is the
  *  single-page dashboard (cards → inventory → queue → activity); the nav sub-sections are
  *  focused deep-dives that reuse the same building blocks. */
@@ -274,6 +286,10 @@ function ItemForm({ item, onClose, onSaved }) {
 function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
   const [item, setItem] = useState(null);
   const [busy, setBusy] = useState("");
+  const accounts = useFbAccounts();
+  const [acctId, setAcctId] = useState("");
+  const [listingUrl, setListingUrl] = useState("");
+  useEffect(() => { if (!acctId && accounts[0]) setAcctId(accounts[0].account_id); }, [accounts, acctId]);
   const load = useCallback(() => api(`/api/inventory/items/${itemId}`).then((d) => setItem(d.item)).catch(() => {}), [itemId]);
   useEffect(() => { load(); }, [load]);
 
@@ -283,9 +299,12 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
     catch { /* surfaced in the activity log */ } finally { setBusy(""); }
   }, [load, onChanged, onClose]);
 
-  const postNow = () => act("post", async () => {
-    await jpost("/api/inventory/queue", { item_ids: [itemId] });
-    await jpost("/api/inventory/queue/run?dry_run=true");
+  const createListing = () => act("list", async () => {
+    await jpost(`/api/inventory/items/${itemId}/create-listing`, {
+      account_id: acctId || null,
+      listing_url: listingUrl.trim() || null,
+    });
+    setListingUrl("");
   });
 
   return (
@@ -324,7 +343,7 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
                 {item.channels.map((l) => (
                   <div key={l.id} className="panel" style={{ padding: "8px 10px", marginBottom: 6, fontSize: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span>{l.channel}{l.simulated ? " · simulated" : ""}</span>
+                      <span>{l.channel}{l.account_id ? ` · ${l.account_id}` : ""}{l.simulated ? " · stub" : ""}</span>
                       <Pill value={l.listing_status} />
                     </div>
                     {l.listing_url && <a href={l.listing_url} target="_blank" rel="noreferrer">{l.listing_url}</a>}
@@ -333,10 +352,37 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
               </div>
             )}
 
+            {/* List on Marketplace — tied to the account it's posted under */}
+            <div className="panel" style={{ marginTop: 14, padding: "12px 12px" }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>List on Marketplace</div>
+              <Field label="Post as account">
+                <select className="input" value={acctId} onChange={(e) => setAcctId(e.target.value)}>
+                  {accounts.length === 0 && <option value="">No Facebook accounts configured</option>}
+                  {accounts.map((a) => (
+                    <option key={a.account_id} value={a.account_id} disabled={a.status !== "active"}>
+                      {a.label}{a.has_creds ? "" : " · no creds"}{a.status !== "active" ? " · disabled" : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div style={{ marginTop: 8 }}>
+                <Field label="Live listing URL (optional — paste if you already posted it by hand)">
+                  <input className="input" value={listingUrl} onChange={(e) => setListingUrl(e.target.value)}
+                    placeholder="https://www.facebook.com/marketplace/item/…" />
+                </Field>
+              </div>
+              <button className="btn btn-primary btn-sm" style={{ marginTop: 10 }} disabled={busy || !acctId}
+                onClick={createListing}>
+                {busy === "list" ? "Listing…" : listingUrl.trim() ? "Record posted listing" : "Create listing (stub)"}
+              </button>
+              <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                With a URL it records a real post; without one it creates a stub the live drive fills in later.
+              </div>
+            </div>
+
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
               <button className="btn btn-sm" onClick={() => onEdit(item)}>Edit</button>
-              <button className="btn btn-sm" disabled={busy} onClick={() => act("queue", () => jpost("/api/inventory/queue", { item_ids: [itemId] }))}>Add to queue</button>
-              <button className="btn btn-sm btn-primary" disabled={busy} onClick={postNow}>{busy === "post" ? "Posting…" : "Post now"}</button>
+              <button className="btn btn-sm" disabled={busy} onClick={() => act("queue", () => jpost("/api/inventory/queue", { item_ids: [itemId], account_id: acctId || null }))}>Add to queue</button>
               <button className="btn btn-sm" disabled={busy} onClick={() => act("check", () => jpost("/api/inventory/check-responses"))}>Check responses</button>
               <button className="btn btn-sm" disabled={busy} onClick={() => act("sold", () => jpost(`/api/inventory/items/${itemId}/sold`))}>Mark sold</button>
               <button className="btn btn-sm" disabled={busy} onClick={() => act("archive", () => jpost(`/api/inventory/items/${itemId}/archive`))}>Archive</button>
@@ -497,13 +543,14 @@ function ActiveListingsPanel() {
       <div className="panel" style={{ marginTop: 12 }}>
         <div className="table-wrap">
           <table className="runs-table">
-            <thead><tr><th>Item</th><th>Price</th><th>Channel</th><th>Status</th><th>Responses</th><th>Unread</th><th>URL</th><th>Last checked</th></tr></thead>
+            <thead><tr><th>Item</th><th>Price</th><th>Channel</th><th>Account</th><th>Status</th><th>Responses</th><th>Unread</th><th>URL</th><th>Last checked</th></tr></thead>
             <tbody>
               {listings.map((l) => (
                 <tr key={l.id}>
                   <td>{l.item_title || l.item_id}</td>
                   <td>{l.item_price ? `$${l.item_price}` : "—"}</td>
-                  <td className="muted">{l.channel}{l.simulated ? " · sim" : ""}</td>
+                  <td className="muted">{l.channel}{l.simulated ? " · stub" : ""}</td>
+                  <td>{l.account_id ? <span className="badge badge--accent">{l.account_id}</span> : <span className="muted">—</span>}</td>
                   <td><Pill value={l.listing_status} /></td>
                   <td style={{ textAlign: "center" }}>{l.response_count || 0}</td>
                   <td style={{ textAlign: "center" }}>{l.unread_response_count || 0}</td>
@@ -511,7 +558,7 @@ function ActiveListingsPanel() {
                   <td className="muted" style={{ fontSize: 12 }}>{fmtTime(l.last_checked_at)}</td>
                 </tr>
               ))}
-              {listings.length === 0 && <tr><td colSpan={8} className="muted" style={{ padding: 18, textAlign: "center" }}>No active listings yet. Post items from the queue.</td></tr>}
+              {listings.length === 0 && <tr><td colSpan={9} className="muted" style={{ padding: 18, textAlign: "center" }}>No active listings yet. Create one from an item, or post from the queue.</td></tr>}
             </tbody>
           </table>
         </div>

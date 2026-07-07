@@ -215,6 +215,14 @@ class TrainingSession(Base):
     # login stays authenticated for future runs. When None, each session gets a fresh
     # throwaway profile (the default for data-collection captures).
     persistent_profile: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Which configured account (accounts.py) this session runs as. The account's persistent
+    # profile is what actually isolates one account's Chrome from another's; this column just
+    # records the binding so the session manager can label a live session by account.
+    account_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Human-owned / do-not-touch guard. A protected session is never reaped by the
+    # persistent-profile conflict sweep, and stop/relaunch/delete refuse it without force=true.
+    # This is the "don't let a new run disturb my live session" safety flag.
+    protected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     chrome_debug_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     chrome_user_data_dir: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     chrome_process_pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

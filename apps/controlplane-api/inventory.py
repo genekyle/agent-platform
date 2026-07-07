@@ -72,6 +72,7 @@ class MarketplaceListing:
     id: str
     item_id: str
     channel: str = DEFAULT_CHANNEL
+    account_id: Optional[str] = None      # WHICH account (accounts.py) this was posted under
     listing_url: Optional[str] = None
     listing_status: str = "active"
     external_listing_id: Optional[str] = None
@@ -88,6 +89,7 @@ class QueueTask:
     item_id: str
     task_type: str = "post"               # post | check_responses | sync | ...
     channel: str = DEFAULT_CHANNEL
+    account_id: Optional[str] = None      # WHICH account to post as
     status: str = "waiting"
     priority: int = 100                   # lower = sooner
     attempts: int = 0
@@ -312,7 +314,7 @@ def list_listings(*, active_only: bool = False, channel: Optional[str] = None) -
 
 # --- Queue -------------------------------------------------------------------
 def add_to_queue(item_ids: list[str], *, channel: str = DEFAULT_CHANNEL,
-                 task_type: str = "post") -> dict:
+                 task_type: str = "post", account_id: Optional[str] = None) -> dict:
     added = []
     with _lock:
         doc = _load()
@@ -323,7 +325,7 @@ def add_to_queue(item_ids: list[str], *, channel: str = DEFAULT_CHANNEL,
             if iid not in existing_item_ids or (iid, channel) in waiting:
                 continue
             task = QueueTask(id=_new_id("qt"), item_id=iid, task_type=task_type,
-                             channel=channel, created_at=_now())
+                             channel=channel, account_id=account_id, created_at=_now())
             doc["queue"].append(asdict(task))
             added.append(task.id)
             it = next((i for i in doc["items"] if i["id"] == iid), None)
@@ -376,8 +378,9 @@ def run_queue(*, dry_run: bool = True, limit: int = 0) -> dict:
                 continue
             it["internal_status"] = "posting"
             # --- SEAM: real posting via the runner loop goes here (dry_run=False) ---
+            acct = t.get("account_id")
             listing = MarketplaceListing(
-                id=_new_id("lst"), item_id=it["id"], channel=t["channel"],
+                id=_new_id("lst"), item_id=it["id"], channel=t["channel"], account_id=acct,
                 listing_status="active", simulated=bool(dry_run), posted_at=_now(),
                 response_count=0, unread_response_count=0)
             doc["listings"].append(asdict(listing))
@@ -388,11 +391,59 @@ def run_queue(*, dry_run: bool = True, limit: int = 0) -> dict:
             processed.append(t["id"])
             _log_into(doc, "posted", item_id=it["id"], queue_task_id=t["id"],
                       message=f"Posted {it.get('title') or 'item'} to {t['channel']}"
+                              + (f" as {acct}" if acct else "")
                               + (" (simulated — connect the runner loop to post for real)" if dry_run else ""),
-                      metadata={"simulated": bool(dry_run), "listing_id": listing.id})
+                      metadata={"simulated": bool(dry_run), "listing_id": listing.id, "account_id": acct})
         _log_into(doc, "queue_run_finished", message=f"Posting queue finished ({len(processed)} posted)")
         _save(doc)
     return {"posted": processed, "count": len(processed), "dry_run": dry_run}
+
+
+def create_listing(item_id: str, *, account_id: Optional[str] = None,
+                   channel: str = DEFAULT_CHANNEL, listing_url: Optional[str] = None,
+                   external_listing_id: Optional[str] = None) -> Optional[dict]:
+    """Create a Marketplace listing for an item, tied to the ACCOUNT it's posted under. The
+    explicit 'create a listing' seam, in two honest modes:
+
+      * REAL — pass ``listing_url`` (a post you made, by hand or via the live drive later): the
+        listing is recorded with ``simulated=False`` and its real URL.
+      * STUB — omit ``listing_url``: a placeholder listing (``simulated=True``) until the live
+        create-item-form drive fills it in.
+
+    Either way the ``account_id`` is recorded so we always know which account carries the
+    listing. Returns the item view, or None if the item doesn't exist.
+    """
+    with _lock:
+        doc = _load()
+        it = next((i for i in doc["items"] if i["id"] == item_id), None)
+        if it is None:
+            return None
+        real = bool(listing_url)
+        listing = MarketplaceListing(
+            id=_new_id("lst"), item_id=item_id, channel=channel, account_id=account_id,
+            listing_url=listing_url, external_listing_id=external_listing_id,
+            listing_status="active", simulated=not real, posted_at=_now())
+        doc["listings"].append(asdict(listing))
+        it["internal_status"] = "active"
+        it["updated_at"] = _now()
+        _log_into(doc, "listing_created", item_id=item_id,
+                  message=f"Listed {it.get('title') or 'item'} on {channel}"
+                          + (f" as {account_id}" if account_id else "")
+                          + ("" if real else " (stub — not yet posted for real)"),
+                  metadata={"listing_id": listing.id, "account_id": account_id,
+                            "simulated": not real, "listing_url": listing_url})
+        _save(doc)
+    return get_item(item_id)
+
+
+def reset() -> dict:
+    """Wipe ALL inventory state (items, listings, queue, log) — used to clear example/seed data
+    for a clean slate. Operator-owned data; irreversible. Returns the counts removed."""
+    with _lock:
+        doc = _load()
+        counts = {k: len(doc.get(k, [])) for k in ("items", "listings", "queue", "log")}
+        _save(_blank())
+    return {"cleared": counts}
 
 
 def retry_failed() -> dict:

@@ -233,6 +233,9 @@ class TrainingSessionCreate(BaseModel):
     # Attach to a SHARED persistent (pre-authed) Chrome profile that survives across
     # sessions. None = a fresh throwaway profile each launch (the data-collection default).
     persistent_profile: Optional[str] = None
+    # Run this session as a configured account (accounts.py). When set, the account's
+    # persistent profile is used, keeping each account isolated in its own Chrome.
+    account_id: Optional[str] = None
 
 
 class TrainingSessionRead(BaseModel):
@@ -245,6 +248,8 @@ class TrainingSessionRead(BaseModel):
     capture_profile: str
     purpose: str = "data_collection"
     persistent_profile: Optional[str] = None
+    account_id: Optional[str] = None
+    protected: bool = False
     notes: Optional[str] = None
     browser_session_id: Optional[str] = None
     chrome_debug_port: Optional[int] = None

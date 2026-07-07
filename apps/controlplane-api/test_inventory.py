@@ -119,3 +119,44 @@ def test_log_records_actions_newest_first():
     log = inventory.list_log()
     assert log[0]["action_type"] == "queued"
     assert any(e["action_type"] == "item_created" for e in log)
+
+
+def test_create_listing_stub_records_account():
+    it = _item()
+    view = inventory.create_listing(it["id"], account_id="facebook_default")
+    assert view["internal_status"] == "active"
+    ch = view["channels"]
+    assert len(ch) == 1
+    assert ch[0]["account_id"] == "facebook_default"
+    assert ch[0]["simulated"] is True          # stub until a real post replaces it
+    assert ch[0]["listing_url"] is None
+
+
+def test_create_listing_real_with_url_is_not_simulated():
+    it = _item()
+    view = inventory.create_listing(it["id"], account_id="facebook_alt",
+                                    listing_url="https://facebook.com/marketplace/item/123")
+    ch = view["channels"][0]
+    assert ch["simulated"] is False
+    assert ch["listing_url"].endswith("/123")
+    assert ch["account_id"] == "facebook_alt"
+
+
+def test_queue_carries_account_onto_listing():
+    it = _item()
+    inventory.add_to_queue([it["id"]], account_id="facebook_default")
+    assert inventory.list_queue()[0]["account_id"] == "facebook_default"
+    inventory.run_queue(dry_run=True)
+    assert inventory.list_listings()[0]["account_id"] == "facebook_default"
+
+
+def test_reset_clears_everything():
+    it = _item()
+    inventory.add_to_queue([it["id"]])
+    inventory.create_listing(it["id"], account_id="facebook_default")
+    res = inventory.reset()
+    assert res["cleared"]["items"] == 1
+    assert inventory.list_items() == []
+    assert inventory.list_listings() == []
+    assert inventory.list_queue() == []
+    assert inventory.list_log() == []

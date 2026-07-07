@@ -3877,16 +3877,60 @@ class QueueAddBody(BaseModel):
     item_ids: list[str]
     channel: str = "facebook_marketplace"
     task_type: str = "post"
+    account_id: Optional[str] = None       # which account to post as
 
 
 class IdsBody(BaseModel):
     task_ids: list[str] = []
 
 
+class CreateListingBody(BaseModel):
+    account_id: Optional[str] = None       # which account this listing is posted under
+    channel: str = "facebook_marketplace"
+    listing_url: Optional[str] = None      # set → records a REAL post; omit → a stub listing
+    external_listing_id: Optional[str] = None
+
+
 @app.get("/api/inventory/overview")
 def inventory_overview():
     import inventory
     return inventory.overview()
+
+
+def _validate_marketplace_account(account_id: Optional[str]):
+    """A create-listing/post account must be a real, active facebook_marketplace account. None is
+    allowed (unattributed) so nothing breaks, but a BAD id is rejected loudly."""
+    if not account_id:
+        return
+    import accounts
+    acct = accounts.get_account(account_id)
+    if acct is None:
+        raise HTTPException(status_code=404, detail=f"Unknown account '{account_id}'")
+    if acct["domain_id"] != "facebook_marketplace":
+        raise HTTPException(status_code=400, detail=f"Account '{account_id}' is not a Facebook Marketplace account")
+    if acct["status"] != "active":
+        raise HTTPException(status_code=400, detail=f"Account '{account_id}' is disabled")
+
+
+@app.post("/api/inventory/items/{item_id}/create-listing")
+def inventory_create_listing(item_id: str, body: CreateListingBody):
+    """Create a Marketplace listing for an item, tied to the account it's posted under. Pass a
+    listing_url to record a REAL post you made; omit it for a stub the live drive fills later."""
+    import inventory
+    _validate_marketplace_account(body.account_id)
+    view = inventory.create_listing(
+        item_id, account_id=body.account_id, channel=body.channel,
+        listing_url=body.listing_url, external_listing_id=body.external_listing_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item": view}
+
+
+@app.post("/api/inventory/reset")
+def inventory_reset():
+    """Wipe ALL inventory (items/listings/queue/log) — clears example/seed data for a clean slate."""
+    import inventory
+    return inventory.reset()
 
 
 @app.get("/api/inventory/items")
@@ -3958,7 +4002,9 @@ def inventory_queue():
 @app.post("/api/inventory/queue")
 def inventory_queue_add(body: QueueAddBody):
     import inventory
-    return inventory.add_to_queue(body.item_ids, channel=body.channel, task_type=body.task_type)
+    _validate_marketplace_account(body.account_id)
+    return inventory.add_to_queue(body.item_ids, channel=body.channel,
+                                  task_type=body.task_type, account_id=body.account_id)
 
 
 @app.post("/api/inventory/queue/run")

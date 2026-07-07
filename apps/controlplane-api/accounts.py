@@ -1,0 +1,249 @@
+"""Account registry — configure MULTIPLE accounts per domain, in-app, without ever putting a
+secret in the registry.
+
+Why this exists: training and running against more than one Indeed (or Facebook) login is how we
+generalize across accounts. But an account is two very different things glued together:
+
+  * **metadata** — a label, which domain it's for, which persistent Chrome profile isolates it,
+    and a *reference* to where its secret lives. This is operator-owned config, safe to inspect
+    and edit in the UI, and safe to sit in a JSON doc next to the other operator state
+    (inventory.json, domain_settings.json). It contains NO secret.
+  * **the secret** — the username + password. This stays in the gitignored ``.env`` (or, later, the
+    macOS Keychain). The registry only holds a ``secret_ref`` like ``env:INDEED_PRIMARY`` that
+    names where to look; the value is resolved on demand, never stored here and never returned by
+    the API. The most the API ever exposes is a masked hint (``g***@gmail.com``) and a
+    ``has_creds`` boolean.
+
+The isolation guarantee: each account maps to its OWN persistent Chrome profile (``profile``).
+Two accounts with two profiles are two independent user-data-dirs, so their cookies/sessions can
+never bleed into each other — which is precisely what makes "generalize across accounts" safe.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+from settings import settings
+
+_lock = threading.Lock()
+
+# Built-in accounts derived from the legacy single-account .env keys, so nothing that already
+# works (FB_USERNAME/PASSWORD, INDEED_USERNAME/PASSWORD, ...) breaks. They always appear in the
+# registry; if their env keys are empty they simply show has_creds=false — honest, not hidden.
+_BUILTIN_ACCOUNTS: dict[str, dict[str, Any]] = {
+    "facebook_default": {
+        "account_id": "facebook_default", "domain_id": "facebook_marketplace",
+        "label": "Facebook — default", "profile": "facebook", "secret_ref": "env:FB",
+        "status": "active", "notes": "Legacy FB_USERNAME / FB_PASSWORD.", "builtin": True,
+    },
+    "indeed_default": {
+        "account_id": "indeed_default", "domain_id": "indeed_jobs",
+        "label": "Indeed — default", "profile": "indeed", "secret_ref": "env:INDEED",
+        "status": "active", "notes": "Legacy INDEED_USERNAME / INDEED_PASSWORD.", "builtin": True,
+    },
+    "gmail_default": {
+        "account_id": "gmail_default", "domain_id": "gmail",
+        "label": "Gmail — default", "profile": "gmail", "secret_ref": "env:GMAIL",
+        "status": "active", "notes": "Legacy GMAIL_USERNAME / GMAIL_PASSWORD.", "builtin": True,
+    },
+}
+
+_EDITABLE_KEYS = ("domain_id", "label", "profile", "secret_ref", "status", "notes")
+_STATUSES = ("active", "disabled")
+
+
+# --------------------------------------------------------------------------- storage
+def _path() -> Path:
+    base = Path(settings.observer_artifacts_dir)
+    if not base.is_absolute():
+        base = (Path(__file__).resolve().parent / base).resolve()
+    p = base / "cache" / "accounts.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _load() -> dict[str, Any]:
+    p = _path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        stored = data.get("accounts") if isinstance(data, dict) else None
+        return stored if isinstance(stored, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save(accounts: dict[str, Any]) -> None:
+    _path().write_text(json.dumps({"accounts": accounts}, indent=2), encoding="utf-8")
+
+
+def _merged() -> dict[str, dict[str, Any]]:
+    """Built-in defaults overlaid with stored edits. Stored values win so an operator can rename or
+    re-point a built-in; a stored-only account (a genuinely new login) is included as-is."""
+    out: dict[str, dict[str, Any]] = {aid: dict(rec) for aid, rec in _BUILTIN_ACCOUNTS.items()}
+    for aid, rec in _load().items():
+        if not isinstance(rec, dict):
+            continue
+        base = dict(out.get(aid) or {})
+        base.update(rec)
+        base["account_id"] = aid
+        out[aid] = base
+    return out
+
+
+# --------------------------------------------------------------------------- secrets
+def _slugify(value: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _read_env_value(key: str) -> str:
+    """A real environment variable wins; otherwise read the gitignored .env directly. pydantic
+    Settings only loads *declared* fields, so per-account keys (INDEED_PRIMARY_USERNAME, ...) won't
+    be on `settings` or in os.environ — we parse the file ourselves, like scripts/haiku_smoke_test.
+    """
+    if key in os.environ:
+        return os.environ[key].strip()
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return ""
+    try:
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            if k.strip() == key:
+                return v.strip().strip('"').strip("'")
+    except Exception:
+        return ""
+    return ""
+
+
+def _resolve_secret_ref(secret_ref: str) -> Optional[tuple[str, str]]:
+    """(username, password) for a ``secret_ref``, or None if either half is missing. Dispatches on
+    the scheme so a stronger backend (keychain:) can slot in later without touching callers."""
+    ref = (secret_ref or "").strip()
+    scheme, _, name = ref.partition(":")
+    if not name:  # bare name -> treat as env prefix, the common case
+        scheme, name = "env", ref
+    if scheme == "env":
+        user = _read_env_value(f"{name}_USERNAME")
+        pw = _read_env_value(f"{name}_PASSWORD")
+        return (user, pw) if user and pw else None
+    # keychain:<service> and other backends are a planned "more secure, still local" upgrade;
+    # unknown/unsupported schemes resolve to nothing rather than guessing.
+    return None
+
+
+def _mask(username: str) -> str:
+    """A safe-to-display hint. Emails keep the first char + domain; other logins keep the ends."""
+    u = (username or "").strip()
+    if not u:
+        return ""
+    if "@" in u:
+        local, _, domain = u.partition("@")
+        head = local[0] if local else ""
+        return f"{head}***@{domain}"
+    if len(u) <= 2:
+        return "***"
+    return f"{u[0]}***{u[-1]}"
+
+
+# --------------------------------------------------------------------------- public API
+def _public(rec: dict[str, Any]) -> dict[str, Any]:
+    """A registry record enriched for the API: adds has_creds + a masked username hint, and
+    guarantees NO raw secret is present."""
+    creds = _resolve_secret_ref(rec.get("secret_ref", ""))
+    return {
+        "account_id": rec.get("account_id"),
+        "domain_id": rec.get("domain_id"),
+        "label": rec.get("label") or rec.get("account_id"),
+        "profile": rec.get("profile") or rec.get("account_id"),
+        "secret_ref": rec.get("secret_ref", ""),
+        "status": rec.get("status", "active"),
+        "notes": rec.get("notes", ""),
+        "builtin": bool(rec.get("builtin")),
+        "has_creds": creds is not None,
+        "username_hint": _mask(creds[0]) if creds else "",
+        "created_at": rec.get("created_at"),
+        "updated_at": rec.get("updated_at"),
+    }
+
+
+def list_accounts(domain_id: Optional[str] = None) -> list[dict[str, Any]]:
+    recs = [_public(r) for r in _merged().values()]
+    if domain_id:
+        recs = [r for r in recs if r["domain_id"] == domain_id]
+    return sorted(recs, key=lambda r: (r["domain_id"] or "", r["account_id"] or ""))
+
+
+def get_account(account_id: str) -> Optional[dict[str, Any]]:
+    rec = _merged().get(account_id)
+    return _public(rec) if rec else None
+
+
+def profile_for(account_id: str) -> Optional[str]:
+    """The persistent Chrome profile name for an account — the isolation key a session launches
+    against. None if the account is unknown."""
+    rec = _merged().get(account_id)
+    if not rec:
+        return None
+    return rec.get("profile") or account_id
+
+
+def resolve_creds(account_id: str) -> Optional[tuple[str, str]]:
+    """(username, password) for an account, resolved from its secret backend. NEVER log or return
+    this over the API. Returns None when the account is unknown, disabled, or its creds are unset."""
+    rec = _merged().get(account_id)
+    if not rec or rec.get("status") == "disabled":
+        return None
+    return _resolve_secret_ref(rec.get("secret_ref", ""))
+
+
+def put_account(account_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    """Create or update an account's METADATA (never its secret). Returns the public view.
+
+    ``account_id`` is slugified so it's a stable, filesystem/profile-safe key. Only known keys are
+    accepted; ``status`` is validated. A missing ``profile`` defaults to the account id, so a new
+    account is isolated by default instead of silently sharing another's Chrome."""
+    aid = _slugify(account_id)
+    if not aid:
+        raise ValueError("account_id must contain at least one alphanumeric character")
+    with _lock:
+        stored = _load()
+        current = dict(stored.get(aid) or _BUILTIN_ACCOUNTS.get(aid) or {})
+        current["account_id"] = aid
+        for key in _EDITABLE_KEYS:
+            if key in patch and patch[key] is not None:
+                current[key] = patch[key]
+        if current.get("status") not in _STATUSES:
+            current["status"] = "active"
+        if not current.get("profile"):
+            current["profile"] = aid
+        now = datetime.now(timezone.utc).isoformat()
+        current.setdefault("created_at", now)
+        current["updated_at"] = now
+        # A stored copy of a built-in shouldn't masquerade as un-editable.
+        current.pop("builtin", None)
+        stored[aid] = current
+        _save(stored)
+        return _public({**current, "account_id": aid})
+
+
+def delete_account(account_id: str) -> bool:
+    """Remove a STORED account. Built-ins can't be deleted (they'd just re-seed); disable them via
+    status instead. Returns True if a stored row was removed."""
+    with _lock:
+        stored = _load()
+        if account_id not in stored:
+            return False
+        del stored[account_id]
+        _save(stored)
+        return True
