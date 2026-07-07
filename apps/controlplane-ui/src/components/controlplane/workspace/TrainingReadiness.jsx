@@ -55,7 +55,8 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
 
   if (!data) return <div className="empty-hint">Loading training readiness…</div>;
 
-  const { coverage: cov, l3, l4, next_gap: gap, states } = data;
+  const { coverage: cov, l3, l4, next_gap: gap, states, distillation: distill } = data;
+  const golden = distill?.golden_reps ?? 0;
 
   return (
     <div className="cockpit">
@@ -65,9 +66,11 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
           <span className="layer__sub">Claude is the teacher — the students distill from every rep</span>
         </div>
         <p className="mode-hint" style={{ marginTop: 0 }}>
-          Every paid pick also labels a page-state (fuel for the <strong>L3</strong> screen classifier) and logs a
-          selection (fuel for the <strong>L4</strong> element selector). As those students get trained they slot in
-          <em> below</em> the Haiku catchall in the cascade — driving the Haiku share (and cost) down.
+          The theme is <strong>distillation</strong>: Claude/Haiku decides, and every confirmed decision is written
+          down as a golden rep — a page-state label (fuel for the <strong>L3</strong> screen classifier) and the
+          correct element (fuel for the <strong>L4</strong> selector). As the students learn, they slot in
+          <em> below</em> the Haiku catchall in the cascade, driving the Haiku share (and cost) down until the
+          teacher is only needed for the genuinely new.
         </p>
 
         {/* The money-saving scoreboard — system-wide SELECT telemetry */}
@@ -113,20 +116,24 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
         <div className="layer">
           <div className="layer__head">
             <div className="layer__title">🎯 L4 · Element selector</div>
-            <span className="badge badge--muted">Distilling</span>
+            <span className="badge badge--accent">Distilling</span>
           </div>
-          <p className="layer__sub" style={{ marginBottom: 10 }}>“Which element do I act on, given the screen + goal?” — the pick that replaces Haiku.</p>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-            <span>Selection corpus</span><strong>{l4.corpus_size} picks</strong>
+          <p className="layer__sub" style={{ marginBottom: 12 }}>“Which element do I act on, given the screen + goal?” — the pick that replaces Haiku.</p>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <div style={{ fontSize: 34, fontWeight: 800, color: "var(--cc-accent)", lineHeight: 1 }}>{golden}</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>golden reps distilled</div>
+          </div>
+          <div className="mode-hint" style={{ marginTop: 6 }}>
+            Teacher-confirmed <strong>(state → action)</strong> labels — the supervised ground truth the student
+            learns to replace Haiku with. Written every time a pick is confirmed.
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, margin: "12px 0 6px" }}>
+            <span className="muted">Behavioral corpus (all picks)</span><strong>{l4.corpus_size}</strong>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {l4.by_layer.map((r) => (
               <span key={r.layer} className="chip muted">{r.layer}: {r.count}</span>
             ))}
-          </div>
-          <div className="mode-hint" style={{ marginTop: 10 }}>
-            Grows from every live pick + <code>run_batch</code> replays. Trains once the create-listing / reply flows
-            are walked enough that the corpus has real (state → action) reps.
           </div>
         </div>
       </div>

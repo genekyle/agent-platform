@@ -383,15 +383,29 @@ def _profile_dir_for(session: TrainingSession) -> Path:
 
 
 def _next_training_port(db: Session) -> int:
-    active_ports = db.scalars(
-        select(TrainingSession.chrome_debug_port).where(
-            TrainingSession.chrome_debug_port.is_not(None),
-            TrainingSession.status.in_(["active", "starting"]),
-        )
-    ).all()
+    """Pick a free debugging port. We skip ports claimed by active/starting DB rows AND any port
+    that answers CDP *right now* — because a row can be stale (API restarted, status never
+    updated) while its Chrome is still very much alive. Trusting DB status alone is exactly how a
+    fresh launch could seize a live session's port and disturb it (e.g. the persistent Facebook
+    browser that drifted to 9327). The live probe is the honest, collision-proof check."""
+    import channel_browser
+
+    active_port_set = {
+        value
+        for value in db.scalars(
+            select(TrainingSession.chrome_debug_port).where(
+                TrainingSession.chrome_debug_port.is_not(None),
+                TrainingSession.status.in_(["active", "starting"]),
+            )
+        ).all()
+        if value is not None
+    }
     port = settings.training_chrome_port_start
-    active_port_set = {value for value in active_ports if value is not None}
-    while port in active_port_set:
+    # Bound the walk so a pathological host can't spin forever; far more headroom than we'd ever
+    # run concurrently. A refused connection returns immediately, so probing dead ports is cheap.
+    for _ in range(200):
+        if port not in active_port_set and not channel_browser.cdp_reachable(port, timeout=0.5):
+            return port
         port += 1
     return port
 
@@ -499,6 +513,7 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
                 TrainingSession.id != session.id,
             )
         ).all()
+        reaped = False
         for other in siblings:
             if channel_browser.cdp_reachable(other.chrome_debug_port):
                 raise HTTPException(
@@ -506,9 +521,15 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
                     detail=f"Persistent profile '{session.persistent_profile}' is already in use by "
                            f"a live session #{other.id}. Stop it first.",
                 )
+            if other.protected:
+                # Human-owned rows are never auto-reaped, even when their browser looks dead — we
+                # leave the record intact and let the operator decide. (A dead profile isn't locked,
+                # so this doesn't block the relaunch.)
+                continue
             other.status = "stopped"
             other.chrome_stopped_at = utcnow()
-        if siblings:
+            reaped = True
+        if reaped:
             db.commit()
 
     port = _next_training_port(db)
@@ -690,6 +711,9 @@ def _migrate_schema() -> None:
         ("observed_jobs", "application_platform", "VARCHAR(40)"),
         # training_sessions persistent (pre-authed) profile attach (v14)
         ("training_sessions", "persistent_profile", "VARCHAR(120)"),
+        # training_sessions multi-account + protect guard (v15)
+        ("training_sessions", "account_id", "VARCHAR(120)"),
+        ("training_sessions", "protected", "BOOLEAN NOT NULL DEFAULT false"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -2521,6 +2545,120 @@ def archive_action(action_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Session manager — one honest, live view of every browser session the platform owns, folded with
+# a real CDP liveness probe (not the DB status, which goes stale on restart), the account each runs
+# as, and a human-owned "protect" flag. This is the "be cognizant of my sessions" surface so a new
+# run can never blindside a live one.
+# ---------------------------------------------------------------------------
+def _session_tab_count(port: Optional[int]) -> Optional[int]:
+    """Best-effort count of open page tabs in a session's Chrome (None if it isn't answering)."""
+    if not port:
+        return None
+    try:
+        with httpx.Client(timeout=1.5) as client:
+            targets = client.get(f"http://127.0.0.1:{port}/json").json()
+        return sum(1 for t in targets if t.get("type") == "page")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@app.get("/api/sessions")
+def list_sessions(db: Session = Depends(get_db)):
+    """Every browser session, each folded with a LIVE CDP probe, its account label, and whether
+    it's protected — the view that makes concurrent/training sessions safe to reason about."""
+    import accounts as accounts_mod
+    import channel_browser
+    import session_manager
+    label_by_id = {a["account_id"]: a["label"] for a in accounts_mod.list_accounts()}
+    rows = []
+    for s in db.scalars(select(TrainingSession).order_by(TrainingSession.created_at.desc())).all():
+        live = channel_browser.cdp_reachable(s.chrome_debug_port, timeout=0.5)
+        rows.append(session_manager.view_row(
+            s, cdp_reachable=live,
+            account_label=label_by_id.get(s.account_id),
+            tab_count=_session_tab_count(s.chrome_debug_port) if live else None,
+        ))
+    return {"sessions": rows}
+
+
+class ProtectBody(BaseModel):
+    protected: bool = True
+
+
+@app.post("/api/sessions/{session_id}/protect", response_model=TrainingSessionRead)
+def set_session_protected(session_id: int, body: ProtectBody, db: Session = Depends(get_db)):
+    """Mark a session human-owned (or release it). While protected it refuses stop / reap /
+    delete without force=true — the switch that keeps your live session safe from an automated step."""
+    session = db.get(TrainingSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    session.protected = bool(body.protected)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+# ---------------------------------------------------------------------------
+# Accounts — configure multiple accounts per domain, in-app. Metadata only; the secret stays in
+# .env (or a stronger local backend later) and is NEVER returned by these endpoints.
+# ---------------------------------------------------------------------------
+class AccountBody(BaseModel):
+    account_id: Optional[str] = None
+    domain_id: Optional[str] = None
+    label: Optional[str] = None
+    profile: Optional[str] = None
+    secret_ref: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/accounts")
+def get_accounts(domain_id: Optional[str] = None):
+    import accounts as accounts_mod
+    return {"accounts": accounts_mod.list_accounts(domain_id)}
+
+
+@app.get("/api/accounts/{account_id}")
+def get_account_ep(account_id: str):
+    import accounts as accounts_mod
+    acct = accounts_mod.get_account(account_id)
+    if acct is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return acct
+
+
+@app.post("/api/accounts")
+def create_account_ep(body: AccountBody):
+    import accounts as accounts_mod
+    if not body.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    try:
+        return accounts_mod.put_account(body.account_id, body.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/accounts/{account_id}")
+def update_account_ep(account_id: str, body: AccountBody):
+    import accounts as accounts_mod
+    try:
+        return accounts_mod.put_account(account_id, body.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/accounts/{account_id}")
+def delete_account_ep(account_id: str):
+    import accounts as accounts_mod
+    if not accounts_mod.delete_account(account_id):
+        raise HTTPException(
+            status_code=404,
+            detail="No stored account to delete (built-ins can't be deleted — disable via status).",
+        )
+    return {"ok": True, "deleted": account_id}
+
+
 @app.get("/api/training/sessions", response_model=list[TrainingSessionRead])
 def list_training_sessions(db: Session = Depends(get_db)):
     stmt = select(TrainingSession).order_by(TrainingSession.created_at.desc())
@@ -2539,6 +2677,18 @@ def create_training_session(body: TrainingSessionCreate, db: Session = Depends(g
         raise HTTPException(status_code=400, detail="Scenario is not allowed for the selected domain")
 
     purpose = body.purpose if body.purpose in {"data_collection", "production"} else "data_collection"
+
+    # Bind an account -> its persistent profile is what isolates this session's Chrome (cookies,
+    # login) from every other account's. An explicit persistent_profile still wins if given.
+    account_id = body.account_id or None
+    persistent_profile = body.persistent_profile or None
+    if account_id:
+        import accounts as accounts_mod
+        acct = accounts_mod.get_account(account_id)
+        if acct is None:
+            raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found")
+        persistent_profile = persistent_profile or acct["profile"]
+
     session = TrainingSession(
         domain_id=body.domain_id,
         scenario_id=body.scenario_id,
@@ -2546,7 +2696,8 @@ def create_training_session(body: TrainingSessionCreate, db: Session = Depends(g
         task_id=scenario.task_id,
         capture_profile=scenario.capture_profile_override or (domain.capture_defaults or {}).get("profile", "viewport"),
         purpose=purpose,
-        persistent_profile=(body.persistent_profile or None),
+        account_id=account_id,
+        persistent_profile=persistent_profile,
         notes=body.notes,
         status="draft",
     )
@@ -2565,10 +2716,14 @@ def start_training_session(session_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/training/sessions/{session_id}/stop", response_model=TrainingSessionRead)
-def stop_training_session(session_id: int, db: Session = Depends(get_db)):
+def stop_training_session(session_id: int, force: bool = False, db: Session = Depends(get_db)):
+    import session_manager
     session = db.get(TrainingSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Training session not found")
+    allowed, reason = session_manager.may_touch(protected=session.protected, action="stop", force=force)
+    if not allowed:
+        raise HTTPException(status_code=409, detail=reason)
     _stop_training_chrome(session)
     now = utcnow()
     session.status = "stopped"
@@ -2580,7 +2735,7 @@ def stop_training_session(session_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/training/sessions/{session_id}")
-def delete_training_session(session_id: int, db: Session = Depends(get_db)):
+def delete_training_session(session_id: int, force: bool = False, db: Session = Depends(get_db)):
     """Wipe one training session and everything it owns.
 
     Cascades to: captures (via SQLAlchemy relationship), artifact JSONs,
@@ -2589,10 +2744,17 @@ def delete_training_session(session_id: int, db: Session = Depends(get_db)):
 
     Registry rows (domains, goals, tasks, scenarios) are NOT touched —
     those are configuration, not session data.
+
+    A protected (human-owned) session refuses deletion unless force=true, so a stray
+    click can't destroy a live session's captures.
     """
+    import session_manager
     session = db.get(TrainingSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Training session not found")
+    allowed, reason = session_manager.may_touch(protected=session.protected, action="delete", force=force)
+    if not allowed:
+        raise HTTPException(status_code=409, detail=reason)
 
     # Stop Chrome before tearing down the DB row that holds its PID
     _stop_training_chrome(session)
@@ -3436,8 +3598,24 @@ def domain_training_readiness(domain_id: str, db: Session = Depends(get_db)):
     haiku_ct = by_layer.get("som_haiku", 0)
     haiku_share = round(haiku_ct / selections, 4) if selections else 0.0
 
+    # Distillation counter — the teacher's CONFIRMED reps: captures in this domain that carry a
+    # golden positive_candidate_id (the correct element to act on). This is the supervised L4
+    # ground truth (label_source='human'), the label historically never written. It's what makes
+    # the student able to replace Haiku, so we surface it as the headline distillation metric.
+    state_ids = [s["state_id"] for s in states]
+    golden_reps = db.scalar(
+        select(func.count()).select_from(TrainingCapture).where(
+            TrainingCapture.positive_candidate_id.isnot(None),
+            TrainingCapture.observed_page_state.in_(state_ids),
+        )
+    ) or 0
+
     return {
         "domain_id": domain_id,
+        "distillation": {
+            "golden_reps": int(golden_reps),         # teacher-confirmed (state → action) labels
+            "labeled_captures": cov["totals"]["tagged_captures"],
+        },
         "coverage": {
             **cov["totals"],
             "target_per_state": cov["target_per_state"],
