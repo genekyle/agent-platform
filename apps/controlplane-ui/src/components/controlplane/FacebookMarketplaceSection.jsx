@@ -13,6 +13,11 @@ const jpatch = (path, body) =>
   api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const jdelete = (path) => api(path, { method: "DELETE" });
 
+// Resolve a stored photo to a displayable URL. Photos are asset KEYS ("marketplace/x.jpg") served by
+// the API's /assets mount; a legacy full URL is passed through unchanged.
+const assetUrl = (keyOrUrl) =>
+  !keyOrUrl ? "" : /^https?:\/\//.test(keyOrUrl) ? keyOrUrl : `${API}/assets/${keyOrUrl}`;
+
 const ITEM_STATUS_COLOR = {
   draft: "#8b949e", ready_to_post: "#3b82f6", queued: "#d29922", posting: "#d29922",
   posted: "#16a34a", active: "#16a34a", needs_attention: "#dc2626", sold: "#7c3aed",
@@ -47,7 +52,7 @@ function Field({ label, children }) {
 
 function Thumb({ photos, size = 34 }) {
   const src = (photos || [])[0];
-  if (src) return <img src={src} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 6 }} />;
+  if (src) return <img src={assetUrl(src)} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 6 }} />;
   return <div style={{ width: size, height: size, borderRadius: 6, background: "#e6e8eb",
     display: "grid", placeItems: "center", color: "#9aa0a6", fontSize: size * 0.5 }}>🖼</div>;
 }
@@ -243,13 +248,21 @@ function InventoryBody() {
 }
 
 function ItemForm({ item, onClose, onSaved }) {
-  const [d, setD] = useState({ ...EMPTY_ITEM, ...item, photos: (item.photos || []).join("\n") });
+  const [d, setD] = useState({ ...EMPTY_ITEM, ...item, photos: item.photos || [] });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   // FB's live listing taxonomy — drives dropdowns (not free-text) so a typo can't desync an item's
   // category/condition from FB. Mirrored from the create-listing form; see facebook_listing_schema.py.
   const [schema, setSchema] = useState(null);
+  // Photos are picked from the local asset store (keys, not URLs) — FB uploads real files, and the
+  // store is a stub for cloud (S3) later. See assets.py / assets/README.md.
+  const [assets, setAssets] = useState([]);
   useEffect(() => { api("/api/facebook/listing_schema").then(setSchema).catch(() => {}); }, []);
+  useEffect(() => { api("/api/assets").then((r) => setAssets(r.assets || [])).catch(() => {}); }, []);
+  const togglePhoto = (key) => setD((p) => {
+    const has = (p.photos || []).includes(key);
+    return { ...p, photos: has ? p.photos.filter((k) => k !== key) : [...(p.photos || []), key] };
+  });
   const setAttr = (name, val) => setD((p) => ({ ...p, attributes: { ...(p.attributes || {}), [name]: val } }));
   const cats = schema?.categories || [];
   // keep a legacy free-text category selectable so editing an old item doesn't silently drop it
@@ -258,7 +271,7 @@ function ItemForm({ item, onClose, onSaved }) {
   const save = useCallback(async () => {
     if (!d.title.trim()) { setErr("Title is required"); return; }
     setBusy(true); setErr("");
-    const payload = { ...d, photos: String(d.photos || "").split("\n").map((s) => s.trim()).filter(Boolean) };
+    const payload = { ...d, photos: Array.isArray(d.photos) ? d.photos : [] };
     delete payload.id; delete payload.channels;
     try {
       if (item.id) await jpatch(`/api/inventory/items/${item.id}`, payload);
@@ -316,7 +329,29 @@ function ItemForm({ item, onClose, onSaved }) {
           </div>
         )}
         <Field label="Description"><textarea rows={3} className="input" value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} /></Field>
-        <Field label="Photo URLs (one per line)"><textarea rows={2} className="input" value={d.photos} onChange={(e) => setD({ ...d, photos: e.target.value })} placeholder="https://…" /></Field>
+        <Field label={`Photos — pick from assets (${(d.photos || []).length} selected)`}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {assets.length === 0 && (
+              <div className="muted" style={{ fontSize: 12 }}>
+                No assets yet — drop images into <code>assets/marketplace/</code> (local now, cloud later).
+              </div>
+            )}
+            {assets.map((a) => {
+              const sel = (d.photos || []).includes(a.key);
+              return (
+                <button key={a.key} type="button" onClick={() => togglePhoto(a.key)} title={a.key}
+                  style={{ padding: 0, background: "none", cursor: "pointer", position: "relative",
+                    border: sel ? "2px solid #2563eb" : "2px solid #d1d5db", borderRadius: 8 }}>
+                  <img src={`${API}${a.url}`} alt={a.name} width={72} height={72}
+                    style={{ objectFit: "cover", borderRadius: 6, display: "block", opacity: sel ? 1 : 0.6 }} />
+                  {sel && <span style={{ position: "absolute", top: 2, right: 2, background: "#2563eb",
+                    color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 11,
+                    lineHeight: "16px", textAlign: "center" }}>✓</span>}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
         {err && <div className="error-banner">{err}</div>}
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save"}</button>
@@ -368,7 +403,7 @@ function ItemDrawer({ itemId, onClose, onChanged, onEdit }) {
             </div>
             {(item.photos || []).length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                {item.photos.map((p, i) => <img key={i} src={p} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />)}
+                {item.photos.map((p, i) => <img key={i} src={assetUrl(p)} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />)}
               </div>
             )}
             <table style={{ width: "100%", fontSize: 13 }}><tbody>

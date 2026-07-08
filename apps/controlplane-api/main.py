@@ -87,6 +87,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve the local asset store (listing photos) so the UI can render thumbnails. Stub for eventual
+# cloud (S3) storage — see assets.py. Created if missing so the mount never fails on a fresh checkout.
+import assets as _assets  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+_assets.ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/assets", StaticFiles(directory=str(_assets.ASSETS_ROOT)), name="assets")
+
 
 def utcnow():
     return datetime.now(timezone.utc)
@@ -3741,6 +3748,14 @@ class ListingDraftBody(BaseModel):
     location: str = ""
     photos: list[str] = []
     status: Optional[str] = None
+
+
+@app.get("/api/assets")
+def list_assets(prefix: str = "marketplace"):
+    """Available listing-photo assets (keys + thumbnail URLs) for the UI picker. Local folder now,
+    cloud (S3) later — the swap lives in assets.py. Items store the returned `key`s in item.photos."""
+    import assets
+    return {"assets": assets.list_assets(prefix), "prefix": prefix}
 
 
 @app.get("/api/facebook/listing_schema")

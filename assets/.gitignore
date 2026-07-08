@@ -1,0 +1,9 @@
+# Local asset store — a stub for cloud (S3) storage. Keep the folder structure, the README, and the
+# throwaway sample placeholders in git; do NOT commit real listing photos dropped here (those belong
+# in the bucket once we move to cloud).
+*
+!.gitignore
+!README.md
+!marketplace/
+marketplace/*
+!marketplace/sample-*

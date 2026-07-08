@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://agent:agent@localhost:5432/agentos"
     observer_artifacts_dir: str = "../mcp/output"
+    # Local asset store (listing photos). Stub for eventual cloud (S3) storage; empty → repo-root
+    # /assets. See assets.py + assets/README.md.
+    assets_dir: str = ""
     capture_server_url: str = "http://localhost:8082"
     chrome_cdp_url: str = "http://localhost:9222"
     chrome_binary_path: str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
