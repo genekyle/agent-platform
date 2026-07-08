@@ -64,6 +64,18 @@ TASK_SPECS: list[TaskSpec] = [
         terminal_text=("your listing is being published", "listing is now live",
                        "your item is now listed"),
     ),
+    TaskSpec(
+        name="facebook_open_marketplace",
+        description="Reach Facebook Marketplace — done once any Marketplace page is shown. The ROUTE "
+                    "there is not fixed (accounts render different UIs, PRINCIPLES §7); the loop "
+                    "selects the shortest affordance it observes. This spec only defines 'arrived'.",
+        goal_aliases=("open marketplace", "go to marketplace", "open facebook marketplace",
+                      "reach marketplace", "navigate to marketplace"),
+        # URL is the ONLY reliable signal: any /marketplace* URL means we arrived. NO terminal_text —
+        # the home feed's nav literally contains the word "Marketplace", so a text signal would
+        # falsely report "done" before we ever click (same trap the facebook_login spec calls out).
+        terminal_url_patterns=(r"facebook\.com/marketplace\b",),
+    ),
 ]
 
 

@@ -19,14 +19,16 @@ import httpx
 
 # Per-channel config. `profile` is the persistent Chrome user-data-dir name; `home` is where the
 # browser sits idle + where the login form lives; `tab_url` is the substring used to pick the tab
-# to drive; `login_path` is the mcp driver that fills THIS channel's login form.
+# to drive. Login is NOT a per-channel endpoint anymore: it's driven through the generic CDP-AX
+# interaction layer (scan the page's accessibility tree → find email/password/submit by role +
+# accessible-name → drive by backend_node_id via /execute). The domain's field identities live in
+# its recipe (facebook_recipe.match_login_fields). See docs/interaction-layers.md.
 CHANNELS: dict[str, dict] = {
     "facebook_marketplace": {
         "profile": "facebook",
         "home": "https://www.facebook.com/",
         "tab_url": "facebook.com",
         "domain_id": "facebook_marketplace",
-        "login_path": "/facebook_login",
         "label": "Facebook Marketplace",
     },
 }

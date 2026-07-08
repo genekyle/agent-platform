@@ -63,3 +63,24 @@ def test_facebook_login_bare_domain_is_not_terminal():
     # authed feed — composer text present → complete
     assert spec.is_complete("https://www.facebook.com/", page_text="What's on your mind?") is True
     assert spec.is_complete("https://www.facebook.com/home.php") is True
+
+
+def test_open_marketplace_resolves_by_goal_alias():
+    spec = task_spec.spec_for(task_goal="Open Facebook Marketplace")
+    assert spec is not None and spec.name == "facebook_open_marketplace"
+
+
+def test_open_marketplace_terminal_by_url_only():
+    spec = task_spec.spec_for(task="facebook_open_marketplace")
+    # any /marketplace* URL = arrived (home, a location id, a category, the selling page)
+    assert spec.is_complete("https://www.facebook.com/marketplace") is True
+    assert spec.is_complete("https://www.facebook.com/marketplace/103703779667744") is True
+    assert spec.is_complete("https://www.facebook.com/marketplace/you/selling") is True
+
+
+def test_open_marketplace_home_feed_is_not_terminal():
+    """The home feed's left-nav contains the word 'Marketplace', so a text signal would falsely
+    report 'done' before we click. Only the /marketplace URL counts — the feed URL is facebook.com/."""
+    spec = task_spec.spec_for(task="facebook_open_marketplace")
+    feed_text = "Home Marketplace Groups What's on your mind? Create a post"
+    assert spec.is_complete("https://www.facebook.com/", page_text=feed_text) is False

@@ -67,6 +67,22 @@ class TrajectoryDriver(ABC):
         await cdp.send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
         await cdp.send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
 
+    async def _path_to(self, x: float, y: float, start: Optional[tuple[float, float]] = None):
+        """Cursor path (CSS px) to (x,y). Base = teleport (no path); the motion drivers
+        (MinimumJerk / Humanized) override to synthesize a smooth / human-shaped curve."""
+        return None
+
+    async def _approach(self, cdp, x: float, y: float, start: Optional[tuple[float, float]] = None) -> None:
+        """Move the cursor to (x,y) along this driver's path BEFORE a node-based action — the
+        anti-bot motion signal for the robust `backend_node_id` path (which otherwise never moves the
+        mouse). No-op for DirectDriver (no path → teleport, preserving the record-only/test baseline);
+        Humanized/MinJerk wiggle to the point. The node action itself stays native (robust)."""
+        path = await self._path_to(x, y, start)
+        for px, py in (path or []):
+            await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
+        if path:
+            await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+
     async def _apply_value(self, cdp, request: ActionRequest) -> None:
         """For type/select/clear actions, apply the value after focusing via click."""
         if request.action_id in ("type", "select") and request.value:
@@ -78,12 +94,14 @@ class TrajectoryDriver(ABC):
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46})
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46})
 
-    async def _element_act(self, cdp, request: ActionRequest) -> str:
-        """ELEMENT-BASED action via backend_node_id — robust to spacing/scroll/layout
-        where coordinate-clicking fails (closely-spaced radios, off-screen fields). We
-        resolve the node, scroll it into view, then drive it natively: .click() for
-        click/select, focus+insertText for type. Avoids the 'clicked the No 25px below
-        Yes' class of bug coordinate-clicking hit on long application forms."""
+    async def _element_act(self, cdp, request: ActionRequest, start: Optional[tuple[float, float]] = None) -> str:
+        """ELEMENT-BASED action via backend_node_id — robust to spacing/scroll/layout where
+        coordinate-clicking fails (closely-spaced radios, off-screen fields). We resolve the node,
+        scroll it into view, measure its FRESH centre, APPROACH it with the driver's human-shaped
+        mouse path (the anti-bot motion signal — no-op for DirectDriver, a wiggle for Humanized), then
+        drive it natively: .click() for click/select, focus + driver-specific typing for type. The
+        native action keeps the 'clicked the No 25px below Yes' robustness; the approach + cadence add
+        the human trajectory that node-driving used to skip entirely."""
         await cdp.send("DOM.enable")
         await cdp.send("Runtime.enable")
         resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": request.backend_node_id})
@@ -93,17 +111,27 @@ class TrajectoryDriver(ABC):
             await cdp.send("Runtime.callFunctionOn",
                            {"objectId": object_id, "functionDeclaration": fn, "awaitPromise": False})
 
+        # Scroll into view + measure the node's own centre (CSS px). A fresh per-node measurement is
+        # more accurate than any pre-recorded bbox, so the human motion lands on the real element.
+        center = await cdp.send("Runtime.callFunctionOn", {
+            "objectId": object_id, "returnByValue": True,
+            "functionDeclaration": ("function(){ this.scrollIntoView({block:'center',inline:'center'});"
+                                    " const r=this.getBoundingClientRect();"
+                                    " return {x:r.x+r.width/2, y:r.y+r.height/2}; }")})
+        pt = (center.get("result") or {}).get("value") or {}
+        if "x" in pt and "y" in pt:
+            await self._approach(cdp, float(pt["x"]), float(pt["y"]), start)
+
         if request.action_id == "select" and request.value:
             await self._select_option(cdp, object_id, request.value)
         elif request.action_id == "type" and request.value:
-            await call("function(){ this.scrollIntoView({block:'center',inline:'center'}); this.focus(); }")
-            await cdp.send("Input.insertText", {"text": request.value})
+            await call("function(){ this.focus(); }")
+            await self._apply_value(cdp, request)   # driver-specific: humanized cadence, or single insertText
         elif request.action_id == "clear":
-            await call("function(){ this.scrollIntoView({block:'center'}); this.focus();"
-                       " if(this.select)this.select(); }")
-            await self._apply_value(cdp, request)  # reuse the select-all+delete keystrokes
+            await call("function(){ this.focus(); if(this.select)this.select(); }")
+            await self._apply_value(cdp, request)
         else:  # click / submit / default
-            await call("function(){ this.scrollIntoView({block:'center',inline:'center'}); this.click(); }")
+            await call("function(){ this.click(); }")
         return "element"
 
     async def _select_option(self, cdp, object_id: str, value: str) -> None:
@@ -147,9 +175,6 @@ class DirectDriver(TrajectoryDriver):
     subclass the same interface and only add a path before the click."""
     name = "direct"
 
-    async def _path_to(self, x: float, y: float, start: Optional[tuple[float, float]]) -> Optional[list[tuple[float, float]]]:
-        return None  # DirectDriver teleports; subclasses override to synthesize a path
-
     async def move_and_act(self, *, browser_url, request, tab_id=None, tab_url=None, start=None) -> ExecResult:
         import websockets
         from app.observer.ax_proposer import _CDPSession, _discover_target
@@ -163,7 +188,7 @@ class DirectDriver(TrajectoryDriver):
                 # Prefer ELEMENT-based action when we have the node id (robust); fall back
                 # to coordinate-clicking only when no backend_node_id was provided.
                 if request.backend_node_id is not None:
-                    mode = await self._element_act(cdp, request)
+                    mode = await self._element_act(cdp, request, start=start)
                 else:
                     path = await self._path_to(x, y, start)
                     await self._click_sequence(cdp, x, y, path)

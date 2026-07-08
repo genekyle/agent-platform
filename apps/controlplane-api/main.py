@@ -3836,6 +3836,55 @@ def _blocking_challenge(browser_url: str):
         return None
 
 
+def _login_field_matcher(domain_id: str):
+    """The per-domain 'find the login controls in a CDP-AX scan' matcher. Domain quirks (Facebook
+    shipping Log In as a <div role=button>, the field accessible-names) live in the domain recipe —
+    not here — so login stays on the generic AX/node interaction layer. Returns a callable or None."""
+    if domain_id == "facebook_marketplace":
+        import facebook_recipe
+        return facebook_recipe.match_login_fields
+    return None
+
+
+def _drive_login_form(session: TrainingSession, cfg: dict, creds: tuple[str, str]) -> dict:
+    """Drive a channel's login FORM through the CDP-AX interaction layer — the system's one robust way
+    to act on a page. Scan the live accessibility tree (/ax_scan), find email/password/submit by ROLE
+    + ACCESSIBLE-NAME via the domain recipe's matcher, then drive each BY backend_node_id through
+    /execute (focus+insertText for the fields, native .click() for submit). No hardcoded CSS
+    selectors, no coordinate clicks, no screenshots of the credential flow. Never raises; returns
+    {ok, reason?}. 'controls not found' is normal when we're already past the wall (a checkpoint / 2FA
+    screen) — the caller re-observes and escalates to the human gate."""
+    browser_url = _session_browser_url(session)
+    matcher = _login_field_matcher(cfg["domain_id"])
+    if matcher is None:
+        return {"ok": False, "reason": f"no login matcher for {cfg['domain_id']}"}
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            scan = client.post(f"{settings.capture_server_url}/ax_scan",
+                               json={"browser_url": browser_url, "tab_url": cfg["tab_url"]}).json()
+            fields = matcher(scan.get("candidates", []))
+            if not all(k in fields for k in ("email", "password", "submit")):
+                return {"ok": False, "reason": f"login controls not found (matched {sorted(fields)})"}
+
+            def _exec(action_id: str, node_id: int, value: Optional[str] = None) -> None:
+                # driver="humanized": approach each field/button with a wiggly mouse path + type with
+                # cadence (bot-safety on a hostile site), driving the node by backend_node_id (robust).
+                client.post(f"{settings.capture_server_url}/execute", json={
+                    "action_id": action_id, "backend_node_id": node_id, "target_bbox": {},
+                    "value": value, "browser_url": browser_url, "tab_url": cfg["tab_url"],
+                    "driver": "humanized"})
+
+            _exec("type", fields["email"], creds[0])
+            time.sleep(0.4)
+            _exec("type", fields["password"], creds[1])
+            time.sleep(0.4)
+            _exec("click", fields["submit"])
+        time.sleep(4.0)  # let the submit navigate / a challenge render
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": str(exc)}
+
+
 @app.get("/api/channels/{channel}/status")
 def channel_status(channel: str, account_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Cheap, honest connection status (a CDP probe — no capture). Poll this for the UI badge.
@@ -3905,15 +3954,11 @@ def channel_login(channel: str, account_id: Optional[str] = None, db: Session = 
     if auth_gate.is_authenticated(cfg["domain_id"], obs.url, obs.page_text) is True:
         return {"logged_in": True, "connected": True, "message": "Already signed in."}
 
+    drive_reason = None
     challenge = _blocking_challenge(browser_url)
     if not challenge:
-        try:
-            with httpx.Client(timeout=60.0) as client:
-                client.post(f"{settings.capture_server_url}{cfg['login_path']}",
-                            json={"email": creds[0], "password": creds[1],
-                                  "browser_url": browser_url, "tab_url": cfg["tab_url"]})
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=502, detail=f"login driver error: {exc}")
+        drive = _drive_login_form(session, cfg, creds)
+        drive_reason = None if drive["ok"] else drive.get("reason")
         obs = _observe_once(session, tab_url=cfg["tab_url"])
         if auth_gate.is_authenticated(cfg["domain_id"], obs.url, obs.page_text) is True:
             return {"logged_in": True, "connected": True, "message": "Signed in."}
@@ -3926,7 +3971,7 @@ def channel_login(channel: str, account_id: Optional[str] = None, db: Session = 
         result, task_goal=f"log in to {channel}" + (f" as {account_id}" if account_id else ""),
         training_session_id=session.id,
         last_observation=obs, tab_url=cfg["tab_url"],
-        diagnostic={"reason": gate, "guidance":
+        diagnostic={"reason": gate, "drive_reason": drive_reason, "guidance":
                     "Facebook wants a human step (captcha / 2FA code / 'is this you?'). Complete it "
                     "in the browser window that's open, then click Check sign-in."})
     return {

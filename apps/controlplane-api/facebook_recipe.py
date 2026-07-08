@@ -37,6 +37,41 @@ FACEBOOK_LOGIN_BRANCHES = {
     "fb_login_save_device":{"human_required": False, "note": "'Save this browser?' — choose per policy; not blocking"},
 }
 
+# --- LOGIN FIELDS: identity by AX role + accessible-name (the DOM-reshuffle-proof way) ------------
+# The three login controls, described the way the CDP-AX interaction layer finds them: an AX `role`
+# plus a case-insensitive substring of the accessible name. This is deliberately NOT a CSS selector.
+# Facebook ships "Log in" as a <div role=button> (not a <button>) and its inputs are React-controlled
+# — both of which broke the old hardcoded-selector login. The accessibility tree normalises
+# <div role=button> to role "button" with name "Log in", so matching by role+name is immune to that
+# churn. This is the durable knowledge the login flow keys off; see docs/interaction-layers.md.
+FACEBOOK_LOGIN_FIELDS = {
+    "email":    {"roles": {"textbox", "combobox"},
+                 "name_any": ["email or mobile", "email or phone", "mobile number", "email", "phone"]},
+    "password": {"roles": {"textbox"}, "name_any": ["password"]},
+    "submit":   {"roles": {"button"},  "name_any": ["log in", "login"]},
+}
+
+
+def match_login_fields(candidates: list[dict]) -> dict[str, int]:
+    """Map live CDP-AX candidates (each {role, name, backend_node_id, ...}) onto the login controls,
+    returning {email, password, submit} -> backend_node_id for whatever is found (missing keys mean
+    that control wasn't on the page — e.g. we're already past the wall on a checkpoint/2FA screen).
+
+    Matched by ROLE (gated) + accessible-NAME (case-insensitive substring). Role-gating keeps the
+    form's 'Log in' <button> from losing to the footer 'Log In' <link>, and keeps the 'Password'
+    textbox distinct from the 'Email' one. The caller drives each node via /execute — no selectors,
+    no coordinate clicks."""
+    out: dict[str, int] = {}
+    for key, spec in FACEBOOK_LOGIN_FIELDS.items():
+        for c in candidates:
+            role = (c.get("role") or "").strip().lower()
+            name = (c.get("name") or c.get("caption") or "").strip().lower()
+            node = c.get("backend_node_id")
+            if node is not None and role in spec["roles"] and any(tok in name for tok in spec["name_any"]):
+                out[key] = node
+                break
+    return out
+
 # --- CREATE-LISTING spine (Marketplace) -------------------------------------------
 # Fields are filled from a ListingDraft (see listing_draft.py). PUBLISH is the irreversible
 # action — the consequential gate holds it for operator approval (like Submit on an apply).

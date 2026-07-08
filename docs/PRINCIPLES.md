@@ -43,6 +43,32 @@ wrong; validate them against the actual live pages before trusting them. Burned 
 reCAPTCHA `bframe` *present* ≠ *shown* (visibility probe), and `secure.indeed.com` host ≠ "in the auth
 flow" (path-based check, since it also serves logged-in `/settings`).
 
+## 6. Drive through the AX/node interaction layer — not bespoke DOM workarounds
+There is one resilient way to act on a page: read the **accessibility tree**, find the element by
+**role / accessible-name**, and drive it **by `backend_node_id`** (`DOM.resolveNode` →
+`callFunctionOn`). It survives DOM reshuffles (`<button>`→`<div role=button>`, class churn, layout
+shifts). A hardcoded-`querySelector` + coordinate-click fast-path feels simpler for a small known
+form and is exactly why Facebook login has broken three times in a week — each FB DOM change is a
+reactive patch to one brittle endpoint. When a flow breaks, **first ask which layer it's on**; don't
+diagnose fields or build a one-off CDP script until you've confirmed it's even using the robust path.
+Domain quirks (button→div, React-controlled inputs, the human gates) belong in the distilled recipe
+(`facebook_recipe.py`) via the teacher→distill loop, **not** re-litigated in an imperative endpoint
+the next session can't see.
+- **Enforced by:** *aspirational* — today `apps/mcp/app/executor/driver.py` is Layer A but FB login
+  is routed to the bespoke `/facebook_login` endpoint (`main_server.py`) via
+  `channel_browser.py` `login_path`. Fix = route login through Layer A. See `docs/interaction-layers.md`.
+
+## 7. No single golden path — the golden path is the least-steps route through the UI in front of you
+Accounts (and site variants) render **different UIs**, so a goal like "open Marketplace" has
+different routes per account. Don't assume one fixed recipe spine works everywhere. Observe the
+actual UI (CDP-AX `/ax_scan`), then take the **shortest available verified path** to the goal.
+Recipes hold alternative routes; the state-transition graph accumulates them across accounts, and the
+planner graph-searches it for the fewest-steps path. "Golden path" ≡ fewest steps for *this* UI —
+verify each edge, never assume URL implies state.
+- **Status:** policy now (discovered driving FB Marketplace across accounts); recipes/planner to hold
+  per-variant routes + shortest-path selection over the observed state graph. See
+  memory `project_per_account_ui_paths`.
+
 ---
 
 *Add a principle here whenever a mental model proves load-bearing. Prefer encoding it as an invariant
