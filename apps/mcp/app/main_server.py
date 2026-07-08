@@ -945,20 +945,25 @@ async def facebook_login(body: FacebookLoginRequest):
         sel = _json.dumps(selector)
         focus = await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
             f"(()=>{{const el=document.querySelector({sel}); if(!el) return false;"
-            " el.scrollIntoView({block:'center'}); el.focus(); return true;}})()"})
+            " el.scrollIntoView({block:'center'}); el.focus(); el.click(); return true;}})()"})
         if not (focus.get("result") or {}).get("value"):
             return False
-        for ch in text:  # per-char keystrokes → human cadence (keeps the reCAPTCHA score up)
-            await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch})
-            await cdp.send("Input.dispatchKeyEvent", {"type": "char", "text": ch})
-            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "text": ch})
+        # Insert char-by-char via CDP Input.insertText: it fires real beforeinput/input events, so a
+        # REACT-controlled field (FB's login inputs) actually updates its internal state — a native
+        # .value set alone gets wiped on React's next render. Small random gaps keep a human cadence.
+        for ch in text:
+            await cdp.send("Input.insertText", {"text": ch})
             await asyncio.sleep(random.uniform(0.05, 0.15))
-        v = _json.dumps(text)  # authoritative value-set for correctness (native setter + input event)
-        await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
-            f"(()=>{{const el=document.querySelector({sel}); if(!el) return false;"
-            " const d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');"
-            f" if(d&&d.set)d.set.call(el,{v}); el.dispatchEvent(new Event('input',{{bubbles:true}}));"
-            " el.dispatchEvent(new Event('change',{bubbles:true})); return true;}})()"})
+        # Verify it stuck; if React somehow still reads empty, fall back to the native setter + input.
+        got = await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
+            f"((document.querySelector({sel})||{{}}).value||'').length"})
+        if not (got.get("result") or {}).get("value"):
+            v = _json.dumps(text)
+            await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
+                f"(()=>{{const el=document.querySelector({sel}); if(!el) return false;"
+                " const d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');"
+                f" if(d&&d.set)d.set.call(el,{v}); el.dispatchEvent(new Event('input',{{bubbles:true}}));"
+                " el.dispatchEvent(new Event('change',{bubbles:true})); return true;}})()"})
         return True
 
     try:
