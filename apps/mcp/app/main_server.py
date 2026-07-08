@@ -924,7 +924,8 @@ class FacebookLoginRequest(BaseModel):
 # Facebook's login form selectors (stable on facebook.com/login for years), with fallbacks.
 _FB_EMAIL_SEL = "input[name=email], input#email, input[type=email]"
 _FB_PASS_SEL = "input[name=pass], input#pass, input[type=password]"
-_FB_LOGIN_SEL = "button[name=login], button[data-testid=royal_login_button], button[type=submit]"
+_FB_LOGIN_SEL = ("button[name=login], button[data-testid=royal_login_button], button[type=submit], "
+                 "div[role=button][aria-label='Log In'], div[role=button][aria-label='Log in']")
 
 
 @app.post("/facebook_login")
@@ -970,19 +971,32 @@ async def facebook_login(body: FacebookLoginRequest):
             if not (ok_email and ok_pass):
                 return {"ok": False, "reason": "login form not found (already logged in, or a different page)"}
             await asyncio.sleep(random.uniform(0.3, 0.7))
-            rect = await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
-                f"(()=>{{const b=document.querySelector({_json.dumps(_FB_LOGIN_SEL)}); if(!b) return null;"
-                " b.scrollIntoView({block:'center'}); const r=b.getBoundingClientRect();"
-                " return {x:r.x+r.width/2, y:r.y+r.height/2};}})()"})
+            # Find the Log In control: try the CSS selector, then fall back to a clickable element
+            # whose visible text / aria-label is "log in". FB now ships it as a <div role=button>,
+            # not a <button>, so a text match survives that redesign where a fixed selector didn't.
+            find_btn = (
+                "(()=>{"
+                f"  let b=document.querySelector({_json.dumps(_FB_LOGIN_SEL)});"
+                "  if(!b){const c=[...document.querySelectorAll('button,[role=button],[type=submit],a[role=button]')];"
+                "    b=c.find(e=>/^log\\s*in$/i.test((e.innerText||e.getAttribute('aria-label')||'').trim()) && e.offsetParent!==null);}"
+                "  if(!b) return null; b.scrollIntoView({block:'center'});"
+                "  const r=b.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2};"
+                "})()"
+            )
+            rect = await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression": find_btn})
             pt = (rect.get("result") or {}).get("value")
-            if pt:  # trusted mouse click on Log In
+            if pt:  # trusted mouse click on Log In — fires FB's real JS handler
                 await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": pt["x"], "y": pt["y"]})
                 for t in ("mousePressed", "mouseReleased"):
                     await cdp.send("Input.dispatchMouseEvent",
                                    {"type": t, "x": pt["x"], "y": pt["y"], "button": "left", "clickCount": 1})
-            else:
+            else:  # no button found → press Enter in the password field. This triggers FB's React
+                   # submit handler; a native form.submit() bypasses it and just reloads to an empty form.
                 await cdp.send("Runtime.evaluate", {"expression":
-                    f"document.querySelector({_json.dumps(_FB_PASS_SEL)})?.form?.submit()"})
+                    f"document.querySelector({_json.dumps(_FB_PASS_SEL)})?.focus()"})
+                for t in ("keyDown", "keyUp"):
+                    await cdp.send("Input.dispatchKeyEvent", {"type": t, "key": "Enter", "code": "Enter",
+                                   "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13})
             await asyncio.sleep(4.0)  # let the submit navigate / a challenge render
             res = await cdp.send("Runtime.evaluate", {"returnByValue": True,
                 "expression": "({url:location.href, title:document.title})"})
