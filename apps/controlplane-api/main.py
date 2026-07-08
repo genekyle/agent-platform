@@ -3763,16 +3763,33 @@ def facebook_upsert_draft(body: ListingDraftBody):
 # channel that agents ATTACH to. Login is a supervised task through it (observe → drive
 # → verify → escalate at a gate), not a bespoke one-shot.
 # ---------------------------------------------------------------------------
-def _ensure_channel_browser(db: Session, channel: str):
-    """Find-or-create the channel's single persistent session and make sure its browser is live
-    (attach if CDP answers, else relaunch + wait for ready). Returns (session, cfg)."""
+def _channel_profile(channel_cfg: dict, account_id: Optional[str]) -> str:
+    """Which persistent Chrome profile to isolate this channel session in. With an account, the
+    ACCOUNT's profile (so two accounts never share cookies); otherwise the channel default."""
+    if account_id:
+        import accounts as accounts_mod
+        acct = accounts_mod.get_account(account_id)
+        if acct is None:
+            raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found")
+        if acct["domain_id"] != channel_cfg["domain_id"]:
+            raise HTTPException(status_code=400,
+                                detail=f"Account '{account_id}' is not a {channel_cfg['domain_id']} account")
+        return acct["profile"]
+    return channel_cfg["profile"]
+
+
+def _ensure_channel_browser(db: Session, channel: str, account_id: Optional[str] = None):
+    """Find-or-create the persistent session for a channel (optionally scoped to a specific
+    account) and make sure its browser is live. Returns (session, cfg). With account_id the session
+    is isolated in the account's OWN profile, so it can run alongside other accounts' browsers."""
     import channel_browser
     cfg = channel_browser.channel_config(channel)
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown channel '{channel}'")
+    profile = _channel_profile(cfg, account_id)
     session = db.scalar(
         select(TrainingSession).where(
-            TrainingSession.persistent_profile == cfg["profile"]
+            TrainingSession.persistent_profile == profile
         ).order_by(TrainingSession.id.desc()).limit(1)
     )
     if session is None:
@@ -3784,17 +3801,24 @@ def _ensure_channel_browser(db: Session, channel: str):
         session = TrainingSession(
             domain_id=cfg["domain_id"], scenario_id=scenario.scenario_id,
             goal_id=scenario.goal_id, task_id=scenario.task_id, capture_profile="viewport",
-            purpose="production", persistent_profile=cfg["profile"], status="draft",
+            purpose="production", persistent_profile=profile, account_id=account_id, status="draft",
         )
         db.add(session)
         db.commit()
         db.refresh(session)
+    elif account_id and not session.account_id:
+        session.account_id = account_id   # bind the account to a pre-existing profile session
+        db.commit()
     _launch_training_chrome(db, session)   # attaches if alive, else relaunches + waits for readiness
     return session, cfg
 
 
-def _channel_creds(channel: str):
-    """(username, password) for a channel from the gitignored .env, or None. Never logged."""
+def _channel_creds(channel: str, account_id: Optional[str] = None):
+    """(username, password) for a channel/account, or None. Never logged. With an account the creds
+    come from its secret backend (vault or env); otherwise the legacy single-account .env keys."""
+    if account_id:
+        import accounts as accounts_mod
+        return accounts_mod.resolve_creds(account_id)
     if channel == "facebook_marketplace" and settings.fb_username and settings.fb_password:
         return settings.fb_username, settings.fb_password
     return None
@@ -3813,30 +3837,33 @@ def _blocking_challenge(browser_url: str):
 
 
 @app.get("/api/channels/{channel}/status")
-def channel_status(channel: str, db: Session = Depends(get_db)):
-    """Cheap, honest connection status (a CDP probe — no capture). Poll this for the UI badge."""
+def channel_status(channel: str, account_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """Cheap, honest connection status (a CDP probe — no capture). Poll this for the UI badge.
+    With account_id, reports the status of THAT account's isolated session."""
     import channel_browser
     cfg = channel_browser.channel_config(channel)
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown channel '{channel}'")
+    profile = _channel_profile(cfg, account_id)
     session = db.scalar(
         select(TrainingSession).where(
-            TrainingSession.persistent_profile == cfg["profile"]
+            TrainingSession.persistent_profile == profile
         ).order_by(TrainingSession.id.desc()).limit(1)
     )
     connected = bool(session) and channel_browser.cdp_reachable(session.chrome_debug_port)
-    return {"channel": channel, "label": cfg["label"], "connected": connected,
+    return {"channel": channel, "label": cfg["label"], "account_id": account_id, "connected": connected,
             "session_id": session.id if session else None,
             "port": session.chrome_debug_port if session else None}
 
 
 @app.post("/api/channels/{channel}/connect")
-def channel_connect(channel: str, db: Session = Depends(get_db)):
+def channel_connect(channel: str, account_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Attach to (or heal) the channel browser and sit it on the channel home. Returns honest
-    connected + authed so the UI can show real state instead of hoping."""
+    connected + authed so the UI can show real state instead of hoping. With account_id, opens
+    (or heals) THAT account's own isolated browser."""
     import auth_gate
     import channel_browser
-    session, cfg = _ensure_channel_browser(db, channel)
+    session, cfg = _ensure_channel_browser(db, channel, account_id)
     browser_url = _session_browser_url(session)
     try:
         with httpx.Client(timeout=25.0) as client:
@@ -3849,15 +3876,16 @@ def channel_connect(channel: str, db: Session = Depends(get_db)):
     if connected:
         obs = _observe_once(session, tab_url=cfg["tab_url"])
         authed = auth_gate.is_authenticated(cfg["domain_id"], obs.url, obs.page_text)
-    return {"channel": channel, "connected": connected, "authed": authed,
+    return {"channel": channel, "account_id": account_id, "connected": connected, "authed": authed,
             "session_id": session.id, "port": session.chrome_debug_port}
 
 
 @app.post("/api/channels/{channel}/login")
-def channel_login(channel: str, db: Session = Depends(get_db)):
+def channel_login(channel: str, account_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Supervised login: ensure a healthy browser, observe, drive the login form, re-verify, and
     escalate ONLY at a real gate (captcha / 2FA / checkpoint) — never auto-solving it. The loop
-    doing the work and stopping only when it needs a human."""
+    doing the work and stopping only when it needs a human. With account_id, logs in THAT account
+    (creds from its vault/env backend) in its own isolated browser."""
     from dataclasses import asdict
 
     import auth_gate
@@ -3865,11 +3893,13 @@ def channel_login(channel: str, db: Session = Depends(get_db)):
     from runtime import handoff as handoff_mod
     from runtime.loop import LoopResult, LoopStatus
 
-    session, cfg = _ensure_channel_browser(db, channel)
+    session, cfg = _ensure_channel_browser(db, channel, account_id)
     browser_url = _session_browser_url(session)
-    creds = _channel_creds(channel)
+    creds = _channel_creds(channel, account_id)
     if creds is None:
-        raise HTTPException(status_code=400, detail="Channel credentials are not set in .env")
+        raise HTTPException(status_code=400, detail=(
+            f"No credentials for account '{account_id}'" if account_id
+            else "Channel credentials are not set in .env"))
 
     obs = _observe_once(session, tab_url=cfg["tab_url"])
     if auth_gate.is_authenticated(cfg["domain_id"], obs.url, obs.page_text) is True:
@@ -3893,7 +3923,8 @@ def channel_login(channel: str, db: Session = Depends(get_db)):
     result = LoopResult(LoopStatus.ESCALATED, [], reason="login needs a human gate cleared",
                         escalation_reason="not_authenticated")
     handoff = handoff_mod.emit(
-        result, task_goal=f"log in to {channel}", training_session_id=session.id,
+        result, task_goal=f"log in to {channel}" + (f" as {account_id}" if account_id else ""),
+        training_session_id=session.id,
         last_observation=obs, tab_url=cfg["tab_url"],
         diagnostic={"reason": gate, "guidance":
                     "Facebook wants a human step (captcha / 2FA code / 'is this you?'). Complete it "
