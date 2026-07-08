@@ -143,7 +143,7 @@ function OverviewCards() {
 /* Inventory                                                                   */
 /* -------------------------------------------------------------------------- */
 const EMPTY_ITEM = { title: "", description: "", category: "", price: "", condition: "",
-  pickup_location: "", photos: [], notes: "" };
+  pickup_location: "", photos: [], notes: "", attributes: {} };
 
 function InventoryBody() {
   const [items, setItems] = useState([]);
@@ -246,6 +246,15 @@ function ItemForm({ item, onClose, onSaved }) {
   const [d, setD] = useState({ ...EMPTY_ITEM, ...item, photos: (item.photos || []).join("\n") });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // FB's live listing taxonomy — drives dropdowns (not free-text) so a typo can't desync an item's
+  // category/condition from FB. Mirrored from the create-listing form; see facebook_listing_schema.py.
+  const [schema, setSchema] = useState(null);
+  useEffect(() => { api("/api/facebook/listing_schema").then(setSchema).catch(() => {}); }, []);
+  const setAttr = (name, val) => setD((p) => ({ ...p, attributes: { ...(p.attributes || {}), [name]: val } }));
+  const cats = schema?.categories || [];
+  // keep a legacy free-text category selectable so editing an old item doesn't silently drop it
+  const catOptions = d.category && !cats.includes(d.category) ? [d.category, ...cats] : cats;
+  const condFields = schema?.conditional_fields_by_category?.[d.category] || [];
   const save = useCallback(async () => {
     if (!d.title.trim()) { setErr("Title is required"); return; }
     setBusy(true); setErr("");
@@ -267,10 +276,45 @@ function ItemForm({ item, onClose, onSaved }) {
           <Field label="Price"><input className="input" value={d.price} onChange={(e) => setD({ ...d, price: e.target.value })} placeholder="45" /></Field>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <Field label="Category"><input className="input" value={d.category} onChange={(e) => setD({ ...d, category: e.target.value })} placeholder="Apparel" /></Field>
-          <Field label="Condition"><input className="input" value={d.condition} onChange={(e) => setD({ ...d, condition: e.target.value })} placeholder="Used - Good" /></Field>
+          <Field label="Category">
+            <select className="input" value={d.category}
+              onChange={(e) => setD({ ...d, category: e.target.value, attributes: {} })}>
+              <option value="">— Select category —</option>
+              {catOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="Condition">
+            <select className="input" value={d.condition}
+              onChange={(e) => setD({ ...d, condition: e.target.value })}>
+              <option value="">— Select condition —</option>
+              {(schema?.conditions || []).map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
           <Field label="Pickup location"><input className="input" value={d.pickup_location} onChange={(e) => setD({ ...d, pickup_location: e.target.value })} placeholder="Nashua, NH" /></Field>
         </div>
+        {d.category && condFields.length > 0 && (
+          <div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+              Facebook asks for these on “{d.category}”:
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              {condFields.map((f) => (
+                <Field key={f.name} label={f.name}>
+                  {f.kind === "enum" ? (
+                    <select className="input" value={(d.attributes || {})[f.name] || ""}
+                      onChange={(e) => setAttr(f.name, e.target.value)}>
+                      <option value="">—</option>
+                      {(f.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <input className="input" value={(d.attributes || {})[f.name] || ""}
+                      onChange={(e) => setAttr(f.name, e.target.value)} placeholder={f.name} />
+                  )}
+                </Field>
+              ))}
+            </div>
+          </div>
+        )}
         <Field label="Description"><textarea rows={3} className="input" value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} /></Field>
         <Field label="Photo URLs (one per line)"><textarea rows={2} className="input" value={d.photos} onChange={(e) => setD({ ...d, photos: e.target.value })} placeholder="https://…" /></Field>
         {err && <div className="error-banner">{err}</div>}

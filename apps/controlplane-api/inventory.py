@@ -63,6 +63,9 @@ class Item:
     pickup_location: str = ""
     internal_status: str = "draft"
     notes: str = ""                       # agent/operator notes
+    # Category-conditional fields mirrored from FB's create-listing form (e.g. Color/Material/SKU for
+    # apparel) keyed by FB's field name — see facebook_listing_schema.py. Empty for most items.
+    attributes: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
 
@@ -158,7 +161,7 @@ def _log_into(doc: dict, action_type: str, *, status: str = "ok", item_id: Optio
 
 # --- Items -------------------------------------------------------------------
 _ITEM_FIELDS = {"title", "description", "category", "price", "condition", "photos",
-                "pickup_location", "internal_status", "notes"}
+                "pickup_location", "internal_status", "notes", "attributes"}
 
 
 def _num(price: str) -> Optional[float]:

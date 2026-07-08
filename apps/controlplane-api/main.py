@@ -80,7 +80,8 @@ app = FastAPI(title="Control Plane API", version="0.0.1")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    # Any localhost port — the Vite dev server (5173) plus preview/test servers on other ports.
+    allow_origin_regex=r"http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -3742,6 +3743,16 @@ class ListingDraftBody(BaseModel):
     status: Optional[str] = None
 
 
+@app.get("/api/facebook/listing_schema")
+def facebook_listing_schema():
+    """FB Marketplace 'Item for sale' schema mirrored from the live create-listing UI — categories,
+    conditions, colors, and the conditional fields each category reveals. The UI renders these as
+    DROPDOWNS (not free-text) so a typo can't desync an item's category/condition from FB's taxonomy.
+    Probed via CDP-AX; see facebook_listing_schema.py."""
+    import facebook_listing_schema
+    return facebook_listing_schema.listing_schema()
+
+
 @app.get("/api/facebook/listings")
 def facebook_list_drafts():
     """The operator's Marketplace listing drafts — the inputs a create-listing run fills from."""
@@ -3996,6 +4007,7 @@ class ItemBody(BaseModel):
     pickup_location: str = ""
     internal_status: Optional[str] = None
     notes: str = ""
+    attributes: dict[str, str] = {}       # category-conditional fields (Color/Material/SKU/…) — FB names
 
 
 class QueueAddBody(BaseModel):
