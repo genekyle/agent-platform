@@ -23,10 +23,11 @@ logger = logging.getLogger("mcp.executor")
 class ActionRequest:
     """Selector → executor handoff. bbox is in SCREENSHOT pixels (as produced by
     the AX proposer); device_scale_factor converts it to CSS px for CDP."""
-    action_id: str                      # click | type | select | scroll | submit | clear
+    action_id: str                      # click | type | select | scroll | submit | clear | upload
     target_bbox: dict[str, float]       # {x, y, width, height} screenshot px
     backend_node_id: Optional[int] = None
     value: Optional[str] = None
+    files: Optional[list[str]] = None   # absolute local paths for an `upload` action (file input)
     device_scale_factor: float = 1.0
 
 
@@ -110,6 +111,13 @@ class TrajectoryDriver(ABC):
         async def call(fn: str) -> None:
             await cdp.send("Runtime.callFunctionOn",
                            {"objectId": object_id, "functionDeclaration": fn, "awaitPromise": False})
+
+        # UPLOAD: set files directly on a <input type=file> node — no click (the OS file dialog a
+        # click opens can't be driven over CDP). Paths must be ABSOLUTE and local to this machine.
+        if request.action_id == "upload":
+            await cdp.send("DOM.setFileInputFiles",
+                           {"backendNodeId": request.backend_node_id, "files": list(request.files or [])})
+            return "upload"
 
         # Scroll into view + measure the node's own centre (CSS px). A fresh per-node measurement is
         # more accurate than any pre-recorded bbox, so the human motion lands on the real element.

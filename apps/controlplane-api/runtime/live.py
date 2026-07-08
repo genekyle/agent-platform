@@ -84,6 +84,18 @@ def _device_scale_factor(observation: Observation, backend_node_id: Optional[int
     return 1.0
 
 
+def _candidate_role_name(observation: Observation, backend_node_id: Optional[int]) -> tuple:
+    """(role, accessible-name) of the selected candidate, so the executor can RE-RESOLVE the target
+    by name at act time — closing the node-id-staleness gap between capture/select and act."""
+    if backend_node_id is None:
+        return None, None
+    for c in observation.ax_candidates:
+        bid = c.get("backend_node_id") or (c.get("_debug") or {}).get("backend_node_id")
+        if bid is not None and int(bid) == int(backend_node_id):
+            return (c.get("role"), (c.get("caption") or c.get("name") or "").strip() or None)
+    return None, None
+
+
 # --- Live proposer -----------------------------------------------------------
 class LiveProposer:
     """Observe the live page: trigger a capture on the mcp server, then rebuild an
@@ -187,11 +199,14 @@ class LiveActor:
     def perform(self, *, action_id: str, target_backend_node_id: Optional[int],
                 target_bbox: dict[str, float], value: Optional[str],
                 observation: Observation) -> ActResult:
+        role, name = _candidate_role_name(observation, target_backend_node_id)
         payload: dict[str, Any] = {
             "action_id": action_id,
             "target_bbox": target_bbox or {},
             "value": value,
             "backend_node_id": target_backend_node_id,
+            # Re-resolve by name at act time (immune to node-id churn); node id is the fallback.
+            "target_role": role, "target_name": name,
             "device_scale_factor": _device_scale_factor(observation, target_backend_node_id),
             "tab_id": self._tab_id, "tab_url": self._tab_url,
             "browser_url": self._browser_url, "driver": self._driver,

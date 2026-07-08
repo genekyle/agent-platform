@@ -138,36 +138,111 @@ class ExecuteRequest(BaseModel):
     """Interim executor handoff (v1 — CDP DirectDriver, the pre-diffusion-mouse bridge).
     target_bbox is in SCREENSHOT pixels (as the AX proposer emits); device_scale_factor
     converts to CSS px for CDP input. driver defaults to 'direct' (record_only = dry-run)."""
-    action_id: str                       # click | type | select | clear
+    action_id: str                       # click | type | select | clear | upload
     target_bbox: dict                    # {x, y, width, height} screenshot px
     value: Optional[str] = None
     backend_node_id: Optional[int] = None
+    files: Optional[list[str]] = None    # absolute local paths for an `upload` action
     device_scale_factor: float = 1.0
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
     browser_url: str = "http://127.0.0.1:9222"
     driver: Optional[str] = None         # 'direct' (default) | 'record_only' (dry-run)
+    # Act-by-NAME: when set, re-resolve the target's backend_node_id from a FRESH AX scan at act time
+    # (matched by role + accessible-name), immune to the node-id churn that makes a captured id stale
+    # between select and act. Falls back to backend_node_id when not provided / not found.
+    target_role: Optional[str] = None
+    target_name: Optional[str] = None
+    # CSS selector re-resolution at act time — for elements the AX tree can't name (e.g. a HIDDEN
+    # <input type=file> behind an "Add photos" button, the upload target). Resolved fresh via
+    # DOM.querySelector. Used when target_name isn't given.
+    selector: Optional[str] = None
+
+
+async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
+                           role: Optional[str], name: str) -> Optional[int]:
+    """FRESH backend_node_id for a target described by role + accessible-name, scanned at act time.
+    Exact name match wins, then substring; role-gated when a role is given. None if not found. This
+    is the fix for stale node ids — the same CDP-AX proposer the capture uses, re-run just-in-time."""
+    from app.observer.ax_proposer import AXProposerStats, propose_ax_candidates
+    cands = await propose_ax_candidates(browser_url=browser_url, tab_id=tab_id, tab_url=tab_url,
+                                        device_scale_factor=1.0, stats=AXProposerStats())
+    want_role = (role or "").strip().lower()
+    want = (name or "").strip().lower()
+
+    def role_ok(c: dict) -> bool:
+        return not want_role or (c.get("role") or "").strip().lower() == want_role
+
+    def nm(c: dict) -> str:
+        return (c.get("caption") or c.get("name") or "").strip().lower()
+
+    exact = [c for c in cands if role_ok(c) and nm(c) == want]
+    hit = exact[0] if exact else next((c for c in cands if role_ok(c) and want and want in nm(c)), None)
+    return hit.get("backend_node_id") if hit else None
+
+
+async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
+                                    selector: str) -> Optional[int]:
+    """FRESH backend_node_id for a CSS selector, at act time — for elements with no accessible name
+    (a hidden file input). Uses DOM.querySelector; returns None if not present."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("DOM.enable")
+            doc = await cdp.send("DOM.getDocument", {"depth": 0})
+            root = (doc.get("root") or {}).get("nodeId")
+            found = await cdp.send("DOM.querySelector", {"nodeId": root, "selector": selector})
+            node_id = found.get("nodeId")
+            if not node_id:
+                return None
+            desc = await cdp.send("DOM.describeNode", {"nodeId": node_id})
+            return (desc.get("node") or {}).get("backendNodeId")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("selector resolve failed for %r: %s", selector, exc)
+        return None
 
 
 @app.post("/execute")
 async def execute_action(body: ExecuteRequest):
-    """INTERIM EXECUTOR (v1): perform one resolved action against the live page via the
-    existing raw-CDP DirectDriver. This is the bridge that lets us advance flows during
-    burst-training WITHOUT waiting on the diffusion-mouse executor (v2). It clicks the
-    bbox center (dpr-corrected) and, for type/clear, applies the value to the focused
-    field. Returns the ExecResult. Best-effort; never raises into the caller."""
+    """INTERIM EXECUTOR (v1): perform one resolved action against the live page via the raw-CDP
+    DirectDriver. Actions: click | type | select | clear | upload. When `target_name` is given, the
+    node is RE-RESOLVED from a fresh AX scan at act time (immune to node-id staleness); otherwise
+    `backend_node_id` is used. `files` (absolute paths) drive an `upload` onto a file input. Returns
+    the ExecResult. Best-effort; never raises into the caller."""
     from app.executor.driver import ActionRequest, get_driver
+
+    node_id = body.backend_node_id
+    note = ""
+    if body.target_name:
+        fresh = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
+                                       body.target_role, body.target_name)
+        if fresh is not None:
+            node_id, note = fresh, f"re-resolved {body.target_name!r} -> node {fresh}"
+        elif node_id is None:
+            return {"ok": False, "driver": body.driver or "direct", "action_id": body.action_id,
+                    "css_point": None,
+                    "detail": f"target not found by name: {body.target_name!r} (role={body.target_role})"}
+    elif body.selector:
+        fresh = await _resolve_node_by_selector(body.browser_url, body.tab_id, body.tab_url, body.selector)
+        if fresh is not None:
+            node_id, note = fresh, f"re-resolved {body.selector!r} -> node {fresh}"
+        elif node_id is None:
+            return {"ok": False, "driver": body.driver or "direct", "action_id": body.action_id,
+                    "css_point": None, "detail": f"target not found by selector: {body.selector!r}"}
 
     driver = get_driver(body.driver)
     req = ActionRequest(
         action_id=body.action_id, target_bbox=body.target_bbox, value=body.value,
-        backend_node_id=body.backend_node_id, device_scale_factor=body.device_scale_factor,
+        backend_node_id=node_id, files=body.files, device_scale_factor=body.device_scale_factor,
     )
     result = await driver.move_and_act(
         browser_url=body.browser_url, request=req, tab_id=body.tab_id, tab_url=body.tab_url)
     return {
         "ok": result.ok, "driver": result.driver, "action_id": result.action_id,
-        "css_point": result.css_point, "detail": result.detail,
+        "css_point": result.css_point, "detail": (note + ("; " if note and result.detail else "") + result.detail),
     }
 
 
@@ -1155,8 +1230,19 @@ async def trigger_capture(body: CaptureRequest, background_tasks: BackgroundTask
         )
         _write_ax_sidecar(path.name, ax_candidates, ax_stats)
         ax_candidate_count = len(ax_candidates)
-        logger.info("CDP-AX capture-time: %s -> %d candidates (%dms)",
-                    path.name, ax_candidate_count, ax_stats.total_ms)
+        if ax_candidate_count == 0:
+            # An empty sidecar still gets written (so the shape is uniform), but 0 candidates
+            # means the faucet ran dry for this capture — target discovery failed, the tab was
+            # unreachable, or node-ids were stale. It passes the downstream `only_with_sidecar`
+            # existence check yet carries no Select-training data, so make it LOUD, not INFO.
+            logger.warning(
+                "CDP-AX capture-time: %s -> 0 candidates (%dms) — EMPTY sidecar; "
+                "browser likely unreachable/stale at capture. errors=%s",
+                path.name, ax_stats.total_ms, ax_stats.errors,
+            )
+        else:
+            logger.info("CDP-AX capture-time: %s -> %d candidates (%dms)",
+                        path.name, ax_candidate_count, ax_stats.total_ms)
     except Exception:
         logger.exception("CDP-AX proposal failed for %s", path.name)
 

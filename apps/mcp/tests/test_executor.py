@@ -95,3 +95,28 @@ def test_humanized_path_varies_run_to_run():
 def test_factory_returns_humanized():
     from app.executor.humanized import HumanizedDriver
     assert isinstance(get_driver("humanized"), HumanizedDriver)
+
+
+# --- upload action: sets files on a <input type=file> via DOM.setFileInputFiles (no click) ---
+def test_element_act_upload_sets_files():
+    from app.executor.driver import ActionRequest, DirectDriver
+
+    sent = []
+
+    class FakeCDP:
+        async def send(self, method, params=None):
+            sent.append((method, params or {}))
+            if method == "DOM.resolveNode":
+                return {"object": {"objectId": "obj-1"}}
+            return {"result": {"value": {}}}
+
+    req = ActionRequest(action_id="upload", target_bbox={}, backend_node_id=42,
+                        files=["/abs/a.jpg", "/abs/b.jpg"])
+    mode = asyncio.run(DirectDriver()._element_act(FakeCDP(), req))
+    assert mode == "upload"
+    up = [(m, p) for m, p in sent if m == "DOM.setFileInputFiles"]
+    assert len(up) == 1
+    assert up[0][1]["backendNodeId"] == 42
+    assert up[0][1]["files"] == ["/abs/a.jpg", "/abs/b.jpg"]
+    # upload must NOT click or move the mouse (file dialog can't be driven)
+    assert not any(m == "Input.dispatchMouseEvent" for m, _ in sent)

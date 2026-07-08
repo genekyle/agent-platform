@@ -154,6 +154,9 @@ def test_live_actor_executes_and_shapes_payload(monkeypatch):
     assert payload["driver"] == "humanized"
     assert payload["backend_node_id"] == 5
     assert payload["device_scale_factor"] == 2.0
+    # act-by-name: the selected candidate's role+name travel so the executor re-resolves fresh
+    assert payload["target_role"] == "button"
+    assert payload["target_name"] == "Apply"
 
 
 def test_live_actor_record_only_never_executes(monkeypatch):
