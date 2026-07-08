@@ -18,6 +18,13 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(accounts, "_path", lambda: tmp_path / "accounts.json")
     fake_env: dict[str, str] = {}
     monkeypatch.setattr(accounts, "_read_env_value", lambda key: fake_env.get(key, ""))
+    # Isolate the secrets vault too (temp key + temp lockbox), so vault-backed accounts round-trip
+    # without touching the real key/vault.
+    import secrets_vault
+    monkeypatch.setenv("AGENT_VAULT_KEY_PATH", str(tmp_path / "vault.key"))
+    monkeypatch.setenv("VAULT_KEY_PROVIDER", "local")
+    monkeypatch.setattr(secrets_vault, "_vault_path", lambda: tmp_path / "secrets_vault.json")
+    secrets_vault.reset_provider_cache()
     return fake_env
 
 
@@ -89,3 +96,35 @@ def test_bare_secret_ref_treated_as_env_prefix(_isolate):
 def test_unknown_secret_scheme_resolves_to_none():
     accounts.put_account("kc", {"domain_id": "d", "secret_ref": "keychain:kc"})
     assert accounts.resolve_creds("kc") is None  # keychain backend not implemented yet
+
+
+def test_set_credentials_encrypts_into_vault_not_registry(tmp_path):
+    acct = accounts.set_credentials("facebook_alt", "seller@gmail.com", "topsecretpw")
+    # public view: has_creds + masked hint, never the raw secret
+    assert acct["has_creds"] is True
+    assert acct["username_hint"] == "s***@gmail.com"
+    assert acct["secret_ref"] == "vault:facebook_alt"
+    assert acct["secret_backend"] == "vault"
+    assert "topsecretpw" not in str(acct)
+    # the ACCOUNT REGISTRY file must never contain the plaintext secret
+    registry_raw = (tmp_path / "accounts.json").read_text()
+    assert "topsecretpw" not in registry_raw
+    assert "seller@gmail.com" not in registry_raw   # not even the username lives in the registry
+    # but resolve_creds (login path) can recover them from the vault
+    assert accounts.resolve_creds("facebook_alt") == ("seller@gmail.com", "topsecretpw")
+
+
+def test_clear_credentials_removes_creds_keeps_metadata():
+    accounts.set_credentials("facebook_alt", "seller@gmail.com", "pw")
+    accounts.put_account("facebook_alt", {"label": "Facebook — reseller"})
+    assert accounts.clear_credentials("facebook_alt") is True
+    acct = accounts.get_account("facebook_alt")
+    assert acct["has_creds"] is False
+    assert acct["username_hint"] == ""
+    assert acct["label"] == "Facebook — reseller"    # metadata survives
+    assert accounts.resolve_creds("facebook_alt") is None
+
+
+def test_set_credentials_requires_both():
+    with pytest.raises(ValueError):
+        accounts.set_credentials("facebook_alt", "", "pw")

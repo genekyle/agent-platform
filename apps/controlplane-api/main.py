@@ -2611,6 +2611,23 @@ class AccountBody(BaseModel):
     secret_ref: Optional[str] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    # Credentials typed in the UI — encrypted straight into the secrets vault, never stored on the
+    # account record. Both must be present to set; omitted (edit) = leave existing creds untouched.
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class CredentialsBody(BaseModel):
+    username: str
+    password: str
+
+
+def _apply_account_credentials(account_id: str, body: AccountBody):
+    """If the create/update form carried a username+password, encrypt them into the vault so the
+    whole account can be configured in one save. Metadata never carries the secret."""
+    import accounts as accounts_mod
+    if body.username and body.password:
+        accounts_mod.set_credentials(account_id, body.username, body.password)
 
 
 @app.get("/api/accounts")
@@ -2633,19 +2650,51 @@ def create_account_ep(body: AccountBody):
     import accounts as accounts_mod
     if not body.account_id:
         raise HTTPException(status_code=400, detail="account_id is required")
+    # Metadata (never carries the secret); model_dump keeps only registry-editable keys.
+    meta = {k: v for k, v in body.model_dump(exclude_none=True).items() if k not in ("username", "password")}
     try:
-        return accounts_mod.put_account(body.account_id, body.model_dump(exclude_none=True))
+        accounts_mod.put_account(body.account_id, meta)
+        _apply_account_credentials(body.account_id, body)   # encrypt creds into the vault if provided
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return accounts_mod.get_account(accounts_mod._slugify(body.account_id))
 
 
 @app.patch("/api/accounts/{account_id}")
 def update_account_ep(account_id: str, body: AccountBody):
     import accounts as accounts_mod
+    meta = {k: v for k, v in body.model_dump(exclude_none=True).items() if k not in ("username", "password")}
     try:
-        return accounts_mod.put_account(account_id, body.model_dump(exclude_none=True))
+        accounts_mod.put_account(account_id, meta)
+        _apply_account_credentials(account_id, body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return accounts_mod.get_account(accounts_mod._slugify(account_id))
+
+
+@app.put("/api/accounts/{account_id}/credentials")
+def set_account_credentials_ep(account_id: str, body: CredentialsBody):
+    """Encrypt a login into the secrets vault for an account. Never stored on the account record,
+    never returned, never logged — the response only reflects has_creds + a masked hint."""
+    import accounts as accounts_mod
+    try:
+        acct = accounts_mod.set_credentials(account_id, body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if acct is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return acct
+
+
+@app.delete("/api/accounts/{account_id}/credentials")
+def clear_account_credentials_ep(account_id: str):
+    """Remove an account's vault secret (its metadata stays)."""
+    import accounts as accounts_mod
+    accounts_mod.clear_credentials(account_id)
+    acct = accounts_mod.get_account(accounts_mod._slugify(account_id))
+    if acct is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return acct
 
 
 @app.delete("/api/accounts/{account_id}")

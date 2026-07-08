@@ -137,8 +137,17 @@ def _resolve_secret_ref(secret_ref: str) -> Optional[tuple[str, str]]:
         user = _read_env_value(f"{name}_USERNAME")
         pw = _read_env_value(f"{name}_PASSWORD")
         return (user, pw) if user and pw else None
-    # keychain:<service> and other backends are a planned "more secure, still local" upgrade;
-    # unknown/unsupported schemes resolve to nothing rather than guessing.
+    if scheme == "vault":
+        # UI-entered creds, encrypted at rest in the secrets vault (envelope encryption, pluggable
+        # key provider). `name` is the vault key (the account_id).
+        import secrets_vault
+        creds = secrets_vault.get_secret(name)
+        if not creds:
+            return None
+        user, pw = str(creds.get("username") or ""), str(creds.get("password") or "")
+        return (user, pw) if user and pw else None
+    # keychain:<service> and other backends could slot in the same way; unknown/unsupported
+    # schemes resolve to nothing rather than guessing.
     return None
 
 
@@ -159,19 +168,29 @@ def _mask(username: str) -> str:
 # --------------------------------------------------------------------------- public API
 def _public(rec: dict[str, Any]) -> dict[str, Any]:
     """A registry record enriched for the API: adds has_creds + a masked username hint, and
-    guarantees NO raw secret is present."""
-    creds = _resolve_secret_ref(rec.get("secret_ref", ""))
+    guarantees NO raw secret is present. Vault-backed accounts are checked WITHOUT decrypting —
+    presence is a cheap file check and the hint was pre-masked and stored at set-time."""
+    secret_ref = rec.get("secret_ref", "")
+    if secret_ref.startswith("vault:"):
+        import secrets_vault
+        has_creds = secrets_vault.has_secret(secret_ref.partition(":")[2])
+        hint = rec.get("username_hint", "")
+    else:
+        creds = _resolve_secret_ref(secret_ref)
+        has_creds = creds is not None
+        hint = _mask(creds[0]) if creds else rec.get("username_hint", "")
     return {
         "account_id": rec.get("account_id"),
         "domain_id": rec.get("domain_id"),
         "label": rec.get("label") or rec.get("account_id"),
         "profile": rec.get("profile") or rec.get("account_id"),
-        "secret_ref": rec.get("secret_ref", ""),
+        "secret_ref": secret_ref,
+        "secret_backend": secret_ref.partition(":")[0] if ":" in secret_ref else "env",
         "status": rec.get("status", "active"),
         "notes": rec.get("notes", ""),
         "builtin": bool(rec.get("builtin")),
-        "has_creds": creds is not None,
-        "username_hint": _mask(creds[0]) if creds else "",
+        "has_creds": has_creds,
+        "username_hint": hint,
         "created_at": rec.get("created_at"),
         "updated_at": rec.get("updated_at"),
     }
@@ -239,11 +258,51 @@ def put_account(account_id: str, patch: dict[str, Any]) -> dict[str, Any]:
 
 def delete_account(account_id: str) -> bool:
     """Remove a STORED account. Built-ins can't be deleted (they'd just re-seed); disable them via
-    status instead. Returns True if a stored row was removed."""
+    status instead. Returns True if a stored row was removed. Also clears any vault secret so a
+    deleted account never leaves credentials behind."""
+    import secrets_vault
     with _lock:
         stored = _load()
         if account_id not in stored:
             return False
         del stored[account_id]
         _save(stored)
-        return True
+    secrets_vault.delete_secret(account_id)
+    return True
+
+
+def set_credentials(account_id: str, username: str, password: str) -> Optional[dict[str, Any]]:
+    """Store a login for an account by ENCRYPTING it into the secrets vault (never the registry).
+
+    Points the account's ``secret_ref`` at the vault and stores only a pre-masked hint for display.
+    The raw username/password go through the vault's key provider and are never persisted in the
+    registry, returned by the API, or logged. Returns the account's public view.
+    """
+    aid = _slugify(account_id)
+    if not aid:
+        raise ValueError("account_id must contain at least one alphanumeric character")
+    if not (username and password):
+        raise ValueError("username and password are both required")
+    import secrets_vault
+    secrets_vault.set_secret(aid, {"username": username, "password": password})
+    put_account(aid, {"secret_ref": f"vault:{aid}"})   # ensure a stored record pointing at the vault
+    with _lock:                                          # then stamp the SAFE, pre-masked hint
+        stored = _load()
+        if aid in stored:
+            stored[aid]["username_hint"] = _mask(username)
+            _save(stored)
+    return get_account(aid)
+
+
+def clear_credentials(account_id: str) -> bool:
+    """Delete an account's vault secret + its stored hint (metadata stays). Returns True if a
+    secret was removed."""
+    import secrets_vault
+    aid = _slugify(account_id)
+    removed = secrets_vault.delete_secret(aid)
+    with _lock:
+        stored = _load()
+        if aid in stored and "username_hint" in stored[aid]:
+            stored[aid].pop("username_hint", None)
+            _save(stored)
+    return removed

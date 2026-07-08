@@ -25,3 +25,7 @@ anthropic>=0.109
 # Apple Vision OCR (macOS-only). Free, native, no API key. Optional on non-mac;
 # guard the import so Linux installs don't break.
 pyobjc-framework-Vision>=10.0 ; sys_platform == "darwin"
+
+# Secrets vault: AES-256-GCM encryption at rest for UI-entered credentials
+# (envelope encryption with a pluggable key provider; local keyfile now, cloud KMS later).
+cryptography>=42
