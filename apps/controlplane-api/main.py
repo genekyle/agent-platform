@@ -368,7 +368,7 @@ def _capture_metadata_from_artifact(
     *,
     artifact: dict,
     session: TrainingSession,
-    goal: GoalRegistry,
+    goal: Optional[GoalRegistry],
     scenario: Optional[ScenarioRegistry],
     tab_id: str,
 ) -> dict:
@@ -391,7 +391,7 @@ def _capture_metadata_from_artifact(
         "domain_id": training_metadata.get("domain_id") or session.domain_id,
         "goal_id": training_metadata.get("goal_id") or session.goal_id,
         "task_id": training_metadata.get("task_id") or session.task_id,
-        "action_type_hint": training_metadata.get("action_type_hint") or _session_action_hint(goal),
+        "action_type_hint": training_metadata.get("action_type_hint") or (_session_action_hint(goal) if goal else "any"),
         "notes": training_metadata.get("notes") or session.notes,
         "capture_profile": training_metadata.get("capture_profile") or session.capture_profile,
         "screenshot_refs": screenshots,
@@ -2877,9 +2877,49 @@ def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
     traces_dir = _artifacts_dir() / "observer-traces"
     server = settings.capture_server_url
 
+    # Turn every live capture into LABELABLE training exhaust: persist each NON-EMPTY capture as a
+    # TrainingCapture row, deduped WITHIN this run by state fingerprint so a revisited screen doesn't
+    # flood the corpus (downstream run_batch already dedups cross-run). Empty (0-candidate) sidecars
+    # are skipped — they carry no Select data. Best-effort; a failure here never breaks the drive.
+    from select_stage import fingerprint as _fp
+    _live_goal = db.get(GoalRegistry, session.goal_id) if session.goal_id else None
+    _live_scenario = db.get(ScenarioRegistry, session.scenario_id) if session.scenario_id else None
+    _seen_fps: set[str] = set()
+    recorded_captures = {"captures": 0, "skipped_empty": 0, "skipped_duplicate": 0}
+
+    def _persist_live_capture(filename: str, ax_count: int) -> None:
+        if ax_count <= 0:
+            recorded_captures["skipped_empty"] += 1
+            return
+        try:
+            artifact = json.loads((traces_dir / filename).read_text())
+            obs, _ = observation_from_trace(traces_dir, filename)
+            fp = _fp.compute(url=obs.url, viewport=obs.viewport,
+                             candidates=obs.ax_candidates, task_goal=body.task_goal or "")
+            if fp in _seen_fps:
+                recorded_captures["skipped_duplicate"] += 1
+                return
+            _seen_fps.add(fp)
+            if db.scalar(select(TrainingCapture.id).where(TrainingCapture.artifact_filename == filename)):
+                return  # already a DB capture (e.g. also taken via /api/capture)
+            db.add(TrainingCapture(
+                training_session_id=session.id, artifact_filename=filename,
+                candidate_count=len(obs.ax_candidates), ax_candidate_count=ax_count,
+                review_status="draft",
+                **_capture_metadata_from_artifact(artifact=artifact, session=session,
+                                                  goal=_live_goal, scenario=_live_scenario,
+                                                  tab_id=body.tab_id or ""),
+            ))
+            db.commit()
+            recorded_captures["captures"] += 1
+        except Exception:
+            db.rollback()
+            raise  # LiveProposer's on_capture wrapper logs it; the drive continues
+
     proposer = LiveProposer(
         capture_server_url=server, browser_url=browser_url, traces_dir=traces_dir,
         tab_id=body.tab_id, tab_url=body.tab_url, goal=body.task_goal,
+        on_capture=_persist_live_capture,
     )
 
     # --- AUTH PRE-FLIGHT: observe once; if the domain plainly isn't signed in, hand off
@@ -2900,6 +2940,7 @@ def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
             "reason": result.reason, "escalation_reason": "not_authenticated",
             "total_cost_usd": 0.0, "executed_steps": 0, "steps": [],
             "handoff": asdict(handoff),
+            "recorded_captures": recorded_captures,
         }
     proposer_for_loop = PrimedProposer(first_obs, proposer)
     actor = LiveActor(
@@ -2981,6 +3022,8 @@ def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
         "executed_steps": sum(1 for s in result.steps if s.executed),
         "steps": [asdict(s) for s in result.steps],
         "handoff": asdict(handoff) if handoff else None,
+        # How much labelable training exhaust this drive produced (the flywheel signal).
+        "recorded_captures": recorded_captures,
     }
 
 

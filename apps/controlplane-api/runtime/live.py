@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -108,7 +108,8 @@ class LiveProposer:
 
     def __init__(self, *, capture_server_url: str, browser_url: str, traces_dir: Path,
                  tab_id: Optional[str] = None, tab_url: Optional[str] = None,
-                 goal: str = "", scenario: str = "runtime_loop", timeout: float = 120.0) -> None:
+                 goal: str = "", scenario: str = "runtime_loop", timeout: float = 120.0,
+                 on_capture: Optional[Callable[[str, int], None]] = None) -> None:
         self._capture_server_url = capture_server_url.rstrip("/")
         self._browser_url = browser_url
         self._traces_dir = traces_dir
@@ -117,6 +118,10 @@ class LiveProposer:
         self._goal = goal
         self._scenario = scenario
         self._timeout = timeout
+        # Optional sink for turning each live capture into labelable training exhaust: called with
+        # (filename, ax_candidate_count) after every successful capture. Best-effort in the callee —
+        # a failure there must never break the drive. See run_live's _persist_live_capture.
+        self._on_capture = on_capture
         self.last_filename: Optional[str] = None
 
     def _empty(self, url: str = "") -> Observation:
@@ -133,7 +138,8 @@ class LiveProposer:
             with httpx.Client(timeout=self._timeout) as client:
                 r = client.post(f"{self._capture_server_url}/capture", json=payload)
                 r.raise_for_status()
-                filename = (r.json() or {}).get("filename")
+                resp = r.json() or {}
+                filename = resp.get("filename")
         except Exception as exc:  # noqa: BLE001
             logger.warning("LiveProposer capture failed: %s", exc)
             return self._empty()
@@ -142,6 +148,11 @@ class LiveProposer:
             logger.warning("LiveProposer: capture returned no filename")
             return self._empty()
         self.last_filename = filename
+        if self._on_capture is not None:
+            try:
+                self._on_capture(filename, int(resp.get("ax_candidate_count") or 0))
+            except Exception:  # noqa: BLE001 — persisting exhaust must never break the drive
+                logger.exception("LiveProposer on_capture hook failed for %s", filename)
         try:
             observation, _ = observation_from_trace(self._traces_dir, filename)
             return observation
