@@ -64,8 +64,9 @@ Commit message per step: `refactor: extract <domain> routes into routers/<domain
 - **Concurrent edits during the refactor.** *Mitigation:* run it in **one dedicated session with no
   other session touching `main.py`** — ideally in its own git worktree (Part 2). A half-moved
   `main.py` + a concurrent feature edit = the worst merge.
-- **Silent route drops.** *Mitigation:* assert route count before/after: `len(app.routes)` unchanged;
-  keep the full suite green at every step.
+- **Silent route drops / renames.** *Mitigation (built):* `test_route_inventory.py` pins the full set
+  of (METHOD, path) against `route_inventory.json` (149 routes snapshotted 2026-07-08). A dropped or
+  renamed route fails that test. Run it after every extraction step; it's the split's primary guardrail.
 
 ### Definition of done
 `main.py` < ~400 lines (app + startup + includes); every route lives in a `routers/*.py`; `len(app.routes)`
