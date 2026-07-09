@@ -250,6 +250,14 @@ class TrainingCapture(Base):
     training_session_id: Mapped[int] = mapped_column(ForeignKey("training_sessions.id"), index=True)
     artifact_filename: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    # AX faucet yield (v16): how many CDP-AX candidates the capture-time proposer produced,
+    # recorded straight from the /capture response so the faucet's per-drive output is durable
+    # and queryable WITHOUT statting the .ax.json sidecar. 0 means the sidecar is empty (browser
+    # was unreachable / node-ids stale at capture time) — a capture that looks healthy but carries
+    # no Select-training data. This is the number that says "did this drive actually teach us
+    # anything." See docs/LEARNINGS.md ("the faucet is already open") and the emission site
+    # apps/mcp/app/main_server.py (_write_ax_sidecar).
+    ax_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
     review_status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
     positive_candidate_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # Distillation provenance (v9): how the golden label was set.

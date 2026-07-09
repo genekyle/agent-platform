@@ -144,13 +144,16 @@ retrain scheduler are still ahead.**
      telemetry at ~$0 (cache hits) without duplicating trajectory rows; `limit=N`
      caps spend on a cold run. This is the mechanism that turns accumulated captures
      into training rows for L3/L4.
-   - ⚠️ **Corpus can't be backfilled from history.** Select needs AX candidates, which
-     come only from a capture's `.ax.json` sidecar (live CDP at capture time). Of 175
-     captures, only **3** have a sidecar (the pipeline started emitting them
-     2026-06-15); the rest store the `get_accessibility_tree not found` stub and
-     cannot be re-proposed offline. So the corpus grows only from *new* captures that
-     carry a sidecar — `run_batch` over today's backlog yields ~3 rows. The data
-     faucet is the live-capture path; backfill is a dead end.
+   - ⚠️ **Corpus can't be backfilled from history — but the faucet is open and flowing.**
+     Select needs AX candidates, which come only from a capture's `.ax.json` sidecar
+     (live CDP at capture time), so captures from *before* emission began (2026-06-15,
+     commit `80dd253b`) can never get one — a dead session can't be re-scanned. That's
+     the real dead end. But emission is **unconditional** on every live path
+     (`_write_ax_sidecar` in `POST /capture`), and the current DB has **157 captures,
+     all carrying AX candidates** (the old "3 of 175" was an early snapshot, now stale).
+     Per-capture yield is recorded on `TrainingCapture.ax_candidate_count` (v16) and
+     summarised as `dry_captures` in `/api/training/coverage`. See `docs/LEARNINGS.md`
+     (2026-07-08 faucet entry) for the full picture and the two senses of "backfill".
 2. **Fire real inputs** — DirectDriver can click the live browser; held pending go-ahead.
 3. **Build the trainers** — diffusion input model (#7), tiny classifier (L3),
    micro-model (L4), and the planned brain models (page_state/transition/outcome).

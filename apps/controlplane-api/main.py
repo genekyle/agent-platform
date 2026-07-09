@@ -722,6 +722,8 @@ def _migrate_schema() -> None:
         # training_sessions multi-account + protect guard (v15)
         ("training_sessions", "account_id", "VARCHAR(120)"),
         ("training_sessions", "protected", "BOOLEAN NOT NULL DEFAULT false"),
+        # training_captures AX faucet yield (v16)
+        ("training_captures", "ax_candidate_count", "INTEGER NOT NULL DEFAULT 0"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
@@ -1441,6 +1443,17 @@ def training_coverage(
     tagged = sum(r["count"] for r in rows)
     untagged = int(counts.get(None, 0) or 0)
     covered_classes = sum(1 for r in rows if r["count"] >= 1)
+
+    # Faucet health: of all captures, how many came out DRY (0 AX candidates)? A dry capture
+    # exists on disk but taught Select nothing — the drive's effort was wasted. Surfaced here so
+    # the operator sees the faucet's real yield, not just that captures happened.
+    total_captures = int(db.scalar(select(func.count()).select_from(TrainingCapture)) or 0)
+    dry_captures = int(
+        db.scalar(
+            select(func.count()).select_from(TrainingCapture)
+            .where(TrainingCapture.ax_candidate_count == 0)
+        ) or 0
+    )
     return {
         "generated_at": utcnow().isoformat(),
         "target_per_state": target_per_state,
@@ -1451,6 +1464,9 @@ def training_coverage(
             "gap_states": sum(1 for r in rows if r["status"] == "gap"),
             "tagged_captures": tagged,
             "untagged_captures": untagged,
+            # Faucet yield across ALL captures (not just this filter's relevant states).
+            "total_captures": total_captures,
+            "dry_captures": dry_captures,
         },
         "states": rows,
     }
@@ -3143,6 +3159,10 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
                     training_session_id=session.id,
                     artifact_filename=payload["filename"],
                     candidate_count=payload.get("candidate_count", 0),
+                    # The faucet's yield: how many CDP-AX candidates this drive produced. 0 means
+                    # the sidecar came back empty (unreachable tab / stale node-ids) — the capture
+                    # exists but taught Select nothing. Recorded so it's queryable, not file-stat'd.
+                    ax_candidate_count=payload.get("ax_candidate_count", 0),
                     **_capture_metadata_from_artifact(
                         artifact=artifact,
                         session=session,
@@ -5118,6 +5138,7 @@ def list_observations(db: Session = Depends(get_db)):
                 "scenario": data.get("metadata", {}).get("scenario"),
                 "source": data.get("metadata", {}).get("source"),
                 "candidate_count": capture.candidate_count,
+                "ax_candidate_count": capture.ax_candidate_count,
                 "group": capture.domain_id,
                 "status": capture.review_status,
                 "label": capture.goal_id,

@@ -54,9 +54,10 @@ diagnose fields or build a one-off CDP script until you've confirmed it's even u
 Domain quirks (button→div, React-controlled inputs, the human gates) belong in the distilled recipe
 (`facebook_recipe.py`) via the teacher→distill loop, **not** re-litigated in an imperative endpoint
 the next session can't see.
-- **Enforced by:** *aspirational* — today `apps/mcp/app/executor/driver.py` is Layer A but FB login
-  is routed to the bespoke `/facebook_login` endpoint (`main_server.py`) via
-  `channel_browser.py` `login_path`. Fix = route login through Layer A. See `docs/interaction-layers.md`.
+- **Enforced by:** `apps/mcp/app/executor/driver.py` (Layer A) as the one drive path; FB login was
+  routed through it on 2026-07-08 (commit `6775499`) — the bespoke `/facebook_login` endpoint and
+  `channel_browser.py`'s `login_path` are **deleted**, and `facebook_recipe.match_login_fields` holds
+  the domain quirks. See `docs/interaction-layers.md` and `docs/LEARNINGS.md`.
 
 ## 7. No single golden path — the golden path is the least-steps route through the UI in front of you
 Accounts (and site variants) render **different UIs**, so a goal like "open Marketplace" has

@@ -1,8 +1,13 @@
 # Interaction layers — and why Facebook login keeps reopening the same wound
 
-This note exists because the same regression keeps getting re-litigated session after session
-inside one imperative endpoint, instead of being captured once. If you are here to "fix FB login
-again," read this first — the fix is almost certainly *routing*, not another patch to the endpoint.
+> **STATUS (2026-07-08): FIXED.** The bespoke `/facebook_login` endpoint described below as "Layer B"
+> was **deleted** (commit `6775499`); FB login now runs on the resilient AX/node layer. This note is
+> kept as the *case study* for why we drive through the AX layer — the history below is the argument,
+> not a live bug. If you are here to "fix FB login again," the fix is almost certainly a change to the
+> **recipe** (`facebook_recipe.py`) or the **routing**, never a new hardcoded-selector endpoint.
+
+This note exists because the same regression kept getting re-litigated session after session
+inside one imperative endpoint, instead of being captured once.
 
 ## There are two interaction layers
 
@@ -21,12 +26,13 @@ selectors** — `input[name=email]`, `input[name=pass]`, `button[name=login]` �
 `Runtime.evaluate`, then `insertText` + a coordinate click from `getBoundingClientRect`. Every
 assumption about Facebook's DOM is baked into these 60 lines.
 
-## FB login is hardcoded to Layer B — that's the bug
+## FB login WAS hardcoded to Layer B — that was the bug (now fixed)
 
-`channel_browser.py` sets `login_path: "/facebook_login"` for `facebook_marketplace`, and
-`channel_login` in `apps/controlplane-api/main.py` (~line 3912) POSTs straight to that endpoint
-**every time**. Login never gets Layer A's node-based path. So the regression is structural: login
-was special-cased onto a hardcoded-selector fast-path that **bypasses the resilient layer**.
+Until 2026-07-08, `channel_browser.py` set `login_path: "/facebook_login"` for `facebook_marketplace`,
+and `channel_login` POSTed straight to that endpoint **every time**. Login never got Layer A's
+node-based path — the regression was structural: login was special-cased onto a hardcoded-selector
+fast-path that **bypassed the resilient layer**. That routing is gone (`login_path` removed,
+`_drive_login_form` now scans → matches by role/name → drives by `backend_node_id`).
 
 ## It's the same wound reopening — read the last three commits
 
@@ -51,16 +57,16 @@ and kept extending Layer B, which hardcodes FB's DOM. The login flow never "reve
 controllable than the full observe→propose→drive loop; that trade bought simplicity and paid it back
 in brittleness.
 
-## The durable fix (direction, not yet done)
+## The durable fix — done (2026-07-08, commit `6775499`)
 
-1. **Route FB login through Layer A**: observe the login wall via the AX tree, find the email /
-   password fields and the Log In control by **role / accessible-name**, drive them by node. Delete
-   (or reduce to a thin shim over Layer A) the hardcoded-selector endpoint.
-2. **Land the learnings in `facebook_recipe.py`, not in an endpoint.** That file is meant to be the
-   distilled, teacher-refined state machine for this domain (button→div, React-controlled inputs, the
-   human gates: checkpoint / 2FA / captcha). The whole teacher→distill loop exists for exactly this.
-   When login teaches us something, it belongs there — where the next session can see it — not as a
-   one-off imperative patch the next session can't.
+1. **FB login now runs through Layer A.** The login wall is observed via the AX tree (`/ax_scan`),
+   the email / password fields and the Log In control are found by **role / accessible-name**
+   (`facebook_recipe.match_login_fields`), and each is driven by `backend_node_id` through the
+   humanized driver. The hardcoded-selector endpoint was **deleted**, not shimmed.
+2. **The learnings landed in `facebook_recipe.py`, not an endpoint.** button→div and React-controlled
+   inputs (`Input.insertText`) plus the human gates (checkpoint / 2FA / captcha) live in that
+   distilled recipe — where the next session can see them — via the teacher→distill loop.
 
-The meta-rule: **prefer the AX/node interaction layer over bespoke DOM workarounds, and capture
-domain quirks in the distilled recipe.** See PRINCIPLES.md §6.
+The meta-rule (now proven): **prefer the AX/node interaction layer over bespoke DOM workarounds, and
+capture domain quirks in the distilled recipe.** See PRINCIPLES.md §6 and
+`LEARNINGS.md` (2026-07-08 FB-login entry).
