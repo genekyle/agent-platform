@@ -23,8 +23,9 @@ from models import ObservedJob, TrainingSession
 # the rollup never depends on the UI catalog; "coming soon" domains are a pure-UI concern.
 DOMAINS: list[dict[str, Any]] = [
     {"id": "facebook_marketplace", "label": "Facebook Marketplace", "kind": "selling",
-     "profile": "facebook", "host": "facebook"},
-    {"id": "indeed_jobs", "label": "Indeed", "kind": "jobs", "profile": None, "host": "indeed"},
+     "profile": "facebook", "host": "facebook", "capture_domain": "facebook_marketplace"},
+    {"id": "indeed_jobs", "label": "Indeed", "kind": "jobs", "profile": None, "host": "indeed",
+     "capture_domain": "indeed"},
 ]
 
 
@@ -126,6 +127,47 @@ def _recent_activity(handoffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return feed[:18]
 
 
+def _training_metrics(db: Session) -> dict[str, dict[str, int]]:
+    """Per-CAPTURE-domain labeling backlog: how many captures still need a golden label (draft)
+    vs. how many are done (reviewed/approved). Keyed by TrainingCapture.domain_id. This is the
+    flywheel's headline signal — surfaced on the landing so 'what to label' isn't buried."""
+    from sqlalchemy import func
+
+    from models import TrainingCapture
+
+    try:
+        rows = db.execute(
+            select(
+                TrainingCapture.domain_id,
+                func.count().filter(TrainingCapture.review_status == "draft"),
+                func.count().filter(TrainingCapture.review_status.in_(("reviewed", "approved"))),
+            ).group_by(TrainingCapture.domain_id)
+        ).all()
+    except Exception:  # best-effort like every other source here — never blank the landing
+        return {}
+    return {dom: {"to_label": int(d or 0), "labeled": int(r or 0)} for dom, d, r in rows}
+
+
+def _latest_grounding_accuracy() -> Optional[float]:
+    """Best-effort read of the newest grounding model's target_accuracy (the 'is the flywheel
+    working?' number). None if nothing's been trained yet."""
+    import json
+    from pathlib import Path
+
+    from settings import settings
+
+    try:
+        models_dir = Path(settings.observer_artifacts_dir) / "models"
+        runs = sorted(models_dir.glob("*__grounding_linear_v1"), reverse=True)
+        for run in runs:
+            metrics = run / "metrics.json"
+            if metrics.exists():
+                return float(json.loads(metrics.read_text()).get("target_accuracy"))
+    except Exception:
+        pass
+    return None
+
+
 def build_summary(db: Session) -> dict[str, Any]:
     """The whole landing in one payload: per-domain health tiles, the open-attention count,
     and a cross-domain activity feed."""
@@ -145,6 +187,8 @@ def build_summary(db: Session) -> dict[str, Any]:
         did = _attribute_domain(h)
         if did:
             attention_by_domain[did] = attention_by_domain.get(did, 0) + 1
+
+    training_by_domain = _training_metrics(db)
 
     tiles: list[dict[str, Any]] = []
     for d in DOMAINS:
@@ -170,10 +214,18 @@ def build_summary(db: Session) -> dict[str, Any]:
             "automation_mode": domain_settings.get_settings(d["id"])["automation_mode"],
             "primary": metrics.get("primary"),
             "chips": metrics.get("chips", []),
+            # Flywheel signal, surfaced right on the domain tile (#1 training-UI overhaul).
+            "training": training_by_domain.get(d["capture_domain"], {"to_label": 0, "labeled": 0}),
         })
 
     return {
         "domains": tiles,
         "attention_open_count": len(open_handoffs),
         "activity": _recent_activity(all_handoffs),
+        # Cross-domain flywheel rollup for the landing's headline KPIs.
+        "flywheel": {
+            "to_label_total": sum(t["to_label"] for t in training_by_domain.values()),
+            "labeled_total": sum(t["labeled"] for t in training_by_domain.values()),
+            "grounding_accuracy": _latest_grounding_accuracy(),
+        },
     }

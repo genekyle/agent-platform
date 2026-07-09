@@ -9,19 +9,27 @@ import { DomainsHub } from "./DomainsHub";
 // gets out of the way. The cross-domain Attention inbox is the primary surface; you interact by
 // clearing exceptions, not by hunting for buttons.
 
+const TONE_COLOR = { attention: "#ea580c", ready: "#16a34a", flywheel: "#d97706" };
+
 function Hero({ summary, health }) {
   const domains = summary?.domains || [];
   const ready = domains.filter((d) => d.status === "ready").length;
   const attention = summary?.attention_open_count ?? 0;
+  const fw = summary?.flywheel;
+  const toLabel = fw?.to_label_total ?? 0;
+  const acc = fw?.grounding_accuracy;
+  const accStr = acc == null ? "not trained yet" : `model ${Math.round(acc * 100)}%`;
   const cards = [
     { label: "Needs attention", value: attention, tone: attention ? "attention" : "ready", foot: attention ? "Open handoffs across domains" : "You're all caught up" },
     { label: "Domains ready", value: `${ready}/${domains.length}`, tone: "ready", foot: "Connected and signed in" },
+    // The flywheel's headline number — brought up to KPI altitude (#1 training-UI overhaul).
+    { label: "🏷️ To label", value: toLabel, tone: toLabel ? "flywheel" : "ready", foot: `${accStr} · ${fw?.labeled_total ?? 0} labeled` },
     { label: "Control plane", value: health?.ok ? "Healthy" : "Issue", tone: health?.ok ? "ready" : "attention", foot: health?.ok ? "API reachable" : "API not reachable" },
   ];
   return (
-    <section className="stats-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+    <section className="stats-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
       {cards.map((c) => (
-        <div className="stat-card" key={c.label} style={{ borderTop: `3px solid ${c.tone === "attention" ? "#ea580c" : "#16a34a"}` }}>
+        <div className="stat-card" key={c.label} style={{ borderTop: `3px solid ${TONE_COLOR[c.tone] || TONE_COLOR.ready}` }}>
           <div className="stat-label">{c.label}</div>
           <div className="stat-value">{c.value}</div>
           <div className="stat-footnote">{c.foot}</div>

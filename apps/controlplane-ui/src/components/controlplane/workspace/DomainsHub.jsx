@@ -45,6 +45,13 @@ function Tile({ domain, tile, onOpen }) {
             </div>
           </div>
 
+          {tile?.training && (
+            <div className="domain-tile__chips" style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed var(--border, #d3dae4)" }}>
+              <span className={`chip ${tile.training.to_label ? "warn" : "muted"}`}>🏷️ {tile.training.to_label} to label</span>
+              <span className="chip muted">{tile.training.labeled} labeled</span>
+            </div>
+          )}
+
           <div className="domain-tile__foot">
             <span className="status-line"><span className={`dot ${DOT[status]}`} /> {STATUS_TEXT[status]}</span>
             <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
