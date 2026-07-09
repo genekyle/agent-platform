@@ -12,7 +12,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -87,27 +87,13 @@ from training import (
     write_meta,
 )
 
-app = FastAPI(title="Control Plane API", version="0.0.1")
-
-app.add_middleware(
-    CORSMiddleware,
-    # Any localhost port — the Vite dev server (5173) plus preview/test servers on other ports.
-    allow_origin_regex=r"http://localhost:\d+",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Serve the local asset store (listing photos) so the UI can render thumbnails. Stub for eventual
-# cloud (S3) storage — see assets.py. Created if missing so the mount never fails on a fresh checkout.
+# Assets store (listing photos) — imported here so create_app() can mount it. Stub for cloud (S3).
 import assets as _assets  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
-_assets.ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
-app.mount("/assets", StaticFiles(directory=str(_assets.ASSETS_ROOT)), name="assets")
 
-# --- Routers (extracted from main.py; see docs/PLAN_main-split.md) ------------
-# As domains move out of this file they register here. Routers import shared
-# helpers from deps.py / models / schemas, never from main.
+# --- Routers (see docs/PLAN_main-split.md) -----------------------------------
+# Domain routers extracted from main.py; the module-level `router` below holds the CORE routes not
+# yet extracted into a domain module. create_app() (bottom of file) wires all of them into the app.
 from routers import accounts as accounts_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
 from routers import facebook as facebook_router  # noqa: E402
@@ -115,12 +101,7 @@ from routers import inventory as inventory_router  # noqa: E402
 from routers import sessions as sessions_router  # noqa: E402
 from routers import workspace as workspace_router  # noqa: E402
 
-app.include_router(accounts_router.router)
-app.include_router(application_answers_router.router)
-app.include_router(facebook_router.router)
-app.include_router(inventory_router.router)
-app.include_router(sessions_router.router)
-app.include_router(workspace_router.router)
+router = APIRouter()
 
 
 def _resolve_chrome_binary() -> str:
@@ -461,7 +442,6 @@ def backfill_label_sources(db: Session) -> None:
         db.commit()
 
 
-@app.on_event("startup")
 def on_startup():
     migrate_schema()
     Base.metadata.create_all(bind=engine)
@@ -477,7 +457,7 @@ def on_startup():
         _mark_zombie_eval_runs(db)
 
 
-@app.get("/health")
+@router.get("/health")
 def health():
     return {"ok": True, "service": "control-plane-api"}
 
@@ -787,7 +767,7 @@ def _overall_status_for_services(services: list[dict]) -> str:
     return "healthy"
 
 
-@app.get("/api/system/status")
+@router.get("/api/system/status")
 def get_system_status():
     services = collect_system_services()
     return {
@@ -797,7 +777,7 @@ def get_system_status():
     }
 
 
-@app.get("/api/usage/anthropic")
+@router.get("/api/usage/anthropic")
 def get_anthropic_usage():
     """Self-logged Claude API usage + cost (token counts and dollar cost per
     call). Authoritative org-wide numbers live in the Anthropic Console; this is
@@ -813,7 +793,7 @@ def get_anthropic_usage():
     }
 
 
-@app.get("/api/training/domains", response_model=list[DomainRead])
+@router.get("/api/training/domains", response_model=list[DomainRead])
 def list_training_domains(include_inactive: bool = False, db: Session = Depends(get_db)):
     stmt = select(DomainRegistry)
     if not include_inactive:
@@ -821,7 +801,7 @@ def list_training_domains(include_inactive: bool = False, db: Session = Depends(
     return db.scalars(stmt.order_by(DomainRegistry.display_name.asc())).all()
 
 
-@app.post("/api/training/domains", response_model=DomainRead)
+@router.post("/api/training/domains", response_model=DomainRead)
 def create_training_domain(body: DomainWrite, db: Session = Depends(get_db)):
     if db.get(DomainRegistry, body.domain_id):
         raise HTTPException(status_code=409, detail="Domain already exists")
@@ -832,7 +812,7 @@ def create_training_domain(body: DomainWrite, db: Session = Depends(get_db)):
     return domain
 
 
-@app.patch("/api/training/domains/{domain_id}", response_model=DomainRead)
+@router.patch("/api/training/domains/{domain_id}", response_model=DomainRead)
 def update_training_domain(domain_id: str, body: DomainUpdate, db: Session = Depends(get_db)):
     domain = db.get(DomainRegistry, domain_id)
     if domain is None:
@@ -844,7 +824,7 @@ def update_training_domain(domain_id: str, body: DomainUpdate, db: Session = Dep
     return domain
 
 
-@app.delete("/api/training/domains/{domain_id}")
+@router.delete("/api/training/domains/{domain_id}")
 def archive_training_domain(domain_id: str, db: Session = Depends(get_db)):
     domain = db.get(DomainRegistry, domain_id)
     if domain is None:
@@ -860,7 +840,7 @@ def archive_training_domain(domain_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@app.get("/api/training/goals", response_model=list[GoalRead])
+@router.get("/api/training/goals", response_model=list[GoalRead])
 def list_training_goals(domain_id: Optional[str] = None, db: Session = Depends(get_db)):
     stmt = select(GoalRegistry).where(GoalRegistry.status == "active")
     if domain_id:
@@ -868,7 +848,7 @@ def list_training_goals(domain_id: Optional[str] = None, db: Session = Depends(g
     return db.scalars(stmt.order_by(GoalRegistry.display_name.asc())).all()
 
 
-@app.post("/api/training/goals", response_model=GoalRead)
+@router.post("/api/training/goals", response_model=GoalRead)
 def create_training_goal(body: GoalWrite, db: Session = Depends(get_db)):
     if db.get(GoalRegistry, body.goal_id):
         raise HTTPException(status_code=409, detail="Goal already exists")
@@ -881,7 +861,7 @@ def create_training_goal(body: GoalWrite, db: Session = Depends(get_db)):
     return goal
 
 
-@app.patch("/api/training/goals/{goal_id}", response_model=GoalRead)
+@router.patch("/api/training/goals/{goal_id}", response_model=GoalRead)
 def update_training_goal(goal_id: str, body: GoalUpdate, db: Session = Depends(get_db)):
     goal = db.get(GoalRegistry, goal_id)
     if goal is None:
@@ -896,7 +876,7 @@ def update_training_goal(goal_id: str, body: GoalUpdate, db: Session = Depends(g
     return goal
 
 
-@app.delete("/api/training/goals/{goal_id}")
+@router.delete("/api/training/goals/{goal_id}")
 def archive_training_goal(goal_id: str, db: Session = Depends(get_db)):
     goal = db.get(GoalRegistry, goal_id)
     if goal is None:
@@ -908,7 +888,7 @@ def archive_training_goal(goal_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@app.get("/api/training/tasks", response_model=list[TaskRead])
+@router.get("/api/training/tasks", response_model=list[TaskRead])
 def list_training_tasks(
     scope_level: Optional[str] = None,
     domain_id: Optional[str] = None,
@@ -925,7 +905,7 @@ def list_training_tasks(
     return db.scalars(stmt.order_by(TaskRegistry.display_name.asc())).all()
 
 
-@app.post("/api/training/tasks", response_model=TaskRead)
+@router.post("/api/training/tasks", response_model=TaskRead)
 def create_training_task(body: TaskWrite, db: Session = Depends(get_db)):
     if db.get(TaskRegistry, body.task_id):
         raise HTTPException(status_code=409, detail="Task already exists")
@@ -937,7 +917,7 @@ def create_training_task(body: TaskWrite, db: Session = Depends(get_db)):
     return task
 
 
-@app.patch("/api/training/tasks/{task_id}", response_model=TaskRead)
+@router.patch("/api/training/tasks/{task_id}", response_model=TaskRead)
 def update_training_task(task_id: str, body: TaskUpdate, db: Session = Depends(get_db)):
     task = db.get(TaskRegistry, task_id)
     if task is None:
@@ -951,7 +931,7 @@ def update_training_task(task_id: str, body: TaskUpdate, db: Session = Depends(g
     return task
 
 
-@app.delete("/api/training/tasks/{task_id}")
+@router.delete("/api/training/tasks/{task_id}")
 def archive_training_task(task_id: str, db: Session = Depends(get_db)):
     task = db.get(TaskRegistry, task_id)
     if task is None:
@@ -963,7 +943,7 @@ def archive_training_task(task_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@app.get("/api/training/scenarios", response_model=list[ScenarioRead])
+@router.get("/api/training/scenarios", response_model=list[ScenarioRead])
 def list_training_scenarios(domain_id: Optional[str] = None, db: Session = Depends(get_db)):
     stmt = select(ScenarioRegistry).where(ScenarioRegistry.status == "active")
     if domain_id:
@@ -986,7 +966,7 @@ def _validate_registry_refs(
         raise HTTPException(status_code=404, detail="Task not found")
 
 
-@app.post("/api/training/scenarios", response_model=ScenarioRead)
+@router.post("/api/training/scenarios", response_model=ScenarioRead)
 def create_training_scenario(body: ScenarioWrite, db: Session = Depends(get_db)):
     if db.get(ScenarioRegistry, body.scenario_id):
         raise HTTPException(status_code=409, detail="Scenario already exists")
@@ -998,7 +978,7 @@ def create_training_scenario(body: ScenarioWrite, db: Session = Depends(get_db))
     return scenario
 
 
-@app.patch("/api/training/scenarios/{scenario_id}", response_model=ScenarioRead)
+@router.patch("/api/training/scenarios/{scenario_id}", response_model=ScenarioRead)
 def update_training_scenario(scenario_id: str, body: ScenarioUpdate, db: Session = Depends(get_db)):
     scenario = db.get(ScenarioRegistry, scenario_id)
     if scenario is None:
@@ -1012,7 +992,7 @@ def update_training_scenario(scenario_id: str, body: ScenarioUpdate, db: Session
     return scenario
 
 
-@app.delete("/api/training/scenarios/{scenario_id}")
+@router.delete("/api/training/scenarios/{scenario_id}")
 def archive_training_scenario(scenario_id: str, db: Session = Depends(get_db)):
     scenario = db.get(ScenarioRegistry, scenario_id)
     if scenario is None:
@@ -1063,7 +1043,7 @@ class PageStateUpdate(BaseModel):
     status: Optional[str] = None
 
 
-@app.get("/api/training/coverage")
+@router.get("/api/training/coverage")
 def training_coverage(
     domain_id: Optional[str] = None,
     goal_id: Optional[str] = None,
@@ -1158,7 +1138,7 @@ def training_coverage(
     }
 
 
-@app.get("/api/training/page-states")
+@router.get("/api/training/page-states")
 def list_page_states(
     scope: Optional[str] = None,
     domain_id: Optional[str] = None,
@@ -1212,7 +1192,7 @@ class JobStatusUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-@app.post("/api/jobs/extract")
+@router.post("/api/jobs/extract")
 async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
     """Scrape the live results page for job postings and UPSERT them into observed_jobs,
     deduped by job_id = '{platform}:{external_id}'. A re-seen job bumps seen_count +
@@ -1336,7 +1316,7 @@ def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None) -> dict[str, A
     }
 
 
-@app.post("/api/jobs/autofill_form")
+@router.post("/api/jobs/autofill_form")
 async def autofill_form(training_session_id: int, db: Session = Depends(get_db)):
     """Fill the current Indeed apply form from the Application Profile using the
     type-generalizing interaction layer — match each question to an answer, dispatch by the
@@ -1359,7 +1339,7 @@ async def autofill_form(training_session_id: int, db: Session = Depends(get_db))
         raise HTTPException(status_code=502, detail=f"autofill unreachable: {exc}")
 
 
-@app.get("/api/runtime/apply_state")
+@router.get("/api/runtime/apply_state")
 async def apply_state(training_session_id: int, scan_form: bool = True,
                       db: Session = Depends(get_db)):
     """Live state manager for the apply task. Reads every tab in the session's Chrome, folds
@@ -1450,7 +1430,7 @@ async def _captcha_gate_for(browser_url: str) -> dict[str, Any]:
     return {"blocking": bool(gated), "needs_human": bool(gated), "gated_tabs": gated, "per_tab": per_tab}
 
 
-@app.get("/api/runtime/captcha_gate")
+@router.get("/api/runtime/captcha_gate")
 async def captcha_gate(training_session_id: int, db: Session = Depends(get_db)):
     """CAPTCHA-FIRST CHECK — the very first thing to consult when an action is blocked/disabled/no-ops.
     Because our only eyes are CDP-AX (which can't SEE a reCAPTCHA in its iframe), this probes each of
@@ -1476,7 +1456,7 @@ class AwaitCaptchaRequest(BaseModel):
     interval_s: float = 3.0     # poll cadence
 
 
-@app.post("/api/runtime/await_captcha")
+@router.post("/api/runtime/await_captcha")
 async def await_captcha(body: AwaitCaptchaRequest, db: Session = Depends(get_db)):
     """HANDOFF + RESUME primitive: poll the captcha gate until the human has solved it (blocking flips
     false because the visible widget's token filled) or we time out. This is what the apply loop calls
@@ -1538,7 +1518,7 @@ async def _refine_block_visibility(browser_url: str, block: Optional[dict]) -> O
     return escalation_rules.downgrade_block_if_hidden(block, vis)
 
 
-@app.get("/api/runtime/session_state")
+@router.get("/api/runtime/session_state")
 async def session_state(training_session_id: int, scan_form: bool = True,
                         db: Session = Depends(get_db)):
     """Session-spanning state manager: the generalized sibling of /api/runtime/apply_state that
@@ -1636,7 +1616,7 @@ async def session_state(training_session_id: int, scan_form: bool = True,
     }
 
 
-@app.post("/api/runtime/session/{training_session_id}/start_run")
+@router.post("/api/runtime/session/{training_session_id}/start_run")
 async def start_cadence_run_endpoint(training_session_id: int, db: Session = Depends(get_db)):
     """Open a NEW authenticated search-cadence run on the session's blackboard and stamp its
     provenance (run id, started_at, gathered_authenticated). This is the context that makes data
@@ -1672,7 +1652,7 @@ async def start_cadence_run_endpoint(training_session_id: int, db: Session = Dep
             "search_actionable": store.search_data_actionable(bb)}
 
 
-@app.get("/api/runtime/apply_recipe")
+@router.get("/api/runtime/apply_recipe")
 def apply_recipe_spec():
     """The Indeed apply recipe (expected state machine + branches). Teachable: states are
     page_state_registry ids; transitions are what the state_transition model learns."""
@@ -1695,7 +1675,7 @@ class SearchOutcome(BaseModel):
     radius_miles: Optional[int] = None
 
 
-@app.get("/api/search/targets")
+@router.get("/api/search/targets")
 def list_search_targets():
     """The persisted (query, location) targets the search cadence runs against — the written-down
     'what/where' so it isn't held in a Claude/Haiku context. Seeded on first use."""
@@ -1704,7 +1684,7 @@ def list_search_targets():
     return {"targets": targets, "active": jst.active_target()}
 
 
-@app.post("/api/search/targets")
+@router.post("/api/search/targets")
 def add_search_target(body: SearchTargetCreate):
     """Add a search target (e.g. 'reporting analyst' / 'Nashua, NH'). Idempotent — a
     case-insensitive duplicate returns the existing row rather than adding a second."""
@@ -1716,7 +1696,7 @@ def add_search_target(body: SearchTargetCreate):
     return row
 
 
-@app.post("/api/search/targets/outcome")
+@router.post("/api/search/targets/outcome")
 def record_search_outcome(body: SearchOutcome):
     """Record the RESULT of a search run on its (query, location) target — the durable decision log
     (e.g. status='searched', outcome='human override: no good matches found, committed to searching').
@@ -1727,7 +1707,7 @@ def record_search_outcome(body: SearchOutcome):
                               outcome=body.outcome, radius_miles=body.radius_miles)
 
 
-@app.get("/api/search/cadence")
+@router.get("/api/search/cadence")
 def search_cadence_spec():
     """The bounded job-search cadence: the two task modes (extraction_sweep vs apply_triage),
     their recipes + safety bounds, and the cross-site apply-platform list. The seed of the
@@ -1736,7 +1716,7 @@ def search_cadence_spec():
     return search_cadence.cadence_spec()
 
 
-@app.get("/api/dashboards/indeed_jobs")
+@router.get("/api/dashboards/indeed_jobs")
 def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
     """The Jobs Dashboard data: headline counts + the Jobs Seen and Jobs Applied tables.
     Duplicates are surfaced explicitly (jobs with seen_count>1) so the corpus stays manageable."""
@@ -1795,7 +1775,7 @@ class FetchDescriptionsRequest(BaseModel):
     limit: int = 8
 
 
-@app.post("/api/jobs/fetch_descriptions")
+@router.post("/api/jobs/fetch_descriptions")
 async def fetch_job_descriptions(body: FetchDescriptionsRequest, db: Session = Depends(get_db)):
     """Click INTO postings to collect full job descriptions (+ salary, apply_type) — the
     richer signal that powers matching + resume tailoring. Targets specific job_ids, or the
@@ -1877,7 +1857,7 @@ def _sweep_stop(reason: str, **extra) -> dict:
     return base
 
 
-@app.post("/api/search/sweep")
+@router.post("/api/search/sweep")
 async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     """The bounded auto-sweep — the 'multi-page' Indeed task, end to end and human-paced:
     force the radius to >= min_miles by CLICKING the distance filter, then per results page extract
@@ -1994,7 +1974,7 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
             "distance_selected": dist.get("selected_miles"), "query": query, "location": location}
 
 
-@app.patch("/api/jobs/{job_id:path}")
+@router.patch("/api/jobs/{job_id:path}")
 def update_job(job_id: str, body: JobStatusUpdate, db: Session = Depends(get_db)):
     """Update a job's application status (e.g. mark 'applied' after the apply flow)."""
     row = db.get(ObservedJob, job_id)
@@ -2010,7 +1990,7 @@ def update_job(job_id: str, body: JobStatusUpdate, db: Session = Depends(get_db)
     return _job_dict(row)
 
 
-@app.post("/api/training/page-states")
+@router.post("/api/training/page-states")
 def create_page_state(body: PageStateWrite, db: Session = Depends(get_db)):
     name = (body.display_name or "").strip()
     if not name:
@@ -2051,7 +2031,7 @@ def create_page_state(body: PageStateWrite, db: Session = Depends(get_db)):
     return _page_state_dict(row)
 
 
-@app.patch("/api/training/page-states/{state_id}")
+@router.patch("/api/training/page-states/{state_id}")
 def update_page_state(state_id: str, body: PageStateUpdate, db: Session = Depends(get_db)):
     row = db.get(PageStateRegistry, state_id)
     if row is None:
@@ -2065,7 +2045,7 @@ def update_page_state(state_id: str, body: PageStateUpdate, db: Session = Depend
     return _page_state_dict(row)
 
 
-@app.delete("/api/training/page-states/{state_id}")
+@router.delete("/api/training/page-states/{state_id}")
 def archive_page_state(state_id: str, db: Session = Depends(get_db)):
     row = db.get(PageStateRegistry, state_id)
     if row is None:
@@ -2093,7 +2073,7 @@ class ActionWrite(BaseModel):
     action_id: Optional[str] = None  # optional explicit slug; else from label
 
 
-@app.get("/api/training/actions")
+@router.get("/api/training/actions")
 def list_actions(db: Session = Depends(get_db)):
     rows = db.scalars(
         select(ActionRegistry).where(ActionRegistry.status == "active")
@@ -2102,7 +2082,7 @@ def list_actions(db: Session = Depends(get_db)):
     return [_action_dict(a) for a in rows]
 
 
-@app.post("/api/training/actions")
+@router.post("/api/training/actions")
 def create_action(body: ActionWrite, db: Session = Depends(get_db)):
     label = (body.label or "").strip()
     if not label:
@@ -2130,7 +2110,7 @@ def create_action(body: ActionWrite, db: Session = Depends(get_db)):
     return _action_dict(row)
 
 
-@app.delete("/api/training/actions/{action_id}")
+@router.delete("/api/training/actions/{action_id}")
 def archive_action(action_id: str, db: Session = Depends(get_db)):
     row = db.get(ActionRegistry, action_id)
     if row is None:
@@ -2152,13 +2132,13 @@ def archive_action(action_id: str, db: Session = Depends(get_db)):
 # Accounts — configure multiple accounts per domain, in-app. Metadata only; the secret stays in
 # .env (or a stronger local backend later) and is NEVER returned by these endpoints.
 # ---------------------------------------------------------------------------
-@app.get("/api/training/sessions", response_model=list[TrainingSessionRead])
+@router.get("/api/training/sessions", response_model=list[TrainingSessionRead])
 def list_training_sessions(db: Session = Depends(get_db)):
     stmt = select(TrainingSession).order_by(TrainingSession.created_at.desc())
     return db.scalars(stmt).all()
 
 
-@app.post("/api/training/sessions", response_model=TrainingSessionRead)
+@router.post("/api/training/sessions", response_model=TrainingSessionRead)
 def create_training_session(body: TrainingSessionCreate, db: Session = Depends(get_db)):
     domain = db.get(DomainRegistry, body.domain_id)
     scenario = db.get(ScenarioRegistry, body.scenario_id)
@@ -2200,7 +2180,7 @@ def create_training_session(body: TrainingSessionCreate, db: Session = Depends(g
     return session
 
 
-@app.post("/api/training/sessions/{session_id}/start", response_model=TrainingSessionRead)
+@router.post("/api/training/sessions/{session_id}/start", response_model=TrainingSessionRead)
 def start_training_session(session_id: int, db: Session = Depends(get_db)):
     session = db.get(TrainingSession, session_id)
     if session is None:
@@ -2208,7 +2188,7 @@ def start_training_session(session_id: int, db: Session = Depends(get_db)):
     return _launch_training_chrome(db, session)
 
 
-@app.post("/api/training/sessions/{session_id}/stop", response_model=TrainingSessionRead)
+@router.post("/api/training/sessions/{session_id}/stop", response_model=TrainingSessionRead)
 def stop_training_session(session_id: int, force: bool = False, db: Session = Depends(get_db)):
     import session_manager
     session = db.get(TrainingSession, session_id)
@@ -2227,7 +2207,7 @@ def stop_training_session(session_id: int, force: bool = False, db: Session = De
     return session
 
 
-@app.delete("/api/training/sessions/{session_id}")
+@router.delete("/api/training/sessions/{session_id}")
 def delete_training_session(session_id: int, force: bool = False, db: Session = Depends(get_db)):
     """Wipe one training session and everything it owns.
 
@@ -2272,7 +2252,7 @@ def delete_training_session(session_id: int, force: bool = False, db: Session = 
     }
 
 
-@app.post("/api/training/reset")
+@router.post("/api/training/reset")
 def reset_training_data(db: Session = Depends(get_db)):
     """Clean-slate operation: wipe ALL training sessions and ALL capture artifacts.
 
@@ -2328,7 +2308,7 @@ def reset_training_data(db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/training/sessions/{session_id}/tabs")
+@router.get("/api/training/sessions/{session_id}/tabs")
 async def list_training_session_tabs(session_id: int, db: Session = Depends(get_db)):
     session = db.get(TrainingSession, session_id)
     if session is None:
@@ -2355,7 +2335,7 @@ async def list_training_session_tabs(session_id: int, db: Session = Depends(get_
         raise HTTPException(status_code=503, detail=f"Training session Chrome not reachable: {exc}")
 
 
-@app.get("/api/training/sessions/{session_id}/captures", response_model=list[TrainingCaptureRead])
+@router.get("/api/training/sessions/{session_id}/captures", response_model=list[TrainingCaptureRead])
 def list_training_session_captures(session_id: int, db: Session = Depends(get_db)):
     stmt = (
         select(TrainingCapture)
@@ -2365,14 +2345,14 @@ def list_training_session_captures(session_id: int, db: Session = Depends(get_db
     return db.scalars(stmt).all()
 
 
-@app.get("/api/runs", response_model=list[RunRead])
+@router.get("/api/runs", response_model=list[RunRead])
 def list_runs(db: Session = Depends(get_db)):
     stmt = select(Run).options(selectinload(Run.steps)).order_by(Run.id.desc())
     runs = db.scalars(stmt).all()
     return runs
 
 
-@app.post("/api/runs", response_model=RunCreateResponse)
+@router.post("/api/runs", response_model=RunCreateResponse)
 def create_run(db: Session = Depends(get_db)):
     run = Run(status="PENDING")
 
@@ -2389,7 +2369,7 @@ def create_run(db: Session = Depends(get_db)):
     return run
 
 
-@app.post("/api/workers/{worker_id}/heartbeat", response_model=WorkerHeartbeatResponse)
+@router.post("/api/workers/{worker_id}/heartbeat", response_model=WorkerHeartbeatResponse)
 def worker_heartbeat(worker_id: str, body: WorkerHeartbeatIn, db: Session = Depends(get_db)):
     worker = db.get(Worker, worker_id)
 
@@ -2405,7 +2385,7 @@ def worker_heartbeat(worker_id: str, body: WorkerHeartbeatIn, db: Session = Depe
     return worker
 
 
-@app.get("/api/workers/{worker_id}/next-step", response_model=Optional[StepLeaseResponse])
+@router.get("/api/workers/{worker_id}/next-step", response_model=Optional[StepLeaseResponse])
 def get_next_step(worker_id: str, db: Session = Depends(get_db)):
     worker = db.get(Worker, worker_id)
     if worker is None:
@@ -2452,7 +2432,7 @@ def get_next_step(worker_id: str, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/api/steps/{step_id}/result")
+@router.post("/api/steps/{step_id}/result")
 def post_step_result(step_id: int, body: StepResultIn, db: Session = Depends(get_db)):
     step = db.get(Step, step_id)
     if step is None:
@@ -2506,7 +2486,7 @@ class CaptureRequest(BaseModel):
     scenario: str = "training_capture"
 
 
-@app.get("/api/tabs")
+@router.get("/api/tabs")
 async def list_tabs():
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -2528,7 +2508,7 @@ async def list_tabs():
         return {"tabs": [], "warning": f"Chrome not reachable: {exc}"}
 
 
-@app.post("/api/capture")
+@router.post("/api/capture")
 async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
     session = db.get(TrainingSession, body.training_session_id)
     if session is None:
@@ -2620,7 +2600,7 @@ class ExecuteActionRequest(BaseModel):
     driver: Optional[str] = None          # 'direct' (default) | 'record_only' (dry-run)
 
 
-@app.post("/api/runtime/execute")
+@router.post("/api/runtime/execute")
 async def runtime_execute(body: ExecuteActionRequest, db: Session = Depends(get_db)):
     """INTERIM EXECUTOR proxy — the v2-bypass that lets us advance flows during burst
     training. Resolves the session's Chrome port and the target bbox, then proxies to the
@@ -2667,7 +2647,7 @@ async def runtime_execute(body: ExecuteActionRequest, db: Session = Depends(get_
 # Observation artifact endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/api/observations/screenshots/{filename}")
+@router.get("/api/observations/screenshots/{filename}")
 def get_observation_screenshot(filename: str):
     path = _artifacts_dir() / "observer-screenshots" / filename
     if not path.exists():
@@ -2675,7 +2655,7 @@ def get_observation_screenshot(filename: str):
     return FileResponse(str(path))
 
 
-@app.get("/api/observations/{filename}")
+@router.get("/api/observations/{filename}")
 def get_observation(filename: str, db: Session = Depends(get_db)):
     traces_dir = _artifacts_dir() / "observer-traces"
     path = traces_dir / filename
@@ -2717,7 +2697,7 @@ def get_observation(filename: str, db: Session = Depends(get_db)):
     return data
 
 
-@app.post("/api/observations/{filename}/select")
+@router.post("/api/observations/{filename}/select")
 def select_element(filename: str, element_query: str, db: Session = Depends(get_db)):
     """SELECT stage: run the inner-loop cascade (cache → Haiku SoM → escalate) to
     ground `element_query` against this capture's CDP-AX candidates. Returns the
@@ -2777,7 +2757,7 @@ def select_element(filename: str, element_query: str, db: Session = Depends(get_
     }
 
 
-@app.post("/api/observations/verify")
+@router.post("/api/observations/verify")
 def verify_action(before: str, after: str, action_id: str = "click",
                   target_backend_node_id: Optional[int] = None, expected_value: Optional[str] = None):
     """ActionVerifierV1: did the action produce the predicted change between the
@@ -2821,7 +2801,7 @@ def _observation_from_capture(filename: str):
         raise HTTPException(status_code=404, detail="Observation not found")
 
 
-@app.post("/api/runtime/run")
+@router.post("/api/runtime/run")
 def runtime_run(filename: str, task_goal: str, max_steps: int = 1):
     """Run the per-step runtime loop (classify → propose → select → act → verify)
     against a captured page, RECORD-ONLY. The default RecordOnlyActor logs the
@@ -2875,7 +2855,7 @@ class RunLiveRequest(BaseModel):
     listing_draft_id: Optional[str] = None   # create-listing runs fill form fields from this draft
 
 
-@app.post("/api/runtime/run_live")
+@router.post("/api/runtime/run_live")
 def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
     """Run the loop live: observe → select (cache/practiced → Haiku) → gate → act → verify,
     repeating until done/escalation/budget. Practiced states resolve FREE from the selection
@@ -3004,7 +2984,7 @@ def runtime_run_live(body: RunLiveRequest, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/runtime/handoffs")
+@router.get("/api/runtime/handoffs")
 def runtime_handoffs(open_only: bool = False, limit: int = 50):
     """List handoff records (newest first) — the operator's 'what needs me' queue. Each row
     carries WHY the agent stopped and WHAT it tried before giving up."""
@@ -3013,7 +2993,7 @@ def runtime_handoffs(open_only: bool = False, limit: int = 50):
     return {"handoffs": rows, "open_count": sum(1 for r in rows if r.get("status") != "resolved")}
 
 
-@app.post("/api/runtime/handoffs/{handoff_id}/resolve")
+@router.post("/api/runtime/handoffs/{handoff_id}/resolve")
 def runtime_resolve_handoff(handoff_id: str):
     """Mark a handoff resolved once the operator has unblocked/finished the step."""
     from runtime import handoff as handoff_mod
@@ -3025,7 +3005,7 @@ def runtime_resolve_handoff(handoff_id: str):
 # ---------------------------------------------------------------------------
 # Command Center — the cross-domain cockpit rollup + per-domain automation posture.
 # ---------------------------------------------------------------------------
-@app.get("/api/domains/{domain_id}/training_readiness")
+@router.get("/api/domains/{domain_id}/training_readiness")
 def domain_training_readiness(domain_id: str, db: Session = Depends(get_db)):
     """The money-saving flywheel for ONE domain: how close its cheap local models are to
     displacing the Haiku catchall. Composes the per-domain capture coverage (L3 page-state
@@ -3117,7 +3097,7 @@ def _observe_once(session: TrainingSession, tab_url: Optional[str] = None):
     return p()
 
 
-@app.get("/api/runtime/auth_status")
+@router.get("/api/runtime/auth_status")
 def runtime_auth_status(training_session_id: int, tab_url: Optional[str] = None,
                         db: Session = Depends(get_db)):
     """Domain-aware "is this session signed in?" — observes the live page and reads the
@@ -3136,7 +3116,7 @@ def runtime_auth_status(training_session_id: int, tab_url: Optional[str] = None,
 # ---------------------------------------------------------------------------
 # Facebook Marketplace — recipe + listing drafts (the create-listing inputs)
 # ---------------------------------------------------------------------------
-@app.get("/api/assets")
+@router.get("/api/assets")
 def list_assets(prefix: str = "marketplace"):
     """Available listing-photo assets (keys + thumbnail URLs) for the UI picker. Local folder now,
     cloud (S3) later — the swap lives in assets.py. Items store the returned `key`s in item.photos."""
@@ -3271,7 +3251,7 @@ def _drive_login_form(session: TrainingSession, cfg: dict, creds: tuple[str, str
         return {"ok": False, "reason": str(exc)}
 
 
-@app.get("/api/channels/{channel}/status")
+@router.get("/api/channels/{channel}/status")
 def channel_status(channel: str, account_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Cheap, honest connection status (a CDP probe — no capture). Poll this for the UI badge.
     With account_id, reports the status of THAT account's isolated session."""
@@ -3291,7 +3271,7 @@ def channel_status(channel: str, account_id: Optional[str] = None, db: Session =
             "port": session.chrome_debug_port if session else None}
 
 
-@app.post("/api/channels/{channel}/connect")
+@router.post("/api/channels/{channel}/connect")
 def channel_connect(channel: str, account_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Attach to (or heal) the channel browser and sit it on the channel home. Returns honest
     connected + authed so the UI can show real state instead of hoping. With account_id, opens
@@ -3315,7 +3295,7 @@ def channel_connect(channel: str, account_id: Optional[str] = None, db: Session 
             "session_id": session.id, "port": session.chrome_debug_port}
 
 
-@app.post("/api/channels/{channel}/login")
+@router.post("/api/channels/{channel}/login")
 def channel_login(channel: str, account_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Supervised login: ensure a healthy browser, observe, drive the login form, re-verify, and
     escalate ONLY at a real gate (captcha / 2FA / checkpoint) — never auto-solving it. The loop
@@ -3369,7 +3349,7 @@ def channel_login(channel: str, account_id: Optional[str] = None, db: Session = 
 
 
 
-@app.post("/api/runtime/run_batch")
+@router.post("/api/runtime/run_batch")
 def runtime_run_batch(only_with_sidecar: bool = True, force: bool = False, limit: int = 0):
     """Replay every stored capture through the record-only loop to FILL THE CORPORA.
 
@@ -3466,7 +3446,7 @@ def runtime_run_batch(only_with_sidecar: bool = True, force: bool = False, limit
     }
 
 
-@app.post("/api/runtime/verify_replay")
+@router.post("/api/runtime/verify_replay")
 def runtime_verify_replay(training_session_id: int, db: Session = Depends(get_db)):
     """Replay-verify a session's flow WITHOUT firing any input.
 
@@ -3616,7 +3596,7 @@ def _promotion_decision(*, confidence: Optional[float], needs_human: bool,
     return None, "low_confidence"
 
 
-@app.post("/api/training/promote_auto")
+@router.post("/api/training/promote_auto")
 def promote_auto(training_session_id: Optional[int] = None, dry_run: bool = False,
                  db: Session = Depends(get_db)):
     """Distillation promotion pass — turn verifier-confirmed Haiku picks into labels.
@@ -3758,7 +3738,7 @@ def promote_auto(training_session_id: Optional[int] = None, dry_run: bool = Fals
     }
 
 
-@app.get("/api/training/label_queue")
+@router.get("/api/training/label_queue")
 def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
                 include_labeled: bool = False, db: Session = Depends(get_db)):
     """Active-learning queue for the AX confirm/correct training space.
@@ -3867,7 +3847,7 @@ def _candidate_visible(c: dict, bound_w: float, bound_h: float, profile: str) ->
     return True
 
 
-@app.get("/api/observations/{filename}/candidate_suggestion")
+@router.get("/api/observations/{filename}/candidate_suggestion")
 def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
     """The data contract for the AX-CDP training space: the candidate set + the
     model's SUGGESTED pick (so the UI can pre-highlight it) + the current human golden
@@ -3986,7 +3966,7 @@ def candidate_suggestion(filename: str, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/training/state_graph")
+@router.get("/api/training/state_graph")
 def training_state_graph(db: Session = Depends(get_db)):
     """The agent's map of the world — nodes = page-states, edges = transitions.
 
@@ -4074,7 +4054,7 @@ def training_state_graph(db: Session = Depends(get_db)):
             "domains": sorted({n["domain"] for n in nodes})}
 
 
-@app.get("/api/training/scorecard")
+@router.get("/api/training/scorecard")
 def training_scorecard(db: Session = Depends(get_db)):
     """Corpus health + the quality gate — the 'is this data good enough to train on?'
     view. Joins three truth signals per state: the teacher's self-confidence
@@ -4215,7 +4195,7 @@ def training_scorecard(db: Session = Depends(get_db)):
     }
 
 
-@app.post("/api/select/trajectory")
+@router.post("/api/select/trajectory")
 def save_cursor_trajectory(payload: dict):
     """Persist one recorded human cursor trajectory from the Movement Playground.
     This grows the ground-truth corpus the diffusion input-model will train on."""
@@ -4225,14 +4205,14 @@ def save_cursor_trajectory(payload: dict):
     return {"saved": True, "corpus_size": n}
 
 
-@app.get("/api/select/trajectories/count")
+@router.get("/api/select/trajectories/count")
 def get_trajectory_count():
     from select_stage import telemetry
 
     return {"corpus_size": telemetry.trajectory_count()}
 
 
-@app.get("/api/select/telemetry")
+@router.get("/api/select/telemetry")
 def get_select_telemetry():
     """SELECT-stage flywheel metrics for the Lab dashboard — cache-hit rate,
     escalation rate, cost-per-task, layer/reason mix, daily trend. Aggregated
@@ -4242,7 +4222,7 @@ def get_select_telemetry():
     return {"generated_at": utcnow().isoformat(), **telemetry.summarize()}
 
 
-@app.post("/api/observations/{filename}/vision")
+@router.post("/api/observations/{filename}/vision")
 async def generate_vision_candidates(filename: str, captions: bool = False):
     """Lazily run the OmniParser proposer for ONE capture and write its sidecar.
 
@@ -4267,7 +4247,7 @@ async def generate_vision_candidates(filename: str, captions: bool = False):
         raise HTTPException(status_code=502, detail=f"Proposer failed: {exc}")
 
 
-@app.get("/api/observations")
+@router.get("/api/observations")
 def list_observations(db: Session = Depends(get_db)):
     traces_dir = _artifacts_dir() / "observer-traces"
     stmt = select(TrainingCapture).order_by(TrainingCapture.captured_at.desc())
@@ -4347,7 +4327,7 @@ def _delete_observation_files(filename: str) -> bool:
     return True
 
 
-@app.delete("/api/observations/{filename}")
+@router.delete("/api/observations/{filename}")
 def delete_observation(filename: str, db: Session = Depends(get_db)):
     capture = db.scalar(select(TrainingCapture).where(TrainingCapture.artifact_filename == filename))
     if capture is not None:
@@ -4362,7 +4342,7 @@ class BulkDeleteRequest(BaseModel):
     filenames: list[str]
 
 
-@app.post("/api/observations/bulk-delete")
+@router.post("/api/observations/bulk-delete")
 def bulk_delete_observations(body: BulkDeleteRequest, db: Session = Depends(get_db)):
     deleted = 0
     for filename in body.filenames:
@@ -4392,7 +4372,7 @@ class UpdateMetaRequest(BaseModel):
     action_text: Optional[str] = None
 
 
-@app.patch("/api/observations/{filename}")
+@router.patch("/api/observations/{filename}")
 def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session = Depends(get_db)):
     traces_dir = _artifacts_dir() / "observer-traces"
     if not (traces_dir / filename).exists():
@@ -4478,14 +4458,14 @@ def _reviewed_training_captures(db: Session):
     ).all()
 
 
-@app.post("/api/training/build-dataset")
+@router.post("/api/training/build-dataset")
 def build_training_dataset(db: Session = Depends(get_db)):
     captures = _reviewed_training_captures(db)
     manifest = build_grounding_dataset(_artifacts_dir(), captures=captures)
     return {"ok": True, **manifest}
 
 
-@app.post("/api/training/build-vision-dataset")
+@router.post("/api/training/build-vision-dataset")
 def build_vision_training_dataset(db: Session = Depends(get_db)):
     """Build a vision-grounding dataset: (screenshot, element_query) → bbox pairs."""
     captures = _reviewed_training_captures(db)
@@ -4493,7 +4473,7 @@ def build_vision_training_dataset(db: Session = Depends(get_db)):
     return {"ok": True, **manifest}
 
 
-@app.post("/api/training/train")
+@router.post("/api/training/train")
 def train_grounding(body: TrainRequest, db: Session = Depends(get_db)):
     captures = _reviewed_training_captures(db)
     manifest = build_grounding_dataset(_artifacts_dir(), captures=captures) if body.rebuild_dataset else None
@@ -4503,13 +4483,13 @@ def train_grounding(body: TrainRequest, db: Session = Depends(get_db)):
     return result
 
 
-@app.get("/api/training/target-comparison")
+@router.get("/api/training/target-comparison")
 def training_target_comparison(db: Session = Depends(get_db)):
     captures = _reviewed_training_captures(db)
     return compare_training_targets(_artifacts_dir(), captures=captures)
 
 
-@app.post("/api/training/train_stage_observer")
+@router.post("/api/training/train_stage_observer")
 def train_stage_observer_endpoint(db: Session = Depends(get_db)):
     """Train the coarse page-state observer (L3 v0): a cheap 3-way auth-stage classifier
     (authenticated/unauthenticated/neutral) over URL+AX features. Labels come from each
@@ -4531,7 +4511,7 @@ def train_stage_observer_endpoint(db: Session = Depends(get_db)):
     return result
 
 
-@app.post("/api/training/train_state_transition")
+@router.post("/api/training/train_state_transition")
 def train_state_transition_endpoint(db: Session = Depends(get_db)):
     """Train the state-transition model (the planner's look-ahead edge-model): given
     (from_state, action) predict to_state. Built from captures with BOTH observed_page_state
@@ -4579,7 +4559,7 @@ def _candidate_states_for(db: Session, *, domain_id: Optional[str], goal_id: Opt
             for s in states if relevant(s)]
 
 
-@app.post("/api/training/suggest_page_state")
+@router.post("/api/training/suggest_page_state")
 def suggest_page_state(filename: str, write: bool = True, db: Session = Depends(get_db)):
     """Haiku page-state TEACHER for one capture: classify which known state the screenshot
     shows, growing the observed_page_state corpus that L3 + the transition model distill from.
@@ -4682,12 +4662,12 @@ def _model_read(db: Session, row: ModelRegistry) -> ModelRead:
     )
 
 
-@app.get("/api/models", response_model=list[ModelRead])
+@router.get("/api/models", response_model=list[ModelRead])
 def list_registered_models(db: Session = Depends(get_db)):
     return [_model_read(db, row) for row in model_registry.list_models(db)]
 
 
-@app.post("/api/models/seed")
+@router.post("/api/models/seed")
 def seed_v0_florence_baseline(db: Session = Depends(get_db)):
     """Idempotent: register both zero-shot Florence-2 baselines if missing.
 
@@ -4737,12 +4717,12 @@ def seed_v0_florence_baseline(db: Session = Depends(get_db)):
     return rows
 
 
-@app.get("/api/models/eval-runs", response_model=list[ModelEvalRunRead])
+@router.get("/api/models/eval-runs", response_model=list[ModelEvalRunRead])
 def list_recent_eval_runs(model_id: Optional[str] = None, limit: int = 50, db: Session = Depends(get_db)):
     return model_registry.recent_eval_runs(db, model_id=model_id, limit=limit)
 
 
-@app.get("/api/models/eval-runs/{run_id}", response_model=ModelEvalRunDetail)
+@router.get("/api/models/eval-runs/{run_id}", response_model=ModelEvalRunDetail)
 def get_eval_run_detail(run_id: str, db: Session = Depends(get_db)):
     run = db.get(ModelEvalRun, run_id)
     if run is None:
@@ -4763,7 +4743,7 @@ def get_eval_run_detail(run_id: str, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/api/models/{model_id}")
+@router.get("/api/models/{model_id}")
 def get_model_detail(model_id: str, db: Session = Depends(get_db)):
     row = model_registry.get_model(db, model_id)
     if row is None:
@@ -4775,7 +4755,7 @@ def get_model_detail(model_id: str, db: Session = Depends(get_db)):
     }
 
 
-@app.delete("/api/models/eval-runs/{run_id}")
+@router.delete("/api/models/eval-runs/{run_id}")
 def delete_eval_run(run_id: str, db: Session = Depends(get_db)):
     """Remove an eval run (DB row + on-disk artifact dir). Useful for cleaning up
     accidental re-runs while iterating."""
@@ -4812,7 +4792,7 @@ def _spawn_eval_thread(run_id: str) -> None:
     t.start()
 
 
-@app.post("/api/models/{model_id}/eval", response_model=ModelEvalRunRead)
+@router.post("/api/models/{model_id}/eval", response_model=ModelEvalRunRead)
 def run_model_eval(model_id: str, db: Session = Depends(get_db)):
     """Schedule an eval run in a background thread and return the row immediately.
 
@@ -4831,7 +4811,7 @@ def run_model_eval(model_id: str, db: Session = Depends(get_db)):
     return run
 
 
-@app.get("/api/models/eval-runs/{run_id}/log")
+@router.get("/api/models/eval-runs/{run_id}/log")
 def read_eval_run_log(run_id: str, tail: int = 200, db: Session = Depends(get_db)):
     """Return the tail of the run's run.log file.
 
@@ -4862,7 +4842,7 @@ def read_eval_run_log(run_id: str, tail: int = 200, db: Session = Depends(get_db
     }
 
 
-@app.post("/api/models/eval-runs/{run_id}/cancel", response_model=ModelEvalRunRead)
+@router.post("/api/models/eval-runs/{run_id}/cancel", response_model=ModelEvalRunRead)
 def cancel_eval_run(run_id: str, db: Session = Depends(get_db)):
     """Request a clean cancel. The background runner checks this flag between
     captures and exits with status=cancelled after the next checkpoint."""
@@ -4872,7 +4852,7 @@ def cancel_eval_run(run_id: str, db: Session = Depends(get_db)):
     return run
 
 
-@app.post("/api/models/eval-runs/{run_id}/resume", response_model=ModelEvalRunRead)
+@router.post("/api/models/eval-runs/{run_id}/resume", response_model=ModelEvalRunRead)
 def resume_eval_run(run_id: str, db: Session = Depends(get_db)):
     """Start a NEW run that picks up the prior run's predictions.jsonl and only
     processes captures that weren't completed. The original run row is left
@@ -4888,3 +4868,38 @@ def resume_eval_run(run_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(exc))
     _spawn_eval_thread(new_run.id)
     return new_run
+
+
+# ---------------------------------------------------------------------------
+# Application factory (docs/TARGET_ARCHITECTURE.md Layer 2). Assemble the control
+# plane from its routers + bootstrap. The remaining inline routes live on the
+# module-level `router`; as domains are extracted they move to routers/*.py and
+# the `router` include shrinks toward the goal shape: factory + routers, no route
+# logic left in main.py.
+# ---------------------------------------------------------------------------
+def create_app() -> FastAPI:
+    app = FastAPI(title="Control Plane API", version="0.0.1")
+    app.add_middleware(
+        CORSMiddleware,
+        # Any localhost port — the Vite dev server (5173) plus preview/test servers on other ports.
+        allow_origin_regex=r"http://localhost:\d+",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    _assets.ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
+    app.mount("/assets", StaticFiles(directory=str(_assets.ASSETS_ROOT)), name="assets")
+
+    app.include_router(router)  # core routes not yet extracted into a domain module
+    app.include_router(accounts_router.router)
+    app.include_router(application_answers_router.router)
+    app.include_router(facebook_router.router)
+    app.include_router(inventory_router.router)
+    app.include_router(sessions_router.router)
+    app.include_router(workspace_router.router)
+
+    app.on_event("startup")(on_startup)  # same hook as before, registered by the factory
+    return app
+
+
+app = create_app()
