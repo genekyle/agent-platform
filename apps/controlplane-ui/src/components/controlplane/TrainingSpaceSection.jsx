@@ -221,6 +221,22 @@ export function TrainingSpaceSection() {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }, [item, busy, advance, fromState]);
 
+  // Delete a BAD capture — e.g. a coarse multi-action jump that skipped steps (the classic
+  // "sign-in page → inbox" that really did type-email → Next → type-password → sign-in). There's
+  // no clean single-action transition to label, so it shouldn't train anything. Hard-deletes the
+  // row + artifacts, then advances. Confirmed because it's irreversible.
+  const deleteCapture = useCallback(async () => {
+    if (!item || busy) return;
+    if (!window.confirm("Delete this capture permanently? It won't be used in training.")) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/observations/${encodeURIComponent(item.filename)}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+      showFlash("Deleted", C.red);
+      advance();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }, [item, busy, advance]);
+
   useEffect(() => {
     const onKey = (e) => {
       if (!item || ["SELECT", "INPUT", "TEXTAREA"].includes(e.target.tagName) || e.target.isContentEditable) return;
@@ -402,6 +418,7 @@ export function TrainingSpaceSection() {
           <button className="ghost-btn" onClick={markDone} disabled={busy} title="Task already complete here (e.g. logged-in home) — record as a terminal state, no pick needed">Done <Kbd>D</Kbd></button>
           <button className="ghost-btn" onClick={markNone} disabled={busy} title="No candidate is correct / AX-blind → flag for the vision layer">None <Kbd>N</Kbd></button>
           <button className="ghost-btn" onClick={advance} disabled={busy}>Skip <Kbd>→</Kbd></button>
+          <button className="ghost-btn" onClick={deleteCapture} disabled={busy} title="Delete a BAD capture (e.g. a coarse jump that skipped actions) so it never trains anything — permanent" style={{ color: C.red, borderColor: C.red }}>🗑 Delete</button>
         </div>
 
         {/* stepped state picker — Current state → Expected next, organized folder/search
