@@ -66,6 +66,7 @@ from schemas import (
     WorkerHeartbeatResponse,
 )
 from settings import settings
+from deps import _artifacts_dir, _session_browser_url, utcnow
 from training import (
     build_grounding_dataset,
     build_vision_dataset,
@@ -93,10 +94,6 @@ import assets as _assets  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 _assets.ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/assets", StaticFiles(directory=str(_assets.ASSETS_ROOT)), name="assets")
-
-
-def utcnow():
-    return datetime.now(timezone.utc)
 
 
 REGISTRY_SEED = {
@@ -584,12 +581,6 @@ def _stop_training_chrome(session: TrainingSession) -> None:
         os.kill(session.chrome_process_pid, 15)
     except ProcessLookupError:
         pass
-
-
-def _session_browser_url(session: TrainingSession) -> str:
-    if not session.chrome_debug_port:
-        raise HTTPException(status_code=400, detail="Training session Chrome port is not configured")
-    return f"http://127.0.0.1:{session.chrome_debug_port}"
 
 
 def _training_annotation_from_capture(capture: TrainingCapture) -> dict:
@@ -3246,10 +3237,6 @@ async def runtime_execute(body: ExecuteActionRequest, db: Session = Depends(get_
 # ---------------------------------------------------------------------------
 # Observation artifact endpoints
 # ---------------------------------------------------------------------------
-
-def _artifacts_dir() -> Path:
-    return Path(settings.observer_artifacts_dir)
-
 
 @app.get("/api/observations/screenshots/{filename}")
 def get_observation_screenshot(filename: str):
