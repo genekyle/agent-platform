@@ -54,3 +54,32 @@ def test_extraction_sweep_documents_distance_cardwalk_pagination():
     assert "pagination" in steps         # page forward by clicking
     # and it explicitly refuses sub-floor results
     assert any("min_radius_miles" in d for d in sc.CADENCE_MODES["extraction_sweep"]["does_not"])
+
+
+def test_submitted_outcome_catches_common_success_phrasings():
+    # "...was submitted" was the gap: the regex only allowed "submitted" or
+    # "has been submitted", so the very common past-tense confirmation slipped
+    # through as 'unknown'. All of these are success confirmations.
+    for text in (
+        "Your application was submitted",
+        "Application was submitted",
+        "Your application has been submitted",
+        "Application successfully submitted",
+        "Application submitted",
+        "Your application was sent",
+        "Thanks for applying",
+        "Application received",
+        "You successfully applied",
+    ):
+        result = sc.classify_apply_outcome(text)
+        assert result["outcome"] == "submitted", f"{text!r} -> {result}"
+        assert result["human_required"] is False
+
+
+def test_submitted_regex_does_not_swallow_blocker_branches():
+    # The broadened 'submitted' pattern must not false-positive on the
+    # ats_unavailable / account_creation pages, which never contain "submitted".
+    ats = sc.classify_apply_outcome("The page you are looking for doesn't exist")
+    assert ats["outcome"] == "ats_unavailable"
+    acct = sc.classify_apply_outcome("Create an account to continue")
+    assert acct["outcome"] == "account_creation"
