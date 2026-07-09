@@ -24,6 +24,51 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-09 — Training-UI flywheel overhaul + teacher-auto-labeling proven live + Indeed pre-auth setup
+
+**Training UI was the flywheel's hidden blocker; now surfaced (4 commits `6d6478d`..`8fe4759`).**
+The good **queue labeler already existed but was buried in Lab** (`TrainingSpaceSection`), while the
+Training section routed you through a 6-level Dataset Browser dig. Fixes: (#1) Command Center
+`🏷️ To label` KPI + per-domain backlog rows, fed by `command_center.build_summary`'s new `flywheel`
+block + per-tile `training`; (#2) the "To label" tile is one-click into the queue labeler
+(`openLabeler`); (#4) promoted the queue labeler to **Training → 🏷️ Label** (first in nav), demoted the
+nested path to "Inspect capture", Dataset Browser to "browse+curate"; (#3) `label_queue?domain=` filter
++ Domain pills in the labeler. Also added a **🗑 Delete** action (DELETE `/api/observations/{fn}`) for
+coarse/bad captures, and gmail `email_entered`/`password_entered` substates.
+
+**The action model (the mental unblock).** The system is `(before_state) → [act on ONE element] →
+(after_state)`. A label yields TWO signals from one golden pick: SELECT (which element → AX-CDP selector)
++ TRANSITION (post_action_state → planner). A capture is bad when driving was too COARSE and skipped
+actions (the classic "sign-in page → inbox" that really did type-email→Next→type-password→Sign-in). No
+clean single-action transition → **delete it**. The real cure is **capture PER-ACTION when driving**.
+
+**Teacher-auto-labeling — PROVEN LIVE.** Claude drives → captures a clean state → labels it ITSELF,
+zero human. Mechanism: `POST /api/capture {training_session_id, tab_id}` → `PATCH
+/api/observations/{fn} {training_annotation:{positive_candidate_id, review_status:"reviewed"},
+observed_page_state, post_action_state}`. Because Claude knows what the screen IS + which element it
+would act on + where it leads, the labels come free. (label_source becomes "human" = teacher-trust;
+no separate "teacher" tier yet — a possible refinement.)
+
+**Indeed pre-auth login setup (in progress).** The persistent `indeed` profile had **no cookies** →
+that's why fresh Indeed sessions hit Google's wall (only `facebook`/`business_chrome_profile` were
+pre-authed). Persistent profiles live at `/tmp/agent-platform-training-chrome/persistent/<name>` (NOT
+reboot-durable — move out of /tmp is a follow-up). Setup = create a session bound to the `indeed_default`
+account (→ `persistent_profile=indeed`) + start it (launches Chrome `--user-data-dir=.../indeed`) + do a
+**supervised login ONCE** (human clears Google/2FA/code; Claude never auto-solves auth) → profile
+persists. That one supervised login IS the per-action login-capture opportunity.
+
+**KEY (2026-07-09, user): Indeed FORCES Google login when the email is already a Google account** — the
+email-code fallback won't apply; it redirects to Google SSO. The **human does the Google login** (safe:
+human clicks, no automation-flagging). Cross-domain auth (Google login for Indeed, Gmail code as an
+errand) is a candidate for an explicit **errand section/flow** — see
+[[project_planner_and_cross_domain]].
+
+**Live handoff at compaction:** session **#16** (indeed_jobs, account indeed_default, persistent
+`indeed`) is ACTIVE, Chrome on **:9322**, tab was on `secure.indeed.com/auth`. Already captured +
+teacher-labeled the entry state (`indeed_login_email` → golden=Email field `cdp-ax-1170c306b0` →
+`email_sso_or_code_choice`). Next: user completes the (Google) login; capture + teacher-label each
+subsequent state; then the profile is pre-authed for all future Indeed drives.
+
 ## 2026-07-09 — Training works today; the grounding/vision datasets were BLIND to AX-sidecar golden labels
 
 **What we believed.** That the flywheel was blocked by the backend / concurrency / missing trainers,
