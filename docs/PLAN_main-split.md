@@ -7,14 +7,18 @@ workflow. Both came out of the "why can't we commit cleanly" review — see `LEA
 - ✅ Infra: `deps.py` (shared helpers: `utcnow`, `_artifacts_dir`, `_session_browser_url`,
   `_slugify`, `get_db`) + `routers/` package + `test_route_inventory.py` guardrail (149 routes).
 - ✅ `routers/facebook.py` (4) · `application_answers.py` (5) · `accounts.py` (7) · `inventory.py` (19) ·
-  `workspace.py` (3: command-center summary + domain settings).
-- 📉 `main.py`: 5,742 → **5,254** lines; **38 of 149 routes moved**. Suite + guardrail green each step.
-- ⏭ **Resume here** — next-easiest (still low-coupling): `channels`, `sessions` (move `ProtectBody`
-  too), `search`+`jobs`. Then the coupled tiers (`observations`/`capture`, `runtime`, `models`,
-  `training`) — each needs its shared helpers (`_launch_training_chrome`, `_stop_training_chrome`,
-  `_delete_observation_files`, `_capture_metadata_from_artifact`, `read_meta`/`write_meta`, …) moved to
-  `deps.py` first. `domain_training_readiness` stays in main until `training_coverage` becomes a service
-  (it's a handler calling another handler — a Layer-3 smell; see `docs/TARGET_ARCHITECTURE.md`).
+  `workspace.py` (3) · `sessions.py` (2). **Clean isolated-domain tier COMPLETE (6 routers, 40 routes).**
+- ✅ Layer 2 started: `migrations.py` (`migrate_schema`, the ~60 additive column migrations) out of main.
+- 📉 `main.py`: 5,742 → **5,134** lines; 40 routes + migrations moved. Suite + guardrail green each step.
+- ⏭ **Resume here** — two tracks:
+  - **Layer 2 (clean, self-contained):** move `REGISTRY_SEED` + `seed_training_registry` → `seed.py`;
+    then `create_app()` factory. Big line reduction, low risk.
+  - **Coupled router tiers (need a helper-cluster move first):** `channels` pulls a ~10-helper
+    channel-browser subsystem (`_channel_profile`, `_drive_login_form`, `_observe_once`, `_authenticated`,
+    `_ensure_channel_browser`, `_blocking_challenge`, …) — extract that cluster to a module (or expand
+    `channel_browser.py`) FIRST, then the 3 routes fall out clean. Same shape for `search`/`sweep`,
+    `runtime`, `capture`, `training`. `domain_training_readiness` stays until `training_coverage`
+    becomes a service (handler-calling-handler — a Layer-3 smell; see `docs/TARGET_ARCHITECTURE.md`).
 - **Pattern per router:** create `routers/<domain>.py` (`router = APIRouter()`, bodies verbatim,
   `@app.` → `@router.`); move any route-local helper/model with it; move a *shared* helper to
   `deps.py` and import it back into main; delete the block from main; add the import + `include_router`
