@@ -24,6 +24,28 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-08 — Concurrent sessions in one working tree clobber each other via broad commits
+
+**What happened.** While one session did the faucet work, a *second* Claude session working in the
+**same** `main` working tree ran a broad `git add -A` / `commit -am` and swept the first session's
+in-progress `main_server.py` edit into a commit titled "executor file-upload" (`a57a180`). Work wasn't
+lost, but the history lies and the diff is unreviewable. This — plus a 5,742-line `main.py` everyone
+edits — is the real reason "we can't commit cleanly."
+
+**The norms now (see `CLAUDE.md` + `docs/PLAN_main-split.md`).** Stage **explicit paths**, never
+`git add -A`/`commit -am` for a scoped change; `git status` before committing and confirm you own every
+staged path; and if running sessions **concurrently**, give each its own **git worktree** on a
+short-lived branch (ephemeral ≠ the long-lived feature branches this repo avoids).
+
+**Fresh-start cleanup done same day.** Deleted 3 merged branches; env-gated SQLAlchemy `echo` (was
+hardcoded `True`, flooding a 25 MB dev log — `settings.sql_echo`, default off); regenerated the two
+stale `apps/mcp` golden observer fixtures (they lacked the now-always-emitted
+`acquisition.training_metadata` — the *only* drift, not a regression) so the suite is green again;
+adopted an orphaned passing `classify_apply_outcome` test; pruned dead `.gitignore` worktree lines.
+**Planned, not done:** split `main.py` into `routers/` (see `docs/PLAN_main-split.md`).
+
+---
+
 ## 2026-07-08 — The AX "data faucet" is already open; "3/175" is history, not a gate
 
 **What we believed.** That AX-sidecar emission was *gated* — conditional on a request field (an

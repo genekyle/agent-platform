@@ -25,6 +25,18 @@ every correction becomes training data for local models that take work off the e
 - **Resource-efficiency is a hard constraint** (solo founder; $5/week autonomous spend cap enforced).
 - **Solo dev: commit directly to `main`, no feature branches**, unless told otherwise.
 
+## Working alongside other sessions
+
+One active session on `main` at a time is fine. But multiple sessions have shared this one working
+tree and clobbered each other via broad `git add -A` / `commit -am` (a scoped edit got swept into an
+unrelated commit — 2026-07-08). So:
+- **Stage explicit paths, never `git add -A` / `commit -am`** for a scoped change.
+- **`git status` before committing — confirm you own every staged path.** A file you didn't touch
+  means another session staged it; unstage it.
+- **Running sessions concurrently? Isolate each in its own git worktree** (`.claude/worktrees/`) on a
+  short-lived per-session branch, fast-forward-merge to `main` when done. (Ephemeral ≠ the long-lived
+  feature branches we avoid.) See `docs/PLAN_main-split.md` Part 2.
+
 ## Layout
 
 `apps/controlplane-api/` — FastAPI control plane (recipes, runtime loop, training, DB models).
