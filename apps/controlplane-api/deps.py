@@ -5,6 +5,7 @@ import shared helpers WITHOUT importing main. main includes the routers, so a ro
 importing from main would be a circular import; importing from here is not. Everything
 in this module is deliberately low-dependency (no imports from main or routers).
 """
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,11 +15,16 @@ from db import get_db  # re-exported so routers can do `from deps import get_db`
 from models import TrainingSession
 from settings import settings
 
-__all__ = ["get_db", "utcnow", "_artifacts_dir", "_session_browser_url"]
+__all__ = ["get_db", "utcnow", "_artifacts_dir", "_session_browser_url", "_slugify"]
 
 
 def utcnow():
     return datetime.now(timezone.utc)
+
+
+def _slugify(value: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return s.strip("_")
 
 
 def _artifacts_dir() -> Path:
