@@ -5,6 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://agent:agent@localhost:5432/agentos"
+    # Log every SQL statement (SQLAlchemy engine echo). OFF by default — echo=True floods
+    # the dev log (was 25MB) and drowns real signal (WARNINGs, escalations). Set SQL_ECHO=true
+    # in .env for a debugging session that needs to see queries.
+    sql_echo: bool = False
     observer_artifacts_dir: str = "../mcp/output"
     # Local asset store (listing photos). Stub for eventual cloud (S3) storage; empty → repo-root
     # /assets. See assets.py + assets/README.md.

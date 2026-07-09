@@ -108,6 +108,15 @@
         "status": "success",
         "tool": "take_screenshot"
       }
+    },
+    "training_metadata": {
+      "url": "https://developers.openai.com/codex/cli",
+      "title": "CLI - Codex | OpenAI Developers",
+      "viewport_width": null,
+      "viewport_height": null,
+      "device_scale_factor": null,
+      "scroll_x": null,
+      "scroll_y": null
     }
   },
   "pipeline": {
