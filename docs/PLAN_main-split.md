@@ -6,13 +6,15 @@ workflow. Both came out of the "why can't we commit cleanly" review — see `LEA
 ### Progress
 - ✅ Infra: `deps.py` (shared helpers: `utcnow`, `_artifacts_dir`, `_session_browser_url`,
   `_slugify`, `get_db`) + `routers/` package + `test_route_inventory.py` guardrail (149 routes).
-- ✅ `routers/facebook.py` (4 routes) · `routers/application_answers.py` (5) · `routers/accounts.py` (7).
-- 📉 `main.py`: 5,742 → **5,472** lines; 16 of 149 routes moved. Suite + guardrail green each step.
+- ✅ `routers/facebook.py` (4) · `application_answers.py` (5) · `accounts.py` (7) · `inventory.py` (19) ·
+  `workspace.py` (3: command-center summary + domain settings).
+- 📉 `main.py`: 5,742 → **5,254** lines; **38 of 149 routes moved**. Suite + guardrail green each step.
 - ⏭ **Resume here** — next-easiest (still low-coupling): `channels`, `sessions` (move `ProtectBody`
-  too), `domains`/`command-center`, `search`+`jobs`, `inventory`. Then the coupled tiers
-  (`observations`/`capture`, `runtime`, `models`, `training`) — each needs its shared helpers
-  (`_launch_training_chrome`, `_stop_training_chrome`, `_delete_observation_files`,
-  `_capture_metadata_from_artifact`, `read_meta`/`write_meta`, …) moved to `deps.py` first.
+  too), `search`+`jobs`. Then the coupled tiers (`observations`/`capture`, `runtime`, `models`,
+  `training`) — each needs its shared helpers (`_launch_training_chrome`, `_stop_training_chrome`,
+  `_delete_observation_files`, `_capture_metadata_from_artifact`, `read_meta`/`write_meta`, …) moved to
+  `deps.py` first. `domain_training_readiness` stays in main until `training_coverage` becomes a service
+  (it's a handler calling another handler — a Layer-3 smell; see `docs/TARGET_ARCHITECTURE.md`).
 - **Pattern per router:** create `routers/<domain>.py` (`router = APIRouter()`, bodies verbatim,
   `@app.` → `@router.`); move any route-local helper/model with it; move a *shared* helper to
   `deps.py` and import it back into main; delete the block from main; add the import + `include_router`
