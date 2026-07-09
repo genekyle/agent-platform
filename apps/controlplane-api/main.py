@@ -3783,6 +3783,7 @@ def promote_auto(training_session_id: Optional[int] = None, dry_run: bool = Fals
 
 @router.get("/api/training/label_queue")
 def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
+                domain: Optional[str] = None,
                 include_labeled: bool = False, db: Session = Depends(get_db)):
     """Active-learning queue for the AX confirm/correct training space.
 
@@ -3812,6 +3813,8 @@ def label_queue(limit: int = 60, training_session_id: Optional[int] = None,
     stmt = select(TrainingCapture)
     if training_session_id is not None:
         stmt = stmt.where(TrainingCapture.training_session_id == training_session_id)
+    if domain:
+        stmt = stmt.where(TrainingCapture.domain_id == domain)  # per-domain labeling (#3)
     stmt = stmt.order_by(TrainingCapture.captured_at.desc())
     captures = db.scalars(stmt).all()
 

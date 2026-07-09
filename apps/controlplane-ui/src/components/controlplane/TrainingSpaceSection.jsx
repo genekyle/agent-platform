@@ -30,6 +30,7 @@ const contains = (o, i) => !!o && !!i &&
  */
 export function TrainingSpaceSection() {
   const [queue, setQueue] = useState(null);
+  const [domainFilter, setDomainFilter] = useState(""); // "" = all domains (#3 per-domain labeling)
   const [idx, setIdx] = useState(0);
   const [item, setItem] = useState(null);
   const [goldenId, setGoldenId] = useState(null);
@@ -81,11 +82,12 @@ export function TrainingSpaceSection() {
   const loadQueue = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`${API}/api/training/label_queue?limit=80`);
+      const dq = domainFilter ? `&domain=${encodeURIComponent(domainFilter)}` : "";
+      const r = await fetch(`${API}/api/training/label_queue?limit=80${dq}`);
       if (!r.ok) throw new Error(`Queue failed: ${r.status}`);
       setQueue(await r.json()); setIdx(0);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
-  }, []);
+  }, [domainFilter]);
   useEffect(() => { loadQueue(); }, [loadQueue]);
 
   // registry for the picker's folder labels (domains + goals)
@@ -272,6 +274,19 @@ export function TrainingSpaceSection() {
           {agreePct !== null ? <Stat value={`${agreePct}%`} label="agreement" color={C.blue} /> : null}
           <button className="ghost-btn small-btn" onClick={loadQueue} disabled={loading} title="Reload queue">↻</button>
         </div>
+      </div>
+
+      {/* per-domain scope (#3 per-domain training) */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: C.muted }}>Domain</span>
+        {[{ id: "", label: "All" }, { id: "facebook_marketplace", label: "Facebook" }, { id: "indeed", label: "Indeed" }].map((d) => (
+          <button
+            key={d.id || "all"}
+            className="ghost-btn small-btn"
+            onClick={() => setDomainFilter(d.id)}
+            style={domainFilter === d.id ? { background: C.blue, color: "#fff", borderColor: C.blue } : undefined}
+          >{d.label}</button>
+        ))}
       </div>
 
       {/* progress */}
