@@ -198,9 +198,9 @@ export default function App() {
   // exists — it just lives under Lab → training-space; surface it instead of the nested
   // Dataset Browser dig. (#2 training-UI overhaul.)
   const openLabeler = useCallback(() => {
-    setActivePrimaryView("lab");
+    setActivePrimaryView("training");
     setSidebarLevel("secondary");
-    setActiveSecondaryViewByPrimary((current) => ({ ...current, lab: "training-space" }));
+    setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "label" }));
   }, []);
 
   const goHome = useCallback(() => {
@@ -1007,6 +1007,9 @@ export default function App() {
     sectionContent = <ApiUsageSection usage={usage} loadUsage={loadUsage} />;
   } else if (activePrimaryView === "system") {
     sectionContent = <SystemSection section={activeSectionId} systemStatus={systemStatus} loadSystemStatus={loadSystemStatus} />;
+  } else if (activePrimaryView === "training" && activeSectionId === "label") {
+    // The queue labeler (the crank), promoted out of Lab to be Training's primary surface.
+    sectionContent = <TrainingSpaceSection />;
   } else if (activePrimaryView === "training" && activeSectionId === "coverage") {
     sectionContent = <CoverageSection session={selectedTrainingSession} />;
   } else if (activePrimaryView === "training" && activeSectionId === "page-states") {

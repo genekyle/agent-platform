@@ -20,8 +20,20 @@ export const CONTROL_PLANE_NAV = {
   training: {
     label: "Training",
     title: "Training",
-    subtitle: "Structured training sessions, capture, review, registry, and model-prep.",
+    subtitle: "The flywheel: collect → label → train. Label is the crank.",
     sections: [
+      // Organized around the loop, most-used first. Label (the queue crank) leads — it used to be
+      // buried in Lab while the Dataset Browser dig masqueraded as the labeler.
+      {
+        id: "label",
+        label: "🏷️ Label",
+        subtitle: "The queue crank: confirm/correct the model's pick, Save, auto-advance to the next.",
+      },
+      {
+        id: "coverage",
+        label: "Coverage",
+        subtitle: "Per-page-state capture coverage — drive to the gaps.",
+      },
       {
         id: "session-setup",
         label: "Session Setup",
@@ -33,24 +45,19 @@ export const CONTROL_PLANE_NAV = {
         subtitle: "Capture only from the active training session Chrome instance.",
       },
       {
-        id: "coverage",
-        label: "Coverage",
-        subtitle: "Per-page-state capture coverage for the active session — drive to the gaps.",
-      },
-      {
         id: "dataset-browser",
         label: "Dataset Browser",
-        subtitle: "Browse captured artifacts, curate metadata, and select records for review.",
+        subtitle: "Browse + curate captured artifacts (metadata, status). For labeling, use Label.",
+      },
+      {
+        id: "review-label",
+        label: "Inspect capture",
+        subtitle: "Deep-dive one selected artifact: screenshot, proposals, and candidate set.",
       },
       {
         id: "page-states",
         label: "Page States",
         subtitle: "Organize the state taxonomy: global, per-domain, and per-scenario states by category.",
-      },
-      {
-        id: "review-label",
-        label: "Review / Label",
-        subtitle: "Inspect the screenshot, proposals, and candidate set for one selected artifact.",
       },
       {
         id: "export-model-prep",
