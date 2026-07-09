@@ -8,11 +8,14 @@ workflow. Both came out of the "why can't we commit cleanly" review — see `LEA
   `_slugify`, `get_db`) + `routers/` package + `test_route_inventory.py` guardrail (149 routes).
 - ✅ `routers/facebook.py` (4) · `application_answers.py` (5) · `accounts.py` (7) · `inventory.py` (19) ·
   `workspace.py` (3) · `sessions.py` (2). **Clean isolated-domain tier COMPLETE (6 routers, 40 routes).**
-- ✅ Layer 2 started: `migrations.py` (`migrate_schema`, the ~60 additive column migrations) out of main.
-- 📉 `main.py`: 5,742 → **5,134** lines; 40 routes + migrations moved. Suite + guardrail green each step.
+- ✅ Layer 2: `migrations.py` (`migrate_schema`) + `seed.py` (`REGISTRY_SEED` + 7 seed/backfill
+  functions) out of main. Startup hook calls them via import; verified running against the real DB.
+- 📉 `main.py`: 5,742 → **4,890** lines (−852, ~15%); 40 routes + migrations + seed moved. Green each step.
 - ⏭ **Resume here** — two tracks:
-  - **Layer 2 (clean, self-contained):** move `REGISTRY_SEED` + `seed_training_registry` → `seed.py`;
-    then `create_app()` factory. Big line reduction, low risk.
+  - **Layer 2 finish (clean, self-contained):** `create_app()` factory — wrap app creation + middleware +
+    mounts + `include_router` + the startup hook into a function; keep module-level `app = create_app()`
+    so `main.app` (and TestClient) still resolve. `backfill_label_sources` + `_mark_zombie_eval_runs`
+    can move to `seed.py` too. Then main.py is near the <300-line target.
   - **Coupled router tiers (need a helper-cluster move first):** `channels` pulls a ~10-helper
     channel-browser subsystem (`_channel_profile`, `_drive_login_form`, `_observe_once`, `_authenticated`,
     `_ensure_channel_browser`, `_blocking_challenge`, …) — extract that cluster to a module (or expand

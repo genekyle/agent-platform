@@ -1,0 +1,274 @@
+"""Registry seed data + idempotent bootstrap seeders/backfills.
+
+Extracted from main.py (bootstrap layer — docs/TARGET_ARCHITECTURE.md Layer 2). REGISTRY_SEED is
+the initial domains/goals/tasks/scenarios; the seed_* functions populate an empty registry, the
+backfill_* functions top up rows added after an earlier seed. All idempotent; main.py calls them
+from the startup hook. Self-contained: models + select + _slugify, no route/app imports.
+"""
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from deps import _slugify
+from models import (
+    ActionRegistry,
+    ApplicationAnswer,
+    DomainRegistry,
+    GoalRegistry,
+    PageStateRegistry,
+    ScenarioRegistry,
+    TaskRegistry,
+    TrainingCapture,
+)
+
+
+REGISTRY_SEED = {
+    "domains": [
+        {
+            "domain_id": "facebook_marketplace",
+            "display_name": "Facebook Marketplace",
+            "host_patterns": ["facebook.com", "www.facebook.com"],
+            "page_states": [
+                {"page_state_id": "listing_feed", "display_name": "Listing Feed"},
+                {"page_state_id": "buyer_inbox", "display_name": "Buyer Inbox"},
+                {"page_state_id": "login_wall", "display_name": "Login Wall"},
+            ],
+            "capture_defaults": {"profile": "viewport", "shot_types": ["viewport", "fullpage"]},
+            "validation_expectations": [{"kind": "host_match", "value": "facebook.com"}],
+            "config_version": "v1",
+        },
+        {
+            "domain_id": "indeed_jobs",
+            "display_name": "Indeed Jobs",
+            "host_patterns": ["indeed.com", "www.indeed.com"],
+            "page_states": [
+                {"page_state_id": "search_results", "display_name": "Search Results"},
+                {"page_state_id": "company_page", "display_name": "Company Page"},
+                {"page_state_id": "email_alert", "display_name": "Email Alert"},
+                {"page_state_id": "job_detail", "display_name": "Job Detail"},
+                {"page_state_id": "login_wall", "display_name": "Login Wall"},
+            ],
+            "capture_defaults": {"profile": "viewport", "shot_types": ["viewport", "fullpage", "sweep_1", "sweep_2"]},
+            "validation_expectations": [{"kind": "host_match", "value": "indeed.com"}],
+            "config_version": "v1",
+        },
+        {
+            "domain_id": "linkedin_jobs",
+            "display_name": "LinkedIn Jobs",
+            "host_patterns": ["linkedin.com", "www.linkedin.com"],
+            "page_states": [
+                {"page_state_id": "job_search", "display_name": "Job Search"},
+                {"page_state_id": "job_detail", "display_name": "Job Detail"},
+                {"page_state_id": "login_wall", "display_name": "Login Wall"},
+            ],
+            "capture_defaults": {"profile": "viewport", "shot_types": ["viewport", "fullpage"]},
+            "validation_expectations": [{"kind": "host_match", "value": "linkedin.com"}],
+            "config_version": "v1",
+        },
+    ],
+    "goals": [
+        {"goal_id": "log_in", "domain_id": None, "display_name": "Log In", "action_type_hints": ["type", "click"]},
+        {"goal_id": "review_posted_items", "domain_id": "facebook_marketplace", "display_name": "Review Posted Items", "action_type_hints": ["click"]},
+        {"goal_id": "reply_to_buyer", "domain_id": "facebook_marketplace", "display_name": "Reply to Buyer", "action_type_hints": ["click", "type"]},
+        {"goal_id": "create_listing", "domain_id": "facebook_marketplace", "display_name": "Create Marketplace Listing", "action_type_hints": ["click", "type", "select"]},
+        {"goal_id": "search_jobs", "domain_id": "indeed_jobs", "display_name": "Search Jobs", "action_type_hints": ["type", "click"]},
+        {"goal_id": "open_job_posting", "domain_id": "indeed_jobs", "display_name": "Open Job Posting", "action_type_hints": ["click"]},
+        {"goal_id": "apply_to_job", "domain_id": "indeed_jobs", "display_name": "Apply to Job", "action_type_hints": ["click", "type", "select"]},
+        {"goal_id": "search_linkedin_jobs", "domain_id": "linkedin_jobs", "display_name": "Search LinkedIn Jobs", "action_type_hints": ["type", "click"]},
+        {"goal_id": "open_linkedin_job", "domain_id": "linkedin_jobs", "display_name": "Open LinkedIn Job", "action_type_hints": ["click"]},
+    ],
+    "tasks": [
+        {"task_id": "browser_open_tab", "scope_level": "browser", "domain_id": None, "goal_id": None, "display_name": "Open target tab"},
+        {"task_id": "marketplace_open_inbox", "scope_level": "domain", "domain_id": "facebook_marketplace", "goal_id": None, "display_name": "Open marketplace inbox"},
+        {"task_id": "facebook_create_listing_flow", "scope_level": "goal", "domain_id": "facebook_marketplace", "goal_id": "create_listing", "display_name": "Create a Marketplace listing"},
+        {"task_id": "indeed_apply_flow", "scope_level": "goal", "domain_id": "indeed_jobs", "goal_id": "apply_to_job", "display_name": "Complete Indeed apply flow"},
+    ],
+    "scenarios": [
+        {
+            "scenario_id": "indeed_search_results_open_job_posting",
+            "domain_id": "indeed_jobs",
+            "goal_id": "open_job_posting",
+            "task_id": None,
+            "display_name": "Search Results -> Open Job Posting",
+            "start_page_state": "search_results",
+            "description": "Start from Indeed search results and open a job posting.",
+            "capture_profile_override": None,
+        },
+        {
+            "scenario_id": "indeed_company_page_open_job_posting",
+            "domain_id": "indeed_jobs",
+            "goal_id": "open_job_posting",
+            "task_id": None,
+            "display_name": "Company Page -> Open Job Posting",
+            "start_page_state": "company_page",
+            "description": "Start from a company page and open a job posting.",
+            "capture_profile_override": None,
+        },
+        {
+            "scenario_id": "indeed_email_alert_open_job_posting",
+            "domain_id": "indeed_jobs",
+            "goal_id": "open_job_posting",
+            "task_id": None,
+            "display_name": "Email Alert -> Open Job Posting",
+            "start_page_state": "email_alert",
+            "description": "Start from an email-alert landing page and open a posting.",
+            "capture_profile_override": None,
+        },
+        {
+            "scenario_id": "indeed_login_wall_log_in",
+            "domain_id": "indeed_jobs",
+            "goal_id": "log_in",
+            "task_id": None,
+            "display_name": "Login Wall -> Log In",
+            "start_page_state": "login_wall",
+            "description": "Start at the Indeed login wall and authenticate.",
+            "capture_profile_override": None,
+        },
+        {
+            "scenario_id": "indeed_job_detail_apply_to_job",
+            "domain_id": "indeed_jobs",
+            "goal_id": "apply_to_job",
+            "task_id": "indeed_apply_flow",
+            "display_name": "Job Detail -> Apply to Job",
+            "start_page_state": "job_detail",
+            "description": "Start from a job detail page and enter the apply flow.",
+            "capture_profile_override": "fullpage",
+        },
+    ],
+}
+
+
+def seed_training_registry(db: Session) -> None:
+    if db.scalar(select(DomainRegistry.domain_id).limit(1)):
+        return
+
+    for payload in REGISTRY_SEED["domains"]:
+        db.add(DomainRegistry(status="active", **payload))
+    for payload in REGISTRY_SEED["goals"]:
+        db.add(GoalRegistry(status="active", **payload))
+    for payload in REGISTRY_SEED["tasks"]:
+        db.add(TaskRegistry(status="active", **payload))
+    for payload in REGISTRY_SEED["scenarios"]:
+        db.add(ScenarioRegistry(status="active", **payload))
+    db.commit()
+
+
+def seed_facebook_extras(db: Session) -> None:
+    """Idempotent top-up for the Facebook create-listing goal/task on an ALREADY-seeded DB.
+    `seed_training_registry` only runs on an empty registry, so a DB seeded before the
+    create-listing flow existed would miss these rows — add just the missing ones."""
+    want_goals = [g for g in REGISTRY_SEED["goals"] if g["goal_id"] == "create_listing"]
+    want_tasks = [t for t in REGISTRY_SEED["tasks"] if t["task_id"] == "facebook_create_listing_flow"]
+    if not db.scalar(select(DomainRegistry.domain_id).where(
+            DomainRegistry.domain_id == "facebook_marketplace")):
+        return  # domain not seeded at all → the full seeder will handle it on a fresh DB
+    changed = False
+    for payload in want_goals:
+        if not db.scalar(select(GoalRegistry.goal_id).where(GoalRegistry.goal_id == payload["goal_id"])):
+            db.add(GoalRegistry(status="active", **payload))
+            changed = True
+    for payload in want_tasks:
+        if not db.scalar(select(TaskRegistry.task_id).where(TaskRegistry.task_id == payload["task_id"])):
+            db.add(TaskRegistry(status="active", **payload))
+            changed = True
+    if changed:
+        db.commit()
+
+
+def seed_application_answers(db: Session) -> None:
+    """Seed the operator's repeatable application answers once (idempotent: skip if any
+    exist). Values are operator-provided; everything is editable in the Indeed workspace."""
+    import application_answers as aa
+    if db.scalar(select(ApplicationAnswer.answer_key).limit(1)):
+        return
+    for payload in aa.SEED_ANSWERS:
+        db.add(ApplicationAnswer(**payload))
+    db.commit()
+
+
+
+
+# Global states that apply to any capture regardless of domain/scenario.
+_GLOBAL_PAGE_STATES = [
+    {"state_id": "out_of_domain", "display_name": "Out of Domain", "category": "navigation"},
+    {"state_id": "unknown", "display_name": "Unknown / Unclassified", "category": "navigation"},
+    {"state_id": "blocked", "display_name": "Blocked / Needs Human", "category": "error"},
+]
+
+
+# Built-in action vocabulary. action_id matches what TrainingCapture.action_type_hint
+# already stores (keep ids stable!). "clear" is new. value_label names the payload field.
+_BUILTIN_ACTIONS = [
+    {"action_id": "click", "label": "Click", "value_label": "Optional Payload", "sort_order": 10},
+    {"action_id": "type", "label": "Type", "value_label": "Text to Type", "sort_order": 20},
+    {"action_id": "clear", "label": "Clear", "value_label": None, "sort_order": 30},
+    {"action_id": "select", "label": "Select", "value_label": "Option to Select", "sort_order": 40},
+    {"action_id": "scroll", "label": "Scroll", "value_label": "Scroll Direction / Amount", "sort_order": 50},
+    {"action_id": "navigate", "label": "Navigate", "value_label": "URL or Destination", "sort_order": 60},
+    {"action_id": "wait", "label": "Wait", "value_label": "Wait Condition", "sort_order": 70},
+    {"action_id": "press", "label": "Key", "value_label": "Key / Shortcut", "sort_order": 80},
+    {"action_id": "any", "label": "Any", "value_label": "Optional Payload", "sort_order": 90},
+]
+
+
+def seed_actions(db: Session) -> None:
+    """Idempotently ensure built-in actions exist (incl. the new 'clear')."""
+    existing = set(db.scalars(select(ActionRegistry.action_id)).all())
+    for payload in _BUILTIN_ACTIONS:
+        if payload["action_id"] not in existing:
+            db.add(ActionRegistry(is_builtin=True, status="active", **payload))
+    db.commit()
+
+
+# Heuristic backfill for the new goal.stage: login/signup/auth objectives are the
+# unauthenticated bridge; everything else is authenticated. Annotators can override.
+_UNAUTH_GOAL_HINTS = ("log_in", "login", "sign_in", "signin", "sign_up", "signup", "register", "reset_password", "forgot")
+
+
+def backfill_goal_stages(db: Session) -> None:
+    """Set stage on goals that are still 'neutral' (one-time, non-destructive)."""
+    for goal in db.scalars(select(GoalRegistry).where(GoalRegistry.stage == "neutral")).all():
+        gid = (goal.goal_id or "").lower()
+        goal.stage = "unauthenticated" if any(h in gid for h in _UNAUTH_GOAL_HINTS) else "authenticated"
+    db.commit()
+
+
+def backfill_page_state_stages(db: Session) -> None:
+    """Goal/scenario-scoped states inherit their goal's stage when unset
+    (one-time, non-destructive — only fills NULL stage)."""
+    goals = {g.goal_id: g for g in db.scalars(select(GoalRegistry)).all()}
+    changed = False
+    for s in db.scalars(select(PageStateRegistry).where(PageStateRegistry.stage.is_(None))).all():
+        if s.scope in ("goal", "scenario") and s.goal_id in goals:
+            s.stage = goals[s.goal_id].stage or "neutral"
+            changed = True
+    if changed:
+        db.commit()
+
+
+def seed_page_states(db: Session) -> None:
+    """Idempotently ensure the global states exist, and migrate any legacy
+    per-domain page_states (the old JSON blob) into the registry as scope=domain
+    rows. Safe to run on every startup — only inserts what's missing."""
+    existing_ids = set(db.scalars(select(PageStateRegistry.state_id)).all())
+
+    for payload in _GLOBAL_PAGE_STATES:
+        if payload["state_id"] not in existing_ids:
+            db.add(PageStateRegistry(scope="global", status="active", **payload))
+            existing_ids.add(payload["state_id"])
+
+    # Migrate legacy domain.page_states JSON → scope=domain registry rows.
+    for domain in db.scalars(select(DomainRegistry)).all():
+        for ps in (domain.page_states or []):
+            sid = ps.get("page_state_id") or _slugify(ps.get("display_name", ""))
+            if not sid or sid in existing_ids:
+                continue
+            db.add(PageStateRegistry(
+                state_id=sid,
+                display_name=ps.get("display_name") or sid,
+                scope="domain",
+                domain_id=domain.domain_id,
+                category=ps.get("category") or "general",
+                status="active",
+            ))
+            existing_ids.add(sid)
+    db.commit()
