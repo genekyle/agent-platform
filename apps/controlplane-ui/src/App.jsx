@@ -194,6 +194,15 @@ export default function App() {
     setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "coverage" }));
   }, []);
 
+  // One-click into the QUEUE labeler (the crank) from anywhere. The good labeler already
+  // exists — it just lives under Lab → training-space; surface it instead of the nested
+  // Dataset Browser dig. (#2 training-UI overhaul.)
+  const openLabeler = useCallback(() => {
+    setActivePrimaryView("lab");
+    setSidebarLevel("secondary");
+    setActiveSecondaryViewByPrimary((current) => ({ ...current, lab: "training-space" }));
+  }, []);
+
   const goHome = useCallback(() => {
     setActivePrimaryView("command");
     setSidebarLevel("primary");
@@ -989,7 +998,7 @@ export default function App() {
 
   let sectionContent = null;
   if (activePrimaryView === "command") {
-    sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} />;
+    sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} onOpenLabeler={openLabeler} />;
   } else if (activePrimaryView === "domains") {
     sectionContent = activeDomain
       ? <DomainWorkspace domain={activeDomain} activeTab={activeDomainTab} onChangeTab={setDomainTab} onOpenTraining={openTrainingCoverage} />
