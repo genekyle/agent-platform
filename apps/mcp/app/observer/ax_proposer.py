@@ -137,19 +137,33 @@ async def _discover_target(
     *,
     tab_id: Optional[str],
     tab_url: Optional[str],
+    retries: int = 3,
+    retry_delay: float = 0.4,
 ) -> dict[str, Any]:
     """Pick the page target to attach to, mirroring mcp_client tab selection:
-    match targetId first, then url substring, else the first type=='page'."""
+    match targetId first, then url substring, else the first type=='page'.
+
+    Retries when /json/list momentarily has NO attachable page target — during a live
+    drive the page target briefly vanishes mid-navigation (the #1 cause of empty AX
+    sidecars: "No attachable page targets"). It reappears within a few hundred ms, so a
+    short retry recovers it instead of writing a dry, useless capture."""
     import httpx
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.get(f"{browser_url}/json/list")
-        resp.raise_for_status()
-        targets = resp.json()
-
-    pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+    pages: list[dict[str, Any]] = []
+    for attempt in range(retries):
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{browser_url}/json/list")
+            resp.raise_for_status()
+            targets = resp.json()
+        pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+        if pages:
+            break
+        if attempt < retries - 1:
+            await asyncio.sleep(retry_delay)  # transient mid-navigation gap; let the target reappear
     if not pages:
-        raise RuntimeError(f"No attachable page targets at {browser_url}/json/list")
+        raise RuntimeError(
+            f"No attachable page targets at {browser_url}/json/list (after {retries} attempts)"
+        )
 
     if tab_id:
         for t in pages:
