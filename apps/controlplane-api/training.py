@@ -209,6 +209,20 @@ def merge_training_annotation(existing: Optional[dict[str, Any]], patch: Optiona
     }
 
 
+def _load_ax_candidates(trace_path: Path) -> list[dict[str, Any]]:
+    """Load the CDP-AX candidate proposals from a capture's .ax.json sidecar (best-effort, [] if
+    absent). Since the AX faucet these ARE the candidate pool the labeler labels against, so the
+    grounding dataset must search them for the golden positive_candidate_id, not just the trace's
+    (usually stale/empty) ranked_candidates. See docs/LEARNINGS.md (grounding reads the AX sidecar)."""
+    sidecar = trace_path.with_name(trace_path.name + ".ax.json")
+    if not sidecar.exists():
+        return []
+    try:
+        return json.loads(sidecar.read_text()).get("proposals") or []
+    except Exception:
+        return []
+
+
 def build_grounding_dataset(artifacts_root: Path, *, captures: list[Any]) -> dict[str, Any]:
     datasets_dir = artifacts_root / "datasets"
     datasets_dir.mkdir(parents=True, exist_ok=True)
@@ -228,7 +242,8 @@ def build_grounding_dataset(artifacts_root: Path, *, captures: list[Any]) -> dic
             skipped += 1
             continue
 
-        record = _build_dataset_record(capture, artifact)
+        ax_candidates = _load_ax_candidates(trace_path)
+        record = _build_dataset_record(capture, artifact, ax_candidates=ax_candidates)
         if record is None:
             skipped += 1
             continue
@@ -287,7 +302,9 @@ def build_vision_dataset(artifacts_root: Path, *, captures: list[Any]) -> dict[s
         if not capture.element_query:
             skipped_no_query += 1
             continue
-        if not capture.approved_bbox:
+        # Need a bbox SOURCE — either an explicit approved_bbox or a golden candidate whose bbox we
+        # can pull from the AX sidecar (recovered in _build_vision_record, same as grounding).
+        if not capture.approved_bbox and not capture.positive_candidate_id:
             skipped_no_bbox += 1
             continue
 
@@ -302,7 +319,8 @@ def build_vision_dataset(artifacts_root: Path, *, captures: list[Any]) -> dict[s
             skipped_no_artifact += 1
             continue
 
-        record = _build_vision_record(capture, artifact)
+        ax_candidates = _load_ax_candidates(trace_path)
+        record = _build_vision_record(capture, artifact, ax_candidates=ax_candidates)
         if record is not None:
             records.append(record)
             included += 1
@@ -343,13 +361,21 @@ def build_vision_dataset(artifacts_root: Path, *, captures: list[Any]) -> dict[s
     return manifest
 
 
-def _build_vision_record(capture: Any, artifact: dict[str, Any]) -> Optional[dict[str, Any]]:
+def _build_vision_record(
+    capture: Any, artifact: dict[str, Any], ax_candidates: Optional[list[dict[str, Any]]] = None
+) -> Optional[dict[str, Any]]:
     """Build a single vision training record from a reviewed capture."""
     acquisition = artifact.get("acquisition") or {}
     screenshots = acquisition.get("screenshots") or []
     screenshot = (capture.screenshot_refs or screenshots or [{}])[0]
 
     bbox = capture.approved_bbox
+    if not isinstance(bbox, dict):
+        # No explicit approved_bbox — derive it from the golden candidate's bbox in the AX sidecar,
+        # the same recovery the grounding dataset does (15 of 19 golden labels have no approved_bbox).
+        candidates = (artifact.get("ranked_candidates") or []) + (ax_candidates or [])
+        positive = next((c for c in candidates if c.get("candidate_id") == capture.positive_candidate_id), None)
+        bbox = _candidate_bbox(positive, acquisition) if positive else None
     if not isinstance(bbox, dict):
         return None
 
@@ -467,8 +493,13 @@ def train_grounding_model(artifacts_root: Path, *, dataset_manifest: Optional[di
     }
 
 
-def _build_dataset_record(capture: Any, artifact: dict[str, Any]) -> Optional[dict[str, Any]]:
-    candidates = artifact.get("ranked_candidates") or []
+def _build_dataset_record(
+    capture: Any, artifact: dict[str, Any], ax_candidates: Optional[list[dict[str, Any]]] = None
+) -> Optional[dict[str, Any]]:
+    # The golden label (positive_candidate_id) is set in the labeler against whatever candidate pool
+    # the capture was shown — which, since the AX faucet, is the .ax.json SIDECAR (cdp-ax-* ids), not
+    # the trace's ranked_candidates. Search the union so AX-labeled captures aren't silently skipped.
+    candidates = (artifact.get("ranked_candidates") or []) + (ax_candidates or [])
     positive_candidate_id = capture.positive_candidate_id
     positive_candidate = next((candidate for candidate in candidates if candidate.get("candidate_id") == positive_candidate_id), None)
     if positive_candidate is None:
@@ -536,6 +567,10 @@ def _build_dataset_record(capture: Any, artifact: dict[str, Any]) -> Optional[di
 
 def _candidate_bbox(candidate: dict[str, Any], acquisition: dict[str, Any]) -> Optional[dict[str, float]]:
     bbox = ((candidate.get("grounding") or {}).get("bbox") if isinstance(candidate.get("grounding"), dict) else None)
+    if bbox is None:
+        # CDP-AX candidates (the .ax.json sidecar) carry their bbox at the TOP level, already scaled
+        # to screenshot px — no `grounding` wrapper. This is what makes AX-labeled captures trainable.
+        bbox = candidate.get("bbox")
     if bbox is None:
         for element in acquisition.get("actionable_elements", []):
             if element.get("uid") == candidate.get("element_id"):

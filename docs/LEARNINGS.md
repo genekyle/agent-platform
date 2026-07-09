@@ -24,6 +24,33 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-09 — Training works today; the grounding/vision datasets were BLIND to AX-sidecar golden labels
+
+**What we believed.** That the flywheel was blocked by the backend / concurrency / missing trainers,
+and that the grounding model was hopelessly data-starved (only 4 usable records).
+
+**What's actually true.** Training already works: `POST /api/training/train_stage_observer` (the L3 v0
+"am I logged in?" auth classifier) trains to **94% held-out accuracy on 98 labeled captures** —
+a real local model that offloads Haiku at classify. And the grounding "4 records" was a **plumbing
+bug**, not a data shortage: **15 of 19 golden labels (`positive_candidate_id`) point to `cdp-ax-*`
+candidates that live only in the `.ax.json` sidecar**, but both dataset builders searched only the
+trace's `ranked_candidates` (grounding) / required an explicit `approved_bbox` (vision) — so AX-labeled
+captures were silently skipped. Since the AX faucet, **the sidecar IS the candidate pool the labeler
+labels against**; any consumer reading `ranked_candidates` for candidates is stale.
+
+**Fix.** `build_grounding_dataset` + `build_vision_dataset` now load the sidecar (`_load_ax_candidates`),
+search the union `ranked_candidates + ax_candidates` for the golden id, and derive the bbox from the AX
+candidate (which carries `bbox` at top level, screenshot-px) when `approved_bbox` is absent. **Both
+datasets 4 → 19 records**, across both `facebook_marketplace` and `indeed` scenarios. Tests green.
+Encoded in `apps/controlplane-api/training.py` (`_load_ax_candidates`, `_build_dataset_record`,
+`_build_vision_record`, `_candidate_bbox`).
+
+**Still the real bottleneck (unchanged north star).** Model *accuracy* is still 0% on grounding — 19
+records is tiny and the v0 linear grounder is weak. So the lever remains **golden-label VOLUME**
+(drive → capture → review/label → retrain), now that the labels we already have actually reach the
+trainer. "Concurrency-hardening for training" is premature — nothing to harden until many per-domain
+trainers run at once. See [[project_backend_refactor_for_concurrency]].
+
 ## 2026-07-08 — Concurrent sessions in one working tree clobber each other via broad commits
 
 **What happened.** While one session did the faucet work, a *second* Claude session working in the
