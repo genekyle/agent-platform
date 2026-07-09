@@ -102,12 +102,14 @@ from routers import accounts as accounts_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
 from routers import facebook as facebook_router  # noqa: E402
 from routers import inventory as inventory_router  # noqa: E402
+from routers import sessions as sessions_router  # noqa: E402
 from routers import workspace as workspace_router  # noqa: E402
 
 app.include_router(accounts_router.router)
 app.include_router(application_answers_router.router)
 app.include_router(facebook_router.router)
 app.include_router(inventory_router.router)
+app.include_router(sessions_router.router)
 app.include_router(workspace_router.router)
 
 
@@ -2464,54 +2466,6 @@ def archive_action(action_id: str, db: Session = Depends(get_db)):
 # as, and a human-owned "protect" flag. This is the "be cognizant of my sessions" surface so a new
 # run can never blindside a live one.
 # ---------------------------------------------------------------------------
-def _session_tab_count(port: Optional[int]) -> Optional[int]:
-    """Best-effort count of open page tabs in a session's Chrome (None if it isn't answering)."""
-    if not port:
-        return None
-    try:
-        with httpx.Client(timeout=1.5) as client:
-            targets = client.get(f"http://127.0.0.1:{port}/json").json()
-        return sum(1 for t in targets if t.get("type") == "page")
-    except Exception:  # noqa: BLE001
-        return None
-
-
-@app.get("/api/sessions")
-def list_sessions(db: Session = Depends(get_db)):
-    """Every browser session, each folded with a LIVE CDP probe, its account label, and whether
-    it's protected — the view that makes concurrent/training sessions safe to reason about."""
-    import accounts as accounts_mod
-    import channel_browser
-    import session_manager
-    label_by_id = {a["account_id"]: a["label"] for a in accounts_mod.list_accounts()}
-    rows = []
-    for s in db.scalars(select(TrainingSession).order_by(TrainingSession.created_at.desc())).all():
-        live = channel_browser.cdp_reachable(s.chrome_debug_port, timeout=0.5)
-        rows.append(session_manager.view_row(
-            s, cdp_reachable=live,
-            account_label=label_by_id.get(s.account_id),
-            tab_count=_session_tab_count(s.chrome_debug_port) if live else None,
-        ))
-    return {"sessions": rows}
-
-
-class ProtectBody(BaseModel):
-    protected: bool = True
-
-
-@app.post("/api/sessions/{session_id}/protect", response_model=TrainingSessionRead)
-def set_session_protected(session_id: int, body: ProtectBody, db: Session = Depends(get_db)):
-    """Mark a session human-owned (or release it). While protected it refuses stop / reap /
-    delete without force=true — the switch that keeps your live session safe from an automated step."""
-    session = db.get(TrainingSession, session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Training session not found")
-    session.protected = bool(body.protected)
-    db.commit()
-    db.refresh(session)
-    return session
-
-
 # ---------------------------------------------------------------------------
 # Accounts — configure multiple accounts per domain, in-app. Metadata only; the secret stays in
 # .env (or a stronger local backend later) and is NEVER returned by these endpoints.
