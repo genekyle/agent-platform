@@ -8,9 +8,15 @@ workflow. Both came out of the "why can't we commit cleanly" review — see `LEA
   `_slugify`, `get_db`) + `routers/` package + `test_route_inventory.py` guardrail (149 routes).
 - ✅ `routers/facebook.py` (4) · `application_answers.py` (5) · `accounts.py` (7) · `inventory.py` (19) ·
   `workspace.py` (3) · `sessions.py` (2). **Clean isolated-domain tier COMPLETE (6 routers, 40 routes).**
-- ✅ Layer 2: `migrations.py` (`migrate_schema`) + `seed.py` (`REGISTRY_SEED` + 7 seed/backfill
-  functions) out of main. Startup hook calls them via import; verified running against the real DB.
-- 📉 `main.py`: 5,742 → **4,890** lines (−852, ~15%); 40 routes + migrations + seed moved. Green each step.
+- ✅ Layer 2 COMPLETE: `migrations.py` + `seed.py` + **`create_app()` factory** (the 105 still-inline
+  routes now hang off a module-level `router`; the factory assembles FastAPI + CORS + mount + all
+  routers + startup). Bootstrap shape is target-correct.
+- ✅ **Litmus HOLDS:** no production module imports `main` (verified). main.py is a leaf, not a hub.
+- 📉 `main.py`: 5,742 → **4,905** lines; 40/149 routes in domain routers, 105 still inline on `router`.
+  (Line count is flat now — big reductions come as the inline coupled-tier routes extract into modules.)
+- ↪ **Paused mid-Layer-1 to pivot to concurrency-hardening for training** (user's north star). Resume
+  the coupled-tier extractions (channels/search/runtime/capture/training) later — extract each helper
+  cluster to a module first, then its routes fall out clean.
 - ⏭ **Resume here** — two tracks:
   - **Layer 2 finish (clean, self-contained):** `create_app()` factory — wrap app creation + middleware +
     mounts + `include_router` + the startup hook into a function; keep module-level `app = create_app()`
