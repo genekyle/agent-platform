@@ -53,6 +53,40 @@ telemetry/logging. Shared by all layers; imports **none** of them. This is the b
 
 ---
 
+## Concurrency & the teacher-driven training model (verified 2026-07-09)
+
+The midway goal — Claude as the concurrent *distilling driver* generating data for multiple domains
+at once — is closer than it feels. There are **three separate concurrencies**; don't conflate them.
+
+1. **Concurrent code editing (git).** Only matters when sessions edit the repo. Fix: one git worktree
+   per coding session (`docs/PLAN_main-split.md` Part 2). Irrelevant to driving/training.
+2. **Concurrent driving (many live browsers capturing different domains).** **Already supported.** Each
+   drive is parameterized by its own `browser_url` (`runtime/live.py`); each session runs its own Chrome
+   on a distinct port + account profile (`session_manager`); captures are tagged by
+   `domain_id`/`account_id`/`tenant_id`/`session` (`models.py`); corpus appends are `threading.Lock`-
+   guarded (`runtime/loop.py`, `select_stage/telemetry.py`). Safe **because deployment is single-process**
+   (`uvicorn main:app`, no `--workers`) — the locks serialize concurrent async drives.
+3. **Concurrent training (fitting the small models).** Offline batch. **Gap:** `train_grounding` writes
+   to a single artifacts root, not per-domain-versioned. Close this (per-domain model output paths +
+   `ModelRegistry.domain_id` versioning) before running two domain trainings at once.
+
+**The real trip is NOT git — it's the process.** `uvicorn --reload` means **a code edit restarts the
+control-plane and kills every in-flight drive** (see `main.py`: "worker exited mid-run … uvicorn
+reload"). Worktrees fix git; they do not fix this. To develop *while* driving, run a **separate,
+pinned control-plane instance** (own port + working copy) for the driver, so dev reloads don't kill it.
+
+**Before flipping on concurrent teacher-driving — small hardening pass:**
+- Per-domain model output paths + versioning (the one true gap; concern #3).
+- A `session → domain/account` binding assert on capture, so a drive can't write mislabeled data
+  (the risk is *mislabeling*, not corruption — "state is context-bound", PRINCIPLES §1).
+- Keep it **one control-plane process** (many browsers under it); if you ever need multiple API
+  processes, shard corpora per-domain or move them to the DB (the thread-locks don't cross processes).
+- Global `$5/week` budget is shared across concurrent drives — they compete for the same cap.
+
+**Verdict:** start concurrent *driving* now (data is the flywheel's bottleneck); the architecture split
+makes concurrent *training* organized, and Layer 4 (per-domain swappable stages) is what lets many
+domains train without ever confusing which model/corpus is which.
+
 ## What "v1 clean break" means (the pragmatic bar for a solo founder)
 Not the full grand version — the point where the architecture stops fighting us:
 1. **Layer 1 complete** — `main.py` = app factory + routers (transport split done).
