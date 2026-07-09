@@ -1,7 +1,23 @@
 # Plan — split `main.py` into routers + one-worktree-per-session
 
-Status: **planned, not started** (2026-07-08). Two structural fixes for a clean, collision-free
+Status: **in progress** (2026-07-08). Two structural fixes for a clean, collision-free
 workflow. Both came out of the "why can't we commit cleanly" review — see `LEARNINGS.md`.
+
+### Progress
+- ✅ Infra: `deps.py` (shared helpers: `utcnow`, `_artifacts_dir`, `_session_browser_url`,
+  `_slugify`, `get_db`) + `routers/` package + `test_route_inventory.py` guardrail (149 routes).
+- ✅ `routers/facebook.py` (4 routes) · `routers/application_answers.py` (5) · `routers/accounts.py` (7).
+- 📉 `main.py`: 5,742 → **5,472** lines; 16 of 149 routes moved. Suite + guardrail green each step.
+- ⏭ **Resume here** — next-easiest (still low-coupling): `channels`, `sessions` (move `ProtectBody`
+  too), `domains`/`command-center`, `search`+`jobs`, `inventory`. Then the coupled tiers
+  (`observations`/`capture`, `runtime`, `models`, `training`) — each needs its shared helpers
+  (`_launch_training_chrome`, `_stop_training_chrome`, `_delete_observation_files`,
+  `_capture_metadata_from_artifact`, `read_meta`/`write_meta`, …) moved to `deps.py` first.
+- **Pattern per router:** create `routers/<domain>.py` (`router = APIRouter()`, bodies verbatim,
+  `@app.` → `@router.`); move any route-local helper/model with it; move a *shared* helper to
+  `deps.py` and import it back into main; delete the block from main; add the import + `include_router`
+  in main's Routers block; run `test_route_inventory.py` + full suite; commit
+  `refactor: extract <domain> routes (no behavior change)`.
 
 ---
 
