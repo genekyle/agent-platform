@@ -7,10 +7,12 @@ registry. Self-contained: no DB session, no main helpers.
 """
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 router = APIRouter()
+
+MAX_PHOTO_BYTES = 12 * 1024 * 1024  # 12 MB per photo — generous for a phone shot, bounds abuse
 
 
 class ItemBody(BaseModel):
@@ -117,6 +119,43 @@ def inventory_update_item(item_id: str, body: ItemBody):
     item = inventory.update_item(item_id, body.model_dump(exclude_none=True))
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
+    return {"item": item}
+
+
+@router.post("/api/inventory/items/{item_id}/photos")
+async def inventory_upload_photo(item_id: str, file: UploadFile = File(...)):
+    """Upload ONE photo and assign it to this item (owned, not shared). The file is stored under
+    marketplace/items/<item_id>/ so it belongs to exactly this post and never appears in another
+    item's shared-library picker; its key is appended to item.photos. Returns the updated item."""
+    import assets
+    import inventory
+    if inventory.get_item(item_id) is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Photo exceeds 12 MB")
+    ct = (file.content_type or "").lower()
+    name = (file.filename or "").lower()
+    if not (ct.startswith("image/") or any(name.endswith(e) for e in assets.IMAGE_EXTS)):
+        raise HTTPException(status_code=415, detail="Only image files are allowed")
+    asset = assets.save_item_photo(item_id, file.filename or "photo", data, file.content_type or "")
+    item = inventory.add_item_photo(item_id, asset["key"])
+    return {"item": item, "asset": asset}
+
+
+@router.delete("/api/inventory/items/{item_id}/photos")
+def inventory_delete_photo(item_id: str, key: str):
+    """Unassign a photo from the item. An item-OWNED file (under marketplace/items/…) is also
+    deleted from disk; a shared-library key is only unassigned (the library file stays)."""
+    import assets
+    import inventory
+    item = inventory.remove_item_photo(item_id, key)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if key.startswith(assets.ITEM_PREFIX + "/"):
+        assets.delete_asset(key)
     return {"item": item}
 
 

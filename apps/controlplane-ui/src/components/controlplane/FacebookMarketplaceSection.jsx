@@ -257,12 +257,31 @@ function ItemForm({ item, onClose, onSaved }) {
   // Photos are picked from the local asset store (keys, not URLs) — FB uploads real files, and the
   // store is a stub for cloud (S3) later. See assets.py / assets/README.md.
   const [assets, setAssets] = useState([]);
+  // Direct uploads staged locally until save. In EDIT mode we could upload immediately, but staging
+  // in BOTH modes keeps one predictable flush-on-save path (create has no item id until saved).
+  const [staged, setStaged] = useState([]); // [{ file, url }]
   useEffect(() => { api("/api/facebook/listing_schema").then(setSchema).catch(() => {}); }, []);
   useEffect(() => { api("/api/assets").then((r) => setAssets(r.assets || [])).catch(() => {}); }, []);
   const togglePhoto = (key) => setD((p) => {
     const has = (p.photos || []).includes(key);
     return { ...p, photos: has ? p.photos.filter((k) => k !== key) : [...(p.photos || []), key] };
   });
+  const onPick = (fileList) => {
+    const imgs = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+    setStaged((s) => [...s, ...imgs.map((f) => ({ file: f, url: URL.createObjectURL(f) }))]);
+  };
+  // Remove an already-assigned photo. In edit mode this hits the server (unassign + delete the
+  // owned file); in create mode it just drops the (shared-library) pick locally.
+  const removeOwned = async (key) => {
+    if (item.id) {
+      try {
+        const r = await jdelete(`/api/inventory/items/${item.id}/photos?key=${encodeURIComponent(key)}`);
+        setD((p) => ({ ...p, photos: r.item?.photos || (p.photos || []).filter((k) => k !== key) }));
+      } catch (e) { setErr(String(e.message || e)); }
+    } else {
+      setD((p) => ({ ...p, photos: (p.photos || []).filter((k) => k !== key) }));
+    }
+  };
   const setAttr = (name, val) => setD((p) => ({ ...p, attributes: { ...(p.attributes || {}), [name]: val } }));
   const cats = schema?.categories || [];
   // keep a legacy free-text category selectable so editing an old item doesn't silently drop it
@@ -274,11 +293,18 @@ function ItemForm({ item, onClose, onSaved }) {
     const payload = { ...d, photos: Array.isArray(d.photos) ? d.photos : [] };
     delete payload.id; delete payload.channels;
     try {
-      if (item.id) await jpatch(`/api/inventory/items/${item.id}`, payload);
-      else await jpost("/api/inventory/items", payload);
+      let id = item.id;
+      if (id) await jpatch(`/api/inventory/items/${id}`, payload);
+      else { const r = await jpost("/api/inventory/items", payload); id = r.item.id; }
+      // Flush direct uploads — each is stored OWNED by this item and appended to its photos.
+      for (const s of staged) {
+        const fd = new FormData(); fd.append("file", s.file);
+        await api(`/api/inventory/items/${id}/photos`, { method: "POST", body: fd });
+      }
+      staged.forEach((s) => URL.revokeObjectURL(s.url));
       onSaved();
     } catch (e) { setErr(String(e.message || e)); } finally { setBusy(false); }
-  }, [d, item, onSaved]);
+  }, [d, item, staged, onSaved]);
 
   return (
     <div className="panel" style={{ marginTop: 12 }}>
@@ -329,28 +355,64 @@ function ItemForm({ item, onClose, onSaved }) {
           </div>
         )}
         <Field label="Description"><textarea rows={3} className="input" value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} /></Field>
-        <Field label={`Photos — pick from assets (${(d.photos || []).length} selected)`}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {assets.length === 0 && (
-              <div className="muted" style={{ fontSize: 12 }}>
-                No assets yet — drop images into <code>assets/marketplace/</code> (local now, cloud later).
+        <Field label={`Photos — this item’s own (${(d.photos || []).length + staged.length})`}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            {(d.photos || []).map((key) => (
+              <div key={key} style={{ position: "relative" }} title={key}>
+                <img src={assetUrl(key)} alt="" width={72} height={72}
+                  style={{ objectFit: "cover", borderRadius: 6, display: "block", border: "2px solid #16a34a" }} />
+                <button type="button" onClick={() => removeOwned(key)} title="Remove photo"
+                  style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%",
+                    border: "none", background: "#dc2626", color: "#fff", fontSize: 12, lineHeight: "16px",
+                    cursor: "pointer" }}>×</button>
               </div>
-            )}
-            {assets.map((a) => {
-              const sel = (d.photos || []).includes(a.key);
-              return (
-                <button key={a.key} type="button" onClick={() => togglePhoto(a.key)} title={a.key}
-                  style={{ padding: 0, background: "none", cursor: "pointer", position: "relative",
-                    border: sel ? "2px solid #2563eb" : "2px solid #d1d5db", borderRadius: 8 }}>
-                  <img src={`${API}${a.url}`} alt={a.name} width={72} height={72}
-                    style={{ objectFit: "cover", borderRadius: 6, display: "block", opacity: sel ? 1 : 0.6 }} />
-                  {sel && <span style={{ position: "absolute", top: 2, right: 2, background: "#2563eb",
-                    color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 11,
-                    lineHeight: "16px", textAlign: "center" }}>✓</span>}
-                </button>
-              );
-            })}
+            ))}
+            {staged.map((s, i) => (
+              <div key={i} style={{ position: "relative" }}>
+                <img src={s.url} alt="" width={72} height={72}
+                  style={{ objectFit: "cover", borderRadius: 6, display: "block", border: "2px dashed #2563eb" }} />
+                <span style={{ position: "absolute", bottom: 2, left: 2, background: "#2563eb", color: "#fff",
+                  fontSize: 9, padding: "0 4px", borderRadius: 4 }}>new</span>
+                <button type="button" onClick={() => setStaged((st) => st.filter((_, j) => j !== i))}
+                  title="Remove" style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18,
+                    borderRadius: "50%", border: "none", background: "#dc2626", color: "#fff", fontSize: 12,
+                    lineHeight: "16px", cursor: "pointer" }}>×</button>
+              </div>
+            ))}
+            <label style={{ width: 72, height: 72, borderRadius: 8, border: "2px dashed #9aa0a6",
+              display: "grid", placeItems: "center", cursor: "pointer", color: "#6b7280", fontSize: 11,
+              textAlign: "center", lineHeight: 1.3 }}>
+              ＋<br />Upload
+              <input type="file" accept="image/*" multiple style={{ display: "none" }}
+                onChange={(e) => { onPick(e.target.files); e.target.value = ""; }} />
+            </label>
           </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            Uploaded photos are owned by this item (assigned on save) — never shared with other posts.
+          </div>
+          {assets.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>
+                …or reuse from the shared library ({assets.length})
+              </summary>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                {assets.map((a) => {
+                  const sel = (d.photos || []).includes(a.key);
+                  return (
+                    <button key={a.key} type="button" onClick={() => togglePhoto(a.key)} title={a.key}
+                      style={{ padding: 0, background: "none", cursor: "pointer", position: "relative",
+                        border: sel ? "2px solid #2563eb" : "2px solid #d1d5db", borderRadius: 8 }}>
+                      <img src={`${API}${a.url}`} alt={a.name} width={64} height={64}
+                        style={{ objectFit: "cover", borderRadius: 6, display: "block", opacity: sel ? 1 : 0.6 }} />
+                      {sel && <span style={{ position: "absolute", top: 2, right: 2, background: "#2563eb",
+                        color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 11,
+                        lineHeight: "16px", textAlign: "center" }}>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </details>
+          )}
         </Field>
         {err && <div className="error-banner">{err}</div>}
         <div style={{ display: "flex", gap: 8 }}>

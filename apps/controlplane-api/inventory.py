@@ -253,6 +253,37 @@ def update_item(item_id: str, data: dict) -> Optional[dict]:
     return get_item(item_id)
 
 
+def add_item_photo(item_id: str, key: str) -> Optional[dict]:
+    """Assign an asset `key` to an item's photos (append, deduped). Used by the per-item photo
+    upload — the uploaded asset is OWNED by this item (its key lives under marketplace/items/<id>/)."""
+    with _lock:
+        doc = _load()
+        it = next((i for i in doc["items"] if i["id"] == item_id), None)
+        if it is None:
+            return None
+        photos = list(it.get("photos") or [])
+        if key and key not in photos:
+            photos.append(key)
+        it["photos"] = photos
+        it["updated_at"] = _now()
+        _save(doc)
+    return get_item(item_id)
+
+
+def remove_item_photo(item_id: str, key: str) -> Optional[dict]:
+    """Unassign an asset `key` from an item's photos (the file itself is deleted by the caller when
+    it's an item-owned asset)."""
+    with _lock:
+        doc = _load()
+        it = next((i for i in doc["items"] if i["id"] == item_id), None)
+        if it is None:
+            return None
+        it["photos"] = [k for k in (it.get("photos") or []) if k != key]
+        it["updated_at"] = _now()
+        _save(doc)
+    return get_item(item_id)
+
+
 def set_item_status(item_id: str, status: str, *, message: str = "") -> Optional[dict]:
     if status not in ITEM_STATUSES:
         return None
@@ -289,6 +320,12 @@ def delete_item(item_id: str) -> bool:
         doc["queue"] = [t for t in doc["queue"] if t["item_id"] != item_id]
         _log_into(doc, "item_deleted", message=f"Deleted {it.get('title') or 'item'} from inventory")
         _save(doc)
+    # Drop the item's OWNED photo folder so its uploads don't orphan on disk (best-effort).
+    try:
+        import assets
+        assets.delete_item_assets(item_id)
+    except Exception:
+        pass
     return True
 
 

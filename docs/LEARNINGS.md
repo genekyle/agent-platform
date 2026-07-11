@@ -24,6 +24,223 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-11 — First full Indeed smartapply flow driven end-to-end (Brigham Sr Data Analyst SUBMITTED)
+
+**What we did.** Drove a complete Indeed "Apply with Indeed" (smartapply) application to SUBMIT, live,
+humanized, on session #16. The module sequence (each its own URL under `smartapply.indeed.com/beta/indeedapply/form/`):
+`contact-info` (auto-prefilled) → `commute-check` ("Continue applying") → `resume-selection-module`
+(the user's uploaded **GM_Res.pdf** was pre-selected — chosen over the auto-generated Indeed résumé) →
+`questions-module` (employer screening) → `demographic-questions/1` (EEO self-ID) → `demographic-questions/2`
+(ADA disability) → `review-module` → `post-apply` ("Your application was submitted…"). Captured + labeled
+every state (rows 247–256).
+
+**Interaction findings that will save the next session a lot of pain.**
+- **`/scan_form` is the right tool to READ an apply form** — returns every field's `{label, kind, required,
+  filled, value_preview}` in one call, no scrolling. Use it before touching anything; re-call it to VERIFY
+  each field after you set it. Far more reliable than screenshot-scrolling (which the reload churn keeps resetting).
+- **Multi-question radio groups: target by `backend_node_id`, never by name.** Every question's options are
+  just "Yes"/"No" (or "Declined"), so `target_name` collapses to the FIRST group. Get fresh node-ids from an
+  `/ax_scan`, sort by bbox `y` to map DOM order → questions, click the specific node. Node-ids CHURN on
+  Go-back/re-render, so re-scan after navigating.
+- **Prefills can silently DISCLOSE against preference.** The EEO module came prefilled from a past
+  application with real values (Gender=Male, Race=Asian, Veteran=Not-a-veteran, Disability="No, I do not
+  have a disability"). Per the user's decline preference we OVERRODE each to its decline option
+  ("Declined" / "Decline to Disclose" combobox / "I do not wish to self-identify" / "I do not want to
+  answer"). ALWAYS read `value_preview` and override — don't trust `filled=True` as "handled correctly."
+- **A required field may have NO decline option.** "Are you Hispanic or Latino? *" was Yes/No only and
+  BLOCKED submit ("Choose an option to continue") — escalate to the human (their factual call), don't guess.
+- **There's a required Terms **certify** radio at the very bottom of the EEO module** ("I certify that I have
+  read…") with no alternative — easy to miss; it's a real gate.
+- **The `/execute` empty-response quirk is EVERYWHERE in this flow** — nearly every click returned an empty
+  body; ~half were genuine no-ops. Pattern that worked every time: fire → verify (scan_form/url/screenshot)
+  → retry until it takes. Budget 1–2 retries per click.
+- **Two-tab flow:** "Apply with Indeed" opens smartapply in a NEW tab; pin `tab_url="smartapply.indeed.com"`
+  on every call. `/screenshot` (Page.bringToFront) DISMISSES open dropdowns — never screenshot between
+  opening a filter/select and acting on it.
+- **Humanized scroll shipped** — `driver.py` `parse_scroll_value` + base `_do_scroll` (CDP mouseWheel) +
+  `humanized.py` `_scroll_plan` (eased, jittered notches + read-pauses). NB: running a venv script that
+  imports MCP modules writes `.pyc` into the reload-watched dir → bounces the MCP worker → resets in-flight
+  HTTP (`HTTP 000`); don't do that mid-drive.
+- **Resume asset for cross-site apply** — `assets.py` now has a `documents/` area + `resume_key()`/`resume_path()`
+  + `GET /api/assets/documents`; canonical resume `documents/GM_Resume.pdf` for Workday/ATS file uploads
+  (Indeed's own flow uses the profile résumé, not this file).
+
+**Search-filter findings (same session).** Indeed's Distance filter is a 2-step apply (pick radius → click
+**Update**); applying mutates the URL (`&radius=50`) and re-navigates the SERP (`from=searchOnHP` →
+`searchOnDesktopSerp`, new `vjk`). Canonical order: search first, THEN set radius.
+
+**Where it's encoded.** Captures 247–256; `apps/mcp/app/executor/driver.py` + `humanized.py` (scroll);
+`apps/controlplane-api/assets.py` (documents/resume). Still a live teacher drive, not yet a codified apply recipe.
+
+## 2026-07-10 — FB create-listing driven live for the first time + per-item OWNED photo uploads
+
+**Context.** A Facebook Marketplace training/selling session run *concurrently* with the live Indeed
+session. Isolation held by pinning `browser_url=http://127.0.0.1:9326` (the selling profile) on every
+MCP call — Indeed (`:9322`) + Gmail (`:9325`) never touched. Backend runs `--reload`, so each edit
+bounces the shared API briefly; fine while the other session is human-login-idle, but **batch backend
+edits** so it reloads once, not per-file.
+
+**The selling profile was already authed — don't assume "log in" is the task.** Session #15
+(`facebook_alt` / `business_chrome_profile`, "John Carl") was already logged in and sitting on
+`/marketplace/create/item`. Per PRINCIPLES §7 we confirmed via screenshot, not the URL. The user's
+stated goal ("get logged in") was already satisfied — surface that instead of re-driving a login.
+
+**The create-listing recipe went from "seeded, not live-verified" to DRIVEN live.** Drove the whole
+`fb_create_listing_form` per-action with the humanized driver, re-resolving each node by role+name at
+act time (`/execute` `target_role`+`target_name`) — zero node-id staleness. Captured + teacher-labeled
+5 distinct states (rows 243–246: empty form→Title, title+price→category-suggestion, condition-picker
+→Used-Good, complete-form→Next). **FB domain findings that change the recipe:**
+- **Category suggestion PILLS** appear under the Category box the moment you type a Title (e.g.
+  "Men's clothing & shoes" / "Women's clothing & shoes"). The human path is to **click the pill**, not
+  open the combobox and scroll. Add these as the preferred `category` selector in `facebook_recipe.py`.
+- **Conditional fields live under "More details"** and only render per category — apparel reveals
+  **Color** (portal combobox) + **Material** (free-text) + SKU. Matches `facebook_listing_schema.py`.
+- **Condition** is a 4-option portal picker (New / Used - Like New / Used - Good / Used - Fair). Our
+  driver's `select` (click-open → click option) and a granular click-open→capture→click both work; the
+  portal survives an `/ax_scan` + `/capture` in between (no premature close).
+
+**The executor ALREADY does file upload — the old "no setFileInputFiles" note was STALE.**
+`apps/mcp/app/executor/driver.py` `_element_act` handles `action_id="upload"` via `DOM.setFileInputFiles`
+(+ `selector` re-resolution for a hidden `<input type=file>`). So a real post is not blocked by system
+capability — only by having a real product photo. Corrected [[project_create_listing_drive_gaps]].
+
+**New feature — per-item OWNED photo uploads (assets belong to ONE post, never shared).** The old
+model was a flat *shared* pool (`assets/marketplace/*.jpg`) picked by toggle, so every item's picker
+showed every asset. Now: direct upload stored under `marketplace/items/<item_id>/<file>` with a
+`<file>.meta.json` sidecar (owner, original name, uploaded_at, size, content_type). Ownership is encoded
+in the key path; `list_assets` **excludes** the `items/` subtree so owned photos never leak into another
+item's library. Endpoints `POST|DELETE /api/inventory/items/{id}/photos` (multipart up / unassign+delete
+down); UI upload tile in **both** create (staged, flushed on save) and edit (owned thumbnails + remove).
+Item hard-delete drops the owned folder (no orphans). Encoded: `assets.py`
+(`save_item_photo`/`asset_meta`/`delete_asset`/`delete_item_assets`, `ITEM_PREFIX`), `inventory.py`
+(`add_item_photo`/`remove_item_photo`, delete cleanup), `routers/inventory.py` (the two endpoints),
+`FacebookMarketplaceSection.jsx` (`ItemForm`). Verified end-to-end (upload→owned path→assign→delete,
+no shared-pool leak). NB: FastAPI multipart works though `import multipart` looks missing — newer
+`python-multipart` imports as `python_multipart`; trust the live upload, not the import probe.
+
+**A real listing was driven to the publish gate (Kith x Wilson polo, $90, 7 real photos) — two more
+domain facts.** (a) **FB auto-detects Color from the photos.** After swapping the placeholder for the
+real navy photos, the Color field flipped Black→**Blue** on its own — FB's image analysis fills the
+attribute. Don't fight it; verify it landed right. (b) **New accounts have a daily Marketplace-listing
+cap.** At the final "List in more places" step, `facebook_alt` (a young account) showed *"You can't add
+a listing to Marketplace right now because you reached your daily limit as a new Facebook account"* with
+Publish disabled. This is a **human-required stop-state — do NOT force Publish** (errors + flags the
+account). Retry after the ~24h reset or use an established account; FB retains the prepared listing as a
+draft, and the inventory item (`internal_status=ready_to_post` + a note) is the source of truth to
+re-drive. Encoded as `fb_listing_publish_blocked_new_account_limit` in
+`facebook_recipe.py`'s `FACEBOOK_CREATE_LISTING_BRANCHES`. Also relevant: driving overwrote a stale draft
+in place (remove placeholder photo → `upload` 7 owned files via one `DOM.setFileInputFiles` → `clear`
+then `type` each text field, since `type` APPENDS). The empty-first-execute quirk hit every `Next` click
+— always retry + verify by screenshot.
+
+**Two things worth fixing (noted, not yet done).** (1) `/execute` requires `target_bbox` even when
+`target_name`/`selector` re-resolves the node and the bbox is ignored — pass a zero bbox for now; make
+it Optional. (2) **Modeling nuance:** within ONE page-state (`fb_create_listing_form`) the correct
+golden action depends on form-fill PROGRESS, not the visual (empty→type Title vs complete→click Next).
+Labeled the finished form as a distinct state `fb_create_listing_form_complete` so the classifier isn't
+handed the same picture with two different goldens; a cleaner fix is a completion feature in the state.
+
+## 2026-07-10 — The cross-domain login-code errand works end-to-end (Indeed authed via a code read from Gmail)
+
+**What we proved.** The `fetch_login_code` errand ran live, end-to-end, and got Indeed authenticated
+WITHOUT ever driving Google's password page:
+1. Stood up the dedicated **`google` profile** (session #17, port 9325) via `POST /api/training/sessions`
+   + `/start`. Needed a gmail scenario first — `create_training_session` REQUIRES a domain-bound
+   scenario, so added `gmail_login_google_signin` to the registry.
+2. The human did the one-time Google login in that window (passwordless **passkey** — even cleaner than
+   a password). A **per-instance auto-capture watcher** (poll page target → capture on settle) recorded
+   each state as gmail-domain training data: `google_signin_email`, `google_signin_2fa` (passkey), `inbox`.
+3. On Indeed (session #16), clicked **"Sign in with a code instead"** → Indeed emailed a code. The authed
+   `google` profile read it **straight from the Gmail inbox subject line** ("Sign in to Indeed with code:
+   NNNNNN") — no need to open the email. Typed it into Indeed → accepted.
+4. Indeed then required **phone 2FA** ("confirm it's you", SMS to …67) — a real 2FA gate, so we ESCALATED
+   to the human (never auto-solve), they supplied the SMS code, we submitted it → `logged_in: true` on
+   `secure.indeed.com/settings/account`. Skipped the "set up a passkey" post-auth funnel with **Not now**.
+
+**Lessons that will bite the next session.**
+- **A login code can require a second, out-of-band factor.** The email-code path is NOT sufficient alone
+  when the account has phone 2FA — the errand gets you PAST the email wall, then hands off. Build the code
+  errand to expect a follow-on human-gated factor, not to assume email-code ⇒ done.
+- **The `/execute` "empty-first-execute" quirk is real and recurring** — the first action after an idle
+  gap often returns an empty body / no-op (sometimes it silently worked, sometimes not). ALWAYS verify by
+  screenshot/AX and retry; never trust a single execute's return value. (Confirmed again here on type + click.)
+- **Read a login code from the Gmail SUBJECT, not the body.** Indeed (and most senders) put the code in the
+  subject/snippet, so the inbox list is enough — no need to open the thread (fewer steps, less churn).
+- **Two live sessions, two ports, target explicitly.** Indeed on :9322, google/Gmail on :9325 — every
+  MCP call pins `browser_url` to the right one. The errand is literally "hop from :9322 to :9325 and back."
+- **`auth_state` is Indeed-specific.** On `myaccount.google.com` it reported `logged_in:false` — meaningless
+  there; being on a signed-in-only URL is the real signal. Don't reuse the Indeed detector for Google.
+
+**Where it's encoded now.** Captures/labels: rows 232–242 (gmail SSO states + Indeed code-entry / phone-2FA
+/ logged-in). Watcher prototype: `scratchpad/gmail_login_watch.py` (graduate into a permanent per-session
+auto-capture endpoint — the "state detector within each Chrome instance"). Registry: `gmail_login_google_signin`
+scenario in `seed.py`. STILL TODO: codify the errand as a reusable recipe/endpoint (today it was a live
+teacher drive), and give Gmail an operator workspace.
+
+---
+
+## 2026-07-09 — Provider groups (Google bucket) + Gmail is a real domain; Google login is an errand, not a page to drive
+
+**The trigger.** Trying to log Indeed in via Google SSO from the training session (#16, Chrome on
+`:9322`, persistent `indeed` profile). Clicking Indeed's **Continue** hands off to Google — and the
+Google sign-in surfaces in a **separate window/popup**, plus Indeed's auth page already carries a
+**reCAPTCHA enterprise** iframe. Two lessons fell out.
+
+**1 — Don't drive Google's password page; make login an ERRAND.** Everything up to and after Google's
+auth we drive on the CDP-AX layer with the humanized driver (verified: typed the email into Indeed's
+box by role+name `textbox/"Email address"`, clicked `button/"Continue"`). But the Google
+*password + 2FA* keystrokes are a deliberate hand-off to the human — same class as never auto-solving
+a captcha. Reasons: (a) it's the user's **crown-jewel Google credential** (a locked Google account
+cascades everywhere), (b) `accounts.google.com` is the most bot-fingerprinted page on the web, (c) the
+training value is in **capturing the states**, not in who typed. The cleaner design the operator
+chose: use Indeed's **"sign in with a code instead"** path and fetch the code from Gmail — i.e. login
+becomes a cross-domain **errand** (`gmail ▸ fetch_login_code`), not a page we drive.
+
+**2 — Multi-window SSO IS reachable over CDP; target it explicitly.** The popup is its own
+`type=="page"` target on the SAME `:9322` debugging port (visible in `/json/list`). `_discover_target`
+(`apps/mcp/app/observer/ax_proposer.py`) matches **`tab_id` first, then `tab_url` substring, else the
+first page**, so pin every `/capture|/ax_scan|/execute|/screenshot` call to the popup with
+`tab_url="accounts.google.com"` (or its exact `tab_id`) — don't let discovery default to the Indeed
+tab underneath. This is the concrete fix for the long-standing "multi-window captures carry no window
+identity" gap.
+
+**What we built — the PROVIDER GROUP, the bucket above domains.** A *provider* is one company whose
+many surfaces we drive as separate domains but which share **one identity/login**. Google is the
+first: `gmail` (built) + `google_calendar`/`google_docs`/`google_sheets` (planned) all authenticate
+through **one** Google sign-in (one persistent pre-authed profile) and the shared SSO flow is what
+other domains hand off to. Kept as a small **backend constant** (`providers.py`, like
+`command_center.DOMAINS`), NOT a DB table — it's config, membership is derived from the live
+`DomainRegistry`. `GET /api/providers` resolves each group's live vs. planned members. **Gmail is now
+a real domain** in `REGISTRY_SEED` (seed.py) with the shared `google_signin_*` page-states as its home
+for SSO training data + the `fetch_login_code` errand goal.
+
+**Gotcha — the base registry seeder only runs on an EMPTY registry.** `seed_training_registry`
+early-returns if any domain exists, so adding Gmail to `REGISTRY_SEED` did nothing on the live DB;
+worse, a barebones `gmail` row already existed (added by hand/UI, empty `page_states`). The fix is an
+idempotent **top-up + reconcile** seeder (`seed_gmail_domain`, mirroring `seed_facebook_extras`) that
+**merges** the canonical page-states/hosts into the existing row without removing anything.
+
+**Bug fixed in passing — `/screenshot` always returned "no screenshot data".** `_CDPSession.send()`
+returns the **unwrapped** CDP result (`msg["result"]`), so `Page.captureScreenshot`'s base64 is at
+`res["data"]`, but the handler read `res["result"]["data"]` (always `None`) — a regression from the
+`main.py → main_server.py` split. Now `res.get("data")`. The driver's "eyes" work again.
+
+**Where it's encoded now.** `apps/controlplane-api/providers.py` (new group constant + helpers),
+`apps/controlplane-api/routers/providers.py` (`GET /api/providers`), `apps/controlplane-api/seed.py`
+(gmail domain + goals + `seed_gmail_domain`), `apps/controlplane-api/main.py` (startup call + router
+include), `apps/controlplane-ui/src/components/controlplane/workspace/domains.js` (`PROVIDER_GROUPS`,
+gmail `provider:"google"`) + `DomainsHub.jsx` (renders the bucket),
+`apps/mcp/app/main_server.py` (`/screenshot` unwrap fix). Verified live: `GET /api/providers` returns
+google↦{members:[gmail], planned:[calendar,docs,sheets]}, gmail carries all 7 page-states, and the
+"🌐 Google" bucket renders in the cockpit.
+
+**Still open (deliberately).** Gmail has no operator *workspace* UI yet (tile stays non-clickable —
+"training live, workspace soon"); the `fetch_login_code` errand + the shared `google` browser profile
+are declared but not yet wired to a live run; provider is a constant, not a DB column (promote only if
+operators need to edit groups at runtime).
+
+---
+
 ## 2026-07-09 — Training-UI flywheel overhaul + teacher-auto-labeling proven live + Indeed pre-auth setup
 
 **Training UI was the flywheel's hidden blocker; now surfaced (4 commits `6d6478d`..`8fe4759`).**

@@ -105,6 +105,14 @@ FACEBOOK_CREATE_LISTING_BRANCHES = {
     "captcha":                 {"human_required": True,  "note": "anti-bot challenge on publish — operator solves"},
     "fb_listing_policy_warning": {"human_required": True, "note": "commerce-policy / prohibited-item warning — operator decides"},
     "fb_listing_duplicate":    {"human_required": True,  "note": "'similar listing already exists' prompt — operator decides"},
+    # New/young accounts hit a daily Marketplace-listing cap. Seen live 2026-07-10 on facebook_alt at
+    # the final "List in more places" step: "You can't add a listing to Marketplace right now because you
+    # reached your daily limit as a new Facebook account." Publish is disabled — do NOT force it (errors +
+    # flags the account). Escalate; retry after the ~24h reset or use an established account. The listing
+    # is retained as an FB draft, and our inventory item is the source of truth to re-drive.
+    "fb_listing_publish_blocked_new_account_limit": {
+        "human_required": True,
+        "note": "new-account daily Marketplace listing limit reached — publish disabled; wait ~24h or use an established account"},
 }
 
 # --- URL -> state (cheap, no model) -----------------------------------------------
