@@ -138,6 +138,20 @@ def inventory_get_item(item_id: str):
     return {"item": item}
 
 
+@router.get("/api/inventory/items/{item_id}/price-history")
+def inventory_price_history(item_id: str):
+    """The item's price trajectory over time — the data-collection SKELETON for a future repricing
+    model (collect now, train later). Each point is {price, at, source, note}; entries accrue
+    automatically whenever the price changes."""
+    import inventory
+    item = inventory.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    history = item.get("price_history", [])
+    return {"item_id": item_id, "current_price": item.get("price"),
+            "changes": len(history), "history": history}
+
+
 @router.patch("/api/inventory/items/{item_id}")
 def inventory_update_item(item_id: str, body: ItemBody):
     import inventory

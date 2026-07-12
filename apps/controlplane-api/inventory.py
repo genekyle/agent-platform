@@ -66,6 +66,11 @@ class Item:
     # Category-conditional fields mirrored from FB's create-listing form (e.g. Color/Material/SKU for
     # apparel) keyed by FB's field name — see facebook_listing_schema.py. Empty for most items.
     attributes: dict[str, Any] = field(default_factory=dict)
+    # Price-history SKELETON — the data faucet for a future repricing model. Each entry is
+    # {"price", "at", "source", "note"}; appended automatically whenever the price changes (see
+    # _record_price / update_item). System-managed: NOT settable via ItemBody, so a form save can't
+    # clobber it. Trainer (later) reads every item's price_history to learn repricing over time.
+    price_history: list[dict] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
 
@@ -136,6 +141,14 @@ def _load() -> dict[str, list]:
         data = json.loads(p.read_text(encoding="utf-8"))
         for k in ("items", "listings", "queue", "log"):
             data.setdefault(k, [])
+        # Backfill the price-history skeleton onto older items (idempotent): seed one baseline
+        # entry from the current price so the trajectory isn't blank. Persists on the next _save.
+        for it in data["items"]:
+            it.setdefault("price_history", [])
+            if not it["price_history"] and it.get("price"):
+                it["price_history"] = [{"price": str(it["price"]),
+                                        "at": it.get("created_at") or _now(),
+                                        "source": "backfill", "note": ""}]
         return data
     except Exception:
         return _blank()
@@ -160,8 +173,19 @@ def _log_into(doc: dict, action_type: str, *, status: str = "ok", item_id: Optio
 
 
 # --- Items -------------------------------------------------------------------
+# NOTE: price_history is deliberately NOT in _ITEM_FIELDS — it's system-managed (appended on price
+# changes), so a form/PATCH payload can never overwrite the trajectory.
 _ITEM_FIELDS = {"title", "description", "category", "price", "condition", "photos",
                 "pickup_location", "internal_status", "notes", "attributes"}
+
+# Price-history skeleton sources — where a price point came from (feature for a future model).
+PRICE_SOURCES = {"created", "update", "backfill", "reconcile", "import"}
+
+
+def _price_entry(price: Any, source: str, note: str = "") -> dict:
+    """One point on an item's price trajectory (the training-corpus row)."""
+    return {"price": str(price), "at": _now(),
+            "source": source if source in PRICE_SOURCES else "update", "note": note}
 
 
 def _num(price: str) -> Optional[float]:
@@ -233,6 +257,8 @@ def create_item(data: dict) -> dict:
         item = Item(id=_new_id("item"), created_at=_now(), updated_at=_now(), **clean)
         if item.internal_status not in ITEM_STATUSES:
             item.internal_status = "draft"
+        if item.price and not item.price_history:      # seed the trajectory at creation
+            item.price_history = [_price_entry(item.price, "created")]
         doc["items"].append(asdict(item))
         _log_into(doc, "item_created", item_id=item.id, message=f"Added {item.title or 'item'} to inventory")
         _save(doc)
@@ -246,6 +272,10 @@ def update_item(item_id: str, data: dict) -> Optional[dict]:
         it = next((i for i in doc["items"] if i["id"] == item_id), None)
         if it is None:
             return None
+        # Record a price change onto the trajectory BEFORE applying the update (skeleton faucet).
+        new_price = clean.get("price")
+        if new_price is not None and str(new_price) != str(it.get("price", "")):
+            it.setdefault("price_history", []).append(_price_entry(new_price, "update"))
         it.update(clean)
         it["updated_at"] = _now()
         _log_into(doc, "item_updated", item_id=item_id, message=f"Edited {it.get('title') or 'item'}")
