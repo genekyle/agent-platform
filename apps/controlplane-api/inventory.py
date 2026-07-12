@@ -476,6 +476,31 @@ def create_listing(item_id: str, *, account_id: Optional[str] = None,
     return get_item(item_id)
 
 
+_LISTING_FIELDS = {"account_id", "listing_url", "external_listing_id", "listing_status", "simulated"}
+
+
+def update_listing(listing_id: str, data: dict) -> Optional[dict]:
+    """Correct a listing record's attribution/status — reassign the ACCOUNT it was posted under,
+    attach the real ``listing_url`` (which flips it from stub → real), or update its status. Merges
+    only the provided fields so we always keep an accurate, editable record of which account carries
+    each listing. Returns the updated listing dict, or None if not found."""
+    clean = {k: v for k, v in (data or {}).items() if k in _LISTING_FIELDS}
+    with _lock:
+        doc = _load()
+        listing = next((x for x in doc["listings"] if x["id"] == listing_id), None)
+        if listing is None:
+            return None
+        if clean.get("listing_url"):          # a real URL means it's no longer a stub
+            clean.setdefault("simulated", False)
+        listing.update(clean)
+        _log_into(doc, "listing_updated", item_id=listing.get("item_id"),
+                  message=f"Updated listing {listing_id}"
+                          + (f" → account {clean['account_id']}" if clean.get("account_id") else ""),
+                  metadata={"listing_id": listing_id, **clean})
+        _save(doc)
+        return dict(listing)
+
+
 def reset() -> dict:
     """Wipe ALL inventory state (items, listings, queue, log) — used to clear example/seed data
     for a clean slate. Operator-owned data; irreversible. Returns the counts removed."""

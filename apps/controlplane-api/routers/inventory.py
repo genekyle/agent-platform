@@ -15,17 +15,20 @@ router = APIRouter()
 MAX_PHOTO_BYTES = 12 * 1024 * 1024  # 12 MB per photo — generous for a phone shot, bounds abuse
 
 
+# All fields Optional/None so a PATCH is a MERGE, not a replace: model_dump(exclude_none=True)
+# drops any field the caller didn't send, leaving it unchanged. (With "" defaults, exclude_none
+# kept them — so a partial PATCH like {internal_status} silently wiped title/price/photos.)
 class ItemBody(BaseModel):
-    title: str = ""
-    description: str = ""
-    category: str = ""
-    price: str = ""
-    condition: str = ""
-    photos: list[str] = []
-    pickup_location: str = ""
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    price: Optional[str] = None
+    condition: Optional[str] = None
+    photos: Optional[list[str]] = None
+    pickup_location: Optional[str] = None
     internal_status: Optional[str] = None
-    notes: str = ""
-    attributes: dict[str, str] = {}       # category-conditional fields (Color/Material/SKU/…) — FB names
+    notes: Optional[str] = None
+    attributes: Optional[dict[str, str]] = None   # category-conditional fields (Color/Material/SKU/…) — FB names
 
 
 class QueueAddBody(BaseModel):
@@ -79,6 +82,28 @@ def inventory_create_listing(item_id: str, body: CreateListingBody):
     if view is None:
         raise HTTPException(status_code=404, detail="Item not found")
     return {"item": view}
+
+
+class ListingUpdateBody(BaseModel):
+    account_id: Optional[str] = None        # which account this listing is posted under
+    listing_url: Optional[str] = None       # the real Marketplace URL (flips stub → real)
+    external_listing_id: Optional[str] = None
+    listing_status: Optional[str] = None
+    simulated: Optional[bool] = None
+
+
+@router.patch("/api/inventory/listings/{listing_id}")
+def inventory_update_listing(listing_id: str, body: ListingUpdateBody):
+    """Correct/reassign a listing's attribution so we always know which account carries it (e.g. it
+    was recorded unattributed, or posted under a different account than intended). Merges only the
+    fields provided."""
+    import inventory
+    if body.account_id:
+        _validate_marketplace_account(body.account_id)
+    listing = inventory.update_listing(listing_id, body.model_dump(exclude_none=True))
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    return {"listing": listing}
 
 
 @router.post("/api/inventory/reset")
