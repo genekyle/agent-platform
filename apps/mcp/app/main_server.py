@@ -1139,7 +1139,9 @@ async def screenshot(body: ScreenshotRequest):
             await cdp.send("Page.bringToFront", {})  # surface an occluded window so capture works
             res = await cdp.send("Page.captureScreenshot", {"format": "png", "fromSurface": True,
                                                             "captureBeyondViewport": False})
-        data = (res.get("result") or {}).get("data")
+        # _CDPSession.send() returns the UNWRAPPED CDP result, so the PNG base64 is at
+        # res["data"] directly (not res["result"]["data"]).
+        data = res.get("data")
         if not data:
             return {"ok": False, "detail": "no screenshot data"}
         out_dir = Path(tempfile.gettempdir()) / "agent-mcp-live-shots"

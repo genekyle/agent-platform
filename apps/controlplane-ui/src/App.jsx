@@ -7,6 +7,7 @@ import { LabSection } from "./components/controlplane/LabSection";
 import { DomainsSection } from "./components/controlplane/DomainsSection";
 import { ModelsSection } from "./components/controlplane/ModelsSection";
 import { SystemSection } from "./components/controlplane/SystemSection";
+import { WorkdayAccountsPanel } from "./components/controlplane/workspace/WorkdayAccountsPanel";
 import { TrainingSection } from "./components/controlplane/TrainingSection";
 import { PageStatesSection } from "./components/controlplane/PageStatesSection";
 import { CoverageSection } from "./components/controlplane/CoverageSection";
@@ -1005,6 +1006,8 @@ export default function App() {
       : <DomainsHub onOpenDomain={openDomain} />;
   } else if (activePrimaryView === "system" && activeSectionId === "api-usage") {
     sectionContent = <ApiUsageSection usage={usage} loadUsage={loadUsage} />;
+  } else if (activePrimaryView === "system" && activeSectionId === "workday-accounts") {
+    sectionContent = <WorkdayAccountsPanel />;
   } else if (activePrimaryView === "system") {
     sectionContent = <SystemSection section={activeSectionId} systemStatus={systemStatus} loadSystemStatus={loadSystemStatus} />;
   } else if (activePrimaryView === "training" && activeSectionId === "label") {

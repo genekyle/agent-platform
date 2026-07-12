@@ -50,6 +50,21 @@ def target_css_point(bbox: dict[str, float], device_scale_factor: float = 1.0) -
     return (round(cx, 2), round(cy, 2))
 
 
+def parse_scroll_value(value: Optional[str], default: float = 600.0) -> float:
+    """Parse a scroll spec into signed CSS px (DOWN positive, matching CDP wheel deltaY). Accepts
+    'down'/'up' (± default), a bare number of px, or 'down 1000' / 'up 300'. Pure/testable."""
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    sign = -1.0 if s.startswith("up") else 1.0
+    s = s.replace("up", "").replace("down", "").strip()
+    try:
+        n = abs(float(s)) if s else default
+    except ValueError:
+        n = default
+    return sign * n
+
+
 class TrajectoryDriver(ABC):
     name = "base"
 
@@ -142,6 +157,27 @@ class TrajectoryDriver(ABC):
             await call("function(){ this.click(); }")
         return "element"
 
+    def _scroll_plan(self, total: float) -> list[tuple[float, float]]:
+        """Break a vertical scroll of `total` CSS px into (deltaY, pause_seconds) steps. Base = one
+        instant wheel notch (robotic baseline). HumanizedDriver overrides to several eased, jittered
+        notches with short read-pauses — a human trackpad/wheel signal, not a teleport."""
+        return [(total, 0.0)]
+
+    async def _do_scroll(self, cdp, request: ActionRequest) -> str:
+        """Vertical wheel scroll over a viewport point. `request.value` = 'down'/'up' (default ~600px),
+        a number of px, or 'down 1000'. Positive deltaY scrolls down. Dispatches this driver's plan."""
+        import asyncio
+        total = parse_scroll_value(request.value)
+        x, y = target_css_point(request.target_bbox, request.device_scale_factor)
+        if not x and not y:  # no anchor bbox → scroll over mid-viewport
+            x, y = 400.0, 400.0
+        for delta, pause in self._scroll_plan(total):
+            await cdp.send("Input.dispatchMouseEvent",
+                           {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta})
+            if pause:
+                await asyncio.sleep(pause)
+        return "scroll"
+
     async def _select_option(self, cdp, object_id: str, value: str) -> None:
         """Choose `value` in a dropdown — handles BOTH a native <select> (set value +
         dispatch change) and a custom ARIA combobox (click to open, then click the option
@@ -193,9 +229,12 @@ class DirectDriver(TrajectoryDriver):
             target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
             async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
                 cdp = _CDPSession(ws)
+                # Scroll is viewport-level (no target node); dispatch this driver's wheel plan.
+                if request.action_id == "scroll":
+                    mode = await self._do_scroll(cdp, request)
                 # Prefer ELEMENT-based action when we have the node id (robust); fall back
                 # to coordinate-clicking only when no backend_node_id was provided.
-                if request.backend_node_id is not None:
+                elif request.backend_node_id is not None:
                     mode = await self._element_act(cdp, request, start=start)
                 else:
                     path = await self._path_to(x, y, start)

@@ -113,6 +113,11 @@ export const CONTROL_PLANE_NAV = {
         label: "API Usage",
         subtitle: "Claude API spend and token usage, tagged by purpose, with links to the Anthropic Console.",
       },
+      {
+        id: "workday-accounts",
+        label: "Workday Accounts",
+        subtitle: "Per-employer Workday/ATS logins for cross-site applications — encrypted into the local vault.",
+      },
     ],
   },
 };

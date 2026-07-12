@@ -66,10 +66,14 @@ export const DOMAIN_CATALOG = [
     label: "Gmail",
     short: "Gmail",
     icon: "📧",
+    // A real training domain (its registry entry owns the shared Google SSO page-states — the home
+    // for single-sign-on training data — and the fetch_login_code errand goal). The operator
+    // WORKSPACE isn't built yet, so the tile stays non-clickable; training capture is live.
     kind: "coming_soon",
+    provider: "google",
     host: "gmail",
-    responsibility: "Fetch verification codes and run cross-domain email errands.",
-    blurb: "Email errands — coming soon.",
+    responsibility: "Home for Google single-sign-on training data + the target of cross-domain 'fetch the login code' errands.",
+    blurb: "Google login + email errands — training live, workspace soon.",
     tabs: [{ id: "overview", label: "Overview" }],
   },
   {
@@ -86,6 +90,25 @@ export const DOMAIN_CATALOG = [
 ];
 
 export const DOMAINS_BY_ID = Object.fromEntries(DOMAIN_CATALOG.map((d) => [d.id, d]));
+
+// Provider groups — the bucket ABOVE domains. A provider is one company whose surfaces we drive as
+// separate domains but which share ONE identity/login (Google ▸ Gmail, Calendar, Docs, Sheets). The
+// backend `GET /api/providers` is authoritative; this static mirror lets the hub render the bucket
+// without an extra fetch (same pattern as DOMAIN_CATALOG). `planned` are declared-not-yet domains.
+export const PROVIDER_GROUPS = [
+  {
+    id: "google",
+    label: "Google",
+    icon: "🌐",
+    blurb: "One Google sign-in authenticates every Google surface; errands hand off to Gmail.",
+    planned: ["Calendar", "Docs", "Sheets"],
+  },
+];
+
+// Domain id -> provider id, derived from the catalog (a domain declares its `provider`).
+export const PROVIDER_OF_DOMAIN = Object.fromEntries(
+  DOMAIN_CATALOG.filter((d) => d.provider).map((d) => [d.id, d.provider]),
+);
 
 // Human copy for each automation mode — shown under the mode toggle so the operator knows
 // exactly what they're switching on.

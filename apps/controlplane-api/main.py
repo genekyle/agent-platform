@@ -74,6 +74,7 @@ from seed import (
     seed_actions,
     seed_application_answers,
     seed_facebook_extras,
+    seed_gmail_domain,
     seed_page_states,
     seed_training_registry,
 )
@@ -98,6 +99,7 @@ from routers import accounts as accounts_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
 from routers import facebook as facebook_router  # noqa: E402
 from routers import inventory as inventory_router  # noqa: E402
+from routers import providers as providers_router  # noqa: E402
 from routers import sessions as sessions_router  # noqa: E402
 from routers import workspace as workspace_router  # noqa: E402
 
@@ -448,6 +450,7 @@ def on_startup():
     with Session(engine) as db:
         seed_training_registry(db)
         seed_facebook_extras(db)
+        seed_gmail_domain(db)
         seed_page_states(db)
         seed_actions(db)
         backfill_goal_stages(db)
@@ -3167,6 +3170,18 @@ def list_assets(prefix: str = "marketplace"):
     return {"assets": assets.list_assets(prefix), "prefix": prefix}
 
 
+@router.get("/api/assets/documents")
+def list_document_assets(prefix: str = "documents"):
+    """Document assets (resumes, cover letters) + which one is the canonical resume. Domain-agnostic:
+    the apply flow uploads `resume_key` into any ATS file input (Indeed, Workday, company sites)."""
+    import assets
+    return {
+        "documents": assets.list_documents(prefix),
+        "resume_key": assets.resume_key(),
+        "resume_available": assets.resume_path() is not None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Channel browser — one persistent, health-checked, auto-healing browser per sales
 # channel that agents ATTACH to. Login is a supervised task through it (observe → drive
@@ -4941,6 +4956,7 @@ def create_app() -> FastAPI:
     app.include_router(application_answers_router.router)
     app.include_router(facebook_router.router)
     app.include_router(inventory_router.router)
+    app.include_router(providers_router.router)
     app.include_router(sessions_router.router)
     app.include_router(workspace_router.router)
 

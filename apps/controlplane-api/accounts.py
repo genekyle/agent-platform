@@ -53,7 +53,10 @@ _BUILTIN_ACCOUNTS: dict[str, dict[str, Any]] = {
     },
 }
 
-_EDITABLE_KEYS = ("domain_id", "label", "profile", "secret_ref", "status", "notes")
+# `kind` distinguishes a domain login (default) from a per-employer ATS account (e.g. "workday"),
+# and `login_url` is that ATS tenant's sign-in URL. Both are plain metadata — the PASSWORD still only
+# ever lives encrypted in the secrets vault (secret_ref="vault:..."), never on the record.
+_EDITABLE_KEYS = ("domain_id", "label", "profile", "secret_ref", "status", "notes", "kind", "login_url")
 _STATUSES = ("active", "disabled")
 
 
@@ -188,6 +191,8 @@ def _public(rec: dict[str, Any]) -> dict[str, Any]:
         "secret_backend": secret_ref.partition(":")[0] if ":" in secret_ref else "env",
         "status": rec.get("status", "active"),
         "notes": rec.get("notes", ""),
+        "kind": rec.get("kind", "domain"),
+        "login_url": rec.get("login_url", ""),
         "builtin": bool(rec.get("builtin")),
         "has_creds": has_creds,
         "username_hint": hint,

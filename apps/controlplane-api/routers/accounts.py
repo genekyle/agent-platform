@@ -21,6 +21,8 @@ class AccountBody(BaseModel):
     secret_ref: Optional[str] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    kind: Optional[str] = None          # "domain" (default) or "workday"/ATS per-employer account
+    login_url: Optional[str] = None     # the ATS tenant sign-in URL (metadata only, never a secret)
     # Credentials typed in the UI — encrypted straight into the secrets vault, never stored on the
     # account record. Both must be present to set; omitted (edit) = leave existing creds untouched.
     username: Optional[str] = None
@@ -105,6 +107,80 @@ def clear_account_credentials_ep(account_id: str):
     if acct is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return acct
+
+
+class LoginRequest(BaseModel):
+    # Which live browser + tab the login form is in. Defaults target the training Chrome + any
+    # Workday tab, which fits the current cross-site-apply context; override to point elsewhere.
+    browser_url: str = "http://127.0.0.1:9322"
+    tab_url: Optional[str] = "myworkdayjobs.com"
+    tab_id: Optional[str] = None
+
+
+def _match_login_fields(candidates: list) -> dict:
+    """Best-effort {email, password, submit} backend_node_ids from AX candidates for a generic login
+    form. Skips the 'verify new password' (account-create) field and the bot-honeypot inputs. The
+    submit is taken as the LAST sign-in/log-in control — the header 'Sign In' comes before the fields;
+    the real submit is the one after them."""
+    out: dict = {}
+    submit_nodes: list = []
+    for c in candidates:
+        role = (c.get("role") or "").lower()
+        name = (c.get("name") or c.get("caption") or "").lower()
+        nid = c.get("backend_node_id")
+        if role == "textbox" and "robot" not in name and "website" not in name:
+            if "email" in name and "email" not in out:
+                out["email"] = nid
+            elif "password" in name and "verify" not in name and "password" not in out:
+                out["password"] = nid
+        elif role == "button" and any(k in name for k in ("sign in", "log in", "login")) and "robot" not in name:
+            submit_nodes.append(nid)
+    if submit_nodes:
+        out["submit"] = submit_nodes[-1]
+    return out
+
+
+@router.post("/api/accounts/{account_id}/login")
+async def account_login_ep(account_id: str, body: LoginRequest):
+    """OPERATOR-TRIGGERED login (the panel's Login button). Resolves the account's credential from the
+    vault SERVER-SIDE (never returned) and drives the currently-open login form with the humanized
+    browser driver — the app's own password-manager-style auto-login, fired by the human's click.
+    Returns a STATUS ONLY (never the password). Does NOT solve 2FA/captcha — those escalate to the
+    human. If no login form is visible, it says so instead of guessing."""
+    import httpx
+
+    import accounts as accounts_mod
+    from settings import settings
+
+    creds = accounts_mod.resolve_creds(account_id)
+    if not creds:
+        raise HTTPException(status_code=400,
+                            detail="No stored credentials for this account — add them in the panel first.")
+    username, password = creds
+    scan_req = {"browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            scan = (await client.post(f"{settings.capture_server_url}/ax_scan", json=scan_req)).json()
+            fields = _match_login_fields(scan.get("candidates", []))
+            if "password" not in fields or "submit" not in fields:
+                return {"ok": False, "status": "no_login_form",
+                        "detail": f"No sign-in form visible in the target tab (found {sorted(fields)}). "
+                                  "Open the site's Sign In screen first, then press Login."}
+
+            async def _exec(action_id: str, node_id: int, value: Optional[str] = None) -> None:
+                await client.post(f"{settings.capture_server_url}/execute", json={
+                    "action_id": action_id, "backend_node_id": node_id, "target_bbox": {},
+                    "value": value, "browser_url": body.browser_url, "tab_url": body.tab_url,
+                    "tab_id": body.tab_id, "driver": "humanized"})
+
+            if "email" in fields:
+                await _exec("type", fields["email"], username)
+            await _exec("type", fields["password"], password)
+            await _exec("click", fields["submit"])
+        return {"ok": True, "status": "submitted",
+                "detail": "Sign-in submitted. If the site now asks for 2FA or a captcha, that step is yours."}
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Login driver unreachable: {exc}")
 
 
 @router.delete("/api/accounts/{account_id}")

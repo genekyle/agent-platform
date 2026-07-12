@@ -72,6 +72,21 @@ every state (rows 247–256).
 **Where it's encoded.** Captures 247–256; `apps/mcp/app/executor/driver.py` + `humanized.py` (scroll);
 `apps/controlplane-api/assets.py` (documents/resume). Still a live teacher drive, not yet a codified apply recipe.
 
+**Cross-site (Workday) apply recipe — operator-directed strategy (2026-07-11).** "Apply on company site"
+routes to the employer's own Workday tenant (`<employer>.wd5.myworkdayjobs.com`). Recipe facts to bake in:
+- **Workday needs a per-employer ACCOUNT + a résumé FILE.** The first step is always `Create Account/Sign In`
+  (the wall). The agent CANNOT do this — creating accounts and entering passwords to authenticate are hard
+  prohibitions, and that holds even when the operator has saved the password in the Workday Accounts vault
+  (saving ≠ logging into the live site). The operator does the site login by hand; then the agent drives.
+- **Workday steps:** Create Account/Sign In → Autofill with Resume → My Information → My Experience →
+  Application Questions → Voluntary Disclosures → Self Identify → Review.
+- **ALWAYS try Autofill-with-Resume, then CHECK (don't hand-input then check).** Operator's efficiency rule:
+  autofill from the résumé file, then VERIFY each parsed field lines up + fill only the gaps — fewer steps
+  than typing everything and then verifying. Résumé file = `assets.resume_path()` (GM_Resume.pdf).
+- **Secure per-employer credential store shipped:** `accounts.py` gained `kind="workday"` + `login_url`;
+  `WorkdayAccountsPanel.jsx` under System→Workday Accounts (operator types password → encrypted into the
+  secrets vault; only a masked hint returns; agent never handles plaintext). Point32Health shell seeded.
+
 ## 2026-07-10 — FB create-listing driven live for the first time + per-item OWNED photo uploads
 
 **Context.** A Facebook Marketplace training/selling session run *concurrently* with the live Indeed

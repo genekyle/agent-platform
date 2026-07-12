@@ -76,6 +76,26 @@ class HumanizedDriver(DirectDriver):
         await cdp.send("Input.dispatchMouseEvent",
                        {"type": "mouseReleased", "x": jx, "y": jy, "button": "left", "clickCount": 1})
 
+    def _scroll_plan(self, total: float) -> list[tuple[float, float]]:
+        """Human wheel scroll: several notches under an ease-in/out envelope with per-notch jitter and
+        short pauses (plus the occasional longer 'reading' pause), so it never lands as one instant
+        jump. Signed `total` (down positive) is preserved; the remainder is trued-up on a final notch."""
+        rng = self._rng
+        n = rng.randint(6, 11)
+        weights = [((i + 1) / n) * (1 - (i + 1) / n) + 0.15 for i in range(n)]  # slow-fast-slow
+        wsum = sum(weights) or 1.0
+        steps: list[tuple[float, float]] = []
+        for w in weights:
+            delta = total * (w / wsum) * rng.uniform(0.8, 1.2)
+            pause = rng.uniform(0.03, 0.13)
+            if rng.random() < 0.12:  # occasional longer read-pause
+                pause += rng.uniform(0.18, 0.55)
+            steps.append((delta, pause))
+        drift = total - sum(d for d, _ in steps)  # true up rounding/jitter so we land on ~total
+        if abs(drift) > 1.0:
+            steps.append((drift, rng.uniform(0.02, 0.08)))
+        return steps
+
     async def _apply_value(self, cdp, request: ActionRequest) -> None:
         if request.action_id in ("type", "select") and request.value:
             await self._clear_focused(cdp)          # don't append onto residue

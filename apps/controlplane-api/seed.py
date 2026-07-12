@@ -64,6 +64,30 @@ REGISTRY_SEED = {
             "validation_expectations": [{"kind": "host_match", "value": "linkedin.com"}],
             "config_version": "v1",
         },
+        {
+            # Gmail — first member of the "google" PROVIDER group (see providers.py). It is BOTH a
+            # real domain (its own inbox/thread surfaces) and the home for shared Google SSO
+            # training data: the google_signin_* states below are the ONE sign-in every Google
+            # domain reuses, captured here because Gmail is the surface that triggers login today.
+            # Also the target of cross-domain "sign in with a code" errands (goal fetch_login_code).
+            "domain_id": "gmail",
+            "display_name": "Gmail",
+            "host_patterns": ["mail.google.com", "accounts.google.com"],
+            "page_states": [
+                # Shared Google single-sign-on flow (provider-level; homed here for now).
+                {"page_state_id": "google_signin_email", "display_name": "Google Sign-in — Email"},
+                {"page_state_id": "google_signin_password", "display_name": "Google Sign-in — Password"},
+                {"page_state_id": "google_signin_2fa", "display_name": "Google Sign-in — 2-Step Verification"},
+                {"page_state_id": "google_signin_consent", "display_name": "Google OAuth Consent"},
+                # Gmail's own surfaces.
+                {"page_state_id": "inbox", "display_name": "Inbox"},
+                {"page_state_id": "email_thread", "display_name": "Email Thread"},
+                {"page_state_id": "login_wall", "display_name": "Login Wall"},
+            ],
+            "capture_defaults": {"profile": "viewport", "shot_types": ["viewport", "fullpage"]},
+            "validation_expectations": [{"kind": "host_match", "value": "google.com"}],
+            "config_version": "v1",
+        },
     ],
     "goals": [
         {"goal_id": "log_in", "domain_id": None, "display_name": "Log In", "action_type_hints": ["type", "click"]},
@@ -75,6 +99,10 @@ REGISTRY_SEED = {
         {"goal_id": "apply_to_job", "domain_id": "indeed_jobs", "display_name": "Apply to Job", "action_type_hints": ["click", "type", "select"]},
         {"goal_id": "search_linkedin_jobs", "domain_id": "linkedin_jobs", "display_name": "Search LinkedIn Jobs", "action_type_hints": ["type", "click"]},
         {"goal_id": "open_linkedin_job", "domain_id": "linkedin_jobs", "display_name": "Open LinkedIn Job", "action_type_hints": ["click"]},
+        # Gmail (google provider). fetch_login_code is the cross-domain errand hand-off — read a
+        # one-time sign-in code out of the inbox for another domain's "sign in with a code" flow.
+        {"goal_id": "fetch_login_code", "domain_id": "gmail", "display_name": "Fetch Login Code from Email", "action_type_hints": ["click", "type"]},
+        {"goal_id": "read_email", "domain_id": "gmail", "display_name": "Read Email", "action_type_hints": ["click"]},
     ],
     "tasks": [
         {"task_id": "browser_open_tab", "scope_level": "browser", "domain_id": None, "goal_id": None, "display_name": "Open target tab"},
@@ -83,6 +111,18 @@ REGISTRY_SEED = {
         {"task_id": "indeed_apply_flow", "scope_level": "goal", "domain_id": "indeed_jobs", "goal_id": "apply_to_job", "display_name": "Complete Indeed apply flow"},
     ],
     "scenarios": [
+        {
+            # Supervised one-time Google sign-in for the shared `google` profile (gmail domain).
+            # Start state is the Google email screen; the flow walks email → password → 2FA → inbox.
+            "scenario_id": "gmail_login_google_signin",
+            "domain_id": "gmail",
+            "goal_id": "log_in",
+            "task_id": None,
+            "display_name": "Google Sign-in -> Gmail Inbox",
+            "start_page_state": "google_signin_email",
+            "description": "Supervised one-time Google sign-in for the shared google profile (email -> password -> 2FA -> inbox).",
+            "capture_profile_override": None,
+        },
         {
             "scenario_id": "indeed_search_results_open_job_posting",
             "domain_id": "indeed_jobs",
@@ -169,6 +209,44 @@ def seed_facebook_extras(db: Session) -> None:
     for payload in want_tasks:
         if not db.scalar(select(TaskRegistry.task_id).where(TaskRegistry.task_id == payload["task_id"])):
             db.add(TaskRegistry(status="active", **payload))
+            changed = True
+    if changed:
+        db.commit()
+
+
+def seed_gmail_domain(db: Session) -> None:
+    """Idempotent top-up + RECONCILE for the Gmail domain + its goals on an ALREADY-seeded DB —
+    the base seeder only runs on an empty registry, so a DB seeded before Gmail existed would miss
+    it. A barebones `gmail` row may also have been added by hand/UI; if so we merge in the canonical
+    Google-SSO page_states (the home for single-sign-on training data) and host patterns without
+    removing anything another session may own. See providers.py for the google provider group."""
+    want = next((d for d in REGISTRY_SEED["domains"] if d["domain_id"] == "gmail"), None)
+    if want is None:
+        return
+    changed = False
+    row = db.get(DomainRegistry, "gmail")
+    if row is None:
+        db.add(DomainRegistry(status="active", **want))
+        changed = True
+    else:
+        # Merge (reassign so SQLAlchemy tracks the JSON change), never remove.
+        have_states = {s.get("page_state_id") for s in (row.page_states or [])}
+        missing_states = [s for s in want["page_states"] if s["page_state_id"] not in have_states]
+        if missing_states:
+            row.page_states = (row.page_states or []) + missing_states
+            changed = True
+        have_hosts = set(row.host_patterns or [])
+        missing_hosts = [h for h in want["host_patterns"] if h not in have_hosts]
+        if missing_hosts:
+            row.host_patterns = (row.host_patterns or []) + missing_hosts
+            changed = True
+    for payload in [g for g in REGISTRY_SEED["goals"] if g.get("domain_id") == "gmail"]:
+        if not db.scalar(select(GoalRegistry.goal_id).where(GoalRegistry.goal_id == payload["goal_id"])):
+            db.add(GoalRegistry(status="active", **payload))
+            changed = True
+    for payload in [s for s in REGISTRY_SEED["scenarios"] if s.get("domain_id") == "gmail"]:
+        if not db.scalar(select(ScenarioRegistry.scenario_id).where(ScenarioRegistry.scenario_id == payload["scenario_id"])):
+            db.add(ScenarioRegistry(status="active", **payload))
             changed = True
     if changed:
         db.commit()

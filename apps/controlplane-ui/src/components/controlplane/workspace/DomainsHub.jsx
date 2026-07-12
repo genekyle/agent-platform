@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getJSON } from "./api";
-import { DOMAIN_CATALOG } from "./domains";
+import { DOMAIN_CATALOG, PROVIDER_GROUPS } from "./domains";
 
 // The Domains hub — the landing that replaces "Selling" and "Indeed" sitting loose in the nav.
 // One tile per domain, each answering the same glanceable questions: is it healthy, what's the
@@ -78,13 +78,45 @@ export function DomainsHub({ onOpenDomain, tilesById }) {
 
   const byId = tilesById || fetched;
 
+  // Split the catalog into standalone domains and provider buckets (Google ▸ Gmail, …). A provider
+  // group renders as its own titled section so the operator can SEE that these surfaces share one
+  // identity — the "bucket above domains" made visible.
+  const standalone = DOMAIN_CATALOG.filter((d) => !d.provider);
+  const grouped = PROVIDER_GROUPS.map((g) => ({
+    group: g,
+    domains: DOMAIN_CATALOG.filter((d) => d.provider === g.id),
+  })).filter((x) => x.domains.length > 0);
+
   return (
     <div className="section-body">
       <div className="domain-tiles">
-        {DOMAIN_CATALOG.map((d) => (
+        {standalone.map((d) => (
           <Tile key={d.id} domain={d} tile={byId[d.id]} onOpen={onOpenDomain} />
         ))}
       </div>
+
+      {grouped.map(({ group, domains }) => (
+        <div key={group.id} className="provider-group" style={{ marginTop: 20 }}>
+          <div
+            className="provider-group__head"
+            style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}
+          >
+            <span style={{ fontSize: 18 }}>{group.icon}</span>
+            <span className="summary-title" style={{ fontWeight: 600 }}>{group.label}</span>
+            <span className="domain-tile__blurb" style={{ margin: 0 }}>{group.blurb}</span>
+            {group.planned?.length > 0 && (
+              <span className="badge badge--muted" style={{ marginLeft: "auto" }}>
+                Planned: {group.planned.join(" · ")}
+              </span>
+            )}
+          </div>
+          <div className="domain-tiles">
+            {domains.map((d) => (
+              <Tile key={d.id} domain={d} tile={byId[d.id]} onOpen={onOpenDomain} />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
