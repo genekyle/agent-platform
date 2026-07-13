@@ -56,8 +56,13 @@ _BUILTIN_ACCOUNTS: dict[str, dict[str, Any]] = {
 # `kind` distinguishes a domain login (default) from a per-employer ATS account (e.g. "workday"),
 # and `login_url` is that ATS tenant's sign-in URL. Both are plain metadata — the PASSWORD still only
 # ever lives encrypted in the secrets vault (secret_ref="vault:..."), never on the record.
-_EDITABLE_KEYS = ("domain_id", "label", "profile", "secret_ref", "status", "notes", "kind", "login_url")
-_STATUSES = ("active", "disabled")
+# `company` + `ats_id` tie a per-employer ATS login to its company and platform (the company-first
+# org). `username_hint` is the safe-to-show login id (e.g. genomags@gmail.com) — NOT a secret.
+_EDITABLE_KEYS = ("domain_id", "label", "profile", "secret_ref", "status", "notes", "kind",
+                  "login_url", "company", "ats_id", "username_hint")
+# "pending" = a per-employer ATS account we've registered but whose login the operator hasn't
+# created on the site yet (the human-does-the-signup step). Becomes "active" once creds are saved.
+_STATUSES = ("active", "disabled", "pending")
 
 
 # --------------------------------------------------------------------------- storage
@@ -193,6 +198,8 @@ def _public(rec: dict[str, Any]) -> dict[str, Any]:
         "notes": rec.get("notes", ""),
         "kind": rec.get("kind", "domain"),
         "login_url": rec.get("login_url", ""),
+        "company": rec.get("company", ""),
+        "ats_id": rec.get("ats_id", ""),
         "builtin": bool(rec.get("builtin")),
         "has_creds": has_creds,
         "username_hint": hint,

@@ -10,6 +10,8 @@ import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
 import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
 import { IndeedWorkspaceSection } from "../IndeedWorkspaceSection";
+import { AccountsSection } from "../AccountsSection";
+import { DOMAINS_BY_ID } from "./domains";
 
 // The shared five-layer workspace shell. Every domain gets the SAME operating pattern — a
 // computed Status + one action, an Automation mode, and an Overview cockpit (Attention · Goals ·
@@ -25,7 +27,12 @@ const TAB_TO_SECTION = {
 
 function DataTab({ domain, tab, onOpenTraining }) {
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
-  if (tab === "accounts") return <AccountsPanel domain={domain} />;
+  if (tab === "accounts") {
+    // Career-Search sub-domains (Workday, …) show the company-first ATS accounts filtered to THIS
+    // ATS; other domains keep the legacy per-domain accounts panel.
+    if (domain.parent === "career_search") return <AccountsSection atsFilter={domain.id} />;
+    return <AccountsPanel domain={domain} />;
+  }
   const section = TAB_TO_SECTION[domain.id]?.[tab];
   if (domain.id === "facebook_marketplace") return <FacebookMarketplaceSection section={section} />;
   if (domain.id === "indeed_jobs") return <IndeedWorkspaceSection section={section} />;
@@ -77,7 +84,52 @@ function Overview({ domain, mode, goalState, onToggleGoal }) {
   );
 }
 
-export function DomainWorkspace({ domain, activeTab, onChangeTab, onOpenTraining }) {
+// A group/parent domain (Career Search): no driven surface of its own — it lists its sub-domains and
+// holds the shared Accounts. Rendered instead of the Status/Automation/cockpit shell.
+function GroupWorkspace({ domain, activeTab, onChangeTab, onOpenDomain }) {
+  const tabs = domain.tabs || [{ id: "overview", label: "Sub-domains" }];
+  const tab = tabs.find((t) => t.id === activeTab) ? activeTab : "overview";
+  const children = (domain.children || []).map((id) => DOMAINS_BY_ID[id]).filter(Boolean);
+  return (
+    <div className="section-body">
+      <div className="layer">
+        <div className="layer__head"><div className="layer__title">{domain.icon} {domain.label}</div></div>
+        <p className="mode-hint" style={{ marginTop: 0 }}>{domain.responsibility}</p>
+      </div>
+      {tabs.length > 1 && (
+        <div className="workspace-tabs">
+          {tabs.map((t) => (
+            <button key={t.id} className={`workspace-tab ${t.id === tab ? "is-active" : ""}`} onClick={() => onChangeTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {tab === "accounts" ? <AccountsSection /> : (
+        <div className="domain-tiles">
+          {children.map((c) => {
+            const soon = c.kind === "coming_soon";
+            return (
+              <button key={c.id} className={`domain-tile ${soon ? "domain-tile--soon" : ""}`}
+                disabled={soon} onClick={() => !soon && onOpenDomain?.(c.id)}>
+                <div className="domain-tile__head">
+                  <span className="domain-tile__icon">{c.icon}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="domain-tile__title">{c.label}</div>
+                    <div className="domain-tile__blurb">{c.blurb}</div>
+                  </div>
+                </div>
+                {soon && <div style={{ marginTop: 4 }}><span className="badge badge--muted">Coming soon</span></div>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function DomainWorkspace({ domain, activeTab, onChangeTab, onOpenTraining, onOpenDomain }) {
   const [settings, setSettings] = useState({ automation_mode: "manual", goals: {} });
   const [saving, setSaving] = useState(false);
 
@@ -99,6 +151,12 @@ export function DomainWorkspace({ domain, activeTab, onChangeTab, onOpenTraining
 
   const onChangeMode = (mode) => patch({ automation_mode: mode });
   const onToggleGoal = (goalId, enabled) => patch({ goals: { [goalId]: enabled } });
+
+  // Group/parent domains (Career Search) render their own sub-domain + Accounts view (hooks above
+  // still run unconditionally — this branch is after them, so rules-of-hooks holds).
+  if (domain.kind === "group") {
+    return <GroupWorkspace domain={domain} activeTab={activeTab} onChangeTab={onChangeTab} onOpenDomain={onOpenDomain} />;
+  }
 
   const tabs = domain.tabs || [{ id: "overview", label: "Overview" }];
   const tab = tabs.find((t) => t.id === activeTab) ? activeTab : "overview";

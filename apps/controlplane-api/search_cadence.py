@@ -11,8 +11,6 @@ cadence we follow by hand. Exposed at GET /api/search/cadence.
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 # Bounds keep the cadence SAFE + human-paced (see feedback_bot_safety_live_sessions):
 # don't sweep endlessly, don't churn tabs, reach apply pages like a human.
 BOUNDS = {
@@ -22,10 +20,17 @@ BOUNDS = {
     # Distance floor: every search runs at >= this radius. Enforced by /api/search/sweep clicking
     # the Indeed distance filter (not a radius= URL param) up to this value before extracting.
     "min_radius_miles": 50,
-    "navigate_by": "search results only — NEVER job-detail URLs or new/closed tabs",
+    "navigate_by": "search results only — NEVER job-detail URLs or bot-like tab churn",
     "interact_by": "CLICK like a human — click cards to open the in-page detail pane, click "
                    "pagination numbers to page forward; scroll the page; never URL-jump",
     "apply_requires": "explicit user approval per job before the final Submit",
+    # Tab hygiene: Indeed opens the apply flow (smartapply) OR a cross-site ATS (Workday/…) in a
+    # NEW tab. The "no tab churn" rule forbids scraper-like opening/closing of many tabs — it does
+    # NOT forbid the human-natural epilogue: once ONE application is finished (submitted, or
+    # abandoned at a human-required wall), CLOSE that single apply tab and return to the search
+    # tab, then continue. That cleanup is driven via mcp /close_tab (focus_tab_url = the search).
+    "tab_hygiene": "close the ONE finished apply tab and refocus the search tab before the next "
+                   "prospect; never open/close tabs to browse — that single close is not churn",
 }
 
 # Structured SEARCH/triage spine — the search-phase analogue of apply_recipe.INDEED_APPLY_RECIPE.
@@ -87,6 +92,11 @@ CADENCE_MODES = {
             "The operator handpicks which (if any) of that page's shortlist to apply to — final say.",
             "For each pick: verify the pane shows the INTENDED job, then run the apply cadence "
             "(quick-apply drive, or cross-site recipe) — captcha/submit gates per the apply rules.",
+            "APPLY EPILOGUE (every pick): the apply opens in a NEW tab (smartapply or the ATS). "
+            "When it finishes — submitted, OR abandoned at a human-required wall (e.g. a Workday "
+            "account gate we can't create) — record the outcome, then CLOSE that apply tab and "
+            "refocus the search tab (mcp /close_tab, focus_tab_url=the search). Don't leave orphan "
+            "apply tabs; return to exactly where triage left off.",
             "Only after the page's picks are handled: CLICK pagination to the next page. Repeat "
             "until the query's pages are exhausted, then record_outcome on the target.",
         ],
@@ -94,7 +104,8 @@ CADENCE_MODES = {
                     "per-page shortlist + operator picks", "application_status + provenance"],
         "stops_when": "all pages done, bounds hit, a live captcha gate, or the operator pauses",
         "does_not": ["apply without the operator's per-job pick", "skip the distance filter",
-                     "advance a page while its picks are unfinished", "auto-solve captchas"],
+                     "advance a page while its picks are unfinished", "auto-solve captchas",
+                     "leave the finished apply tab open (close it + refocus search before the next pick)"],
     },
     # ---- TASK 2: act on good fits -------------------------------------------
     "apply_triage": {
@@ -108,45 +119,28 @@ CADENCE_MODES = {
             "right apply recipe (Indeed quick-apply | Workday | Greenhouse | ...).",
             "Drive the apply cadence; PAUSE at the final Submit for explicit user approval.",
             "On submit: mark observed_jobs.applied + record which page + which search it came from.",
-            "Then continue (next approved job / next page).",
+            "Close the finished apply tab and refocus the search tab (mcp /close_tab), then "
+            "continue (next approved job / next page).",
         ],
         "records": ["application_status (applied/skipped)", "source page", "search_query",
                     "application_platform"],
         "stops_when": "shortlist handled or user pauses",
-        "does_not": ["auto-submit without approval", "URL-jump to jobs", "churn tabs"],
+        # "churn tabs" = scraper-like open/close of many tabs. Closing the ONE finished apply tab
+        # to return to search is the expected epilogue (see BOUNDS.tab_hygiene), not churn.
+        "does_not": ["auto-submit without approval", "URL-jump to jobs", "churn tabs to browse"],
     },
 }
 
 # Where an application actually routes — apply is CROSS-SITE, not Indeed-only.
-# (project_application_is_cross_site: Workday majority, but many others.)
-_PLATFORM_HOSTS = {
-    "smartapply.indeed.com": "indeed_quick_apply",
-    "myworkdayjobs.com": "workday",
-    "myworkday.com": "workday",
-    "greenhouse.io": "greenhouse",
-    "lever.co": "lever",
-    "icims.com": "icims",
-    "ashbyhq.com": "ashby",
-    "taleo.net": "taleo",
-    "successfactors.com": "successfactors",
-    "smartrecruiters.com": "smartrecruiters",
-    "workable.com": "workable",
-}
-
-
+# (project_application_is_cross_site: Workday majority, but many others.) The ATS host map and the
+# per-ATS structure now live in ats_registry.py (each ATS is domain-like, with company→ATS
+# generalization); this function delegates so there's ONE source of truth for "which ATS is this."
 def classify_apply_platform(url: str) -> str:
-    """Map an apply destination URL to its ATS platform. Unknown external host =
-    'company_site' (still handled — just not a recognized ATS yet). Drives which
-    per-platform apply recipe to run; keeps the apply task generalized, not siloed."""
-    host = (urlparse(url or "").hostname or "").lower()
-    if not host:
-        return "unknown"
-    for needle, platform in _PLATFORM_HOSTS.items():
-        if needle in host:
-            return platform
-    if "indeed.com" in host:
-        return "indeed_quick_apply"
-    return "company_site"
+    """Map an apply destination URL to its ATS platform id (see ats_registry.classify_ats).
+    Unknown external host = 'company_site'; empty = 'unknown'. Drives which per-platform apply
+    recipe to run; keeps the apply task generalized across companies sharing an ATS, not siloed."""
+    from ats_registry import classify_ats
+    return classify_ats(url)
 
 
 # Apply OUTCOME branches — the "random events" an Indeed application can hit after the form.
@@ -189,11 +183,12 @@ def classify_apply_outcome(page_text: str, url: str = "") -> dict:
 
 def cadence_spec() -> dict:
     """The full cadence definition — what GET /api/search/cadence returns."""
+    from ats_registry import ATS_PLATFORMS
     return {
         "bounds": BOUNDS,
         "modes": CADENCE_MODES,
         "search_recipe": SEARCH_RECIPE,
-        "known_platforms": sorted(set(_PLATFORM_HOSTS.values()) | {"company_site"}),
+        "known_platforms": sorted({a["ats_id"] for a in ATS_PLATFORMS} | {"company_site"}),
         "apply_outcomes": [{"outcome": o, "human_required": h} for o, h, _ in _APPLY_OUTCOMES],
         "note": "Two search tasks: extraction_sweep (record everything) vs apply_triage "
                 "(triage→approve→apply→record). Apply routes by platform; not Indeed-only. "

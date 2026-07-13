@@ -438,3 +438,152 @@ recorded `run_live` loop.
 **Where it's encoded now.** `apps/controlplane-api/facebook_recipe.py` (`match_login_fields` + the
 login-controls comment block), `apps/controlplane-api/channel_browser.py` (no more `login_path`),
 `PRINCIPLES.md` §6, `interaction-layers.md`.
+
+---
+
+## 2026-07-12 — The apply cadence has an EPILOGUE: close the finished apply tab, refocus search
+
+**What was missing.** The `targeted_search_and_apply` / `apply_triage` cadences drove a pick through
+the apply flow and then jumped straight to "click pagination to the next page" — leaving the
+newly-opened apply tab (smartapply for quick-apply, or the ATS host for cross-site) open. Over a
+session that orphans a stack of apply tabs, and the loop never cleanly "returns to the search." There
+was also no capability to close a tab at all; the bounds only said "never churn tabs."
+
+**What's true / what we did.** Indeed opens the apply in a NEW tab. The human-natural epilogue —
+finish (submit) OR abandon at a human-required wall (e.g. a Workday **account-creation gate** we
+cannot create), record the outcome, then CLOSE that one apply tab and return to the search tab — is
+now a first-class step:
+- New MCP capability **`POST /close_tab`** (`apps/mcp/app/main_server.py`): closes a tab by id/url via
+  the CDP HTTP endpoint (`/json/close/<id>`), optionally activates `focus_tab_url` (the search).
+  SAFETY: refuses to close the control panel (`localhost:5173`) or the last remaining page tab.
+- `search_cadence.py`: `BOUNDS.tab_hygiene` carves the single intentional close OUT of the "no tab
+  churn" rule; the epilogue step added to both apply modes.
+- `apply_recipe.py`: terminal `indeed_apply_submitted` action + new `APPLY_EPILOGUE` + the
+  `account_creation` branch note now say "record → close apply tab → refocus search."
+
+**The distinction that matters.** "No tab churn" forbids scraper-like opening/closing of many tabs to
+browse. Closing the ONE finished apply tab to return to search is expected cleanup, not churn — a
+human does exactly that. The bounds now say so explicitly.
+
+**Verified.** Live on the Indeed session (port 9322): closed a completed smartapply `post-apply`
+confirmation tab AND a Point32Health Workday `userHome` (account-wall, prospect #32) tab via
+`/close_tab`, each refocusing `indeed.com/jobs` — ended on the single search tab, focused, where
+triage left off.
+
+**Where it's encoded now.** `apps/mcp/app/main_server.py` (`/close_tab`),
+`apps/controlplane-api/search_cadence.py` (`BOUNDS.tab_hygiene` + both apply modes),
+`apps/controlplane-api/apply_recipe.py` (`APPLY_EPILOGUE`, terminal step, `account_creation` note).
+
+---
+
+## 2026-07-12 — Applying is organized as Career-Search domain → ATS group (each ATS domain-like)
+
+**The structure (defined live with the operator).** Applying is cross-site and was an unorganized
+pile. It's now a taxonomy:
+- **Career Search** = the domain CATEGORY for job engines (Indeed, LinkedIn, ZipRecruiter, …). "Indeed"
+  isn't the domain; "career-search engine" is, and Indeed/LinkedIn/… are members. Where we SEARCH.
+- **ATS group** = the third-party apply portals you hand off TO (Workday, iCIMS, Taleo, Greenhouse,
+  Lever, SuccessFactors, …). Each ATS is treated like its OWN domain: its own recipe AND its own
+  training-data bucket (captures tagged `domain_id=<ats_id>`, so rollups accrue per-ATS not per-company).
+
+**Why per-ATS.** An ATS renders the same component library across every tenant (Workday's
+`data-automation-id`s are identical for State Street / Takeda / Point32Health). So training
+GENERALIZES across companies sharing an ATS. The **company→ATS map** (`ats_for_company` /
+`record_company_ats`, persisted `cache/company_ats.json`) is the hook: the first time we drive
+Company X's Workday we already reuse everything learned on every other Workday.
+
+**Never auto-create an account.** ATSs with `auth: "account"` (Workday, iCIMS, Taleo, …) gate the
+apply behind a per-employer candidate account — escalate to the operator (persistent pre-authed
+profile), never sign up. Point32Health's Workday `userHome` account-wall (prospect #32) is the case
+that motivated this; recorded as `Point32Health → workday`.
+
+**Application preferences** are operator-owned notes attached to the career-search domain
+(`application_preferences.py`, `cache/application_preferences.json`): a `structured` block (comp
+target $130k, no sponsorship, 1–2 onsite days, decline demographics) + append-only `notes` (why a
+role was skipped). The apply shortlister/filler reads these.
+
+**Where it's encoded now.** `ats_registry.py` (CAREER_SEARCH + ATS_PLATFORMS + company→ATS store +
+`classify_ats`), `application_preferences.py`, `routers/career_search.py`
+(GET `/api/career_search/ats`, GET/POST `/application_preferences`, POST `/ats/company`),
+`search_cadence.classify_apply_platform` now delegates to `ats_registry.classify_ats` (one source of
+truth). Verified live: endpoints return the registry; Point32Health shows under Workday; both
+session exclusions (Knipper Sr BI, Fidelity Alt-Investments) recorded as preference notes.
+
+---
+
+## 2026-07-12 — Account-walled ATS jobs: build the accounts system, pause at CREATION (don't skip)
+
+**What was wrong.** Account-gated ATS applications (Workday/Phenom/iCIMS/… candidate-account walls)
+were being SKIPPED as "can't, unsafe." The operator was right that this is wrong — it drops jobs they
+want. The safety rule only forbids a narrow act (the agent typing a password into a site or submitting
+an account creation/login), not organizing accounts or generating credentials.
+
+**The workaround (built + verified end-to-end).** Company-first ATS accounts:
+- `ats_accounts.py` on top of the existing `accounts.py` vault. `derive_password("U.S. Bank National
+  Association")` → INITIALS "USBNA" (first letter of each token, splits on spaces AND punctuation) +
+  a shared suffix in gitignored `.env` (`ATS_ACCOUNT_PW_SUFFIX`); username `ATS_ACCOUNT_USERNAME`
+  (genomags@gmail.com). `ensure_account(company, ats_id)` registers a company↔ATS login as `pending`.
+- Endpoints: `/api/career_search/accounts{,/ensure,/credentials}`. New top-level **Accounts** UI tab
+  (`AccountsSection.jsx`), company→ATS, reveal generated login, Save login (→vault), operator ▶ Login.
+- `accounts.py`: `_STATUSES` += "pending"; `_EDITABLE_KEYS` += company/ats_id/username_hint.
+- New ATS registered from live intake: **Phenom** (careers.<co>.com; U.S. Bank → careers.usbank.com).
+
+**The boundary (unchanged, load-bearing).** The agent GENERATES + ORGANIZES credentials and drives up
+to the signup/login form. The agent does NOT type a password into a site or submit account
+creation/login — the OPERATOR does that one step (the "pause at the creation point"), then automation
+resumes. This is the honest line: build everything, pause at the keystroke, never refuse-and-skip.
+
+**Where it's encoded now.** `apps/controlplane-api/ats_accounts.py`, `accounts.py` (pending status +
+keys), `routers/career_search.py`, `apps/controlplane-ui/.../AccountsSection.jsx` + `navigation.js` +
+`App.jsx`, `.env` (ATS_ACCOUNT_USERNAME / ATS_ACCOUNT_PW_SUFFIX, gitignored).
+
+---
+
+## 2026-07-12 — Workday account lifecycle: create-account recipe + sign-in leg = one loop
+
+**What.** A per-employer Workday login is CREATED before it can sign in, so the account has a
+lifecycle STATE and the button differs by state: `needs_creation`/`pending` → "Create Account";
+`active` → "Sign In". Built both legs as DATA recipes (by accessible name, churn-immune AX layer),
+verified against U.S. Bank's live Workday tenant:
+- `WORKDAY_CREATE_ACCOUNT_RECIPE` — fields Email Address / Password / Verify New Password /
+  acknowledge-checkbox → "Create Account"; honeypot ("Enter website… for robots only") NEVER filled.
+- `WORKDAY_SIGN_IN_RECIPE` — Email + Password → "Sign In".
+- `WORKDAY_ACCOUNT_LOOP` + `ats_accounts.next_account_action()` pick the leg from the account status;
+  then hand to `WORKDAY_APPLY_RECIPE`. Endpoints: `/api/career_search/accounts/next-action`,
+  `/mark-created`; recipes on `/api/runtime/apply_recipe`.
+
+**The point.** create-account → sign-in → apply is ONE loop the (future, operator-run) **Account
+Manager** executes so the operator doesn't manage it. BOUNDARY unchanged: these recipes are DATA;
+they're run by the operator-triggered Account Manager / the operator, NEVER the agent's own loop —
+the agent never types passwords into a site or submits account creation/sign-in.
+
+**Also fixed:** `close_tab` now refuses to close a different tab when a specific tab_id/tab_url was
+given but doesn't match (a truncated id fell through to closing the wrong tab live).
+
+---
+
+## 2026-07-12 — Career Search parent domain + Accounts moved in + operator "Create account"
+
+**UI/domain restructure.** Domains is now hierarchical: **Career Search** (`kind: "group"`) is the
+parent domain; the job engines + ATS (Indeed, LinkedIn, Workday) are its `children` and declare
+`parent: "career_search"` so they nest (hidden from the top-level hub, shown inside Career Search's
+"Sub-domains" tab). The top-level **Accounts** nav was REMOVED — the company-first `AccountsSection`
+now lives in Career Search's **Accounts** tab (`GroupWorkspace` in DomainWorkspace.jsx renders the
+group: no Status/Automation shell, just Sub-domains + Accounts). Files: `workspace/domains.js`,
+`DomainWorkspace.jsx`, `DomainsHub.jsx` (filter out `parent`), `App.jsx` (pass onOpenDomain, drop
+accounts route), `navigation.js`.
+
+**Operator "Create account" executor.** `POST /api/career_search/accounts/create-account` — the
+create leg of the account loop, built on the SAME operator-triggered pattern as the existing
+`/api/accounts/{id}/login`: resolves the GENERATED credential server-side (never returned), scans the
+live Workday Create-Account form, fills Email/Password/Verify + the acknowledge checkbox (SKIPS the
+bot honeypot), clicks Create Account, stores creds in the vault + marks the account active. UI: a
+"+ Create account" button on pending accounts. BOUNDARY: runs ONLY on the operator's button press —
+the AGENT must never call it from its own tool-loop (never creates accounts / enters creds itself).
+Also: deleted the stale U.S. Bank→Phenom account (Workday is the real apply backend).
+
+**Rail nesting refinement.** The Domains SIDEBAR rail (not just the hub) is now hierarchical: only
+top-level domains show at the "All Domains" level; Career Search always expands to its nested
+Indeed / LinkedIn / Workday + a 🔐 Accounts item (`App.jsx` flatMap over `!d.parent`, `openDomainTab`).
+Each sub-domain's own Accounts tab shows the company-first accounts filtered to THAT ATS
+(`AccountsSection atsFilter=domain.id`); Workday now has an Overview + Accounts tab.

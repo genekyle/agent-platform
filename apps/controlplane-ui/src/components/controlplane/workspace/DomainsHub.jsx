@@ -81,7 +81,9 @@ export function DomainsHub({ onOpenDomain, tilesById }) {
   // Split the catalog into standalone domains and provider buckets (Google ▸ Gmail, …). A provider
   // group renders as its own titled section so the operator can SEE that these surfaces share one
   // identity — the "bucket above domains" made visible.
-  const standalone = DOMAIN_CATALOG.filter((d) => !d.provider);
+  // Exclude domains nested under a parent group (Indeed/LinkedIn/Workday live inside Career Search,
+  // not at the top level) and provider-bucket members.
+  const standalone = DOMAIN_CATALOG.filter((d) => !d.provider && !d.parent);
   const grouped = PROVIDER_GROUPS.map((g) => ({
     group: g,
     domains: DOMAIN_CATALOG.filter((d) => d.provider === g.id),

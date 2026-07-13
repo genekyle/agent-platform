@@ -35,8 +35,21 @@ INDEED_APPLY_RECIPE = [
      "expect": ["indeed_apply_review", "indeed_apply_demographics"]},
     {"step": 6, "state": "indeed_apply_review",           "action": "Submit (human at captcha)",
      "expect": ["indeed_apply_submitted", "indeed_apply_ai_recruiter_gate", "captcha"]},
-    {"step": 7, "state": "indeed_apply_submitted",        "action": "done", "expect": []},
+    {"step": 7, "state": "indeed_apply_submitted",        "action": "record applied + provenance, "
+     "then EPILOGUE: close this apply tab and refocus the search tab (mcp /close_tab, "
+     "focus_tab_url=the search) so the next prospect starts where triage left off", "expect": []},
 ]
+
+# The apply flow opens in a NEW tab (smartapply for quick-apply, the ATS host for cross-site). The
+# EPILOGUE is the same for every terminal — whether we submitted or bailed at a human-required wall
+# (Workday account gate, survey, ai_recruiter): record the outcome, then close that one apply tab
+# and return to the search tab. This is what closes the loop back to the search cadence.
+APPLY_EPILOGUE = {
+    "when": "any apply terminal — submitted OR abandoned at a human-required branch",
+    "do": "record application_status + provenance, then mcp /close_tab the apply tab with "
+          "focus_tab_url set to the search URL (returns focus to the search tab)",
+    "why": "no orphan apply tabs; the next prospect resumes exactly where triage left off",
+}
 
 # --- Branches: the "random events" off the spine (project_apply_random_events) -----
 # human_required => STOP and hand to the operator; never auto-handle.
@@ -168,7 +181,7 @@ WORKDAY_APPLY_RECIPE = [
 
 WORKDAY_APPLY_BRANCHES = {
     "ats_unavailable":  {"human_required": False, "note": "req 404'd on the ATS — but if AUTHED, tenant-search the title first (stale-re-post pattern); only then skip"},
-    "account_creation": {"human_required": True,  "note": "no candidate account for this employer — needs the operator (persistent per-employer profile)"},
+    "account_creation": {"human_required": True,  "note": "no candidate account for this employer — needs the operator (persistent per-employer profile). ABANDON this prospect (don't create an account): record blocked, then run APPLY_EPILOGUE — close the ATS tab + refocus search"},
     "captcha":          {"human_required": True,  "note": "anti-bot challenge — human clears it (captcha-first check on any blocked action)"},
     "nested_prompt_gap": {"human_required": True, "note": "Workday nested-prompt multiselect resists CDP input — hand the single field to the operator, continue after"},
 }
@@ -201,14 +214,69 @@ WORKDAY_LESSONS = {
 }
 
 
+# --- Workday ACCOUNT lifecycle: create-account leg + sign-in leg (the Account Manager's loop) -----
+# A per-employer Workday login is CREATED before it can sign in. The account record's status drives
+# WHICH leg runs — this is the "state as an account" the operator described:
+#   needs_creation  → WORKDAY_CREATE_ACCOUNT_RECIPE  (the button says "Create Account")
+#   created/active  → WORKDAY_SIGN_IN_RECIPE          (the button says "Sign In")
+# then either leg hands off to WORKDAY_APPLY_RECIPE (My Information → … → Review). All three are ONE
+# loop the (future, operator-run) Account Manager executes end-to-end so the operator doesn't manage it.
+#
+# Fields are matched by accessible NAME (role + name → backend_node_id at act time), the churn-immune
+# AX layer. Verified live on U.S. Bank's Workday tenant (usbank.wd1.myworkdayjobs.com) 2026-07-12.
+#
+# BOUNDARY: these are DATA recipes describing the flow. They are executed by the operator-triggered
+# Account Manager / the operator — NEVER by the agent's own tool-loop (the agent does not type
+# passwords into a site or submit an account creation/sign-in). See docs/PLAN_account_manager_and_l3.md.
+WORKDAY_CREATE_ACCOUNT_RECIPE = [
+    {"step": 0, "state": "workday_create_account",
+     "action": "fill Email Address (username) + Password + Verify New Password (the generated "
+               "credential), CHECK the acknowledge checkbox, click Create Account. NEVER fill the "
+               "honeypot. May then require email verification (errand → gmail fetch_login_code).",
+     "fields": {
+         "email": {"role": "textbox", "name": "Email Address"},
+         "password": {"role": "textbox", "name": "Password"},
+         "verify_password": {"role": "textbox", "name": "Verify New Password"},
+         "acknowledge": {"role": "checkbox", "name": "I confirm that I have read and acknowledge"},
+     },
+     "submit": {"role": "button", "name": "Create Account"},
+     "toggle_to_sign_in": {"role": "button", "name": "Sign In"},
+     "honeypot_do_not_fill": {"role": "textbox", "name": "Enter website. This input is for robots only"},
+     "expect": ["workday_my_information", "workday_verify_email", "account_creation"]},
+]
+
+WORKDAY_SIGN_IN_RECIPE = [
+    {"step": 0, "state": "workday_sign_in",
+     "action": "fill Email Address + Password (resolved from the account's stored/derived creds), "
+               "click Sign In. NEVER fill the honeypot. 2FA/verification → escalate.",
+     "fields": {"email": {"role": "textbox", "name": "Email Address"},
+                "password": {"role": "textbox", "name": "Password"}},
+     "submit": {"role": "button", "name": "Sign In"},
+     "honeypot_do_not_fill": {"role": "textbox", "name": "Enter website. This input is for robots only"},
+     "expect": ["workday_my_information"]},
+]
+
+WORKDAY_ACCOUNT_LOOP = {
+    "needs_creation": {"state": "workday_create_account", "recipe": "WORKDAY_CREATE_ACCOUNT_RECIPE",
+                       "button": "Create Account"},
+    "created": {"state": "workday_sign_in", "recipe": "WORKDAY_SIGN_IN_RECIPE", "button": "Sign In"},
+    "then": "hand to WORKDAY_APPLY_RECIPE (My Information → … → Review → operator Submit)",
+    "runs_as": "ONE loop executed by the operator-run Account Manager (never the agent's own loop)",
+}
+
+
 def recipe_spec() -> dict[str, Any]:
     return {
         "domain": "indeed",
         "recipe": INDEED_APPLY_RECIPE,
         "branches": APPLY_BRANCHES,
+        "epilogue": APPLY_EPILOGUE,
         "cross_site": {
             "workday": {"recipe": WORKDAY_APPLY_RECIPE, "branches": WORKDAY_APPLY_BRANCHES,
                         "lessons": WORKDAY_LESSONS,
+                        "account_loop": WORKDAY_ACCOUNT_LOOP,
+                        "create_account_recipe": WORKDAY_CREATE_ACCOUNT_RECIPE,
+                        "sign_in_recipe": WORKDAY_SIGN_IN_RECIPE,
                         "detect": "host matches *.myworkdayjobs.com, OR a branded careers wrapper whose "
                                   "APPLY-NOW href targets *.myworkdayjobs.com (e.g. Takeda)"},
         },

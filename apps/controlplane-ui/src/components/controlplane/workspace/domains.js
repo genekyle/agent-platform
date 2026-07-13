@@ -10,6 +10,24 @@
 
 export const DOMAIN_CATALOG = [
   {
+    // Career Search — the PARENT domain grouping the job engines (Indeed, LinkedIn, …) and the ATS
+    // sub-domains (Workday, iCIMS, …) they hand off to. Its workspace lists the sub-domains and holds
+    // the shared Accounts (application logins, company→ATS). `kind: "group"` = a container, not a
+    // driven surface. Members declare `parent: "career_search"` so they nest here, not at top level.
+    id: "career_search",
+    label: "Career Search",
+    short: "Career Search",
+    icon: "🧭",
+    kind: "group",
+    children: ["indeed_jobs", "linkedin", "workday"],
+    responsibility: "Search + apply across job engines (Indeed, LinkedIn, ZipRecruiter) and their ATS (Workday, iCIMS, Taleo, …); the shared application accounts live here.",
+    blurb: "Job engines + ATS — search, apply, accounts.",
+    tabs: [
+      { id: "overview", label: "Sub-domains" },
+      { id: "accounts", label: "Accounts" },
+    ],
+  },
+  {
     id: "facebook_marketplace",
     label: "Facebook Marketplace",
     short: "Marketplace",
@@ -36,6 +54,7 @@ export const DOMAIN_CATALOG = [
     short: "Indeed",
     icon: "💼",
     kind: "jobs",
+    parent: "career_search",
     channel: null,
     host: "indeed",
     tabUrl: "indeed.com",
@@ -56,9 +75,26 @@ export const DOMAIN_CATALOG = [
     short: "Workday",
     icon: "🗂️",
     kind: "coming_soon",
+    parent: "career_search",
     host: "workday",
     responsibility: "Complete Workday applications (the ATS most Indeed applies route to).",
     blurb: "Cross-site apply target — coming soon.",
+    tabs: [
+      { id: "overview", label: "Overview" },
+      { id: "accounts", label: "Accounts" },
+    ],
+  },
+  {
+    id: "linkedin",
+    label: "LinkedIn",
+    short: "LinkedIn",
+    icon: "🔗",
+    kind: "coming_soon",
+    parent: "career_search",
+    host: "linkedin",
+    tabUrl: "linkedin.com",
+    responsibility: "Search LinkedIn and apply to roles (Easy Apply + off-site ATS hand-offs).",
+    blurb: "Find and apply to jobs on LinkedIn — coming soon.",
     tabs: [{ id: "overview", label: "Overview" }],
   },
   {

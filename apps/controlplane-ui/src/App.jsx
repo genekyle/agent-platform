@@ -188,6 +188,16 @@ export default function App() {
     setActiveDomainTabByDomain((current) => ({ ...current, [activeDomainId]: tabId }));
   }, [activeDomainId]);
 
+  // Open a domain AND land on a specific tab in one go (used by the nested rail's "Accounts" item).
+  // Sets the tab for THAT domain id directly — can't reuse setDomainTab, which closes over the
+  // pre-update activeDomainId.
+  const openDomainTab = useCallback((domainId, tabId) => {
+    setActivePrimaryView("domains");
+    setActiveDomainId(domainId);
+    setSidebarLevel("secondary");
+    setActiveDomainTabByDomain((current) => ({ ...current, [domainId]: tabId }));
+  }, []);
+
   // From a domain's Training tab, jump straight to Training → Coverage to run a capture sprint.
   const openTrainingCoverage = useCallback(() => {
     setActivePrimaryView("training");
@@ -1002,7 +1012,7 @@ export default function App() {
     sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} onOpenLabeler={openLabeler} />;
   } else if (activePrimaryView === "domains") {
     sectionContent = activeDomain
-      ? <DomainWorkspace domain={activeDomain} activeTab={activeDomainTab} onChangeTab={setDomainTab} onOpenTraining={openTrainingCoverage} />
+      ? <DomainWorkspace domain={activeDomain} activeTab={activeDomainTab} onChangeTab={setDomainTab} onOpenTraining={openTrainingCoverage} onOpenDomain={openDomain} />
       : <DomainsHub onOpenDomain={openDomain} />;
   } else if (activePrimaryView === "system" && activeSectionId === "api-usage") {
     sectionContent = <ApiUsageSection usage={usage} loadUsage={loadUsage} />;
@@ -1196,16 +1206,45 @@ export default function App() {
                       <span className="nav-subitem-label">All Domains</span>
                       <span className="nav-subitem-copy">Health at a glance across every domain.</span>
                     </button>
-                    {DOMAIN_CATALOG.map((d) => (
-                      <button
-                        key={d.id}
-                        className={`nav-item nav-subitem ${activeDomainId === d.id ? "active" : ""}`}
-                        onClick={() => openDomain(d.id)}
-                      >
-                        <span className="nav-subitem-label">{d.icon} {d.label}</span>
-                        <span className="nav-subitem-copy">{d.kind === "coming_soon" ? "Coming soon." : d.blurb}</span>
-                      </button>
-                    ))}
+                    {DOMAIN_CATALOG.filter((d) => !d.parent).flatMap((d) => {
+                      // Top-level domains only. A parent (Career Search) renders its sub-domains
+                      // + an "Accounts" item nested beneath it — the sub-domains never appear at
+                      // the top level.
+                      const kids = (d.children || []).map((id) => DOMAINS_BY_ID[id]).filter(Boolean);
+                      const items = [
+                        <button
+                          key={d.id}
+                          className={`nav-item nav-subitem ${activeDomainId === d.id ? "active" : ""}`}
+                          onClick={() => openDomain(d.id)}
+                        >
+                          <span className="nav-subitem-label">{d.icon} {d.label}</span>
+                          <span className="nav-subitem-copy">{d.kind === "coming_soon" ? "Coming soon." : d.blurb}</span>
+                        </button>,
+                      ];
+                      kids.forEach((c) => items.push(
+                        <button
+                          key={c.id}
+                          className={`nav-item nav-subitem ${activeDomainId === c.id ? "active" : ""}`}
+                          style={{ paddingLeft: 34 }}
+                          onClick={() => openDomain(c.id)}
+                        >
+                          <span className="nav-subitem-label">{c.icon} {c.label}</span>
+                          <span className="nav-subitem-copy">{c.kind === "coming_soon" ? "Coming soon." : c.blurb}</span>
+                        </button>
+                      ));
+                      if (d.children) items.push(
+                        <button
+                          key={`${d.id}-accounts`}
+                          className={`nav-item nav-subitem ${activeDomainId === d.id && activeDomainTab === "accounts" ? "active" : ""}`}
+                          style={{ paddingLeft: 34 }}
+                          onClick={() => openDomainTab(d.id, "accounts")}
+                        >
+                          <span className="nav-subitem-label">🔐 Accounts</span>
+                          <span className="nav-subitem-copy">All application logins for this domain.</span>
+                        </button>
+                      );
+                      return items;
+                    })}
                   </>
                 ) : canEnterSecondary ? currentNav.sections.map((section) => (
                   <button key={section.id} className={`nav-item nav-subitem ${activeSectionId === section.id ? "active" : ""}`} onClick={() => setActiveSection(section.id)}>

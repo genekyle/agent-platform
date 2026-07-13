@@ -1026,6 +1026,65 @@ async def ax_scan(body: AXScanRequest):
         return {"ok": False, "count": 0, "candidates": [], "detail": str(exc)}
 
 
+class CloseTabRequest(BaseModel):
+    """Close ONE finished tab and (optionally) bring another to the front — the apply-flow
+    epilogue primitive. Indeed opens the quick-apply (smartapply) or a cross-site ATS (Workday/…)
+    in a NEW tab; once that application is submitted (or abandoned at a human-required wall like a
+    Workday account gate), a human closes that tab and returns to the search. This makes that
+    cleanup a real capability the cadence/recipe can drive, instead of leaving orphan apply tabs."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None       # exact target id to close
+    tab_url: Optional[str] = None      # OR a URL substring identifying the tab to close (e.g. "smartapply")
+    focus_tab_url: Optional[str] = None  # after closing, activate the tab whose URL contains this (e.g. "indeed.com/jobs")
+
+
+@app.post("/close_tab")
+async def close_tab(body: CloseTabRequest):
+    """Close the identified tab via the CDP HTTP endpoint (GET /json/close/<id>), then optionally
+    activate the tab matching focus_tab_url so we land back on the search — the 'return to the
+    search' seam of the apply cadence. SAFETY: refuses to close the control panel (localhost:5173)
+    and refuses to close the last remaining page tab (never leave the browser tab-less). This is
+    intentional single-tab cleanup, NOT the tab-churn the bounds forbid. Best-effort; never raises."""
+    import httpx
+    from app.observer.ax_proposer import _discover_target
+    if not (body.tab_id or body.tab_url):
+        return {"ok": False, "detail": "tab_id or tab_url is required (won't guess which tab to close)"}
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        url = str(target.get("url", ""))
+        # GUARD: _discover_target falls through to the FIRST page tab when the requested id/url
+        # doesn't match — which would silently close the wrong tab (a truncated tab_id did exactly
+        # that live 2026-07-12). If the caller named a specific tab, it MUST match, or we refuse.
+        if body.tab_id and str(target.get("id")) != body.tab_id and str(target.get("targetId")) != body.tab_id:
+            return {"ok": False, "detail": f"tab_id {body.tab_id!r} not found — refusing to close a different tab"}
+        if body.tab_url and body.tab_url not in url:
+            return {"ok": False, "detail": f"tab_url {body.tab_url!r} matched no tab — refusing to close a different tab"}
+        if "localhost:5173" in url:
+            return {"ok": False, "detail": "refusing to close the control panel tab"}
+        # Count page tabs — never leave the browser with zero.
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            pages_before = [t for t in (await client.get(f"{body.browser_url}/json/list")).json()
+                            if t.get("type") == "page"]
+            if len(pages_before) <= 1:
+                return {"ok": False, "detail": "refusing to close the only remaining tab", "url": url[:90]}
+            closed_id = target.get("id")
+            await client.get(f"{body.browser_url}/json/close/{closed_id}")
+            activated = None
+            if body.focus_tab_url:
+                remaining = [t for t in (await client.get(f"{body.browser_url}/json/list")).json()
+                             if t.get("type") == "page" and body.focus_tab_url in str(t.get("url", ""))]
+                if remaining:
+                    activated = remaining[0].get("id")
+                    await client.get(f"{body.browser_url}/json/activate/{activated}")
+            remaining_pages = [t for t in (await client.get(f"{body.browser_url}/json/list")).json()
+                               if t.get("type") == "page"]
+        return {"ok": True, "closed_tab_id": closed_id, "closed_url": url[:90],
+                "activated_tab_id": activated, "remaining_tab_count": len(remaining_pages)}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("close_tab failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
 class NavigateRequest(BaseModel):
     url: str
     browser_url: str = "http://127.0.0.1:9222"
