@@ -25,6 +25,7 @@ export const DOMAIN_CATALOG = [
     tabs: [
       { id: "overview", label: "Sub-domains" },
       { id: "accounts", label: "Accounts" },
+      { id: "activity", label: "Activity" },
     ],
   },
   {

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import application_preferences as prefs_lib
 import ats_accounts
 import ats_registry
+import event_log
 
 router = APIRouter()
 
@@ -98,7 +99,11 @@ class EnsureATSAccount(BaseModel):
 def ensure_ats_account(body: EnsureATSAccount) -> dict[str, Any]:
     """Register (idempotent) a company↔ATS login as PENDING and return it + the suggested
     credentials to CREATE it with. Does NOT create the account on the site (operator's step)."""
-    return ats_accounts.ensure_account(body.company, body.ats_id, body.login_url or "")
+    res = ats_accounts.ensure_account(body.company, body.ats_id, body.login_url or "")
+    if res.get("ok"):
+        event_log.log_event("account", f"Registered account: {body.company} · {body.ats_id} (pending)",
+                            domain="career_search")
+    return res
 
 
 @router.get("/api/career_search/accounts/credentials")
@@ -124,7 +129,11 @@ class MarkCreated(BaseModel):
 def ats_account_mark_created(body: MarkCreated) -> dict[str, Any]:
     """Flip an account from the creation stage to 'active' after it's been created on the ATS —
     so next-action returns SIGN IN instead of CREATE."""
-    return ats_accounts.mark_created(body.company, body.ats_id)
+    res = ats_accounts.mark_created(body.company, body.ats_id)
+    if res.get("ok"):
+        event_log.log_event("account", f"Account active: {body.company} · {body.ats_id}",
+                            domain="career_search")
+    return res
 
 
 class CreateAccountOnSite(BaseModel):
@@ -163,6 +172,8 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
             scan = (await client.post(f"{settings.capture_server_url}/ax_scan", json=scan_req)).json()
             fields = _match_create_account_fields(scan.get("candidates", []))
             if "password" not in fields or "submit" not in fields:
+                event_log.log_event("account", f"Create-account skipped: no form for {body.company} · {body.ats_id}",
+                                    domain="career_search", detail=f"matched {sorted(fields)}")
                 return {"ok": False, "status": "no_create_form",
                         "detail": f"No Create-Account form visible (found {sorted(fields)}). Open the "
                                   "ATS 'Create Account' screen first, then press Create account."}
@@ -184,6 +195,8 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
         # Persist the login into the vault + flip to active so future sign-ins resolve it.
         accounts_mod.set_credentials(ats_accounts.ats_account_id(body.company, body.ats_id), username, password)
         ats_accounts.mark_created(body.company, body.ats_id)
+        event_log.log_event("account", f"Create-account submitted: {body.company} · {body.ats_id} (operator-triggered)",
+                            domain="career_search", detail=f"filled {sorted(fields)}; account marked active")
         return {"ok": True, "status": "submitted",
                 "detail": "Create Account submitted. Any email-verification / 2FA step is yours."}
     except httpx.HTTPError as exc:

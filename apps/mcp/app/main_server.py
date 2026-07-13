@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.artifacts import ARTIFACTS_DIR, SCREENSHOTS_DIR, write_observation_artifact
+from app.event_log import log_event as _log_event
 from app.main import observe_live_capture
 from app.observer.ax_proposer import MODEL_VERSION as AX_MODEL_VERSION
 from app.observer.ax_proposer import AXProposerStats, propose_ax_candidates
@@ -240,6 +241,9 @@ async def execute_action(body: ExecuteRequest):
     )
     result = await driver.move_and_act(
         browser_url=body.browser_url, request=req, tab_id=body.tab_id, tab_url=body.tab_url)
+    _tgt = body.target_name or body.selector or (f"node {node_id}" if node_id else "")
+    _log_event("drive", f"{body.action_id} {_tgt}".strip()[:90],
+               detail=(f"{'ok' if result.ok else 'FAIL'} · {body.tab_url or ''}"), domain=body.tab_url)
     return {
         "ok": result.ok, "driver": result.driver, "action_id": result.action_id,
         "css_point": result.css_point, "detail": (note + ("; " if note and result.detail else "") + result.detail),
@@ -1078,6 +1082,7 @@ async def close_tab(body: CloseTabRequest):
                     await client.get(f"{body.browser_url}/json/activate/{activated}")
             remaining_pages = [t for t in (await client.get(f"{body.browser_url}/json/list")).json()
                                if t.get("type") == "page"]
+        _log_event("tab", f"Closed tab {url[:70]}", detail=f"remaining {len(remaining_pages)}")
         return {"ok": True, "closed_tab_id": closed_id, "closed_url": url[:90],
                 "activated_tab_id": activated, "remaining_tab_count": len(remaining_pages)}
     except Exception as exc:  # noqa: BLE001
@@ -1118,6 +1123,8 @@ async def navigate(body: NavigateRequest):
                                  {"expression": "({url: location.href, title: document.title})",
                                   "returnByValue": True})
         landed = (res.get("result") or {}).get("value") or {}
+        _log_event("nav", f"Navigated → {(landed.get('title') or landed.get('url') or body.url)[:80]}",
+                   detail=landed.get("url", "")[:120])
         return {"ok": True, "requested_url": body.url,
                 "landed_url": landed.get("url", ""), "title": landed.get("title", ""),
                 "tab_id": target.get("id")}
@@ -1310,6 +1317,9 @@ async def trigger_capture(body: CaptureRequest, background_tasks: BackgroundTask
     # NOTE: the vision proposer (OmniParser) is the parked super-fallback — NOT run
     # here or on labeler-open. It only activates when AX yields nothing and we
     # explicitly need it (not wired yet).
+    _dom = (body.training_metadata or {}).get("domain_id") if body.training_metadata else None
+    _log_event("capture", f"Captured '{body.scenario}' — {ax_candidate_count} AX candidates",
+               detail=f"{path.name} · {body.tab_url or ''}", domain=_dom)
     return {
         "filename": path.name,
         "candidate_count": candidate_count,

@@ -11,6 +11,7 @@ import { AccountsPanel } from "./AccountsPanel";
 import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
 import { IndeedWorkspaceSection } from "../IndeedWorkspaceSection";
 import { AccountsSection } from "../AccountsSection";
+import { EventsConsole } from "../EventsConsole";
 import { DOMAINS_BY_ID } from "./domains";
 
 // The shared five-layer workspace shell. Every domain gets the SAME operating pattern — a
@@ -105,7 +106,7 @@ function GroupWorkspace({ domain, activeTab, onChangeTab, onOpenDomain }) {
           ))}
         </div>
       )}
-      {tab === "accounts" ? <AccountsSection /> : (
+      {tab === "accounts" ? <AccountsSection /> : tab === "activity" ? <EventsConsole /> : (
         <div className="domain-tiles">
           {children.map((c) => {
             const soon = c.kind === "coming_soon";

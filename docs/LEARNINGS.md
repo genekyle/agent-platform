@@ -587,3 +587,22 @@ top-level domains show at the "All Domains" level; Career Search always expands 
 Indeed / LinkedIn / Workday + a 🔐 Accounts item (`App.jsx` flatMap over `!d.parent`, `openDomainTab`).
 Each sub-domain's own Accounts tab shows the company-first accounts filtered to THAT ATS
 (`AccountsSection atsFilter=domain.id`); Workday now has an Overview + Accounts tab.
+
+---
+
+## 2026-07-12 — Event console: a cross-process feed of what the system did
+
+**Gap.** Direct MCP drives (my bash curls to :8082) left no visible trace — the operator couldn't
+tell at a glance that the system worked or was being used/trained. Nothing tied the two processes
+together.
+
+**Built.** A shared append-only JSONL event log in the dir both processes already share
+(`observer_artifacts_dir` == `../mcp/output`): `apps/mcp/output/cache/event_log.jsonl`. Both write it
+best-effort (never raises into a caller); the control plane serves it.
+- `controlplane-api/event_log.py` + `mcp/app/event_log.py` (parallel writers, same file),
+  `routers/events.py` (GET/POST `/api/events`).
+- Instrumented: MCP `/capture` `/execute` `/close_tab` `/navigate`; control-plane account
+  create/ensure/mark-created. Events: `{ts, source, kind, summary, detail, domain}`.
+- UI: `EventsConsole.jsx` — live feed (source/kind badges, relative time, filter, pause) added as the
+  **Activity** tab in the Career Search domain. Verified: MCP captures + control-plane apply/account
+  events show together, auto-refreshing.
