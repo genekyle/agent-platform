@@ -37,6 +37,7 @@ def select(
     page_text: str = "",
     dom_clickables: Optional[list[dict[str, Any]]] = None,
     meta: Optional[dict[str, Any]] = None,
+    cache_only: bool = False,
 ) -> SelectionResult:
     viewport = viewport or {}
     route = fingerprint.route_template(url)
@@ -72,6 +73,15 @@ def select(
                             layer="cache", cost_usd=0.0, fingerprint=fp)
         logger.info("cache HIT: goal=%r -> %s", task_goal, c.name)
         return finish(r, "hit", {})
+
+    # Inner-loop-only run: the cheap local layers (classify + cache) get to answer, but we do NOT
+    # fall through to the paid Haiku catchall. Used to hand a decision to "the kids" and observe
+    # whether the flywheel already knows it — a cache miss here is real signal (not yet learned),
+    # NOT a failure to escalate to a human.
+    if cache_only:
+        r = SelectionResult(ActionId.NONE, None, 0.0, True, ReasonCode.NO_MATCH,
+                            layer="cache", cost_usd=0.0, fingerprint=fp)
+        return finish(r, "miss", {})
 
     # --- Layer 5: Haiku SoM (budget-gated) ----------------------------------
     try:

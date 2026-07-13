@@ -97,6 +97,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 # yet extracted into a domain module. create_app() (bottom of file) wires all of them into the app.
 from routers import accounts as accounts_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
+from routers import career_search as career_search_router  # noqa: E402
 from routers import facebook as facebook_router  # noqa: E402
 from routers import inventory as inventory_router  # noqa: E402
 from routers import providers as providers_router  # noqa: E402
@@ -2701,12 +2702,16 @@ def get_observation(filename: str, db: Session = Depends(get_db)):
 
 
 @router.post("/api/observations/{filename}/select")
-def select_element(filename: str, element_query: str, db: Session = Depends(get_db)):
+def select_element(filename: str, element_query: str, cache_only: bool = False,
+                   db: Session = Depends(get_db)):
     """SELECT stage: run the inner-loop cascade (cache → Haiku SoM → escalate) to
     ground `element_query` against this capture's CDP-AX candidates. Returns the
     chosen candidate + which layer answered + cost, or an escalate result. Haiku
     is budget-gated; over budget escalates to a human. Lets you try the select
-    stage against any captured page."""
+    stage against any captured page.
+
+    `cache_only=true` runs ONLY the free local layers (no paid Haiku) — hand a
+    decision to "the kids" and see if the flywheel already knows it."""
     from select_stage import selector
     from select_stage.schema import candidates_from_ax
 
@@ -2742,6 +2747,7 @@ def select_element(filename: str, element_query: str, db: Session = Depends(get_
         page_text=page_text,
         dom_clickables=dom_clickables,
         meta={"filename": filename},
+        cache_only=cache_only,
     )
     # Frozen 5-field contract + the resolved candidate (for convenience) + status.
     resolved = next((c for c in candidates_from_ax(ax_candidates)
@@ -2758,6 +2764,87 @@ def select_element(filename: str, element_query: str, db: Session = Depends(get_
         "fingerprint": result.fingerprint,
         "candidate": ({"role": resolved.role, "name": resolved.name} if resolved else None),
     }
+
+
+# Canonical INTENT strings — the item-agnostic goal for each create-listing decision. The fingerprint
+# bakes in the goal, so the cache only generalizes across items when the goal is canonical (not the
+# per-item element_query we labelled with). Maps (state, golden role, golden name) -> canonical goal.
+def _canonical_goal(state: str, role: str, name: str) -> Optional[str]:
+    state, role, name = (state or ""), (role or "").lower(), (name or "")
+    nl = name.lower()
+    if nl == "marketplace":                         return "go to marketplace"
+    if "create new listing" in nl:                  return "start a new listing"
+    if nl.startswith("item for sale"):              return "choose the item-for-sale listing type"
+    if role == "textbox" and nl == "title":         return "enter the item title"
+    if role == "textbox" and nl == "price":         return "enter the item price"
+    if role == "textbox" and nl == "description":   return "enter the item description"
+    if "clothing & shoes" in nl:                    return "choose the item category"
+    if "condition" in state:                        return "choose the item condition"
+    if nl == "next":                                return "advance to the next step"
+    if nl == "publish":                             return "publish the listing"
+    return None
+
+
+@router.post("/api/training/seed_cache")
+def seed_selection_cache(domain: Optional[str] = None, db: Session = Depends(get_db)):
+    """Seed the SELECT cache (the free Layer-2 inner loop) from our GOLDEN labels: for every reviewed
+    capture that has a positive_candidate_id, store (fingerprint, element_query) -> chosen role+name+
+    action. That lets the cache REPRODUCE a taught pick for $0 (no Haiku) on any future state whose
+    fingerprint matches — i.e. a labeled correction literally trains the cheapest 'kid'. Idempotent
+    (overwrites by key). Returns {seeded, skipped, total_golden}."""
+    from select_stage import cache as sel_cache
+    from select_stage import fingerprint as fp_mod
+    from select_stage.schema import ActionId, candidates_from_ax
+
+    traces_dir = _artifacts_dir() / "observer-traces"
+    q = select(TrainingCapture).where(TrainingCapture.positive_candidate_id.isnot(None))
+    if domain:
+        q = q.where(TrainingCapture.domain_id == domain)
+    caps = db.scalars(q).all()
+    seeded, skipped = 0, 0
+    debug_reasons = []
+    for cap in caps:
+        sidecar = traces_dir / f"{cap.artifact_filename}.ax.json"
+        art_path = traces_dir / cap.artifact_filename
+        task_goal = (cap.element_query or "").strip()
+        if not (sidecar.exists() and art_path.exists() and task_goal):
+            skipped += 1
+            if len(debug_reasons) < 5:
+                debug_reasons.append("guard: sc=%s art=%s goal=%s" % (sidecar.exists(), art_path.exists(), bool(task_goal)))
+            continue
+        try:
+            ax = json.loads(sidecar.read_text()).get("proposals", [])
+            gold = next((c for c in ax if c.get("candidate_id") == cap.positive_candidate_id), None)
+            chosen = next((c for c in candidates_from_ax(ax)
+                           if gold and c.backend_node_id == gold.get("backend_node_id")), None)
+            if chosen is None:
+                skipped += 1
+                continue
+            acq = (json.loads(art_path.read_text()).get("acquisition", {}) or {})
+            url = (acq.get("page_identity", {}) or {}).get("url", "")
+            # Use the SAME viewport fallback as the /select endpoint so fingerprints match exactly.
+            viewport = acq.get("viewport_state", {}) or acq.get("training_metadata", {}) or {}
+            fp = fp_mod.compute(url=url, viewport=viewport, candidates=ax,
+                                task_goal=task_goal, dom_clickables=acq.get("actionable_elements", []) or [])
+            # Derive the action from the chosen element's role (no action_type column on the model):
+            # a textbox is typed into, everything else is clicked.
+            action = ActionId.TYPE if (chosen.role or "").lower() == "textbox" else ActionId.CLICK
+            sel_cache.store(fingerprint=fp, task_goal=task_goal, chosen=chosen,
+                            action_id=action, source="golden_label")
+            seeded += 1
+            # ALSO store under the canonical INTENT so the pick generalizes across items (the goal is
+            # part of the fingerprint, so we must recompute the fp with the canonical goal).
+            canon = _canonical_goal(cap.observed_page_state, chosen.role, chosen.name)
+            if canon:
+                fp_c = fp_mod.compute(url=url, viewport=viewport, candidates=ax,
+                                      task_goal=canon, dom_clickables=acq.get("actionable_elements", []) or [])
+                sel_cache.store(fingerprint=fp_c, task_goal=canon, chosen=chosen,
+                                action_id=action, source="golden_label_canonical")
+        except Exception as exc:  # noqa: BLE001 — best-effort per capture; skip the malformed ones
+            skipped += 1
+            if len(debug_reasons) < 5:
+                debug_reasons.append("exc: %s" % repr(exc)[:120])
+    return {"seeded": seeded, "skipped": skipped, "total_golden": len(caps), "debug": debug_reasons}
 
 
 @router.post("/api/observations/verify")
@@ -4954,6 +5041,7 @@ def create_app() -> FastAPI:
     app.include_router(router)  # core routes not yet extracted into a domain module
     app.include_router(accounts_router.router)
     app.include_router(application_answers_router.router)
+    app.include_router(career_search_router.router)
     app.include_router(facebook_router.router)
     app.include_router(inventory_router.router)
     app.include_router(providers_router.router)
