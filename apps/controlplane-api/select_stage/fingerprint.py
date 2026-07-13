@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 # Bumping this re-hashes every state, so old cache entries cleanly miss and re-seed
 # from live runs (the cache is a cache). Bump on any change to how the payload is built.
-_FINGERPRINT_VERSION = "v2"
+_FINGERPRINT_VERSION = "v4"
 
 # Path segments that are clearly content ids, not route structure.
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
@@ -35,13 +35,18 @@ _DIGITS = re.compile(r"^\d+$")
 _COUNT_PAREN = re.compile(r"[(\[]\s*\d[\d.,]*\s*[)\]]")   # (3)  [12]
 _CURRENCY = re.compile(r"[$€£¥]\s?\d[\d.,]*")             # $1,299.00
 _NUMRUN = re.compile(r"\d[\d.,:]*")                        # any remaining number run
+# Volatile STATUS words baked into top-nav/chrome accessible names — a badge or nav-active state
+# that flips between visits without changing the SCREEN's identity: "Messenger, unread" vs
+# "Messenger", "Your listings active" vs "Your listings", "… online". Stripping these is what
+# lets a taught pick generalize across re-captures (the fingerprint stops drifting on nav chrome).
+_VOLATILE_STATUS = re.compile(r"\b(?:unread|active|online|away|busy)\b")
 _WS = re.compile(r"\s+")
 _TRIM_CHARS = " ·•|,:-–—\t"
 
 
 def _normalize_ax_name(name: str) -> str:
-    """Lowercase + strip volatile tokens (counts, currency, numbers) so the same control
-    keeps one stable identity across visits. Returns '' for a purely-volatile label
+    """Lowercase + strip volatile tokens (counts, currency, numbers, nav status words) so the same
+    control keeps one stable identity across visits. Returns '' for a purely-volatile label
     (a bare count/price), which the summary then drops."""
     s = (name or "").strip().lower()
     if not s:
@@ -49,6 +54,7 @@ def _normalize_ax_name(name: str) -> str:
     s = _COUNT_PAREN.sub(" ", s)
     s = _CURRENCY.sub(" ", s)
     s = _NUMRUN.sub(" ", s)
+    s = _VOLATILE_STATUS.sub(" ", s)
     return _WS.sub(" ", s).strip(_TRIM_CHARS)
 
 
@@ -127,12 +133,16 @@ def compute(
     dom_clickables: Optional[list[dict[str, Any]]] = None,
 ) -> str:
     """Stable sha256 fingerprint of the page state for cache keying."""
+    # NB: the DOM/layout summary is deliberately EXCLUDED. It was an optional "sharpener", but in
+    # practice it drifts on incidental layout churn (a stray tab/div appearing between visits) and
+    # busted the cache on re-captures of the same screen. The role+accessible-name candidate set (ax)
+    # is the real screen identity; keep the fingerprint to route + viewport + ax + goal. `dom_summary`
+    # / `dom_clickables` are retained in the signature for callers but no longer keyed on.
     payload = {
         "v": _FINGERPRINT_VERSION,
         "route": route_template(url),
         "viewport": viewport_class(viewport.get("viewport_width", 0), viewport.get("viewport_height", 0)),
         "ax": ax_summary(candidates),
-        "dom": dom_summary(dom_clickables),
         "goal": (task_goal or "").strip().lower(),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
