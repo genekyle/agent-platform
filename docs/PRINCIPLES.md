@@ -19,6 +19,15 @@ run) can **look valid but isn't** — acting on it is a "thought-bubble" error.
   `apps/controlplane-api/apply_state_store.py`. Triage/approve are valid **only** within a current,
   authenticated run; logging in does **not** retroactively bless logged-out data (it goes `stale`).
 
+- **Live UI/session state goes stale too — refresh before you operate.** Beyond blackboard data, the
+  browser itself decays with time: CDP `backend_node_id`s churn, forms/CSRF tokens and ATS sessions
+  time out, "Did you apply?" prompts appear, and a tab you left minutes ago may have navigated away
+  from where you left it. **Before driving a tab — or pressing anything that scans it (the Account
+  Manager's Create-Account / ▶ Login button, which AX-scans the live form) — reload the tab and
+  re-verify the expected state.** Never assume the tab is where you left it. This is cheap insurance
+  against the "button did nothing / it clicked the wrong element / it closed the wrong tab" surprises
+  (all seen live 2026-07-12). Treat stale live state as a first-class hazard, like stale data.
+
 ## 2. Authenticate before you automate
 The agent must not run searches or task automation on a logged-out session. Login first, automate
 second.
