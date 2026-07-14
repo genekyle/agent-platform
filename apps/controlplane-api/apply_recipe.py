@@ -197,10 +197,19 @@ WORKDAY_LESSONS = {
         "stale Indeed deep-link ≠ dead req: tenant ?q= search finds the live re-post",
         "page navigations kill the CDP websocket — reconnect and re-discover the target (expected)",
     ],
+    "prompt_action": [  # reusable atomic action for Workday hierarchical prompts + listboxes
+        "SOLVED nested-prompt / listbox selection via the reusable MCP action `POST /select_prompt` "
+        "(field_name, value): opens the field with a NATIVE node-click, then — if the popup has a "
+        "searchBox — types the value with TRUSTED per-char key events (Workday fetches results "
+        "server-side on real keystrokes; value-set/insertText do NOT trigger it), and finally "
+        "NATIVE-clicks the matched option by accessible name (coordinate clicks mis-fire on long/"
+        "virtualized lists — picked 'American Samoa' for 'New Hampshire'). Validated live on State. "
+        "A stale session silently returns NO options → refresh first. Pass a PRECISE field_name; the "
+        "field's accessible name embeds its current value ('State New Hampshire Required'), and short "
+        "names collide ('State' matches 'United States').",
+    ],
     "gaps": [
-        "nested-prompt multiselect (formField-source 'How Did You Hear'): promptOption/menuItem/"
-        "checkbox coordinate clicks, keyboard Arrow+Enter, and type-to-filter (no text input) ALL "
-        "fail to register — operator fills it (seconds by hand)",
+        "(was: nested-prompt multiselect — NOW handled by /select_prompt, see works above)",
         "3-spinner DATE widget (dateSectionMonth/Day/Year-input): inputs are linked and auto-advance; "
         "CDP click+type+backspace scrambles across sub-fields (got '12//', '//2012'). Operator fills it",
         "flow-level auth is separate from tenant-nav auth (sign-in may be needed twice)",

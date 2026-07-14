@@ -606,3 +606,49 @@ best-effort (never raises into a caller); the control plane serves it.
 - UI: `EventsConsole.jsx` — live feed (source/kind badges, relative time, filter, pause) added as the
   **Activity** tab in the Career Search domain. Verified: MCP captures + control-plane apply/account
   events show together, auto-refreshing.
+
+---
+
+## 2026-07-13 — Driving a Workday PII form + the capture/label loop (live, U.S. Bank)
+
+Drove Workday "My Information" for a FRESH account (not prefilled). What worked / bit us:
+
+- **Capture→label loop:** control-plane `POST /api/capture {training_session_id, tab_id, tab_url}` makes
+  a labelable `TrainingCapture` (MCP-direct `/capture` does NOT — its artifact 404s the label PATCH).
+  Then `PATCH /api/observations/{filename}` `{observed_page_state}`. GOTCHA: the ISO-timestamp filename
+  contains `+`; it MUST be URL-encoded (`%2B`) in the PATCH path or you get 404 / silent no-op.
+  Labeled 2× `workday_my_information` (empty + filled) via session 16.
+- **Use the `direct` driver for ATS form fills, not `humanized`:** humanized (wiggly mouse + cadence
+  typing) is ~15-20s/field → times out at ~5 fields, and it TRUNCATED a value ("46 Canterbury Rd" →
+  "46 Cante"). direct (Input.insertText) is ~1-2s and reliable. Bot-safety matters far less on a
+  signed-in ATS than on the engine.
+- **CLEAR before (re)typing** — a re-fill without clearing DOUBLED the postal code ("0330103301").
+  Always verify text fields by value after filling (screenshot / `/locate` returns the value).
+- **Act-by-name substring pitfall:** `target_name="State"` matched the **Country** field
+  ("United **State**s…"); use the fuller name ("State Select One"). Single-select listbox dropdowns
+  work (click field → click the option by exact name, e.g. "New Hampshire").
+- **`How Did You Hear About Us?` nested prompt = confirmed gap** — clicking it surfaces no CDP-visible
+  options; route to the operator (Online Source → Indeed), as WORKDAY_LESSONS said.
+
+---
+
+## 2026-07-13 — Reusable action for Workday prompts (`/select_prompt`) + stale-session validation
+
+The nested-prompt gap ("How Did You Hear About Us?") is now a reusable atomic action, the prompt
+analogue of human_click/human_type. `POST /select_prompt {field_name, value}` (apps/mcp):
+1. **Open** the field with a NATIVE node-click (same path /execute uses) — a trusted-mouse-at-box-
+   center did NOT reliably open the popup.
+2. If the popup has a `input[data-automation-id=searchBox]`, type the value with **TRUSTED per-char
+   key events** — Workday fetches prompt results SERVER-SIDE on real keystrokes; a react-safe
+   value-set or `Input.insertText` does NOT trigger the fetch (confirmed via the new `/eval` debug
+   endpoint: value became "Indeed" but zero options loaded).
+3. **NATIVE-click** the matched option by accessible name — coordinate/`_trusted_click` on the
+   option mis-fires on long/virtualized lists (picked "American Samoa" for "New Hampshire").
+
+**Validated live on the State field** (State → New Hampshire, verified "State New Hampshire Required").
+Caveats baked into WORKDAY_LESSONS.prompt_action: pass a PRECISE field_name (the accessible name
+embeds the current value, and short names collide — "State" matches "United States"); a STALE session
+silently returns NO options (the whole reason this looked broken for an hour — the Workday tab had
+logged out; reload + re-auth first, per PRINCIPLES §1).
+
+Also: added `POST /eval` (run JS in the tab, return value) as a dev tool for building/tuning actions.

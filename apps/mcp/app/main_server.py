@@ -250,6 +250,155 @@ async def execute_action(body: ExecuteRequest):
     }
 
 
+# --- Reusable ATOMIC action: select from a Workday hierarchical PROMPT ("How Did You Hear About Us?",
+# etc.). Standard type/click/select do NOT work on these — the options render in a portal and only
+# register TRUSTED CDP mouse events (JS .click() and coordinate-less selects are ignored). This action
+# encodes the reliable HOW: open the field → type into the *visible* searchBox (scoped to the open
+# popup, not another prompt's) → trusted-click the matching promptOption. It's the prompt analogue of
+# human_click/human_type. Wired into WORKDAY recipes so every tenant's nested prompts reuse it. -------
+class SelectPromptRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    field_role: Optional[str] = "textbox"
+    field_name: str            # accessible name of the prompt field, e.g. "How Did You Hear About Us?"
+    value: str                 # the leaf to select, e.g. "Indeed" (searched across the hierarchy)
+    settle_seconds: float = 0.8
+
+
+# Find the VISIBLE searchBox (the one in the currently-open prompt popup) — offsetParent guards against
+# the other prompts' hidden search inputs. Returns its viewport-center in CSS px.
+_PROMPT_SEARCHBOX_JS = r"""
+(() => {
+  const b=[...document.querySelectorAll("input[data-automation-id='searchBox']")].find(e=>e.offsetParent && e.getClientRects().length);
+  if(!b) return {found:false};
+  b.scrollIntoView({block:'center'});
+  const r=b.getBoundingClientRect();
+  return {found:true, x:r.x+r.width/2, y:r.y+r.height/2};
+})()
+"""
+
+
+def _prompt_option_js(value: str) -> str:
+    """JS returning the VISIBLE promptOption matching `value` (exact, then substring; case-insensitive)
+    — center in CSS px. Includes a sample of what's visible when no match, for debugging."""
+    v = json.dumps((value or "").strip().lower())
+    return (
+        "(() => {"
+        f"  const want={v};"
+        "  const opts=[...document.querySelectorAll(\"[data-automation-id='promptOption'],[data-automation-id='menuItem'],[role='option']\")]"
+        "    .filter(e=>e.offsetParent && e.getClientRects().length);"
+        "  let el=opts.find(e=>(e.textContent||'').trim().toLowerCase()===want)"
+        "     || opts.find(e=>(e.textContent||'').trim().toLowerCase().includes(want));"
+        "  if(!el) return {found:false, count:opts.length, sample:opts.slice(0,10).map(e=>(e.textContent||'').trim())};"
+        "  el.scrollIntoView({block:'center'});"
+        "  const r=el.getBoundingClientRect();"
+        "  return {found:true, x:r.x+r.width/2, y:r.y+r.height/2, text:(el.textContent||'').trim()};"
+        "})()"
+    )
+
+
+async def _trusted_click(cdp, x: float, y: float) -> None:
+    """A real (isTrusted) CDP mouse click at CSS-px (x, y) — what Workday's prompt options require."""
+    for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+        ev = {"type": typ, "x": x, "y": y}
+        if typ != "mouseMoved":
+            ev.update({"button": "left", "clickCount": 1})
+        await cdp.send("Input.dispatchMouseEvent", ev)
+
+
+@app.post("/select_prompt")
+async def select_prompt(body: SelectPromptRequest):
+    """Atomic Workday prompt-select: open the field → search → trusted-click the matching option.
+    Returns {ok, selected, detail}. Best-effort; never raises. Reusable across all Workday prompts."""
+    import asyncio
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
+                                         body.field_role, body.field_name)
+        if node_id is None:
+            return {"ok": False, "detail": f"prompt field not found: {body.field_name!r}"}
+        # 1. OPEN the prompt via the proven driver node-click (same path /execute uses) — a
+        # trusted-mouse-at-box-center did NOT reliably open Workday prompt popups.
+        from app.executor.driver import ActionRequest, get_driver
+        await get_driver("direct").move_and_act(
+            browser_url=body.browser_url,
+            request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=node_id),
+            tab_id=body.tab_id, tab_url=body.tab_url)
+        await asyncio.sleep(max(0.5, min(body.settle_seconds, 4.0)))
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.enable", {})
+            # 2. type the value into the visible searchBox (scoped to the open popup)
+            sb = (await cdp.send("Runtime.evaluate", {"expression": _PROMPT_SEARCHBOX_JS,
+                                                      "returnByValue": True})).get("result", {}).get("value") or {}
+            if sb.get("found"):
+                await _trusted_click(cdp, sb["x"], sb["y"])   # focus the searchBox → it's activeElement
+                await asyncio.sleep(0.2)
+                # TRUSTED per-char key events — Workday's prompt search FETCHES results server-side on
+                # real keystrokes; a programmatic value-set (or insertText) does NOT trigger the fetch,
+                # so nothing appears. Clear first, then type each char with keyDown(text)+keyUp.
+                await cdp.send("Runtime.evaluate", {"expression":
+                    "(()=>{const el=document.activeElement; if(el&&el.value){el.value='';"
+                    "el.dispatchEvent(new Event('input',{bubbles:true}));}})()"})
+                for ch in body.value:
+                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch,
+                                                              "key": ch, "unmodifiedText": ch})
+                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
+                    await asyncio.sleep(0.05)
+                await asyncio.sleep(1.3)   # Workday's debounced search fetch
+        # 3. resolve the option by ACCESSIBLE NAME and NATIVE-click it. Coordinate clicks mis-fire on
+        # long/virtualized lists (picked "American Samoa" for "New Hampshire"); native node-click is the
+        # reliable primitive. No option found here usually means a stale session (refresh first).
+        opt_node = None
+        for _ in range(6):
+            opt_node = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url, None, body.value)
+            if opt_node is not None:
+                break
+            await asyncio.sleep(0.4)
+        if opt_node is None:
+            return {"ok": False, "detail": f"option {body.value!r} not found "
+                    f"(searchBox={'yes' if sb.get('found') else 'no'}; refresh if the session is stale)"}
+        await get_driver("direct").move_and_act(
+            browser_url=body.browser_url,
+            request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=opt_node),
+            tab_id=body.tab_id, tab_url=body.tab_url)
+        await asyncio.sleep(0.4)
+        _log_event("drive", f"prompt-select '{body.field_name}' <- {body.value}",
+                   detail=f"searchBox={'yes' if sb.get('found') else 'no'}", domain=body.tab_url)
+        return {"ok": True, "selected": body.value, "detail": f"searchBox={'yes' if sb.get('found') else 'no'}"}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("select_prompt failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
+class EvalRequest(BaseModel):
+    """DEBUG: run a JS expression in the tab and return its value. For building/tuning actions (e.g.
+    inspecting a Workday prompt popup). Local dev tool — the MCP already fully drives the browser."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    expression: str
+
+
+@app.post("/eval")
+async def eval_js(body: EvalRequest):
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate", {"expression": body.expression,
+                                                      "returnByValue": True, "awaitPromise": True})
+        return {"ok": True, "value": (res.get("result") or {}).get("value"),
+                "exception": res.get("exceptionDetails")}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": str(exc)}
+
+
 class ExtractJobsRequest(BaseModel):
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
