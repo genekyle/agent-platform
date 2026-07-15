@@ -74,7 +74,50 @@ APPLY_BRANCHES = {
     "account_creation":            {"human_required": True,  "note": "company-site account signup"},
     "company_site":                {"human_required": True,  "note": "redirect off Indeed to an ATS (Workday/Greenhouse/...)"},
     "post_submit_feedback":        {"human_required": False, "note": "optional AI-tool rating — skippable; app already in"},
+    "ai_use_attestation":          {"human_required": False,
+                                    "note": "a field asking the applicant to attest whether their materials were "
+                                            "generated/edited/supplemented by AI tools (KKR's Greenhouse form names "
+                                            "ChatGPT/Gemini/Claude explicitly). Answered from the answer store like any "
+                                            "other question — the OPERATOR sets the value, since it's their attestation "
+                                            "about their own materials. Detected so it's never silently missed."},
 }
+
+# Detects the attestation above by its question text, so the scanner flags it as human_required on
+# ANY ATS, not just where we've seen it. Biased toward DETECTING: a false positive costs one operator
+# click; a false negative means the agent auto-answers a question about its own involvement.
+# STRONG — any one of these is enough on its own.
+_AI_ATTEST_STRONG = [
+    r"(chatgpt|gemini|\bclaude\b|copilot|\bllm\b)",                      # names a tool
+    r"without\s+(the\s+)?(use\s+of\s+)?(any\s+)?(ai|artificial intelligence)\b",
+    r"not\s+(been\s+)?(generated|written|created|produced|edited|supplemented)\b.{0,80}\b(ai|artificial intelligence)\b",
+    r"\b(ai|artificial intelligence)\b.{0,60}(tools?|assistant|assistance).{0,90}\b(not|without|no)\b",
+    r"\b(no|not)\s+(ai|artificial intelligence)\s+(was\s+)?(used|involved)",
+]
+# WEAK — need two together (each is innocuous alone).
+_AI_ATTEST_WEAK = [
+    r"reflects?\s+my\s+own\s+work",
+    r"\bmy\s+own\s+(work|words|writing)\b",
+    r"\b(certify|attest|confirm|declare)\b",
+    r"\b(ai|artificial intelligence)\b",
+]
+AI_USE_ATTESTATION_PATTERNS = _AI_ATTEST_STRONG + _AI_ATTEST_WEAK   # kept for introspection/tests
+
+
+def is_ai_use_attestation(question_text: str) -> bool:
+    """True when a form field asks the applicant to attest about AI-tool use in their application.
+
+    Recognising it is the point: these are worded very differently per employer, so without a detector
+    the loop either misses one or has to re-ask the operator every time. Once detected, it's answered
+    from the answer store key `ai_use_attestation` — the operator's own stated answer about their own
+    materials. Exposed as a function (not just a regex list) so the scanner, the recipe and any future
+    L3 classifier all ask the same question the same way.
+    """
+    t = (question_text or "").strip().lower()
+    if not t:
+        return False
+    if any(re.search(p, t, re.I) for p in _AI_ATTEST_STRONG):
+        return True
+    return sum(1 for p in _AI_ATTEST_WEAK if re.search(p, t, re.I)) >= 2
 
 # --- URL -> apply state (cheap, no model) ------------------------------------------
 # The smartapply/dashboard URL reliably encodes the module, so we read state from it
@@ -435,7 +478,39 @@ GREENHOUSE_LESSONS = {
                      "(#onetrust-pc-btn-handler) -> 'Reject All' (.ot-pc-refuse-all-handler). The "
                      "banner itself offers only ACCEPT, so the reject lives one level in.",
     "custom_questions": "Employer-specific questions are appended per posting — they are the part that "
-                        "does NOT generalize. Read them live; the rest of the form does generalize.",
+                        "does NOT generalize. Read them live; the rest of the form does generalize. "
+                        "They render as #question_<id> (comboboxes carry aria-expanded; each has a "
+                        "hidden required twin, so a duplicate empty-id field is NOT a second question).",
+    "education_may_be_required": "KKR requires School*/Degree*/Discipline* + dates (#school--0, "
+                                 "#degree--0, #discipline--0, #start-month--0, #start-year--0, ...). "
+                                 "Wellington's Workday allowed blank; Greenhouse employers often don't. "
+                                 "Answers live in the answer store (education_*) — never invent credentials.",
+    "ai_use_attestation": "KKR asks a REQUIRED 'my materials were not generated/edited/supplemented by "
+                          "AI tools (ChatGPT, Gemini, Claude...)' confirmation. Wording varies a lot "
+                          "per employer, so detect it with is_ai_use_attestation(question_text) rather "
+                          "than matching a fixed string, then answer from the answer-store key "
+                          "`ai_use_attestation` (the operator's own attestation about their own "
+                          "materials — set once, reused). Detected-but-unanswered => ask the operator "
+                          "rather than guess.",
+    "react_select_widgets": "Country / Location / every Yes-No custom question is a REACT-SELECT "
+                            "combobox. It fetches + opens ONLY on real per-char keystrokes: a "
+                            "react-safe value-set or insertText leaves aria-expanded=false and no "
+                            "listbox (same lesson as Workday's prompt searchBox). Use driver="
+                            "'humanized' to type, THEN click the option. Two gotchas: (1) aria-controls "
+                            "is ABSENT until it expands, so resolve the popup AFTER typing; (2) after "
+                            "picking, the input's .value goes EMPTY — the choice renders in a sibling "
+                            "[class*=singleValue], so verify there, not on .value.",
+    "option_matching": "Match options EXACTLY. /Concord/ picked 'Concordia, Entre Rios, Argentina' "
+                       "over 'Concord, New Hampshire' — the same substring pitfall as Workday's "
+                       "'State' matching 'United States'. Anchor it (^Concord,\\s*New Hampshire).",
+    "date_inputs": "start/end month+year are controlled text inputs: driver='direct' silently no-ops "
+                   "(field stays empty, call still returns ok) — type them with 'humanized' too. They "
+                   "are NOT Workday segmented spinbuttons; no calendar picker involved.",
+    "phone_country_field": "#country is the PHONE country code (renders '+1'), NOT the address "
+                           "country — the address lives in #candidate-location.",
+    "stale_state": "Greenhouse is ANONYMOUS — no session, no account. So unlike Workday (where any "
+                   "refresh DROPS the session and costs you the whole fill), a stale Greenhouse form is "
+                   "cheap: just reload the iframe and re-fill. Refresh freely here; never on Workday.",
 }
 
 def recipe_spec() -> dict[str, Any]:

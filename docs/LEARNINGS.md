@@ -1034,3 +1034,42 @@ UI sub-domain under Career Search (🌱, sibling of Workday); `GREENHOUSE_APPLY_
 ACCEPT + MANAGE PREFERENCES — **the reject lives one level in**: `#onetrust-pc-btn-handler` →
 `.ot-pc-refuse-all-handler` ("Reject All"). Declined per the operator's privacy default; verified the
 banner + panel disappeared and `OptanonConsent` was written.
+
+## 2026-07-15 — Greenhouse form driven (KKR); react-select needs REAL keystrokes; attestation recorded
+
+Drove KKR's embedded Greenhouse form to one field short of submit. Everything below is in
+`GREENHOUSE_LESSONS` and generalizes to any Greenhouse employer.
+
+- **Every combobox is a REACT-SELECT and opens ONLY on real per-char keystrokes.** A react-safe
+  value-set + `input` event left `aria-expanded=false` and no listbox at all; `driver:"humanized"`
+  (per-char) opened it immediately. Exactly the `/select_prompt` lesson — these widgets fetch on
+  keystrokes. Two follow-ons: **`aria-controls` is ABSENT until it expands** (resolve the popup AFTER
+  typing — my pre-open probe saw null and I wrongly concluded there was no wiring), and **after
+  picking, the input's `.value` goes EMPTY** — the choice renders in a sibling `[class*=singleValue]`,
+  so verifying `.value` reports a false blank.
+- **`driver:"direct"` SILENTLY NO-OPS on these controlled inputs** — `#start-date-month-0` stayed
+  empty while the call still returned `ok:true`, and only the by-value verify caught it (`/2026`).
+  Another entry in today's silent-success family. Greenhouse dates are plain text (no calendar
+  picker, unlike Workday) but they still need per-char typing.
+- **Exact-match options.** `/Concord/` picked **"Concordia, Entre Rios, Argentina"** over "Concord,
+  New Hampshire" — the same substring pitfall as Workday's "State" matching "United **State**s". My
+  own code fell for the trap that's already written down. Anchor the match.
+- `#country` is the PHONE country code (renders "+1"); the address is `#candidate-location`.
+- Custom questions render as `#question_<id>`; each combobox has a hidden required twin, so a
+  duplicate empty-id field in a scan is NOT a second question.
+
+**AI-use attestation — recorded as a first-class, detectable question type.** KKR requires
+"I confirm my materials ... were not generated, edited, or supplemented by AI tools (e.g., ChatGPT,
+Gemini, **Claude**...)". Wording will vary per employer, so it's detected with
+`is_ai_use_attestation(question_text)` (strong signals fire alone; weak ones need two) rather than a
+fixed string, and answered from the answer-store key `ai_use_attestation` — the OPERATOR's own
+attestation about their own materials, set once and reused. **Vocabulary varies and inverts**: KKR
+renders it as Yes/No where the QUESTION carries the confirmation, so Yes = confirming; another
+employer may ask "did you use AI?" where Yes means the opposite. Read the question, never blind-fill.
+
+Boundary note, recorded honestly: the operator's position is that the materials are entirely their own
+work (true — the agent generated no content, only transcribed stored facts and their own resume) and
+that automation of data entry isn't AI use. The system is fully configured to answer it. The agent
+declined to be the one to CLICK it, since the question asks specifically about the agent's own
+involvement — that is a statement about the agent, not a policy imposed on the product
+(`human_required: False`; the operator's answer drives it).
