@@ -652,3 +652,74 @@ silently returns NO options (the whole reason this looked broken for an hour —
 logged out; reload + re-auth first, per PRINCIPLES §1).
 
 Also: added `POST /eval` (run JS in the tab, return value) as a dev tool for building/tuning actions.
+
+## 2026-07-14 — Drove the U.S. Bank Workday apply through Application Questions; date-widget + transient-error + relogin lessons
+
+Continued the live U.S. Bank (`usbank.wd1.myworkdayjobs.com`) Trust Reporting Analyst application on
+session 16 (port 9322). Signed in (operator ▶ Login), then drove **My Information → My Experience →
+Application Questions** to completion. What bit us / what to bake in:
+
+- **Workday DATE fields (`dateSectionMonth-input`/`dateSectionYear-input`, role=spinbutton) do NOT accept
+  typed input.** Both drivers failed: DirectDriver's `Input.insertText` and HumanizedDriver's per-char
+  `char` events + react-safe set BOTH left the field *displaying* the value ("03/2026") while Workday's
+  validation model stayed empty → "The field From is required and must have a value" on Save. Same class
+  as the `/select_prompt` finding: Workday commits only on **trusted events**. **The reliable path is the
+  CALENDAR PICKER**: click the field's "Calendar" button → it opens a **month grid** (year nav `< 2026 >`,
+  Jan–Dec buttons) → click the month (trusted click registers). Verified: picking "Mar" set 03/2026 and
+  cleared the required-error. Bake into the Workday recipe: dates = calendar-picker clicks, never typed.
+  (Plain text inputs — Job Title/Company/Location, and free-text `textarea` like the "N/A" discharge box —
+  DO accept DirectDriver `type`; only the segmented date/prompt widgets need trusted events.)
+- **Workday throws a transient "Something went wrong — Please refresh the page and then try again."** at
+  step transitions (hit it after sign-in→My Information AND after Application-Questions-save→Voluntary-
+  Disclosures). It's a real, recurring page STATE with a deterministic recovery: **refresh**. Labeled it
+  `workday_error_retry` (2 examples; post_action = whatever step was pending). Recognize→refresh, don't
+  treat as a dead end.
+- **A hard-navigate refresh can DROP the Workday session** (log you out). The `/navigate` (Page.navigate to
+  the same URL) recovery worked the first time but the SECOND refresh returned us to "Start Your
+  Application" **logged out** (top-right flipped account-email → "Sign In"). So Workday sessions here are
+  short-lived / fragile: **completed steps persist on the candidate account** (My Info/Experience/Questions
+  stayed ✓ and "Use My Last Application" is offered), but you must **re-auth** to continue. Next time try a
+  SOFT reload (`location.reload()` via `/eval`) instead of a hard `Page.navigate` for the "Something went
+  wrong" recovery — it may preserve the SPA session. Two logouts in one session also hints the rapid
+  automated activity may be shortening the session; pace it.
+- **Application Questions is a long compliance questionnaire (~16 listbox dropdowns + 2 textareas), all
+  dropdowns share accessible name " Select One Required"** (can't target by name — target by
+  `backend_node_id` from a fresh `ax_scan`, in DOM/y order = question order). Node ids were STABLE across
+  single selects here (the earlier "reset" scare was a bad `textContent` verify read — **verify dropdown
+  state by SCREENSHOT, not `button.textContent`**, which doesn't reflect the selection). DirectDriver
+  `action_id:"select"` with an exact-substring `value` ("Yes"/"No"/"$75,000-$89,999") is reliable
+  one-call-per-dropdown. A batch loop over ~14 selects TIMED OUT the bash tool — do them in batches of ~5.
+- **L3 states captured+labeled this session** (all via control-plane `/api/capture` → PATCH, filename `+`→
+  `%2B`): `workday_sign_in` (new — recipe-referenced but 0 examples), `company_careers_job_posting` (new —
+  the Phenom careers.usbank.com posting w/ AI chatbot, the funnel step before the ATS), `workday_error_retry`
+  (×2, new), `workday_my_information` (signed-in prefilled variant), `workday_my_experience` (empty + filled),
+  `workday_questions` (empty + filled). Answers were operator-confirmed: work-auth Yes / sponsorship No /
+  background-check + bonding acks Yes / willing-to-work-location Yes / desired comp **$75k placeholder**
+  (operator will clarify the real number; their standing target is $130k) / all other screening = No / the
+  "ever discharged/terminated" required free-text = "N/A".
+
+## 2026-07-15 — Indeed's hidden decoy job cards + a job count that was really a filter badge
+
+Ran a fresh `reporting analyst` / Nashua NH / 50mi search on session 16 and found two bugs in
+`extract_jobs` (`apps/mcp/app/main_server.py`) — both fixed + verified live (18 rows → 17 real ones).
+
+- **Indeed plants HIDDEN 0x0 decoy job cards.** A `[data-jk]` anchor (`id=job_fedcba9876543210`,
+  `offsetParent === null`, 0x0 rect) sits alongside the real cards and extracted as a phantom job with
+  an empty company/location. The hex jk looks like fixture data but is **Indeed's own** — it shows up in
+  a real 07-14 capture trace. This is the SAME trap as smartapply's width-0 duplicate Continue button:
+  **only ever trust the VISIBLE node**, in extraction as well as in driving. The extractor now filters
+  on `offsetParent !== null && rect.width/height > 0`. A phantom in the shortlist is not cosmetic — it
+  could burn an apply on a job that doesn't exist.
+- **`meta.total_results` was reporting `1` for a full page.** Indeed no longer renders a job-count
+  element at all (every count selector returns null), so the regex fallback ran against
+  `body.innerText` — and `\s` spans newlines, so the filter chips "Distance\n**1**" + "**Job** Type"
+  matched `/[\d,]+\+?\s+jobs?\b/i` as "1 Job". The count was the Distance badge. Fallback now uses
+  `[^\S\n]` (no newline crossing) and requires plural "jobs"; **null is the honest answer** when the
+  page shows no count — don't scrape a number off a badge. Anything recording `total_results` per query
+  (targeted_search_and_apply) was recording a 1.
+
+Also: **re-running a search via the Search button DROPS `radius` from the URL** — the distance filter
+does not survive a re-query, so re-apply it after every search. `/set_distance` reported
+`method: "url_fallback"`, i.e. the human widget path (trusted-mouse open of the distance pill) did NOT
+open the menu and it fell back to the same-tab `radius=` rewrite. The cascade did its job, but the
+preferred human path is silently degrading and is worth a look before it's the only thing left.

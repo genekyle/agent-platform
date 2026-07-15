@@ -38,6 +38,16 @@ def default_username() -> str:
     return accounts_mod._read_env_value("ATS_ACCOUNT_USERNAME") or DEFAULT_USERNAME
 
 
+def default_first_name() -> str:
+    """Candidate first name for account-creation forms that require it (e.g. AppVault). Kept in the
+    gitignored .env (ATS_ACCOUNT_FIRST_NAME) — PII stays out of code, like the username."""
+    return accounts_mod._read_env_value("ATS_ACCOUNT_FIRST_NAME") or ""
+
+
+def default_last_name() -> str:
+    return accounts_mod._read_env_value("ATS_ACCOUNT_LAST_NAME") or ""
+
+
 def _password_suffix() -> str:
     return accounts_mod._read_env_value("ATS_ACCOUNT_PW_SUFFIX")
 
@@ -118,7 +128,9 @@ def next_account_action(company: str, ats_id: str) -> dict[str, Any]:
     created = status == "active" or acct.get("has_creds")
     leg = "sign_in" if created else "create_account"
     recipes = {"workday": {"create_account": "WORKDAY_CREATE_ACCOUNT_RECIPE",
-                           "sign_in": "WORKDAY_SIGN_IN_RECIPE"}}
+                           "sign_in": "WORKDAY_SIGN_IN_RECIPE"},
+               "appvault": {"create_account": "APPVAULT_CREATE_ACCOUNT_RECIPE",
+                            "sign_in": "APPVAULT_SIGN_IN_RECIPE"}}
     return {
         "company": company,
         "ats_id": ats_id,

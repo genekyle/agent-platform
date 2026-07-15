@@ -106,6 +106,16 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
               "can't catch it by host — record the company→phenom mapping from the applystart feed. "
               "'Apply now' is typically account-gated. Observed: careers.usbank.com (U.S. Bank).",
      "seed_companies": ["U.S. Bank"]},
+    {"ats_id": "appvault", "display_name": "AppVault", "icon": "🟩",
+     "hosts": ["appvault.com"], "recipe": "apply_recipe.APPVAULT_APPLY_RECIPE", "auth": "account",
+     "notes": "Reached via a company careers FRONT (e.g. careerswithus.com → 'APPLY NOW' link) that "
+              "hands off to <employer>apply.appvault.com. Account-gated: Material-UI LOGIN (Email + "
+              "Password) with a 'Create an Account' form (Email, Password[8-18, upper+lower+non-alpha], "
+              "confirm, First/Last Name, Country, Profile Visibility, accept-Terms link → Continue). "
+              "MUI inputs carry NO stable name/id EXCEPT the password fields "
+              "(#outlined-adornment-password / -re-password) — match the rest by floating-label text / "
+              "DOM order. Observed: Ahold Delhaize USA (aholddelhaizeapply.appvault.com).",
+     "seed_companies": ["Ahold Delhaize USA"]},
     # Catch-all so an employer's own careers portal (not yet mapped to a known ATS) is a recordable
     # platform. classify_ats returns 'company_site' for unknown external hosts; this makes it a
     # first-class registry entry (so record_company_ats accepts it) until the real backend is known.

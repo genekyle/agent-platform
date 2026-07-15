@@ -274,6 +274,69 @@ WORKDAY_ACCOUNT_LOOP = {
 }
 
 
+# --- AppVault ACCOUNT lifecycle (Ahold Delhaize et al.) --------------------------------------------
+# Reached via a careers FRONT (careerswithus.com) → 'APPLY NOW' → <employer>apply.appvault.com. The
+# apply is account-gated behind a Material-UI login. Mapped live 2026-07-14 on
+# aholddelhaizeapply.appvault.com. KEY QUIRK: MUI inputs carry NO stable accessible name/id EXCEPT the
+# two password fields (#outlined-adornment-password / #outlined-adornment-re-password) — match the
+# email/name fields by their floating-LABEL text or DOM order, not by role+name (the AX name is empty).
+# Password RULES (enforced by AppVault): 8–18 chars, NO whitespace, ≥1 upper + ≥1 lower + ≥1 non-alpha
+# — the generated credential MUST satisfy this. No bot-honeypot observed. Terms must be accepted (a
+# link, not a checkbox) before Continue enables.
+#
+# BOUNDARY (same as Workday): DATA recipes. Executed by the operator-triggered Account Manager / the
+# operator — NEVER the agent's own tool-loop. The agent never types a password into the site.
+APPVAULT_CREATE_ACCOUNT_RECIPE = [
+    {"step": 0, "state": "appvault_create_account",
+     "action": "fill Email + Password + confirm-Password (the generated credential; must meet the "
+               "8-18/upper/lower/non-alpha rule) + First Name + Last Name; Country of Residence and "
+               "Profile Visibility default (United States / Any company recruiter); click 'Click Here "
+               "to Accept Terms of Use'; then click Continue. May then require email verification "
+               "(errand → gmail fetch_login_code).",
+     "fields": {
+         "email": {"label": "Email", "role": "textbox", "match": "label_or_first_text",
+                   "note": "MUI floating label 'Email *'; input has no name/id — match by label or 1st text input"},
+         "password": {"label": "Password", "selector": "#outlined-adornment-password"},
+         "verify_password": {"label": "Enter password again", "selector": "#outlined-adornment-re-password"},
+         "first_name": {"label": "First Name", "role": "textbox", "match": "label_proximity"},
+         "last_name": {"label": "Last Name", "role": "textbox", "match": "label_proximity"},
+     },
+     "defaults_ok": {"country_of_residence": "United States", "profile_visibility": "Any company recruiter"},
+     "accept_terms": {"open_link": {"role": "link", "name": "Click Here to Accept Terms of Use"},
+                      "then_modal": {"role": "button", "name": "Agree"},
+                      "note": "the link opens a 'Term of Use Policy' MODAL (buttons Print/Disagree/Agree); "
+                              "click Agree — Continue stays DISABLED until terms are agreed (live 2026-07-14)"},
+     "submit": {"role": "button", "name": "Continue"},
+     "password_rules": "8-18 chars, no whitespace, ≥1 upper, ≥1 lower, ≥1 non-alpha",
+     "honeypot_do_not_fill": None,
+     "expect": ["appvault_apply", "appvault_verify_email", "account_creation"]},
+]
+
+APPVAULT_SIGN_IN_RECIPE = [
+    {"step": 0, "state": "appvault_login",
+     "action": "fill Email + Password (resolved from the account's stored/derived creds), click "
+               "Sign In. MUI inputs — match Password by #outlined-adornment-password, Email by the "
+               "1st text input. 2FA/verification → escalate.",
+     "fields": {"email": {"label": "Email Address", "role": "textbox", "match": "first_text"},
+                "password": {"label": "Password", "selector": "#outlined-adornment-password"}},
+     "submit": {"role": "button", "name": "Sign In"},
+     "honeypot_do_not_fill": None,
+     "expect": ["appvault_apply"]},
+]
+
+APPVAULT_ACCOUNT_LOOP = {
+    "needs_creation": {"state": "appvault_create_account", "recipe": "APPVAULT_CREATE_ACCOUNT_RECIPE",
+                       "button": "Create an Account"},
+    "created": {"state": "appvault_login", "recipe": "APPVAULT_SIGN_IN_RECIPE", "button": "Sign In"},
+    "then": "hand to APPVAULT_APPLY_RECIPE (the post-auth apply spine — captured once authed)",
+    "runs_as": "ONE loop executed by the operator-run Account Manager (never the agent's own loop)",
+}
+
+# Post-auth apply spine — TBD (behind the account wall; seed it from the first authed capture, the
+# way WORKDAY_APPLY_RECIPE was seeded from teacher probes).
+APPVAULT_APPLY_RECIPE: list[dict[str, Any]] = []
+
+
 def recipe_spec() -> dict[str, Any]:
     return {
         "domain": "indeed",
@@ -288,6 +351,13 @@ def recipe_spec() -> dict[str, Any]:
                         "sign_in_recipe": WORKDAY_SIGN_IN_RECIPE,
                         "detect": "host matches *.myworkdayjobs.com, OR a branded careers wrapper whose "
                                   "APPLY-NOW href targets *.myworkdayjobs.com (e.g. Takeda)"},
+            "appvault": {"recipe": APPVAULT_APPLY_RECIPE,
+                         "account_loop": APPVAULT_ACCOUNT_LOOP,
+                         "create_account_recipe": APPVAULT_CREATE_ACCOUNT_RECIPE,
+                         "sign_in_recipe": APPVAULT_SIGN_IN_RECIPE,
+                         "detect": "apply-destination host matches *apply.appvault.com, reached via a "
+                                   "careers front (careerswithus.com) 'APPLY NOW' link; record the "
+                                   "company→appvault mapping from the applystart feed"},
         },
         "teachable": "states = page_state_registry indeed_apply_* ; transitions = the "
                      "state_transition model learns from captured observed->post_action data. "

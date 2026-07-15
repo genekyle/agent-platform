@@ -42,6 +42,117 @@ def _match_create_account_fields(candidates: list) -> dict:
     return out
 
 
+# AppVault Create-Account tag JS: MUI inputs carry no stable name/id (except the two password fields),
+# so tag Email/First/Last by their FormControl floating-LABEL text → a data-av attribute we can then
+# target with /execute's `selector`. Returns which fields got tagged (for diagnostics).
+_APPVAULT_TAG_JS = (
+    "(()=>{const m={email:/^email/i,first:/first name/i,last:/last name/i};const out={};"
+    "document.querySelectorAll('.MuiFormControl-root,.MuiTextField-root').forEach(fc=>{"
+    "const l=fc.querySelector('label'),inp=fc.querySelector('input');if(!l||!inp)return;"
+    "const t=(l.textContent||'').trim();for(const k in m){if(m[k].test(t)){inp.setAttribute('data-av',k);out[k]=true;}}});"
+    "return out;})()"
+)
+
+
+async def _create_appvault_account(body, username: str, password: str) -> dict[str, Any]:
+    """AppVault create-account leg (Ahold Delhaize et al.). MUI form: tag Email/First/Last by label,
+    fill by selector (passwords have stable ids), accept Terms (a LINK), click Continue.
+    Uses the DIRECT driver: this is a form behind an account wall, where insertText registers with
+    React/MUI and the humanized driver's per-char cadence both times out and truncates values. The
+    humane path is about WHICH control we operate (the real widget, not a URL) — not about typing
+    slowly at a form only the operator ever triggers.
+    OPERATOR-TRIGGERED only — same boundary as the Workday leg."""
+    import asyncio
+
+    import httpx
+
+    import accounts as accounts_mod
+    from settings import settings
+
+    first, last = ats_accounts.default_first_name(), ats_accounts.default_last_name()
+    if not first or not last:
+        return {"ok": False, "status": "no_name",
+                "detail": "AppVault needs a name — set ATS_ACCOUNT_FIRST_NAME / ATS_ACCOUNT_LAST_NAME in .env."}
+    tab_url = body.tab_url if (body.tab_url and "appvault" in body.tab_url) else "appvault.com"
+    base = {"browser_url": body.browser_url, "tab_url": tab_url, "tab_id": body.tab_id}
+    cap = settings.capture_server_url
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async def _eval(expr: str):
+                return (await client.post(f"{cap}/eval", json={**base, "expression": expr})).json().get("value")
+
+            # Confirm the Create-Account form is up (confirm-password + Continue present).
+            on_form = await _eval("!!document.querySelector('#outlined-adornment-re-password') "
+                                  "&& /Continue/.test(document.body.innerText)")
+            if not on_form:
+                event_log.log_event("account", f"AppVault create skipped: no form for {body.company}",
+                                    domain="career_search")
+                return {"ok": False, "status": "no_create_form",
+                        "detail": "AppVault 'Create an Account' form not visible (need Email/Password/confirm/"
+                                  "First/Last + Continue). Open it on the AppVault tab first, then press Create account."}
+            tagged = await _eval(_APPVAULT_TAG_JS) or {}
+            # Fail FAST if a label didn't tag: [data-av=…] would then match nothing and the fill would
+            # no-op, surfacing later as a vague "didn't advance" — i.e. a SELECTOR-layer break wearing
+            # a validation-layer costume. Name the layer here instead of paying to re-diagnose it.
+            missing = [k for k in ("email", "first", "last") if not tagged.get(k)]
+            if missing:
+                event_log.log_event("account", f"AppVault label-tagging failed for {body.company}",
+                                    domain="career_search", detail=f"untagged: {missing}")
+                return {"ok": False, "status": "fields_not_found",
+                        "detail": f"Could not find the AppVault {', '.join(missing)} field(s) by floating-label "
+                                  "text — the form's labels likely changed. Nothing was typed. Re-map the "
+                                  "labels in APPVAULT_CREATE_ACCOUNT_RECIPE before retrying."}
+
+            async def _type(selector: str, value: str) -> None:
+                # CLEAR then DIRECT-type: 'type' APPENDS (would double-fill on a re-run), so clear
+                # first. DIRECT (insertText) registers with React/MUI onChange (proven on Workday text
+                # fields), ~1-2s/field — avoids the humanized ~15-20s/field 5-field TIMEOUT.
+                await client.post(f"{cap}/execute", json={
+                    "action_id": "clear", "selector": selector, "target_bbox": {}, **base})
+                await client.post(f"{cap}/execute", json={
+                    "action_id": "type", "selector": selector, "value": value, "target_bbox": {},
+                    "driver": "direct", **base})
+
+            async def _click(role: str, name: str) -> None:
+                await client.post(f"{cap}/execute", json={
+                    "action_id": "click", "target_role": role, "target_name": name,
+                    "target_bbox": {}, **base})
+
+            await _type("[data-av=email]", username)
+            await _type("#outlined-adornment-password", password)
+            await _type("#outlined-adornment-re-password", password)
+            await _type("[data-av=first]", first)
+            await _type("[data-av=last]", last)
+            # Terms: the link opens a "Term of Use Policy" MODAL — must click Agree (buttons: Print /
+            # Disagree / Agree). Only then does Continue enable (verified live 2026-07-14, Ahold).
+            await _click("link", "Click Here to Accept Terms of Use")
+            await _click("button", "Agree")
+            await _click("button", "Continue")
+            # VERIFY it actually submitted before touching the account record — else a stall (a field
+            # that didn't validate, terms not agreed) would falsely mark the account 'created'. Success
+            # = the create form is gone OR we advanced to email-verification.
+            await asyncio.sleep(2.0)
+            advanced = await _eval(
+                "!document.querySelector('#outlined-adornment-re-password') "
+                "|| /verif|confirm your email|check your email|code (was |has been )?sent/i.test(document.body.innerText)")
+        if not advanced:
+            event_log.log_event("account", f"AppVault create did NOT advance: {body.company}",
+                                domain="career_search", detail="Continue no-op — account left pending")
+            return {"ok": False, "status": "not_advanced",
+                    "detail": "Filled the form + agreed to Terms + clicked Continue, but the Create-Account "
+                              "form is still showing — it did NOT submit (a field likely didn't validate). "
+                              "Account left PENDING (not marked created). Check the form / event log."}
+        accounts_mod.set_credentials(ats_accounts.ats_account_id(body.company, body.ats_id), username, password)
+        ats_accounts.mark_created(body.company, body.ats_id)
+        event_log.log_event("account", f"AppVault create-account submitted: {body.company} (operator-triggered)",
+                            domain="career_search", detail=f"tagged {sorted(tagged)}; advanced past create form")
+        return {"ok": True, "status": "submitted",
+                "detail": "AppVault Create Account submitted + verified it advanced. Any email-verification "
+                          "step (code to your Gmail) is yours."}
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"AppVault create-account driver unreachable: {exc}")
+
+
 @router.get("/api/career_search/ats")
 def get_ats_registry() -> dict[str, Any]:
     """The career-search domain group + the ATS platforms (each with its recipe pointer, auth
@@ -166,6 +277,10 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
     if not username or not password:
         raise HTTPException(status_code=400,
                             detail="No generated credential (set ATS_ACCOUNT_PW_SUFFIX in .env).")
+    # Per-ATS create-account flow. Workday matches fields by AX name; AppVault's MUI form is nameless
+    # (selector/label-based) with a Terms LINK + First/Last + Continue — its own leg.
+    if body.ats_id == "appvault":
+        return await _create_appvault_account(body, username, password)
     scan_req = {"browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id}
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
