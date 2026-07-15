@@ -798,3 +798,47 @@ whichever tab was selected, not the one requested.
 
 **The rule this keeps re-teaching:** *never let a fallback quietly substitute a plausible result for
 the real one.* Fail loud, or the flywheel eats the lie.
+
+## 2026-07-15 — The Workday create-account leg timed out mid-fill (a lesson that never propagated)
+
+Operator pressed "+ Create account" for Wellington: the creds went in, then the UI said the driver
+was unreachable and **Create Account was never clicked**. Event log tells it exactly:
+
+```
+17:58:40 type node 578  ok      <- email
+17:58:42 type node 579  ok      <- password   (2s)
+17:59:53 type node 580  ok      <- verify     (71s!)
+(nothing — no click on submit)
+```
+
+**Root cause: `"driver": "humanized"` in `create_account_on_site`.** Humanized cadence-types at
+~15-20s/field on Workday, so the third field blew the `httpx.AsyncClient(timeout=60.0)` → `HTTPError`
+→ 502 "Create-account driver unreachable" — *after* filling, *before* submitting. The
+**2026-07-13 entry already said this** ("use the `direct` driver for ATS form fills, not humanized —
+~15-20s/field, times out at ~5 fields, and it TRUNCATED a value"), and the AppVault leg written the
+next day used `direct` *with a comment explaining why*. Nobody went back and fixed the Workday leg.
+
+**This is the third time the same shape has bitten us in two days:**
+- `/select_prompt` learned "open with a NATIVE node-click, not trusted-mouse" → never reached
+  `set_distance`, whose widget path was dead for weeks.
+- AppVault learned "direct, not humanized" → never reached the Workday leg.
+- AppVault learned "VERIFY it advanced before marking created" → never reached the Workday leg, which
+  called `mark_created()` purely because the click returned. A stalled form (bad password, unticked
+  ack) would have left a phantom `active` account with no login behind it.
+
+**A lesson recorded in ONE call-site is not a lesson learned.** When you fix a leg, grep for its
+siblings *in the same file* and fix them together, or the next session pays for it again.
+
+**Fixed** (`routers/career_search.py`): Workday leg now uses `direct`, CLEARs before typing (`type`
+appends — it once doubled a postal code to "0330103301"), and **verifies the form actually advanced
+before `mark_created`**, returning `not_advanced` + leaving the account PENDING otherwise.
+
+Also: **the signed-in signal on Workday is the account email in the header** ("Settings
+genomags@gmail.com" / "Candidate Home"), NOT a "Sign Out" button — a `sign out` text probe returns
+false while signed in.
+
+UI: the accounts table rendered a separate `<table>` per company, each auto-sizing its own columns,
+so no two company cards lined up, and five buttons on one `white-space: nowrap` row pushed the
+actions clean off the right edge (the operator couldn't reach "+ Create account" without scrolling
+sideways). Now `table-layout: fixed` + a shared `<colgroup>`, and the actions stack
+primary → utilities → destructive. Verified: both tables measure identically, no horizontal scroll.

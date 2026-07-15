@@ -267,6 +267,8 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
     BOUNDARY: this runs ONLY when the OPERATOR presses the UI button (like ▶ Login). The agent must
     not call it from its own tool-loop — the agent never creates accounts / enters credentials itself.
     """
+    import asyncio
+
     import httpx
 
     import accounts as accounts_mod
@@ -293,26 +295,58 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
                         "detail": f"No Create-Account form visible (found {sorted(fields)}). Open the "
                                   "ATS 'Create Account' screen first, then press Create account."}
 
-            async def _exec(action_id: str, node_id: int, value: Optional[str] = None) -> None:
+            async def _exec(action_id: str, node_id: int, value: Optional[str] = None,
+                            driver: str = "direct") -> None:
+                # DIRECT, not humanized. Humanized cadence-types at ~15-20s/field on Workday, so a
+                # 3-field form blew the 60s client timeout mid-fill: the creds went in, httpx raised,
+                # and the Create Account click NEVER FIRED — surfacing as "driver unreachable" with a
+                # filled form on screen (live 2026-07-15, Wellington). insertText registers with
+                # Workday's React inputs and is ~1-2s. Bot-safety cadence buys nothing on an ATS form
+                # behind an account wall. (The AppVault leg already knew this; the lesson never
+                # propagated here — same shape as /select_prompt's open-path never reaching set_distance.)
                 await client.post(f"{settings.capture_server_url}/execute", json={
                     "action_id": action_id, "backend_node_id": node_id, "target_bbox": {},
                     "value": value, "browser_url": body.browser_url, "tab_url": body.tab_url,
-                    "tab_id": body.tab_id, "driver": "humanized"})
+                    "tab_id": body.tab_id, "driver": driver})
+
+            async def _type(node_id: int, value: str) -> None:
+                # CLEAR first — `type` APPENDS, so a retry would double the value (cost us a
+                # "0330103301" postal code once).
+                await _exec("clear", node_id)
+                await _exec("type", node_id, value)
 
             if "email" in fields:
-                await _exec("type", fields["email"], username)
-            await _exec("type", fields["password"], password)
+                await _type(fields["email"], username)
+            await _type(fields["password"], password)
             if "verify" in fields:
-                await _exec("type", fields["verify"], password)
+                await _type(fields["verify"], password)
             if "acknowledge" in fields:
                 await _exec("click", fields["acknowledge"])
             await _exec("click", fields["submit"])
+
+            # VERIFY the form actually submitted before touching the account record. This leg used to
+            # mark the account 'active' purely because the click returned — so a stalled form (bad
+            # password, unticked ack) would leave a phantom 'active' account with no login behind it.
+            await asyncio.sleep(2.0)
+            gone = (await client.post(f"{settings.capture_server_url}/eval", json={
+                "browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id,
+                "expression": ("(()=>{const f=document.querySelector('[data-automation-id=password]');"
+                               "const t=document.body.innerText||'';"
+                               "return !f || /verif|check your email|candidate home|my applications/i.test(t);})()"),
+            })).json().get("value")
+        if not gone:
+            event_log.log_event("account", f"Create-account did NOT advance: {body.company} · {body.ats_id}",
+                                domain="career_search",
+                                detail="submit clicked but the create form is still up — left PENDING")
+            return {"ok": False, "status": "not_advanced",
+                    "detail": "Filled the form and clicked Create Account, but the form is still showing — "
+                              "it did not submit. Account left PENDING (not marked created). Check the tab."}
         # Persist the login into the vault + flip to active so future sign-ins resolve it.
         accounts_mod.set_credentials(ats_accounts.ats_account_id(body.company, body.ats_id), username, password)
         ats_accounts.mark_created(body.company, body.ats_id)
         event_log.log_event("account", f"Create-account submitted: {body.company} · {body.ats_id} (operator-triggered)",
-                            domain="career_search", detail=f"filled {sorted(fields)}; account marked active")
+                            domain="career_search", detail=f"filled {sorted(fields)}; verified advanced; marked active")
         return {"ok": True, "status": "submitted",
-                "detail": "Create Account submitted. Any email-verification / 2FA step is yours."}
+                "detail": "Create Account submitted + verified it advanced. Any email-verification / 2FA step is yours."}
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Create-account driver unreachable: {exc}")

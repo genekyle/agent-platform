@@ -144,18 +144,27 @@ export function AccountsSection({ atsFilter = "" }) {
         <div className="layer" key={co.company}>
           <div className="layer__head"><div className="layer__title">{co.company}</div></div>
           <div className="table-wrap">
-            <table className="runs-table">
-              <thead><tr><th>ATS</th><th>Login URL</th><th>Generated login</th><th>Status</th><th></th></tr></thead>
+            {/* Every company renders its OWN table, so auto-sized columns never line up between
+                them. Fixed widths via colgroup keep all the company cards on one grid. */}
+            <table className="runs-table accounts-table">
+              <colgroup>
+                <col className="accounts-col--ats" />
+                <col />
+                <col className="accounts-col--login" />
+                <col className="accounts-col--status" />
+                <col className="accounts-col--actions" />
+              </colgroup>
+              <thead><tr><th>ATS</th><th>Login URL</th><th>Generated login</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>
                 {co.accounts.map((a) => (
                   <tr key={a.account_id}>
                     <td><span className="badge badge--accent">{a.ats_id}</span></td>
-                    <td className="muted" style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <td className="muted accounts-url">
                       {a.login_url ? <a href={a.login_url} target="_blank" rel="noreferrer">{a.login_url}</a> : "—"}
                     </td>
                     <td>
                       {revealed[a.account_id] ? (
-                        <code style={{ fontSize: 12 }}>
+                        <code className="accounts-cred">
                           {revealed[a.account_id].username} / {revealed[a.account_id].suggested_password || "(set suffix in .env)"}
                         </code>
                       ) : (
@@ -164,14 +173,27 @@ export function AccountsSection({ atsFilter = "" }) {
                       )}
                     </td>
                     <td><span className={`badge ${a.status === "active" ? "badge--ok" : "badge--warn"}`}>{a.status}</span></td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      <button className="btn btn-sm" onClick={() => reveal(a, co.company)}>{revealed[a.account_id] ? "Hide" : "Show password"}</button>{" "}
-                      {a.status !== "active" && (
-                        <button className="btn btn-sm btn-primary" title="Operator-triggered: fills + submits the ATS Create-Account form from the generated login (open that page first)" onClick={() => createAccount(a, co.company)}>+ Create account</button>
-                      )}{" "}
-                      <button className="btn btn-sm" onClick={() => setCredForm({ account_id: a.account_id, company: co.company, username: data.username, password: "" })}>Save login</button>{" "}
-                      <button className="btn btn-sm btn-primary" disabled={!a.has_creds} title={a.has_creds ? "Operator-triggered autofill" : "Save a login first"} onClick={() => doLogin(a)}>▶ Login</button>{" "}
-                      <button className="btn btn-sm btn-danger" onClick={() => remove(a)}>Delete</button>
+                    <td>
+                      {/* Two rows: the ONE action this account's lifecycle stage calls for, then the
+                          always-available utilities. Beats five buttons crowded on one line. */}
+                      <div className="acct-actions">
+                        <div className="acct-actions__row">
+                          {a.status !== "active" ? (
+                            <button className="btn btn-sm btn-primary"
+                                    title="Operator-triggered: fills + submits the ATS Create-Account form from the generated login (open that page first)"
+                                    onClick={() => createAccount(a, co.company)}>+ Create account</button>
+                          ) : (
+                            <button className="btn btn-sm btn-primary" disabled={!a.has_creds}
+                                    title={a.has_creds ? "Operator-triggered autofill" : "Save a login first"}
+                                    onClick={() => doLogin(a)}>▶ Login</button>
+                          )}
+                        </div>
+                        <div className="acct-actions__row">
+                          <button className="btn btn-sm" onClick={() => reveal(a, co.company)}>{revealed[a.account_id] ? "Hide" : "Show password"}</button>
+                          <button className="btn btn-sm" onClick={() => setCredForm({ account_id: a.account_id, company: co.company, username: data.username, password: "" })}>Save login</button>
+                          <button className="btn btn-sm btn-danger" onClick={() => remove(a)}>Delete</button>
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 ))}

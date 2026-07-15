@@ -262,6 +262,43 @@ input[type="checkbox"] {
   opacity: 0.72;
 }
 
+/* Accounts table: one shared grid across every company card (each company renders its own
+   <table>, so without fixed widths their columns drift out of alignment). */
+.accounts-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.accounts-col--ats { width: 96px; }
+.accounts-col--login { width: 30%; }
+.accounts-col--status { width: 92px; }
+.accounts-col--actions { width: 230px; }
+
+.accounts-table td { vertical-align: top; }
+
+/* The URL is the flexible column — let it wrap instead of forcing the row wider than the pane. */
+.accounts-url { overflow-wrap: anywhere; }
+
+.accounts-cred {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* Stacked action groups: the lifecycle action on top, utilities beneath. Taller rows, but nothing
+   clipped off the right edge and the columns stay consistent. */
+.acct-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.acct-actions__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* Folder rail: a group domain (Career Search) you click INTO, and the trail back out. */
 .nav-folder-chevron {
   float: right;
