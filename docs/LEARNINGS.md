@@ -842,3 +842,50 @@ so no two company cards lined up, and five buttons on one `white-space: nowrap` 
 actions clean off the right edge (the operator couldn't reach "+ Create account" without scrolling
 sideways). Now `table-layout: fixed` + a shared `<colgroup>`, and the actions stack
 primary → utilities → destructive. Verified: both tables measure identically, no horizontal scroll.
+
+## 2026-07-15 — Workday widget layer generalizes; the SESSION is the real enemy (Wellington)
+
+Drove Wellington's Workday My Information end-to-end (all 7 text fields + 4 widgets, verified by
+value), hit Save and Continue → **4× opaque `Error - Page Error / VPS|<uuid>`** and a DISABLED Save
+button. `/challenge_visibility` first (per the rule): no captcha. Then the recovery bit us.
+
+- **A SOFT reload does NOT preserve the Workday session — this DISPROVES the hypothesis in the
+  2026-07-14 entry** ("try `location.reload()` instead of Page.navigate — it may preserve the SPA
+  session"). It doesn't. Both hard and soft refresh drop you to logged-out. **Refreshing to "recover"
+  made things strictly worse**: we lost the whole fill AND the session. Do NOT reflexively refresh a
+  Workday error — re-auth is the recovery, and the fill should be re-done after.
+- **The 4 page errors were almost certainly an EXPIRED SESSION, not field validation.** No field-level
+  errors, all 4 generic + server-side, and the reload revealed we were already logged out. Read
+  `Page Error VPS|…` on save as "session is gone", not "your data is bad".
+- **The step-count tell WORKS and caught it**: `current step 1 of 7` = the account step is back = you
+  are LOGGED OUT; `1 of 6` = signed in, apply spine only. Cheap, deterministic, no screenshot needed.
+  (Signed-in signal is the account email in the header — NOT a "Sign Out" button.)
+- **Workday sessions are short under rapid automated activity — PACE IT.** Third logout in two
+  sessions. Fill fewer fields per unit time and Save EARLY (each saved step persists on the candidate
+  account, so a drop costs one step, not the whole application).
+
+**The widget layer generalized — one protocol, three widget kinds** (`/widget_select`, new):
+- Indeed distance pill: staged-commit (footer `Update` commits) — `commit_names:["Update"]`.
+- Workday listbox (State, Phone Device Type): applies on select, no footer → `commit: found:false`.
+- **Scope options via `aria-controls`/`aria-owns` on the opener.** Workday pages carry stray
+  `[role=option]`s from OTHER fields (63 document-wide vs 5 scoped) — matching option text globally
+  can click the wrong widget's option. `aria-controls` is the widget telling you which popup it owns.
+- **BUG found + fixed: never infer "already open" from an option count.** Pre-open there is no
+  `aria-controls`, so the scope falls back to document, counts another widget's strays, concludes the
+  popup is open, and SKIPS THE CLICK. Open-state must come from the opener's `aria-expanded`.
+- **Confirm staged via EITHER `aria-selected` OR the opener's label changing** — neither is universal
+  (Indeed uses the first, Workday's dropdowns the second; and per 2026-07-14 some Workday dropdowns'
+  textContent lies, so keep both signals).
+- Workday's real field handle is its own `data-automation-id` (`formField-legalName--firstName`,
+  `formField-addressLine1`, …) via `/execute`'s `selector` — stable, semantic, Workday's own contract.
+  `scan_form` is NOT usable here: every field returns the whole fieldset's text as its label, so
+  First/Middle/Last are indistinguishable.
+
+**Per-TENANT variation is real — do not hardcode a prompt's options:**
+- "How Did You Hear About Us?" on Wellington is a FLAT list with **no Indeed and no "Online Source"**
+  (Career Site - eFinancial/Glassdoor/Wellington, Diversity Association, Other, Previous Employee or
+  Consultant, Recruiting Agency). U.S. Bank had the hierarchical Online Source → Indeed. Operator
+  chose **Other** (the only truthful option — we came from Indeed, which isn't offered).
+- Its options are plain `div`s with **no `role=option`**, and `/select_prompt` found no `searchBox`
+  here, so the searchbox-typing path is tenant-specific too. `/select_prompt`'s `field_role` defaults
+  to `textbox`, but Wellington's prompt field is a **button** — pass `field_role` explicitly.

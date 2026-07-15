@@ -851,45 +851,126 @@ _POPUP_SELECT_JS = r"""
     for (let i = 0; i < tries; i++) { const v = fn(); if (v) return v; await sleep(ms); }
     return null;
   };
-  const OPTS = () => [...document.querySelectorAll(cfg.option_selector)];
+  const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
 
   const opener = document.querySelector(cfg.opener_selector);
   if (!opener) return {ok: false, log, detail: `no opener matching ${cfg.opener_selector}`};
-  log.push({step: 'precheck', visibility: document.visibilityState, hasFocus: document.hasFocus()});
-  if (document.visibilityState !== 'visible')
-    return {ok: false, log, detail: 'tab is hidden — the popup will not render; bring it to front first'};
 
-  // OPEN — focus like a real mousedown would, then native click.
+  // SCOPE: the widget tells us which popup it owns via aria-controls/aria-owns. Without this we
+  // search options document-wide and can click ANOTHER widget's identically-named option (a Workday
+  // page had 63 stray [role=option]s from other fields). Fall back to document scope only when the
+  // widget declares no relationship (Indeed's distance pill doesn't).
+  const scope = () => {
+    const ref = opener.getAttribute('aria-controls') || opener.getAttribute('aria-owns');
+    const el = ref ? document.getElementById(ref) : null;
+    return el || document;
+  };
+  const OPTS = () => [...scope().querySelectorAll(cfg.option_selector)].filter(visible);
+
+  log.push({step: 'precheck', visibility: document.visibilityState, hasFocus: document.hasFocus()});
+  // NOTE: a hidden tab breaks SOME widgets (Indeed's pill won't render) but not others (Workday's
+  // listbox opens fine). Report it; let the caller decide — don't refuse outright.
+
+  // OPEN — focus like a real mousedown would (.click() alone does NOT focus), then native click.
+  // "Is it already open?" must come from THE OPENER (aria-expanded), never from an option count:
+  // before opening there is no aria-controls, so OPTS() falls back to document scope and counts
+  // OTHER widgets' stray options — which read as "already open" and skipped the click entirely.
   opener.scrollIntoView({block: 'center'});
   opener.focus();
-  if (opener.getAttribute('aria-expanded') === 'false' || OPTS().length === 0) opener.click();
-  if (!await until(() => OPTS().length > 0))
-    return {ok: false, log: [...log, {step: 'open', n_options: 0}], detail: 'popup did not open'};
-  log.push({step: 'open', n_options: OPTS().length});
+  const expanded = () => opener.getAttribute('aria-expanded');
+  if (expanded() !== 'true') opener.click();
+  // Wait for the widget's OWN popup: aria-expanded flipping, or (for widgets that never set it)
+  // options appearing inside a resolved scope.
+  const opened = await until(() => expanded() === 'true' || (scope() !== document && OPTS().length > 0)
+                                   || (scope() === document && expanded() === null && OPTS().length > 0));
+  if (!opened)
+    return {ok: false, log: [...log, {step: 'open', n_options: OPTS().length, expanded: expanded()}],
+            detail: 'popup did not open'};
+  log.push({step: 'open', n_options: OPTS().length, scoped: scope() !== document, expanded: expanded()});
+  if (OPTS().length === 0)
+    return {ok: false, log, detail: `popup opened but no node matches option_selector `
+            + `(${cfg.option_selector}) — this widget may render plain divs, not [role=option]`};
 
-  // SELECT — click the option, then CONFIRM the widget actually staged it. Never assume.
-  const find = () => OPTS().find(o => (o.innerText || '').trim().startsWith(cfg.option_label));
+  // SELECT — exact match first (a "Mobile" must not match "Mobile Phone"), then prefix.
+  const txt = (o) => (o.innerText || '').trim();
+  const find = () => OPTS().find(o => txt(o) === cfg.option_label)
+                  || OPTS().find(o => txt(o).startsWith(cfg.option_label));
   if (!find())
-    return {ok: false, log, detail: `no option "${cfg.option_label}"`,
-            options: OPTS().map(o => (o.innerText || '').trim())};
+    return {ok: false, log, detail: `no option "${cfg.option_label}"`, options: OPTS().map(txt)};
+  const before = (opener.innerText || '').trim();
   find().click();
+
+  // CONFIRM it took. Two honest signals, because neither is universal: aria-selected on the option
+  // (Indeed) or the opener's own label changing to the choice (Workday). textContent alone is NOT
+  // trustworthy on every Workday dropdown — where it isn't, aria-selected carries it.
   const staged = await until(() => {
     const o = find();
-    return o && (o.getAttribute('aria-selected') === 'true' || o.getAttribute('aria-checked') === 'true') ? o : null;
+    if (o && (o.getAttribute('aria-selected') === 'true' || o.getAttribute('aria-checked') === 'true')) return 'aria';
+    const now = (opener.innerText || '').trim();
+    if (now !== before && now.includes(cfg.option_label)) return 'opener_label';
+    return null;
   });
-  log.push({step: 'select', label: cfg.option_label, staged: !!staged});
-  if (!staged) return {ok: false, log, detail: 'option would not stage (aria-selected never became true)'};
+  log.push({step: 'select', label: cfg.option_label, staged: !!staged, via: staged || null,
+            opener_text: (opener.innerText || '').trim().slice(0, 40)});
+  if (!staged) return {ok: false, log, detail: 'option would not stage (no aria-selected, opener label unchanged)'};
 
-  // COMMIT — the popup's own footer button. Absent = the widget applies on select; that's fine.
-  const commit = [...document.querySelectorAll('button')]
-    .find(b => cfg.commit_names.some(n => new RegExp(`^${n}$`, 'i').test((b.innerText || '').trim())));
+  // COMMIT — the popup's own footer button. Absent = applies on select (the Workday case).
+  const commit = cfg.commit_names.length ? [...document.querySelectorAll('button')]
+    .find(b => cfg.commit_names.some(n => new RegExp(`^${n}$`, 'i').test((b.innerText || '').trim()))) : null;
   if (!commit) { log.push({step: 'commit', found: false, note: 'no footer button — applies on select'});
-                 return {ok: true, log, detail: 'selected (no commit button)'}; }
+                 return {ok: true, log, detail: 'selected (applies on select)'}; }
   log.push({step: 'commit', found: true, disabled: commit.disabled});
   commit.click();     // may navigate → this context dies here; confirm from outside
   return {ok: true, log, detail: 'commit clicked'};
 })(%s)
 """
+
+
+class WidgetSelectRequest(BaseModel):
+    """Drive ANY staged-commit / listbox popup by its own semantics. The reusable widget layer:
+    opener → (aria-controls) popup → option → confirm → optional footer commit."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    opener_selector: str                 # e.g. '[data-automation-id="formField-phoneType"] button'
+    option_label: str                    # e.g. 'Mobile'
+    option_selector: str = "li[role=option], [role=option], [data-automation-id=promptOption]"
+    commit_names: list[str] = []         # e.g. ['Update','Apply'] — empty = applies on select
+    bring_to_front: bool = True
+
+
+@app.post("/widget_select")
+async def widget_select(body: WidgetSelectRequest):
+    """Select an option in a popup widget, confirming each step. One layer for Indeed's distance
+    pill, Workday's dropdowns, and the next unknown-ATS filter — the site-specific part is just the
+    selectors, which belong in that ATS's recipe. Returns {ok, detail, log} where log is the
+    per-step trace (precheck → open → select → commit)."""
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.enable", {})
+            await cdp.send("Runtime.enable", {})
+            if body.bring_to_front:
+                await cdp.send("Page.bringToFront", {})
+                await asyncio.sleep(0.3)
+            res = await _popup_select(cdp, {
+                "opener_selector": body.opener_selector,
+                "option_selector": body.option_selector,
+                "option_label": body.option_label,
+                "commit_names": body.commit_names,
+            })
+        _log_event("drive", f"widget_select {body.option_label}",
+                   detail=f"{'ok' if res.get('ok') else 'FAILED'} · {res.get('detail','')}",
+                   domain=(body.tab_url or ""))
+        return res
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("widget_select failed: %s", exc)
+        return {"ok": False, "detail": str(exc), "log": []}
 
 
 DISTANCE_OPTIONS = [0, 5, 10, 15, 25, 35, 50, 100]     # Indeed's own ladder, in miles

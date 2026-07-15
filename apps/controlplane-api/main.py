@@ -2486,7 +2486,11 @@ _SELF_URL_PATTERNS = ("localhost:5173", "localhost:3000", "127.0.0.1:5173", "127
 
 class CaptureRequest(BaseModel):
     training_session_id: int
-    tab_id: str
+    # tab_url is the REAL handle: chrome-devtools-mcp's list_pages exposes only an index + URL, no
+    # CDP targetId, so a tab_id cannot address a page (see the 2026-07-15 capture entry). Requiring
+    # tab_id forced callers to pass an id the capture then couldn't honour. Pass a tab_url that
+    # matches exactly ONE page; the capture now refuses rather than grab the wrong tab.
+    tab_id: Optional[str] = None
     tab_url: Optional[str] = None
     scenario: str = "training_capture"
 

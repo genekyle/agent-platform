@@ -251,7 +251,32 @@ WORKDAY_CREATE_ACCOUNT_RECIPE = [
      "submit": {"role": "button", "name": "Create Account"},
      "toggle_to_sign_in": {"role": "button", "name": "Sign In"},
      "honeypot_do_not_fill": {"role": "textbox", "name": "Enter website. This input is for robots only"},
-     "expect": ["workday_my_information", "workday_verify_email", "account_creation"]},
+     # Creating the account does NOT land in one place — it BRANCHES, and which branch you get
+     # varies by tenant (and, for the same tenant, by how much Workday trusts the session). Classify
+     # the landing state, don't assume. Observed live 2026-07-15 (Wellington): straight in, no wall.
+     "expect": ["workday_my_information", "workday_sign_in", "workday_verify_email"],
+     "branches": {
+         "workday_my_information": {
+             "meaning": "signed in automatically — creation flowed STRAIGHT into the application",
+             "detect": "account email in the header (Settings <email> / Candidate Home) AND the "
+                       "stepper reads 'current step 1 of 6' with heading 'My Information'",
+             "next": "drive WORKDAY_APPLY_RECIPE from My Information",
+             "observed": "Wellington 2026-07-15"},
+         "workday_sign_in": {
+             "meaning": "account created but dropped at a LOGIN WALL — must sign in with the creds",
+             "detect": "Email/Password fields + a 'Sign In' submit, no account email in the header",
+             "next": "WORKDAY_SIGN_IN_RECIPE (operator-triggered ▶ Login), then the apply spine"},
+         "workday_verify_email": {
+             "meaning": "account created but GATED on email verification before it can be used",
+             "detect": "'verify'/'check your email'/'code sent' copy; no application stepper",
+             "next": "ERRAND → gmail fetch_login_code, then resume. Human-gated; never guess a code."},
+     },
+     # The stepper itself disambiguates: with the account step pending it reads 'step 1 of 7'
+     # (Create Account/Sign In); once the account exists that step DISAPPEARS and My Information
+     # becomes 'step 1 of 6'. Cheap, deterministic signal — prefer it over guessing from the URL.
+     "step_count_tell": {"7": "account step still pending", "6": "account done; apply spine only"},
+     "signed_in_tell": "the ACCOUNT EMAIL in the header (Settings <email> / Candidate Home). NOT a "
+                       "'Sign Out' button — a /sign out/i probe returns false while signed in."},
 ]
 
 WORKDAY_SIGN_IN_RECIPE = [
