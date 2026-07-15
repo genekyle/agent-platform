@@ -80,13 +80,18 @@ control?"* — role + accessible name → `backend_node_id` → native drive. It
 control that is really **several elements with a protocol between them**, and that gap is where the
 Indeed distance pill quietly failed for weeks.
 
-The AX tree faithfully reported the pill (`button "Distance filter 1"`) and, once open, eight
-`li[role=option]`s. It never said the popup has a **`Reset` / `Update` footer**, and that selecting an
-option merely *stages* it — `Update` is what commits. Nothing in the DOM or the AX tree encodes that
-relationship. Only a **screenshot** showed the buttons. So the old code did the Layer-A-shaped thing —
-"click the option" — got no error, and concluded the widget was broken. It then reached for the two
-things we already reject (a coordinate click, then React fiber internals), and finally hid the whole
-mess behind a silent URL rewrite that made every caller *look* successful.
+Be precise about what AX did and didn't give us, because it matters for what L3 can learn. With the
+popup OPEN, AX sees the parts *perfectly well* — eight `li[role=option]`s **and** `button "Reset"` /
+`button "Update"`. What it hands back for those buttons is exactly `{role, name, backend_node_id}`:
+no `aria-controls`, no `owns`, **nothing encoding that `Update` COMMITS the listbox** or that
+selecting an option merely *stages* it. AX gives you the **nouns**; the **protocol between them is
+not in the tree** (and while the popup is closed, the footer isn't there at all — which is why a
+scan taken at the wrong moment says the widget is just a pill and eight options).
+
+So the old code did the Layer-A-shaped thing — "click the option" — got no error, and concluded the
+widget was broken. It then reached for the two things we already reject (a coordinate click, then
+React fiber internals), and finally hid the whole mess behind a silent URL rewrite that made every
+caller *look* successful. Only a **screenshot** made the footer obvious to a human reading the page.
 
 **Driving a widget as if it were an element is its own failure mode.** The fix is not a new way to
 find things — Layer A is fine at that — it's a layer that models the *interaction sequence*:
@@ -118,7 +123,39 @@ how this stayed invisible: every caller still got its radius, so nobody ever lea
 dead. A widget break must be LOUD. **The URL is confirmation, never the mechanism** — the same rule as
 "click the link, don't jump to it" (PRINCIPLES §3), applied to filters.
 
-The open question this leaves: we found the `Update` footer by *looking at a picture*. Nothing in AX
-or the DOM announced it. Discovering a widget's protocol may be exactly the narrow, expensive job the
-vision catchall should keep earning its place on — not to click anything, but to tell us what the
-contract is once, so the cheap semantic layer can drive it forever after.
+### Does L3 need the widget layer? No — but it needs to SEE the states the widget moves through
+
+Worth settling, because it's a natural worry ("L3 only knows AX-CDP — is the widget layer a second,
+disconnected system?"). The two answer different questions and shouldn't be merged:
+
+- **L3 is PERCEPTION** — *what state am I in?* It reads captures (AX sidecar + screenshot).
+- **The widget layer is ACTUATION** — *how do I operate this control?* That's a **transition**
+  concern: how to get from state A to state B. It belongs to the recipe + the `state_transition`
+  (L4) model, which already learns from captured `observed → post_action` pairs.
+
+Keeping them separate is right. L3 classifying "distance popup, option staged, not committed" is a
+perfectly good *state*; it does not need to know that `Update` is what commits — that's the recipe's
+job, and baking actuation into the classifier would just make it a worse classifier.
+
+**But they must share a vocabulary, and that's where the real gap is — and it's a DATA gap, not an
+architecture gap.** AX gives L3 everything it needs to *recognise* these states (the options carry
+`selected`; the footer buttons are right there once open). What's missing is that **we have never
+captured them**: no `distance_popup_open`, no `option_staged`. So L3 can't tell "I opened the popup"
+from "I committed the filter", and the loop cannot verify its own progress through a multi-step
+widget — which is precisely how a dead widget path went unnoticed.
+
+The fix is the flywheel we already have: the protocol's per-step `log`
+(`open` → `select/staged` → `commit`) names each intermediate state, so **capture + label at each
+step** and both models get fed — L3 learns the states, L4 learns the verbs between them. That
+generalizes: the same three states describe a Workday prompt and an unknown-ATS filter.
+
+Two standing cautions when capturing those states: pin a `tab_url` that matches exactly ONE page
+(see the 2026-07-15 capture entry — captures used to silently grab whichever tab was selected), and
+a popup **dismisses on blur**, so a capture taken between steps may catch a *closed* widget. Capture
+must run against the live open popup, not after a round-trip.
+
+The open question this leaves: we found the `Update` footer by *looking at a picture* — AX listed the
+button but never that it governs the listbox. Discovering a widget's **protocol** (as opposed to its
+parts) may be exactly the narrow, expensive job the vision catchall should keep earning its place on
+— not to click anything, but to state the contract once, so the cheap semantic layer drives it
+forever after and L3 gets clean labels for the states along the way.
