@@ -52,6 +52,10 @@ export default function App() {
   const [activeSecondaryViewByPrimary, setActiveSecondaryViewByPrimary] = useState(DEFAULT_SECTION_VIEW);
   // Which domain workspace is open (null = the Domains hub), and the active tab per domain.
   const [activeDomainId, setActiveDomainId] = useState(null);
+  // Which folder (a group domain like Career Search) the domains rail is drilled INTO. null = the
+  // top "All Domains" level. Drilling in replaces the rail with just that folder's contents, so the
+  // unrelated domains (Marketplace, …) are out of sight while you work inside it.
+  const [openFolderId, setOpenFolderId] = useState(null);
   const [activeDomainTabByDomain, setActiveDomainTabByDomain] = useState({});
 
   const [health, setHealth] = useState({ loading: true, ok: false, error: null });
@@ -107,6 +111,13 @@ export default function App() {
   const activeSection = currentNav.sections.find((section) => section.id === activeSectionId) ?? currentNav.sections[0];
   const canEnterSecondary = ["domains", "training", "system", "lab"].includes(activePrimaryView);
   const activeDomain = activeDomainId ? DOMAINS_BY_ID[activeDomainId] : null;
+  // A folder is any top-level domain that groups others (Career Search). The catalog already says
+  // so via `children` — don't hardcode ids here.
+  const isFolder = (d) => !d.parent && (d.children || []).length > 0;
+  const openFolder = openFolderId ? DOMAINS_BY_ID[openFolderId] : null;
+  const openFolderChildren = openFolder
+    ? (openFolder.children || []).map((id) => DOMAINS_BY_ID[id]).filter(Boolean)
+    : [];
   const activeDomainTab = activeDomainId ? (activeDomainTabByDomain[activeDomainId] ?? "overview") : "overview";
   // The topbar shows the domain header only while actually inside the Domains view.
   const domainHeader = activePrimaryView === "domains" ? activeDomain : null;
@@ -167,6 +178,7 @@ export default function App() {
     setActivePrimaryView(view);
     if (view === "domains") {
       setActiveDomainId(null);           // land on the hub; the rail lets you pick a workspace
+      setOpenFolderId(null);             // …at the top level, not inside whichever folder was last open
       setSidebarLevel("secondary");
       return;
     }
@@ -178,10 +190,29 @@ export default function App() {
   }, []);
 
   // Open a specific domain workspace (from a hub tile, a Command Center tile, or the rail).
+  // Entering a domain that lives in a folder drills the rail into that folder, so arriving from
+  // anywhere (not just the rail) leaves you at the same breadcrumb you'd have clicked your way to.
   const openDomain = useCallback((domainId) => {
+    const domain = DOMAINS_BY_ID[domainId];
     setActivePrimaryView("domains");
     setActiveDomainId(domainId);
+    setOpenFolderId(domain?.parent ?? ((domain?.children || []).length ? domainId : null));
     setSidebarLevel("secondary");
+  }, []);
+
+  // Drill into a folder (Career Search) and land on its own workspace — the folder IS a domain, so
+  // clicking it both opens it and scopes the rail to its contents.
+  const enterFolder = useCallback((folderId) => {
+    setActivePrimaryView("domains");
+    setOpenFolderId(folderId);
+    setActiveDomainId(folderId);
+    setSidebarLevel("secondary");
+  }, []);
+
+  // Back out to the top level. Clears the active domain so the hub (All Domains) is what you see.
+  const exitFolder = useCallback(() => {
+    setOpenFolderId(null);
+    setActiveDomainId(null);
   }, []);
 
   const setDomainTab = useCallback((tabId) => {
@@ -192,8 +223,10 @@ export default function App() {
   // Sets the tab for THAT domain id directly — can't reuse setDomainTab, which closes over the
   // pre-update activeDomainId.
   const openDomainTab = useCallback((domainId, tabId) => {
+    const domain = DOMAINS_BY_ID[domainId];
     setActivePrimaryView("domains");
     setActiveDomainId(domainId);
+    setOpenFolderId(domain?.parent ?? ((domain?.children || []).length ? domainId : null));
     setSidebarLevel("secondary");
     setActiveDomainTabByDomain((current) => ({ ...current, [domainId]: tabId }));
   }, []);
@@ -1196,56 +1229,72 @@ export default function App() {
                 <button className="nav-item nav-back" onClick={returnToPrimaryRail}>
                   ← All Sections
                 </button>
-                <div className="nav-section-heading">{currentNav.label}</div>
+                {/* Inside a folder the breadcrumb states where you are, so the plain heading would
+                    just say "Domains" twice over. */}
+                {openFolder && activePrimaryView === "domains" ? null : (
+                  <div className="nav-section-heading">{currentNav.label}</div>
+                )}
                 {activePrimaryView === "domains" ? (
-                  <>
-                    <button
-                      className={`nav-item nav-subitem ${!activeDomainId ? "active" : ""}`}
-                      onClick={() => setActiveDomainId(null)}
-                    >
-                      <span className="nav-subitem-label">All Domains</span>
-                      <span className="nav-subitem-copy">Health at a glance across every domain.</span>
-                    </button>
-                    {DOMAIN_CATALOG.filter((d) => !d.parent).flatMap((d) => {
-                      // Top-level domains only. A parent (Career Search) renders its sub-domains
-                      // + an "Accounts" item nested beneath it — the sub-domains never appear at
-                      // the top level.
-                      const kids = (d.children || []).map((id) => DOMAINS_BY_ID[id]).filter(Boolean);
-                      const items = [
-                        <button
-                          key={d.id}
-                          className={`nav-item nav-subitem ${activeDomainId === d.id ? "active" : ""}`}
-                          onClick={() => openDomain(d.id)}
-                        >
-                          <span className="nav-subitem-label">{d.icon} {d.label}</span>
-                          <span className="nav-subitem-copy">{d.kind === "coming_soon" ? "Coming soon." : d.blurb}</span>
-                        </button>,
-                      ];
-                      kids.forEach((c) => items.push(
+                  openFolder ? (
+                    // INSIDE a folder: breadcrumb + only this folder's contents. The sibling
+                    // domains (Marketplace, …) are deliberately out of sight until you back out.
+                    <>
+                      <div className="nav-breadcrumb">
+                        <button className="nav-crumb" onClick={exitFolder}>All Domains</button>
+                        <span className="nav-crumb-sep">›</span>
+                        <span className="nav-crumb-current">{openFolder.label}</span>
+                      </div>
+                      <button
+                        className={`nav-item nav-subitem ${activeDomainId === openFolder.id && activeDomainTab === "overview" ? "active" : ""}`}
+                        onClick={() => openDomainTab(openFolder.id, "overview")}
+                      >
+                        <span className="nav-subitem-label">{openFolder.icon} Overview</span>
+                        <span className="nav-subitem-copy">{openFolder.blurb}</span>
+                      </button>
+                      {openFolderChildren.map((c) => (
                         <button
                           key={c.id}
                           className={`nav-item nav-subitem ${activeDomainId === c.id ? "active" : ""}`}
-                          style={{ paddingLeft: 34 }}
                           onClick={() => openDomain(c.id)}
                         >
                           <span className="nav-subitem-label">{c.icon} {c.label}</span>
                           <span className="nav-subitem-copy">{c.kind === "coming_soon" ? "Coming soon." : c.blurb}</span>
                         </button>
-                      ));
-                      if (d.children) items.push(
+                      ))}
+                      <button
+                        className={`nav-item nav-subitem ${activeDomainId === openFolder.id && activeDomainTab === "accounts" ? "active" : ""}`}
+                        onClick={() => openDomainTab(openFolder.id, "accounts")}
+                      >
+                        <span className="nav-subitem-label">🔐 Accounts</span>
+                        <span className="nav-subitem-copy">All application logins for this domain.</span>
+                      </button>
+                    </>
+                  ) : (
+                    // TOP level: the hub + top-level domains. A folder opens INTO itself rather than
+                    // expanding its children inline.
+                    <>
+                      <button
+                        className={`nav-item nav-subitem ${!activeDomainId ? "active" : ""}`}
+                        onClick={() => setActiveDomainId(null)}
+                      >
+                        <span className="nav-subitem-label">All Domains</span>
+                        <span className="nav-subitem-copy">Health at a glance across every domain.</span>
+                      </button>
+                      {DOMAIN_CATALOG.filter((d) => !d.parent).map((d) => (
                         <button
-                          key={`${d.id}-accounts`}
-                          className={`nav-item nav-subitem ${activeDomainId === d.id && activeDomainTab === "accounts" ? "active" : ""}`}
-                          style={{ paddingLeft: 34 }}
-                          onClick={() => openDomainTab(d.id, "accounts")}
+                          key={d.id}
+                          className={`nav-item nav-subitem ${isFolder(d) ? "nav-folder" : ""} ${activeDomainId === d.id ? "active" : ""}`}
+                          onClick={() => (isFolder(d) ? enterFolder(d.id) : openDomain(d.id))}
                         >
-                          <span className="nav-subitem-label">🔐 Accounts</span>
-                          <span className="nav-subitem-copy">All application logins for this domain.</span>
+                          <span className="nav-subitem-label">
+                            {d.icon} {d.label}
+                            {isFolder(d) ? <span className="nav-folder-chevron">›</span> : null}
+                          </span>
+                          <span className="nav-subitem-copy">{d.kind === "coming_soon" ? "Coming soon." : d.blurb}</span>
                         </button>
-                      );
-                      return items;
-                    })}
-                  </>
+                      ))}
+                    </>
+                  )
                 ) : canEnterSecondary ? currentNav.sections.map((section) => (
                   <button key={section.id} className={`nav-item nav-subitem ${activeSectionId === section.id ? "active" : ""}`} onClick={() => setActiveSection(section.id)}>
                     <span className="nav-subitem-label">{section.label}</span>

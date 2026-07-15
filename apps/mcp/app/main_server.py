@@ -413,12 +413,20 @@ _INDEED_JOBS_JS = r"""
   const isLoc = (s) => /(,\s*[A-Z]{2}\b)|\bRemote\b|\bHybrid\b|United States|\b\d{5}\b/.test(s);
   const noise = (s) => s === '·' || s === 'New' || /^\d+\s*(min|hour|day|week|month)/i.test(s)
                        || /^(Easily apply|Urgently hiring|Hiring multiple|Responded to|Often replies|Multiple openings|Posted|Active|\+\d+|View all)/i.test(s);
+  // Indeed plants HIDDEN 0x0 decoy cards (e.g. id=job_fedcba9876543210) alongside the real ones —
+  // same trap as smartapply's width-0 duplicate Continue: only ever trust the VISIBLE node.
+  const visible = (el) => {
+    if (el.offsetParent === null) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
   const anchors = Array.from(document.querySelectorAll('a[data-jk], [data-jk]'));
   const seen = new Set();
   const out = [];
   for (const a of anchors) {
     const jk = a.getAttribute('data-jk');
     if (!jk || seen.has(jk)) continue;
+    if (!visible(a)) continue;
     seen.add(jk);
     const titleEl = a.querySelector('span[title]') || a;
     const title = (titleEl.getAttribute && titleEl.getAttribute('title') || titleEl.innerText || '').trim();
@@ -443,10 +451,13 @@ _INDEED_JOBS_JS = r"""
     '.jobsearch-JobCountAndSortPane-jobCount, [class*="jobCount"], [data-testid="searchResults-header"]');
   let totalText = countEl ? (countEl.innerText || '').trim() : '';
   if (!totalText) {
-    const m = (document.body.innerText || '').match(/[\d,]+\+?\s+jobs?\b/i);
+    // Must stay on ONE line: `\s` spans newlines, so the filter chips ("Distance\n1" + "Job Type")
+    // used to parse as "1 job" and report total_results=1 for a full page of hits. Indeed often
+    // renders no count at all now — null is the honest answer, not a number scraped from a badge.
+    const m = (document.body.innerText || '').match(/\b[\d,]+\+?[^\S\n]+jobs\b/i);
     totalText = m ? m[0] : '';
   }
-  const totalMatch = totalText.match(/([\d,]+)\s*\+?/);
+  const totalMatch = totalText.match(/([\d,]+)[^\S\n]*\+?/);
   const total_results = totalMatch ? parseInt(totalMatch[1].replace(/,/g, ''), 10) : null;
   const pageEls = [...document.querySelectorAll('a[data-testid^="pagination-page-"], nav[aria-label*="pag" i] a')];
   const visible_pages = [...new Set(pageEls.map(e => parseInt((e.innerText || '').trim(), 10))

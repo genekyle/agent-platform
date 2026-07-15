@@ -262,6 +262,49 @@ input[type="checkbox"] {
   opacity: 0.72;
 }
 
+/* Folder rail: a group domain (Career Search) you click INTO, and the trail back out. */
+.nav-folder-chevron {
+  float: right;
+  opacity: 0.5;
+  font-weight: 400;
+}
+
+.nav-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  padding: 12px 10px 6px;
+}
+
+.nav-crumb {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.62);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.nav-crumb:hover {
+  color: rgba(255, 255, 255, 0.95);
+  text-decoration: underline;
+}
+
+.nav-crumb-sep {
+  opacity: 0.4;
+}
+
+.nav-crumb-current {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.9;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
