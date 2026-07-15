@@ -964,3 +964,38 @@ and tab cleanup was manual. Now **one call**: `POST /api/career_search/apply/epi
 Standing rule this encodes: **the loop must end each prospect on a clean single-tab search.** Tab
 hygiene isn't tidiness — orphan ATS tabs are what made `tab_url` matching ambiguous for capture
 (a bare `indeed.com` matches several pages once an ATS tab is open; see the capture entry above).
+
+## 2026-07-15 — Cross-origin ATS iframes are driveable targets; branded wrappers lie about the ATS
+
+Job #2 (KKR · Analyst - Actuarial Financial Reporting) routed to
+`www.kkr.com/careers/...?gh_jid=5995076004` — **Greenhouse behind a branded wrapper**, with the real
+form in an embedded `job-boards.greenhouse.io` iframe. Three findings:
+
+- **`classify_ats` said `company_site`** because it only matched the HOST. We'd have grown a bespoke
+  KKR path for what is plainly Greenhouse, and the company→ATS map would have learned the wrong
+  thing. Fixed: host → **query-param tells** (`gh_jid`/`gh_src`→greenhouse, `lever-origin`, `jvi`) →
+  optional `page_hints={"embed_hosts":[…]}`. The param is the ATS leaking its identity through the
+  wrapper — cheap and it generalizes to every employer on that ATS. (Workday's wrappers are caught by
+  the APPLY-NOW href; same shape.)
+- **`_discover_target` filtered to `type=='page'`, so OOPIF iframes were undriveable.** A cross-origin
+  embedded form is its own attachable CDP target (`type=iframe`, has a webSocketDebuggerUrl) — the
+  main frame's Runtime cannot see inside it. Now included, addressable by explicit id/url only (never
+  a default pick). Greenhouse/Lever embeds are common, so this unlocks a whole class of applies.
+- **It silently fell back to the FIRST page when `tab_url` matched nothing** — so I evaluated against
+  kkr.com believing I was in the Greenhouse iframe, and it looked fine. **Same disease as the capture
+  bug and the set_distance url_fallback.** Now: no match → RAISE (listing the open targets);
+  ambiguous → prefer a real page, else refuse. Immediately proved its worth —
+  `job-boards.greenhouse.io` matched 2 targets (the form + a googleapis proxy iframe with
+  "greenhouse" buried in a query param), and it refused to guess instead of driving the wrong one.
+
+**That's now FOUR bugs of one shape in a day** (silent url_fallback, silent wrong-tab capture, silent
+"already open" from stray options, silent wrong-target discovery). The pattern: *a fallback that
+always produces a plausible answer hides a dead path forever.* When adding a fallback, ask what a
+caller sees when the primary silently fails — if the answer is "success", it's the wrong fallback.
+
+Also: Greenhouse embeds need **NO account** (`needs_account:false`) — no wall, unlike Workday. Its
+form has clean semantic ids (`first_name`, `email`, `resume`, `candidate-location`, `company-name-0`,
+`start-date-month-0`). reCAPTCHA Enterprise IS present in the iframe's frame tree (invisible /
+score-based, not blocking) — note `/challenge_visibility` run against the PAGE reports
+`anchor_count: 0` because the captcha lives in the iframe; check the iframe target for it. Humanized
+input matters here to keep the score healthy.

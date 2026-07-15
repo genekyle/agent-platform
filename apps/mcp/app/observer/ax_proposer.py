@@ -140,22 +140,34 @@ async def _discover_target(
     retries: int = 3,
     retry_delay: float = 0.4,
 ) -> dict[str, Any]:
-    """Pick the page target to attach to, mirroring mcp_client tab selection:
-    match targetId first, then url substring, else the first type=='page'.
+    """Pick the target to attach to: match targetId first, then url substring, else the first page.
+
+    Includes OOPIF **iframe** targets, not just pages: a cross-origin embedded ATS form (KKR serves
+    Greenhouse from a job-boards.greenhouse.io iframe) is its own attachable target, and filtering to
+    type=='page' made those forms undriveable — the main frame's Runtime can't see inside them.
 
     Retries when /json/list momentarily has NO attachable page target — during a live
     drive the page target briefly vanishes mid-navigation (the #1 cause of empty AX
     sidecars: "No attachable page targets"). It reappears within a few hundred ms, so a
-    short retry recovers it instead of writing a dry, useless capture."""
+    short retry recovers it instead of writing a dry, useless capture.
+
+    Raises when an explicit tab_id/tab_url matches nothing. It used to fall through to the FIRST
+    page, so a stale or mistyped tab_url silently drove/read the WRONG tab and looked successful —
+    the same failure that wrote an Indeed capture into the corpus labelled as a Workday state.
+    """
     import httpx
 
     pages: list[dict[str, Any]] = []
+    attachable: list[dict[str, Any]] = []
     for attempt in range(retries):
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{browser_url}/json/list")
             resp.raise_for_status()
             targets = resp.json()
         pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+        # iframes are addressable ONLY by explicit id/url — never a default pick.
+        attachable = pages + [t for t in targets
+                              if t.get("type") == "iframe" and t.get("webSocketDebuggerUrl")]
         if pages:
             break
         if attempt < retries - 1:
@@ -166,13 +178,25 @@ async def _discover_target(
         )
 
     if tab_id:
-        for t in pages:
+        for t in attachable:
             if str(t.get("id")) == tab_id or str(t.get("targetId")) == tab_id:
                 return t
+        raise RuntimeError(f"No target with id {tab_id!r} — refusing to fall back to another tab.")
     if tab_url:
-        for t in pages:
-            if tab_url in str(t.get("url", "")):
-                return t
+        hits = [t for t in attachable if tab_url in str(t.get("url", ""))]
+        if len(hits) == 1:
+            return hits[0]
+        if not hits:
+            raise RuntimeError(
+                f"No target whose URL contains {tab_url!r} (open: "
+                f"{[str(t.get('url',''))[:60] for t in attachable]}). Refusing to fall back to "
+                "another tab — that silently drives the wrong page.")
+        # Ambiguous: prefer a real page over an iframe, else refuse rather than guess.
+        page_hits = [t for t in hits if t.get("type") == "page"]
+        if len(page_hits) == 1:
+            return page_hits[0]
+        raise RuntimeError(
+            f"{tab_url!r} matches {len(hits)} targets — pass a more specific tab_url or a tab_id.")
     # Avoid accidentally grabbing the control panel (same guard as _verify_target_tab)
     non_panel = [t for t in pages if "localhost:5173" not in str(t.get("url", ""))]
     return (non_panel or pages)[0]
