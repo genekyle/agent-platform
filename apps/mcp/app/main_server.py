@@ -817,130 +817,195 @@ class SetDistanceRequest(BaseModel):
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
     min_miles: int = 50
+    # Escape hatch, OFF by default. A silent URL rewrite is what hid a broken widget path for weeks:
+    # every caller got radius=N and nobody learned the pill had stopped working. Opt in explicitly
+    # when guaranteeing the floor genuinely matters more than knowing the truth.
+    allow_url_fallback: bool = False
 
 
-# Indeed's distance control is a Downshift-style React combobox (#radius_filter_button → a listbox of
-# li[role=option] "Within N miles"). Live findings on the CDP-observed training Chrome:
-#   * The OPTION only selects when its OWN React onClick handler is invoked off the fiber props
-#     (synthetic + trusted DOM clicks / keyboard all no-op on it).
-#   * OPENING the menu via input gestures is unreliable here (the MCP-drive vs CDP-observe gap):
-#     a trusted mouse click opens it sometimes, not deterministically.
-# So set_distance is a CASCADE: (1) already >= min via URL → done; (2) try the human widget path —
-# trusted-mouse open + fiber-select, poll the URL; (3) if the menu wouldn't open / didn't take, fall
-# back to a same-tab radius= rewrite (one param on the SAME search — not a job-detail URL-jump) so the
-# floor is guaranteed and the sweep is never blocked. Reports which method actually applied it.
+# ── The staged-commit popup protocol ───────────────────────────────────────────────────────────────
+# Indeed's distance pill is an ARIA listbox popup (#radius_filter_button → ul[role=listbox] of
+# li[role=option] "Within N miles") with a Reset/Update FOOTER. Mapped live 2026-07-15; every rule
+# below cost a failed attempt, and they generalize to Workday + unknown-ATS popups:
+#
+#  1. THE POPUP WILL NOT RENDER IN A HIDDEN TAB. document.visibilityState must be 'visible'
+#     (Page.bringToFront) or the opener click no-ops. A human's tab is visible when they click it.
+#  2. .click() DOES NOT FOCUS. A real mousedown focuses; the synthetic one doesn't, and without focus
+#     the widget's own keyboard protocol (aria-activedescendant) is dead. focus() THEN click().
+#  3. THE POPUP DISMISSES ON BLUR, so it cannot survive HTTP round-trips: open→select→commit must run
+#     page-side in ONE evaluation, not as separate calls.
+#  4. SELECTING ONLY STAGES THE VALUE. The footer's Update button is what commits. This is why the old
+#     fiber-prop hack "worked" (it did select) yet nothing ever applied — and why the URL never moved.
+#  5. THE COMMIT DESTROYS ITS OWN OBSERVER: Update triggers a full navigation, so the page-side code
+#     can't see the result. "Inspected target navigated" IS the success signal; CONFIRM FROM OUTSIDE.
+#
+# What earlier attempts got wrong: a trusted mouse click at the box centre (coordinates go stale the
+# moment the menu re-renders — it landed outside and dismissed the popup), and reading React fiber
+# props (Indeed's internals moved). Neither is needed. Identify by ARIA/CSS semantics, drive natively,
+# confirm every step.
+_POPUP_SELECT_JS = r"""
+(async (cfg) => {
+  const log = [];
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const until = async (fn, tries = 25, ms = 200) => {
+    for (let i = 0; i < tries; i++) { const v = fn(); if (v) return v; await sleep(ms); }
+    return null;
+  };
+  const OPTS = () => [...document.querySelectorAll(cfg.option_selector)];
 
-# Prep + idempotency: radius already satisfied? options already open? where's the button to click?
-_DISTANCE_PREP_JS = r"""
-(min_miles) => {
-  const r = parseInt(new URLSearchParams(location.search).get('radius') || '', 10);
-  if (!isNaN(r) && r >= min_miles) return {already:true, current:r};
-  const OPT = '[data-testid^="selection-pill-option-"], li[role=option]';
-  const opts_present = !!document.querySelector(OPT);
-  const btn = document.querySelector('#radius_filter_button, button[id*=radius], [aria-label*="Distance" i]');
-  if (!btn) return {already:false, btn:false, opts_present};
-  btn.scrollIntoView({block:'center'});
-  const b = btn.getBoundingClientRect();
-  return {already:false, btn:true, opts_present, x:b.x + b.width/2, y:b.y + b.height/2};
-}
+  const opener = document.querySelector(cfg.opener_selector);
+  if (!opener) return {ok: false, log, detail: `no opener matching ${cfg.opener_selector}`};
+  log.push({step: 'precheck', visibility: document.visibilityState, hasFocus: document.hasFocus()});
+  if (document.visibilityState !== 'visible')
+    return {ok: false, log, detail: 'tab is hidden — the popup will not render; bring it to front first'};
+
+  // OPEN — focus like a real mousedown would, then native click.
+  opener.scrollIntoView({block: 'center'});
+  opener.focus();
+  if (opener.getAttribute('aria-expanded') === 'false' || OPTS().length === 0) opener.click();
+  if (!await until(() => OPTS().length > 0))
+    return {ok: false, log: [...log, {step: 'open', n_options: 0}], detail: 'popup did not open'};
+  log.push({step: 'open', n_options: OPTS().length});
+
+  // SELECT — click the option, then CONFIRM the widget actually staged it. Never assume.
+  const find = () => OPTS().find(o => (o.innerText || '').trim().startsWith(cfg.option_label));
+  if (!find())
+    return {ok: false, log, detail: `no option "${cfg.option_label}"`,
+            options: OPTS().map(o => (o.innerText || '').trim())};
+  find().click();
+  const staged = await until(() => {
+    const o = find();
+    return o && (o.getAttribute('aria-selected') === 'true' || o.getAttribute('aria-checked') === 'true') ? o : null;
+  });
+  log.push({step: 'select', label: cfg.option_label, staged: !!staged});
+  if (!staged) return {ok: false, log, detail: 'option would not stage (aria-selected never became true)'};
+
+  // COMMIT — the popup's own footer button. Absent = the widget applies on select; that's fine.
+  const commit = [...document.querySelectorAll('button')]
+    .find(b => cfg.commit_names.some(n => new RegExp(`^${n}$`, 'i').test((b.innerText || '').trim())));
+  if (!commit) { log.push({step: 'commit', found: false, note: 'no footer button — applies on select'});
+                 return {ok: true, log, detail: 'selected (no commit button)'}; }
+  log.push({step: 'commit', found: true, disabled: commit.disabled});
+  commit.click();     // may navigate → this context dies here; confirm from outside
+  return {ok: true, log, detail: 'commit clicked'};
+})(%s)
 """
 
-# Select the smallest option >= min by invoking its React handler, then poll the URL for radius.
-_PICK_DISTANCE_JS = r"""
-(min_miles) => new Promise((resolve) => {
-  const OPT = '[data-testid^="selection-pill-option-"], li[role=option]';
-  const opts = [...document.querySelectorAll(OPT)].map(el => {
-    const t = (el.innerText || el.getAttribute('aria-label') || '').trim();
-    const m = t.match(/(\d+)\s*mile/i);
-    return {el, miles: m ? parseInt(m[1], 10) : null, text: t};
-  }).filter(o => o.miles !== null);
-  if (!opts.length) { resolve({applied:false, detail:'menu did not open'}); return; }
-  const atLeast = opts.filter(o => o.miles >= min_miles).sort((a,b)=>a.miles-b.miles);
-  const choice = atLeast[0] || opts.sort((a,b)=>b.miles-a.miles)[0];
-  const key = Object.keys(choice.el).find(k => k.startsWith('__reactProps$'));
-  if (key) {
-    const p = choice.el[key];
-    const ev = {target:choice.el, currentTarget:choice.el, preventDefault(){}, stopPropagation(){}, nativeEvent:{}, type:'click', button:0};
-    try { if (p.onMouseDown) p.onMouseDown(ev); if (p.onClick) p.onClick(ev); } catch (e) { choice.el.click(); }
-  } else { choice.el.click(); }
-  let tries = 0;
-  const iv = setInterval(() => {
-    const r = parseInt(new URLSearchParams(location.search).get('radius') || '', 10);
-    if ((!isNaN(r) && r >= min_miles) || ++tries > 9) {
-      clearInterval(iv);
-      resolve({applied: (!isNaN(r) && r >= min_miles), selected: choice.miles, detail: choice.text});
-    }
-  }, 280);
-})
-"""
 
-# Same-tab radius= rewrite — the guaranteed fallback when the widget won't open. Returns the URL to
-# navigate to (current search + radius=min), preserving every other param.
-_DISTANCE_URL_JS = r"""
-(min_miles) => {
-  const u = new URL(location.href);
-  u.searchParams.set('radius', String(min_miles));
-  u.searchParams.delete('vjk');   // drop any open-posting anchor so we land on the clean list
-  return u.toString();
-}
-"""
+DISTANCE_OPTIONS = [0, 5, 10, 15, 25, 35, 50, 100]     # Indeed's own ladder, in miles
+
+
+async def _read_radius(browser_url: str, tab_id, tab_url) -> Optional[int]:
+    """Read radius from the tab list — from OUTSIDE the page, since the commit navigates and tears
+    down any execution context we'd otherwise ask. The URL is CONFIRMATION, never the mechanism."""
+    from urllib.parse import parse_qs, urlparse
+
+    import httpx
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        tabs = (await client.get(f"{browser_url.rstrip('/')}/json/list")).json()
+    for t in tabs:
+        if t.get("type") != "page":
+            continue
+        url = t.get("url") or ""
+        if tab_id and t.get("id") != tab_id:
+            continue
+        if tab_url and tab_url not in url:
+            continue
+        raw = parse_qs(urlparse(url).query).get("radius", [None])[0]
+        return int(raw) if (raw or "").isdigit() else None
+    return None
+
+
+async def _popup_select(cdp, cfg: dict) -> dict:
+    """Run the staged-commit popup protocol page-side in ONE evaluation (it dismisses on blur).
+    A 'target navigated' error IS the commit firing — the caller confirms from outside."""
+    try:
+        res = await cdp.send("Runtime.evaluate", {
+            "expression": _POPUP_SELECT_JS % json.dumps(cfg),
+            "returnByValue": True, "awaitPromise": True})
+        return (res.get("result") or {}).get("value") or {}
+    except Exception as exc:  # noqa: BLE001
+        if "navigated" in str(exc).lower():
+            return {"ok": True, "log": [{"step": "commit", "note": "context torn down by navigation"}],
+                    "detail": "navigated (commit fired)"}
+        raise
 
 
 @app.post("/set_distance")
 async def set_distance(body: SetDistanceRequest):
-    """Force the search radius to >= min_miles. Cascade: (1) already >= min in the URL → done;
-    (2) the human widget path — trusted-mouse open of the distance pill + invoke the option's React
-    handler, poll the URL; (3) if the widget won't open in this observed Chrome, fall back to a
-    same-tab radius= rewrite (one param on the same search, not a job-detail URL-jump). Returns
-    {applied, selected_miles, method, detail}. `applied` is true only once radius>=min is in the URL."""
+    """Set the search radius to the smallest offered option >= min_miles, BY OPERATING THE PILL —
+    open it, select the option, confirm it staged, click Update, then confirm from the URL.
+
+    The URL is confirmation, not the mechanism. A same-tab radius= rewrite is available only via
+    allow_url_fallback=True: it used to be a silent last resort, which is exactly how a fully broken
+    widget path went unnoticed — every caller still got its radius. A widget failure should be LOUD.
+
+    Returns {applied, selected_miles, method, detail, log} — `log` is the per-step trace.
+    """
     import asyncio
+
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    target_miles = next((m for m in DISTANCE_OPTIONS if m >= body.min_miles), DISTANCE_OPTIONS[-1])
     try:
+        current = await _read_radius(body.browser_url, body.tab_id, body.tab_url)
+        if current is not None and current >= body.min_miles:
+            return {"ok": True, "applied": True, "selected_miles": current, "method": "already",
+                    "detail": f"radius already {current} (>= {body.min_miles})", "log": []}
+
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             await cdp.send("Page.enable", {})
-            await cdp.send("Page.bringToFront", {})
+            await cdp.send("Runtime.enable", {})
+            await cdp.send("Page.bringToFront", {})   # the popup will not render in a hidden tab
+            await asyncio.sleep(0.4)
+            picked = await _popup_select(cdp, {
+                "opener_selector": "#radius_filter_button, button[id*=radius], [aria-label*='Distance' i]",
+                "option_selector": "li[role=option], [data-testid^='selection-pill-option-']",
+                "option_label": "Exact location only" if target_miles == 0 else f"Within {target_miles} miles",
+                "commit_names": ["Update", "Apply", "Done", "Save"],
+            })
 
-            prep = (await cdp.send("Runtime.evaluate", {
-                "expression": f"({_DISTANCE_PREP_JS})({body.min_miles})",
-                "returnByValue": True})).get("result", {}).get("value") or {}
-            if prep.get("already"):
-                return {"ok": True, "applied": True, "selected_miles": prep.get("current"),
-                        "method": "already", "detail": "radius already >= min via URL"}
+        # Confirm from OUTSIDE — the commit navigates, so nothing inside the page can report this.
+        applied = None
+        for _ in range(16):
+            await asyncio.sleep(0.5)
+            r = await _read_radius(body.browser_url, body.tab_id, body.tab_url)
+            if r is not None and r >= body.min_miles:
+                applied = r
+                break
+        if applied is not None:
+            return {"ok": True, "applied": True, "selected_miles": applied, "method": "widget",
+                    "detail": f"selected 'Within {target_miles} miles' + Update; URL confirms radius={applied}",
+                    "log": picked.get("log", [])}
 
-            # (2) Human widget path: open via trusted mouse click, then fiber-select the option.
-            if prep.get("btn") and not prep.get("opts_present"):
-                x, y = prep["x"], prep["y"]
-                for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
-                    ev = {"type": typ, "x": x, "y": y}
-                    if typ != "mouseMoved":
-                        ev.update({"button": "left", "clickCount": 1})
-                    await cdp.send("Input.dispatchMouseEvent", ev)
-                await asyncio.sleep(0.7)  # let the listbox render
-            picked = (await cdp.send("Runtime.evaluate", {
-                "expression": f"({_PICK_DISTANCE_JS})({body.min_miles})",
-                "returnByValue": True, "awaitPromise": True})).get("result", {}).get("value") or {}
-            if picked.get("applied"):
-                return {"ok": True, "applied": True, "selected_miles": picked.get("selected"),
-                        "method": "widget", "detail": picked.get("detail", "")}
+        if not body.allow_url_fallback:
+            return {"ok": False, "applied": False, "selected_miles": None, "method": "widget_failed",
+                    "detail": ("The distance pill did not commit — " + (picked.get("detail") or "unknown") +
+                               ". NOT falling back to a URL rewrite (allow_url_fallback=false) so the "
+                               "break stays visible. Re-map the popup before trusting this filter."),
+                    "log": picked.get("log", [])}
 
-            # (3) Guaranteed fallback: same-tab radius= rewrite of the current search.
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.enable", {})
             url = (await cdp.send("Runtime.evaluate", {
-                "expression": f"({_DISTANCE_URL_JS})({body.min_miles})",
+                "expression": ("(()=>{const u=new URL(location.href);"
+                               f"u.searchParams.set('radius','{body.min_miles}');"
+                               "u.searchParams.delete('vjk');return u.toString();})()"),
                 "returnByValue": True})).get("result", {}).get("value")
             if not url:
-                return {"ok": True, "applied": False, "method": "none",
-                        "detail": "widget would not open and no URL to rewrite"}
+                return {"ok": False, "applied": False, "method": "none",
+                        "detail": "widget failed and no URL to rewrite", "log": picked.get("log", [])}
             await cdp.send("Page.navigate", {"url": url})
-            await asyncio.sleep(2.4)
-            r = (await cdp.send("Runtime.evaluate", {
-                "expression": "parseInt(new URLSearchParams(location.search).get('radius')||'',10)",
-                "returnByValue": True})).get("result", {}).get("value")
-            ok = isinstance(r, (int, float)) and r >= body.min_miles
-            return {"ok": True, "applied": bool(ok), "selected_miles": (r if ok else None),
-                    "method": "url_fallback", "detail": f"radius={r} via same-tab rewrite"}
+        await asyncio.sleep(2.4)
+        r = await _read_radius(body.browser_url, body.tab_id, body.tab_url)
+        ok = r is not None and r >= body.min_miles
+        return {"ok": True, "applied": bool(ok), "selected_miles": (r if ok else None),
+                "method": "url_fallback", "detail": f"radius={r} via same-tab rewrite (widget path failed)",
+                "log": picked.get("log", [])}
     except Exception as exc:  # noqa: BLE001
         logger.warning("set_distance failed: %s", exc)
         return {"ok": False, "applied": False, "method": "error", "detail": str(exc)}

@@ -723,3 +723,43 @@ does not survive a re-query, so re-apply it after every search. `/set_distance` 
 `method: "url_fallback"`, i.e. the human widget path (trusted-mouse open of the distance pill) did NOT
 open the menu and it fell back to the same-tab `radius=` rewrite. The cascade did its job, but the
 preferred human path is silently degrading and is worth a look before it's the only thing left.
+
+## 2026-07-15 — The distance pill: a STAGED-COMMIT widget, and why "the human path" kept losing
+
+`/set_distance` had been silently reporting `method: "url_fallback"` — the human widget path never
+worked. Root-caused and rebuilt on the live Indeed session; it now reports `method: "widget"`,
+verified across 25 / 35 / 15 / 100 / 50. **Five rules, each of which cost a failed attempt, and all
+of which should generalize to Workday + the unknown ATS popups:**
+
+1. **A popup will NOT render in a hidden tab.** `document.visibilityState` must be `visible`
+   (`Page.bringToFront`) or the opener click no-ops. This alone explains why the same code "worked"
+   from a probe (which fronted the tab) and failed from `/eval` (which doesn't). A human's tab is
+   visible when they click — foregrounding IS the humane path, not a trick.
+2. **`.click()` does not FOCUS.** A real mousedown focuses; the synthetic one doesn't. Without focus
+   the widget's keyboard protocol is dead — `activeElement` stayed `BODY` and arrows did nothing.
+   `focus()` THEN `click()`, and the listbox takes focus + `aria-activedescendant` moves properly.
+3. **The popup dismisses on BLUR → it cannot survive HTTP round-trips.** Every separate `/eval` call
+   lost the menu. open→select→commit must run page-side in ONE evaluation.
+4. **Selecting only STAGES the value — the footer's `Update` button commits it.** This was the actual
+   bug, and nothing in the DOM/AX said so: the popup has Reset/Update buttons that only a SCREENSHOT
+   revealed. It's why the old fiber-prop hack looked "invoked" yet nothing ever applied.
+   (Cf. [[feedback_confirm_state_with_screenshot]] — the DOM lied by omission; the picture didn't.)
+5. **The commit DESTROYS ITS OWN OBSERVER.** `Update` triggers a full navigation, so page-side code
+   can't see its own result — `"Inspected target navigated"` IS the success signal. Confirm from
+   OUTSIDE (read radius off `/json/list`).
+
+**What was wrong before, and the general lesson.** The old path did a trusted-mouse click at the
+pill's box centre (coordinates go stale the instant the menu re-renders — it landed outside and
+*dismissed* the popup) and then invoked the option's React fiber props (Indeed's internals moved on).
+Both are the two failure modes we already reject: coordinates, and reaching into a framework's guts.
+Neither is needed. **Identify by ARIA/CSS semantics, drive natively, confirm every step** — that IS
+the in-betweener layer, and it's now `_POPUP_SELECT_JS` + `_popup_select()`, config-driven
+(`opener_selector` / `option_selector` / `option_label` / `commit_names`) so Workday and unknown-ATS
+popups can reuse it instead of growing another bespoke path.
+
+**The url_fallback is now OFF by default** (`allow_url_fallback=false`). A silent fallback is exactly
+how a fully broken widget path went unnoticed for weeks: every caller still got its radius, so nobody
+learned. A widget break must be LOUD. The URL is CONFIRMATION, never the mechanism.
+
+Also worth knowing: `set_distance` is a FLOOR (`min_miles`), so it short-circuits `already` when the
+current radius is larger — to exercise the widget you must start below the target.
