@@ -504,9 +504,13 @@ GREENHOUSE_LESSONS = {
     "option_matching": "Match options EXACTLY. /Concord/ picked 'Concordia, Entre Rios, Argentina' "
                        "over 'Concord, New Hampshire' — the same substring pitfall as Workday's "
                        "'State' matching 'United States'. Anchor it (^Concord,\\s*New Hampshire).",
-    "date_inputs": "start/end month+year are controlled text inputs: driver='direct' silently no-ops "
-                   "(field stays empty, call still returns ok) — type them with 'humanized' too. They "
-                   "are NOT Workday segmented spinbuttons; no calendar picker involved.",
+    "date_inputs": "MONTH and YEAR are DIFFERENT widgets, and the month is NOT a text input: month is a "
+                   "react-select combobox wanting the NAME ('Aug' -> 'August'; typing '08' yields NO "
+                   "options), year is a plain number input that accepts typing. No calendar picker "
+                   "(unlike Workday's segmented spinbuttons). CAUTION: typing into the month input "
+                   "leaves transient text that READS BACK like a value and then clears on blur — a "
+                   "verify against .value reports a false success. Verify the month at its sibling "
+                   "[class*=singleValue]; verify the year at .value.",
     "phone_country_field": "#country is the PHONE country code (renders '+1'), NOT the address "
                            "country — the address lives in #candidate-location.",
     "stale_state": "Greenhouse is ANONYMOUS — no session, no account. So unlike Workday (where any "

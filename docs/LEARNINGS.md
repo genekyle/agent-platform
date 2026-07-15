@@ -1069,3 +1069,34 @@ employer may ask "did you use AI?" where Yes means the opposite. Read the questi
 
 The stored answer is the operator's own, set once and reused (`human_required: False` — the answer
 store drives it, like every other question).
+
+## 2026-07-15 — Greenhouse date fields: month is a react-select, and .value LIES
+
+Filling KKR's education/work dates surfaced the sharpest false-positive yet.
+
+- **Month and year are DIFFERENT widgets in the same date row.** Year is a plain `input[type=number]`
+  that accepts typing. **Month is a react-select combobox that wants the NAME** — `'Aug'` → "August";
+  typing `'08'` returns **zero options**. Both look like `input` in a naive scan; only `role=combobox`
+  + `aria-autocomplete=list` distinguishes them.
+- **`.value` on a react-select reports a FALSE SUCCESS.** Typing "03" into the month left `.value ===
+  "03"`, so my verify passed — then it cleared on blur, because the text was never committed to a
+  selection. I "verified" `work_start: "03/2026"` twice and it was empty both times. **Verify the
+  month at its sibling `[class*=singleValue]`; verify the year at `.value`.** Getting this wrong means
+  submitting a form you believe is filled.
+- Committed correctly via type → wait → click the exact option: August 2015 – June 2021 (UST),
+  March 2026 (LUK).
+
+**The day's recurring theme, one more time:** every bug today has been *something reporting success
+that didn't happen* — the silent url_fallback, the wrong-tab capture, the "already open" stray
+options, the wrong-target discovery, `direct` no-opping on controlled inputs, and now `.value` on a
+react-select. The lesson isn't "check your work" — it's **verify at the layer that COMMITS, not the
+layer you typed into.**
+
+Answer-store additions (so no future application re-asks): `education_school` (University of Santo
+Tomas), `education_degree` (Bachelor of Science), `education_discipline` (Sports Science),
+`education_start_date` (08/2015), `education_end_date` (06/2021), `primary_language`,
+`additional_languages`, `ethnicity_detail`, `current_employer`, `ai_use_attestation`.
+NOTE the store holds canonical values (`08/2015`, `Sports Science`); the FORM may need a different
+vocabulary — Greenhouse wanted the month NAME, and its school list has no University of Santo Tomas
+at all (it does carry Ateneo de Manila, so the absence is real, not a search miss) → "Other". Map
+store → widget vocabulary at fill time; don't assume the stored string is what the widget accepts.
