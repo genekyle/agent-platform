@@ -34,7 +34,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from settings import settings
 
@@ -134,10 +134,29 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
 _BY_ID = {a["ats_id"]: a for a in ATS_PLATFORMS}
 
 
-def classify_ats(url: str) -> str:
+# A BRANDED WRAPPER hosts the ATS on the employer's own domain, so the host alone lies: KKR serves a
+# Greenhouse job at www.kkr.com/careers/...?gh_jid=<id> (the real form is an embedded
+# job-boards.greenhouse.io iframe). Host-matching called that 'company_site' and we'd have grown a
+# bespoke KKR path for what is just Greenhouse. These QUERY-PARAM tells are the ATS leaking its own
+# identity through the wrapper — cheap, and they generalize across every employer on that ATS.
+# (Same lesson as Workday's branded wrappers, which are caught by the APPLY-NOW href instead.)
+_QUERY_PARAM_TELLS = {
+    "gh_jid": "greenhouse",       # Greenhouse embed / board id
+    "gh_src": "greenhouse",
+    "lever-origin": "lever",
+    "jvi": "jobvite",
+}
+
+
+def classify_ats(url: str, page_hints: Optional[dict[str, Any]] = None) -> str:
     """Map an apply-destination URL to its ATS id. Unknown external host = 'company_site' (still
     handled — an employer's own careers page that isn't a recognized ATS yet). Empty = 'unknown'.
-    This is the single source of truth; search_cadence.classify_apply_platform delegates here."""
+    This is the single source of truth; search_cadence.classify_apply_platform delegates here.
+
+    Checks, in order: the HOST, then the ATS's own QUERY-PARAM tells (which see through a branded
+    wrapper on the employer's domain), then optional page_hints — {"embed_hosts": [...]} from a live
+    page (e.g. an embedded job-boards.greenhouse.io iframe), for wrappers that hide even the param.
+    """
     host = (urlparse(url or "").hostname or "").lower()
     if not host:
         return "unknown"
@@ -146,6 +165,22 @@ def classify_ats(url: str) -> str:
             continue  # handled explicitly below so a generic indeed.com host doesn't shadow real ATSs
         if any(needle in host for needle in ats["hosts"]):
             return ats["ats_id"]
+
+    # Branded wrapper: the ATS betrays itself in the query string.
+    params = parse_qs(urlparse(url or "").query)
+    for param, ats_id in _QUERY_PARAM_TELLS.items():
+        if param in params and ats_id in _BY_ID:
+            return ats_id
+
+    # Branded wrapper with no param tell: an embedded ATS iframe on the page.
+    for embed in ((page_hints or {}).get("embed_hosts") or []):
+        embed_host = (urlparse(embed).hostname or embed or "").lower()
+        for ats in ATS_PLATFORMS:
+            if ats["ats_id"] == "indeed_quick_apply":
+                continue
+            if any(needle in embed_host for needle in ats["hosts"]):
+                return ats["ats_id"]
+
     if "smartapply.indeed.com" in host or "indeed.com" in host:
         return "indeed_quick_apply"
     return "company_site"
