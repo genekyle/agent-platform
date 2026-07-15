@@ -19,7 +19,7 @@ export const DOMAIN_CATALOG = [
     short: "Career Search",
     icon: "🧭",
     kind: "group",
-    children: ["indeed_jobs", "linkedin", "workday"],
+    children: ["indeed_jobs", "linkedin", "workday", "greenhouse"],
     responsibility: "Search + apply across job engines (Indeed, LinkedIn, ZipRecruiter) and their ATS (Workday, iCIMS, Taleo, …); the shared application accounts live here.",
     blurb: "Job engines + ATS — search, apply, accounts.",
     tabs: [
@@ -80,6 +80,27 @@ export const DOMAIN_CATALOG = [
     host: "workday",
     responsibility: "Complete Workday applications (the ATS most Indeed applies route to).",
     blurb: "Cross-site apply target — coming soon.",
+    tabs: [
+      { id: "overview", label: "Overview" },
+      { id: "accounts", label: "Accounts" },
+    ],
+  },
+  {
+    // Greenhouse — the SECOND ATS we drive, and the first with NO account wall. Its own sub-domain
+    // (not a KKR-specific thing) so every capture labels as greenhouse_* and generalizes across every
+    // employer on Greenhouse. Reached both directly (job-boards.greenhouse.io) and via a branded
+    // wrapper on the employer's own domain (KKR: kkr.com/careers?gh_jid=… embedding the form in an
+    // iframe) — ats_registry.classify_ats sees through the wrapper via the gh_jid tell.
+    id: "greenhouse",
+    label: "Greenhouse",
+    short: "Greenhouse",
+    icon: "🌱",
+    kind: "coming_soon",
+    parent: "career_search",
+    host: "greenhouse",
+    tabUrl: "greenhouse.io",
+    responsibility: "Complete Greenhouse applications — embedded job_app forms, no account required.",
+    blurb: "Cross-site apply target — no account wall.",
     tabs: [
       { id: "overview", label: "Overview" },
       { id: "accounts", label: "Accounts" },

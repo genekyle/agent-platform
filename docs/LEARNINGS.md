@@ -999,3 +999,38 @@ form has clean semantic ids (`first_name`, `email`, `resume`, `candidate-locatio
 score-based, not blocking) — note `/challenge_visibility` run against the PAGE reports
 `anchor_count: 0` because the captcha lives in the iframe; check the iframe target for it. Humanized
 input matters here to keep the score healthy.
+
+## 2026-07-15 — Greenhouse STUBBED as a sub-domain (and 11 orphan labels finally registered)
+
+Before driving KKR's Greenhouse form we stubbed the ATS out, so its captures label as `greenhouse_*`
+and generalize across EVERY Greenhouse employer instead of teaching us something KKR-shaped.
+
+**Found while stubbing: the `workday_*` labels were ORPHANS.** 62 page states were registered and
+**not one of them was Workday**, yet `workday_my_information` etc. had been applied to ~20 captures.
+`observed_page_state` is free text — the PATCH accepts anything — so the labels trained fine but the
+registry (which drives the coverage view + label queue) had never heard of them. **A label that isn't
+registered is invisible to the thing that tells you what to go capture.** Registered all of them
+(create_account, sign_in, my_information, my_experience, questions, voluntary_disclosures,
+self_identify, review, error_retry, application_submitted) + `indeed_did_you_apply`.
+Still orphaned and left alone (another session's): the `fb_*` listing states, `appvault_login`,
+`company_careers_job_posting`.
+
+**Greenhouse stub** — domain `greenhouse` (hosts greenhouse.io / job-boards / boards) + 4 states:
+`greenhouse_apply_form`, `greenhouse_apply_submitted`, `greenhouse_apply_error`, `greenhouse_captcha`;
+UI sub-domain under Career Search (🌱, sibling of Workday); `GREENHOUSE_APPLY_RECIPE` +
+`GREENHOUSE_ACCOUNT_LOOP` + `GREENHOUSE_LESSONS` wired into `recipe_spec().cross_site`.
+
+**What generalizes vs. what doesn't** — the distinction the recipe encodes:
+- GENERALIZES: the standard form (`#first_name`, `#last_name`, `#email`, `#phone`, `#country`,
+  `#candidate-location`, `#resume`, `#cover_letter`, `#company-name-0`, `#title-0`,
+  `#start-date-month-0`/`-year-0`), the APPLY button, no-account, the iframe embed.
+- DOES NOT: the per-employer CUSTOM QUESTIONS block appended below the standard fields. Read it live.
+- Greenhouse dates are **plain text MM/YYYY inputs** — typing works. NOT Workday's segmented
+  spinbuttons; do not reach for the calendar-picker protocol here.
+- `GREENHOUSE_ACCOUNT_LOOP` is explicitly `None`/None with a `why` — so nobody invents a login leg.
+  ("Quick Apply with MyGreenhouse" is an optional convenience, not the path.)
+
+**Cookie banners belong to the WRAPPER, not the ATS.** KKR uses OneTrust: the banner offers only
+ACCEPT + MANAGE PREFERENCES — **the reject lives one level in**: `#onetrust-pc-btn-handler` →
+`.ot-pc-refuse-all-handler` ("Reject All"). Declined per the operator's privacy default; verified the
+banner + panel disappeared and `OptanonConsent` was written.

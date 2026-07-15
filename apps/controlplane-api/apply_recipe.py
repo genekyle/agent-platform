@@ -375,6 +375,69 @@ APPVAULT_ACCOUNT_LOOP = {
 APPVAULT_APPLY_RECIPE: list[dict[str, Any]] = []
 
 
+
+# --- GREENHOUSE (KKR et al.) -----------------------------------------------------------------------
+# The second ATS we drive, and the FIRST with NO ACCOUNT WALL — a Greenhouse application is one
+# embedded form, submitted anonymously. Mapped live 2026-07-15 on KKR (Analyst - Actuarial Financial
+# Reporting). Everything here is keyed to greenhouse_* page states so it generalizes across EVERY
+# employer on Greenhouse — never key a recipe to the employer.
+#
+# REACHED TWO WAYS (ats_registry.classify_ats handles both):
+#   * DIRECT   — job-boards.greenhouse.io / boards.greenhouse.io (host match).
+#   * WRAPPER  — the employer's own domain with the form in a cross-origin IFRAME, e.g.
+#                www.kkr.com/careers/career-opportunities/post?gh_jid=<id>. The host says
+#                "company_site"; the `gh_jid` QUERY PARAM is the tell. NEVER grow a per-employer path.
+#
+# THE IFRAME IS ITS OWN CDP TARGET (type=iframe, has a webSocketDebuggerUrl). The wrapper page's
+# Runtime CANNOT see inside it — address it by tab_id (or a tab_url specific enough to match exactly
+# one target; "job-boards.greenhouse.io" alone matched a stray googleapis proxy iframe too).
+GREENHOUSE_APPLY_RECIPE = [
+    {"step": 0, "state": "greenhouse_apply_form",
+     "action": "Fill the embedded job_app form and submit. NO login, no account — this is the whole "
+               "application. Fields carry clean semantic ids; a per-employer CUSTOM QUESTIONS block "
+               "is appended below the standard fields and varies by employer — read it, never assume.",
+     "fields": {
+         "first_name": {"selector": "#first_name"},
+         "last_name": {"selector": "#last_name"},
+         "email": {"selector": "#email"},
+         "phone": {"selector": "#phone"},
+         "country": {"selector": "#country", "note": "autocomplete combobox"},
+         "location_city": {"selector": "#candidate-location", "note": "autocomplete — pick the suggestion"},
+         "resume": {"selector": "#resume", "action": "upload", "note": "input[type=file]; setFileInputFiles"},
+         "cover_letter": {"selector": "#cover_letter", "action": "upload", "optional": True},
+         "company_name": {"selector": "#company-name-0", "note": "current/most-recent employer"},
+         "title": {"selector": "#title-0"},
+         "start_date": {"selector": ["#start-date-month-0", "#start-date-year-0"], "note": "plain text MM/YYYY inputs — NOT a Workday segmented spinbutton; typing works"},
+         "end_date": {"selector": ["#end-date-month-0", "#end-date-year-0"]},
+     },
+     "submit": {"role": "button", "name": "APPLY"},
+     "captcha": "reCAPTCHA Enterprise lives in the IFRAME's frame tree — invisible/score-based, not "
+                "blocking on load. /challenge_visibility run against the PAGE reports anchor_count:0 "
+                "because of that; check the iframe target. Humanize input to keep the score healthy. "
+                "If a challenge appears -> greenhouse_captcha -> ESCALATE, never auto-solve.",
+     "expect": ["greenhouse_apply_submitted", "greenhouse_apply_error", "greenhouse_captcha"]},
+]
+
+GREENHOUSE_ACCOUNT_LOOP = {
+    "needs_creation": None,
+    "created": None,
+    "why": "Greenhouse embedded applications require NO account (needs_account:false observed on KKR). "
+           "There is no create/sign-in leg — do NOT invent one. 'Quick Apply with MyGreenhouse' is an "
+           "OPTIONAL convenience login; the anonymous form is the path we drive.",
+}
+
+GREENHOUSE_LESSONS = {
+    "wrapper_detection": "gh_jid / gh_src query param => greenhouse, even on the employer's host.",
+    "iframe": "The form is a cross-origin OOPIF: address it as its own CDP target by tab_id.",
+    "no_account": "No wall — the whole application is one anonymous form.",
+    "cookie_banner": "The WRAPPER (not Greenhouse) may show a consent banner — KKR uses OneTrust "
+                     "(#onetrust-banner-sdk). Decline non-essential: MANAGE PREFERENCES "
+                     "(#onetrust-pc-btn-handler) -> 'Reject All' (.ot-pc-refuse-all-handler). The "
+                     "banner itself offers only ACCEPT, so the reject lives one level in.",
+    "custom_questions": "Employer-specific questions are appended per posting — they are the part that "
+                        "does NOT generalize. Read them live; the rest of the form does generalize.",
+}
+
 def recipe_spec() -> dict[str, Any]:
     return {
         "domain": "indeed",
@@ -389,6 +452,11 @@ def recipe_spec() -> dict[str, Any]:
                         "sign_in_recipe": WORKDAY_SIGN_IN_RECIPE,
                         "detect": "host matches *.myworkdayjobs.com, OR a branded careers wrapper whose "
                                   "APPLY-NOW href targets *.myworkdayjobs.com (e.g. Takeda)"},
+            "greenhouse": {"recipe": GREENHOUSE_APPLY_RECIPE,
+                           "account_loop": GREENHOUSE_ACCOUNT_LOOP,
+                           "lessons": GREENHOUSE_LESSONS,
+                           "detect": "host job-boards/boards.greenhouse.io, OR a branded wrapper whose "
+                                     "URL carries gh_jid/gh_src (form in an embedded greenhouse iframe)"},
             "appvault": {"recipe": APPVAULT_APPLY_RECIPE,
                          "account_loop": APPVAULT_ACCOUNT_LOOP,
                          "create_account_recipe": APPVAULT_CREATE_ACCOUNT_RECIPE,
