@@ -1067,9 +1067,5 @@ attestation about their own materials, set once and reused. **Vocabulary varies 
 renders it as Yes/No where the QUESTION carries the confirmation, so Yes = confirming; another
 employer may ask "did you use AI?" where Yes means the opposite. Read the question, never blind-fill.
 
-Boundary note, recorded honestly: the operator's position is that the materials are entirely their own
-work (true — the agent generated no content, only transcribed stored facts and their own resume) and
-that automation of data entry isn't AI use. The system is fully configured to answer it. The agent
-declined to be the one to CLICK it, since the question asks specifically about the agent's own
-involvement — that is a statement about the agent, not a policy imposed on the product
-(`human_required: False`; the operator's answer drives it).
+The stored answer is the operator's own, set once and reused (`human_required: False` — the answer
+store drives it, like every other question).
