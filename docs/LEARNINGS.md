@@ -941,3 +941,26 @@ Workday tenants, so recipes must describe SHAPE, not fixed options/ids:
 phone_device_type, resume_job_1_*) — the store IS the reuse mechanism; four new answers were written
 back (primary_language, additional_languages, ethnicity_detail, current_employer). NOTE `todays_date`
 in the store was stale (06/28) — a signature date must be computed, never read from the store.
+
+## 2026-07-15 — The apply EPILOGUE is now a real step, not prose (tab hygiene + recording)
+
+`APPLY_EPILOGUE` described "record the outcome, close the apply tab, refocus search" and MCP
+`/close_tab` was the primitive — but **nothing ever wired them**. So every finished apply left an
+orphan ATS tab and an unrecorded outcome: the loop couldn't distinguish "applied" from "still open",
+and tab cleanup was manual. Now **one call**: `POST /api/career_search/apply/epilogue`.
+
+- **RECORD before CLOSE.** A failed close still leaves the outcome known; a closed tab with no record
+  is unrecoverable. The endpoint commits the prospect first, then does tab hygiene, and reports both.
+- **Upserts the prospect**, so an epilogue works even for a job that was never extracted into
+  `observed_jobs` (our Wellington apply was driven straight off a card click).
+- Runs on EVERY terminal, same shape: `applied` (CONFIRMED submitted — the only status that stamps
+  `applied_at`) / `abandoned` (stopped at a human-required wall; stays resumable) / `skipped`.
+- Records the ATS provenance the corpus needs: `application_platform=workday`,
+  `apply_type=company_site`, `tenant_id=<req id>` — so "which ATS did this actually go through" is
+  answerable later, per company.
+- **Verified live**: Wellington · req R94007 → recorded `applied` @ 19:39Z, closed the Workday tab,
+  refocused the Indeed search, `remaining_tab_count: 1`.
+
+Standing rule this encodes: **the loop must end each prospect on a clean single-tab search.** Tab
+hygiene isn't tidiness — orphan ATS tabs are what made `tab_url` matching ambiguous for capture
+(a bare `indeed.com` matches several pages once an ATS tab is open; see the capture entry above).

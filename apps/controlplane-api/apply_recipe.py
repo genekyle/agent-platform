@@ -46,9 +46,22 @@ INDEED_APPLY_RECIPE = [
 # and return to the search tab. This is what closes the loop back to the search cadence.
 APPLY_EPILOGUE = {
     "when": "any apply terminal — submitted OR abandoned at a human-required branch",
-    "do": "record application_status + provenance, then mcp /close_tab the apply tab with "
-          "focus_tab_url set to the search URL (returns focus to the search tab)",
+    "do": "POST /api/career_search/apply/epilogue {external_id, status, ats_id, tenant_id, "
+          "apply_tab_url, search_tab_url} — records the outcome AND closes the apply tab AND "
+          "refocuses the search tab, in that order",
     "why": "no orphan apply tabs; the next prospect resumes exactly where triage left off",
+    # This was prose + a bare /close_tab primitive until 2026-07-15 — nothing wired them, so every
+    # finished apply left an orphan ATS tab and an unrecorded outcome. It is now ONE endpoint, and
+    # it is a REQUIRED step of the loop, not a manual tidy-up.
+    "endpoint": "POST /api/career_search/apply/epilogue",
+    "order_matters": "RECORD before CLOSE — a failed close still leaves the outcome known, but a "
+                     "closed tab with no record is unrecoverable",
+    "status_values": {"applied": "CONFIRMED submitted — only this stamps applied_at",
+                      "abandoned": "stopped at a human-required wall (account gate, survey, "
+                                   "assessment); the prospect stays resumable",
+                      "skipped": "triaged out without applying"},
+    "verified": "Wellington Management · Financial Reporting Analyst US Funds · req R94007 · "
+                "2026-07-15: recorded applied + closed the Workday tab + refocused search (1 tab left)",
 }
 
 # --- Branches: the "random events" off the spine (project_apply_random_events) -----

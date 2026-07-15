@@ -8,13 +8,16 @@ application-preference notes attached to the career-search domain.
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 import application_preferences as prefs_lib
 import ats_accounts
 import ats_registry
 import event_log
+from db import get_db
+from models import ObservedJob, utcnow
 
 router = APIRouter()
 
@@ -350,3 +353,82 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
                 "detail": "Create Account submitted + verified it advanced. Any email-verification / 2FA step is yours."}
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Create-account driver unreachable: {exc}")
+
+
+# --- The APPLY EPILOGUE — the seam that closes the loop back to search ---------------------------
+# apply_recipe.APPLY_EPILOGUE described this in prose and MCP /close_tab was the primitive, but
+# nothing ever WIRED them: every finished apply left an orphan ATS tab and an unrecorded outcome,
+# so the loop couldn't tell "applied" from "still open" and the operator cleaned up by hand.
+# One call, always the same shape whether we SUBMITTED or ABANDONED at a human-required wall.
+class ApplyEpilogue(BaseModel):
+    external_id: str                       # the engine's job id (Indeed jk)
+    platform: str = "indeed"               # the ENGINE the prospect came from
+    status: str = "applied"                # applied | abandoned | skipped
+    ats_id: Optional[str] = None           # where it was actually applied (workday, appvault, …)
+    tenant_id: Optional[str] = None        # the ATS-side req id (e.g. Workday R94007)
+    notes: Optional[str] = None
+    # Upsert fields — so an epilogue works even if the prospect was never extracted into the corpus.
+    title: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = None
+    url: Optional[str] = None
+    # Tab hygiene
+    browser_url: str = "http://127.0.0.1:9322"
+    apply_tab_url: Optional[str] = None    # substring of the ATS tab to CLOSE
+    search_tab_url: str = "indeed.com/jobs"  # substring of the search tab to REFOCUS
+    close_tab: bool = True
+
+
+@router.post("/api/career_search/apply/epilogue")
+async def apply_epilogue(body: ApplyEpilogue, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Finish ONE prospect: record the outcome, close the apply tab, refocus the search tab.
+
+    Runs on EVERY apply terminal — submitted or abandoned at a human-required wall — so the search
+    and apply loop always returns to a clean single-tab search. Recording happens BEFORE the tab is
+    closed: if the close fails we still know the outcome, whereas a closed tab with no record is
+    unrecoverable. Only `status='applied'` stamps applied_at ([[apply = done means SUBMITTED]]).
+    """
+    import httpx
+
+    from settings import settings
+
+    job_id = f"{body.platform}:{body.external_id}"
+    row = db.get(ObservedJob, job_id)
+    if row is None:
+        row = ObservedJob(job_id=job_id, platform=body.platform, external_id=body.external_id)
+        db.add(row)
+    for attr in ("title", "company", "location", "url"):
+        val = getattr(body, attr)
+        if val:
+            setattr(row, attr, val)
+    row.application_status = body.status
+    if body.ats_id:
+        row.application_platform = body.ats_id
+        row.apply_type = "company_site" if body.ats_id != "indeed_quick_apply" else "quick_apply"
+    if body.tenant_id:
+        row.tenant_id = body.tenant_id
+    if body.notes:
+        row.notes = body.notes
+    if body.status == "applied" and row.applied_at is None:
+        row.applied_at = utcnow()
+    db.commit()
+    db.refresh(row)
+
+    closed: dict[str, Any] = {"attempted": False}
+    if body.close_tab and body.apply_tab_url:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                r = await client.post(f"{settings.capture_server_url}/close_tab", json={
+                    "browser_url": body.browser_url, "tab_url": body.apply_tab_url,
+                    "focus_tab_url": body.search_tab_url})
+                closed = {"attempted": True, **(r.json() if r.status_code == 200 else {"ok": False})}
+        except httpx.HTTPError as exc:          # tab hygiene must never lose the RECORD
+            closed = {"attempted": True, "ok": False, "detail": f"close_tab unreachable: {exc}"}
+
+    event_log.log_event("apply", f"{body.status}: {row.title or body.external_id} · {row.company or ''}",
+                        domain="career_search",
+                        detail=f"ats={body.ats_id or '?'} req={body.tenant_id or '?'} "
+                               f"tab_closed={closed.get('ok', False)}")
+    return {"ok": True, "job_id": job_id, "status": row.application_status,
+            "applied_at": row.applied_at.isoformat() if row.applied_at else None,
+            "tab": closed}
