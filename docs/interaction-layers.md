@@ -70,3 +70,55 @@ in brittleness.
 The meta-rule (now proven): **prefer the AX/node interaction layer over bespoke DOM workarounds, and
 capture domain quirks in the distilled recipe.** See PRINCIPLES.md §6 and
 `LEARNINGS.md` (2026-07-08 FB-login entry).
+
+---
+
+## Layer A finds ELEMENTS. It does not model WIDGETS. (2026-07-15)
+
+The two-layer picture above is right and incomplete. It answers *"how do I identify and drive one
+control?"* — role + accessible name → `backend_node_id` → native drive. It has nothing to say about a
+control that is really **several elements with a protocol between them**, and that gap is where the
+Indeed distance pill quietly failed for weeks.
+
+The AX tree faithfully reported the pill (`button "Distance filter 1"`) and, once open, eight
+`li[role=option]`s. It never said the popup has a **`Reset` / `Update` footer**, and that selecting an
+option merely *stages* it — `Update` is what commits. Nothing in the DOM or the AX tree encodes that
+relationship. Only a **screenshot** showed the buttons. So the old code did the Layer-A-shaped thing —
+"click the option" — got no error, and concluded the widget was broken. It then reached for the two
+things we already reject (a coordinate click, then React fiber internals), and finally hid the whole
+mess behind a silent URL rewrite that made every caller *look* successful.
+
+**Driving a widget as if it were an element is its own failure mode.** The fix is not a new way to
+find things — Layer A is fine at that — it's a layer that models the *interaction sequence*:
+
+> **Widget protocol layer** — identify the parts by SEMANTICS (ARIA roles/relationships + CSS), then
+> drive the widget's own sequence natively, confirming at every step:
+> **precondition → open → stage → confirm staged → commit → confirm from outside.**
+
+It is the "in-betweener": above raw element-driving, below vision. No coordinates (they go stale the
+instant a menu re-renders — ours landed outside and *dismissed* the popup). No framework internals
+(Indeed's fibers moved). Just the widget's real contract, asserted rather than assumed.
+
+Four environmental truths it has to encode, each of which cost a failed attempt:
+
+| Truth | Why it bites |
+| --- | --- |
+| A popup will not render in a **hidden tab** | Same code passes from a probe that fronts the tab, fails from `/eval` which doesn't. Foregrounding is the *humane* path, not a trick — a human's tab is visible when they click. |
+| **`.click()` does not focus** | A real mousedown focuses; the synthetic one doesn't. Without focus the widget's keyboard protocol is dead (`activeElement` stays `BODY`). `focus()` **then** `click()`. |
+| The popup **dismisses on blur** | So it cannot survive HTTP round-trips. `open→select→commit` must run page-side in ONE evaluation. |
+| The commit **destroys its own observer** | `Update` navigates, tearing down the execution context. `"Inspected target navigated"` IS the success signal; confirm from OUTSIDE. |
+
+Lives in `apps/mcp/app/main_server.py` as `_POPUP_SELECT_JS` + `_popup_select()`, config-driven
+(`opener_selector` / `option_selector` / `option_label` / `commit_names`) precisely so the next
+staged-commit popup — a Workday prompt, an unknown ATS filter — reuses it instead of growing another
+bespoke path. The per-step `log` it returns is the point: when a widget breaks, it says *which step*.
+
+**And the fallback is now OFF by default.** `allow_url_fallback=false`. A silent fallback is exactly
+how this stayed invisible: every caller still got its radius, so nobody ever learned the pill was
+dead. A widget break must be LOUD. **The URL is confirmation, never the mechanism** — the same rule as
+"click the link, don't jump to it" (PRINCIPLES §3), applied to filters.
+
+The open question this leaves: we found the `Update` footer by *looking at a picture*. Nothing in AX
+or the DOM announced it. Discovering a widget's protocol may be exactly the narrow, expensive job the
+vision catchall should keep earning its place on — not to click anything, but to tell us what the
+contract is once, so the cheap semantic layer can drive it forever after.
