@@ -889,3 +889,55 @@ button. `/challenge_visibility` first (per the rule): no captcha. Then the recov
 - Its options are plain `div`s with **no `role=option`**, and `/select_prompt` found no `searchBox`
   here, so the searchbox-typing path is tenant-specific too. `/select_prompt`'s `field_role` defaults
   to `textbox`, but Wellington's prompt field is a **button** — pass `field_role` explicitly.
+
+## 2026-07-15 — FIRST FULL WELLINGTON WORKDAY APPLICATION SUBMITTED (end-to-end, agent-driven)
+
+**Financial Reporting Analyst, US Funds · Req R94007 · "Under Review" · submitted July 15 2026** —
+confirmed in Workday's own My Applications (Active 1). Operator created the account + pressed Login;
+the agent drove every step after. All 6 steps captured + labelled (`workday_my_information`,
+`workday_my_experience`, `workday_questions`, `workday_voluntary_disclosures`, `workday_self_identify`,
+`workday_review`, plus `workday_error_retry`).
+
+**The re-fill took 1.5s for 11 fields** (7 text + 4 widgets) vs the 71s/field that blew the timeout
+before. Identical data, saved clean on the first try — which retroactively **confirms the 4×
+`Page Error VPS|…` was a DEAD SESSION, not bad data**. Read it that way next time: re-auth, don't
+refresh, don't re-diagnose the fields.
+
+**Workday widget protocols that now work (all via `/widget_select` or the same shape):**
+- **Text fields** → `[data-automation-id="formField-<name>"] input` + `/execute`'s `selector`, CLEAR
+  then `direct` type. Workday's `data-automation-id` is its own stable contract — use it, not labels.
+  (`scan_form` is useless here: every field returns the whole fieldset's text, so First/Middle/Last
+  are indistinguishable.)
+- **Listbox dropdowns** (State, Phone Device Type, veteran, gender) → `/widget_select`, scoped by
+  `aria-controls`. Applies on select, no footer commit.
+- **MONTH picker** (`formField-startDate`, MM/YYYY) → typed input NEVER commits. Open `dateIcon`
+  (aria=Calendar) → tiles are `monthPickerTileLabel` whose **aria-label carries "March 2026"**
+  (month AND year — so year nav is self-verifying via `monthPicker{Left,Right}Spinner`) → click the
+  tile → confirm from `dateSection{Month,Year}-display`. **Proof it committed: Save produced no
+  "field is required" error**, which is exactly how typed input fails.
+- **DAY picker** (`formField-dateSignedOn`, MM/DD/YYYY) → same opener; today's tile carries
+  `data-automation-id*=datePickerSelectedToday` and aria-label `"Selected Today Wednesday 15 July 2026"`.
+- **Checkbox groups** (ethnicity, disability, consent) → click the LABEL by its exact text, then
+  verify `input.checked`.
+- **Resume upload** → `/execute` `action_id:"upload"` + `selector:"input[type=file]"` +
+  absolute path (DOM.setFileInputFiles; a click would open an OS dialog CDP can't drive). Confirmed
+  by the page's own "GM_Resume.pdf successfully uploaded".
+- **Conditional fields are real**: ticking "I currently work here" REMOVES the End Date field.
+
+**Per-TENANT variation is the rule, not the exception** — the same logical field differs across
+Workday tenants, so recipes must describe SHAPE, not fixed options/ids:
+- Application Questions' `data-automation-id`s are **opaque hashes** (`formField-c6b3456dfd0a…`) —
+  no semantic handle at all. Target by QUESTION TEXT.
+- "How Did You Hear About Us?" — U.S. Bank: hierarchical, searchBox, Online Source → Indeed.
+  Wellington: FLAT, plain `div` options (no `role=option`), **no searchBox, and no Indeed at all**.
+  `/select_prompt`'s `field_role` defaults to `textbox`; Wellington's is a **button**.
+- Gender offered **only Female/Male — no decline option**, while veteran ("I do not wish to
+  self-identify") and ethnicity ("Choose Not to Disclose") both had one. A blanket "decline
+  demographics" preference CANNOT be honoured everywhere — surface the constraint and ask.
+- Ethnicity granularity: tenants split Asian into Central/East/South/Southeast/West/Other, so a
+  stored `race_ethnicity=Asian` is too coarse to map. Saved `ethnicity_detail` to stop re-asking.
+
+**Answers reused from the store** (full_name, street_address, city, state, postal_code, phone,
+phone_device_type, resume_job_1_*) — the store IS the reuse mechanism; four new answers were written
+back (primary_language, additional_languages, ethnicity_detail, current_employer). NOTE `todays_date`
+in the store was stale (06/28) — a signature date must be computed, never read from the store.
