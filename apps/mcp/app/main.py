@@ -224,10 +224,9 @@ async def observe_live_capture(
     async with stdio_client(build_server_params(browser_url)) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            if tab_id is not None:
-                await _select_tab(session, tab_id)
-            # Verify we're on the intended tab, not the control panel
-            await _verify_target_tab(session, expected_url=tab_url)
+            pinned = await _select_tab(session, tab_id, tab_url) if (tab_id or tab_url) else False
+            # Verify we're on the intended tab, not the control panel — and not some OTHER tab.
+            await _verify_target_tab(session, expected_url=tab_url, tab_pinned=pinned)
             return await capture_observation(
                 session,
                 scenario=scenario,
@@ -237,59 +236,104 @@ async def observe_live_capture(
             )
 
 
-async def _select_tab(session: ClientSession, tab_id: str) -> None:
-    """Find the MCP page handle matching the CDP tab id, then select it."""
+def _parse_pages(payload: Any) -> list[dict[str, Any]]:
+    """Normalise list_pages into [{page_id:int, url:str, selected:bool}].
+
+    chrome-devtools-mcp answers with {"raw_text": "## Pages\\n1: <url> [selected]\\n2: <url>"} — a
+    DICT, not a list, and it exposes only a 1-based index + URL (no CDP targetId). We used to do
+    `payload if isinstance(payload, list) else []`, so this always parsed to [] and tab selection
+    silently no-opped onto whatever page was [selected]. Kept tolerant of a list payload in case a
+    future version returns structured pages.
+    """
+    if isinstance(payload, list):
+        return [{"page_id": p.get("pageId"), "url": str(p.get("url", "")),
+                 "selected": bool(p.get("selected"))} for p in payload]
+    raw = payload.get("raw_text", "") if isinstance(payload, dict) else str(payload or "")
+    out: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        m = re.match(r"\s*(\d+)\s*:\s*(\S+)(.*)$", line)
+        if m:
+            out.append({"page_id": int(m.group(1)), "url": m.group(2),
+                        "selected": "[selected]" in m.group(3)})
+    return out
+
+
+async def _select_tab(session: ClientSession, tab_id: Optional[str], tab_url: Optional[str]) -> bool:
+    """Select the intended page and report whether it was actually PINNED.
+
+    list_pages exposes no CDP targetId, so a tab_id alone cannot address a page — the URL is the
+    only handle we get. Returns True only when we selected a page we could positively identify;
+    False means we do not know what we're looking at, and the caller must refuse to capture rather
+    than write a mislabelled artifact (see _verify_target_tab).
+    """
     try:
-        pages_result = await session.call_tool("list_pages", {})
-        pages_payload = normalize_capture_tool_payload(pages_result)
-        pages = pages_payload if isinstance(pages_payload, list) else []
+        pages = _parse_pages(normalize_capture_tool_payload(await session.call_tool("list_pages", {})))
     except Exception:
-        # list_pages may not be available; fall through to capture on default tab
-        return
-
+        return False
     if not pages:
-        # MCP server hasn't enumerated pages yet — proceed on default tab
-        return
+        return False
 
-    matched_page_id = None
-    for page in pages:
-        if str(page.get("targetId", "")) == tab_id:
-            matched_page_id = page.get("pageId")
-            break
-        if str(page.get("pageId", "")) == tab_id:
-            matched_page_id = page.get("pageId")
-            break
+    match = None
+    if tab_url:
+        hits = [p for p in pages if tab_url in p["url"]]
+        if len(hits) == 1:
+            match = hits[0]
+        elif len(hits) > 1:                     # ambiguous — refuse rather than guess a tab
+            import logging
+            logging.getLogger(__name__).warning(
+                "list_pages: %r matches %d pages; cannot pin a tab", tab_url, len(hits))
+            return False
+    if match is None and tab_id:
+        match = next((p for p in pages if str(p.get("page_id")) == str(tab_id)), None)
+    if match is None or match.get("page_id") is None:
+        return False
 
-    if matched_page_id is not None:
-        await session.call_tool("select_page", {"pageId": matched_page_id})
+    await session.call_tool("select_page", {"pageId": match["page_id"], "bringToFront": True})
+    return True
 
 
-async def _verify_target_tab(session: ClientSession, *, expected_url: Optional[str] = None) -> None:
-    """Run a lightweight JS check to confirm we're on the intended page, not the control panel."""
+async def _verify_target_tab(session: ClientSession, *, expected_url: Optional[str] = None,
+                             tab_pinned: bool = False) -> None:
+    """Confirm we're on the intended page before capturing.
+
+    A capture of the WRONG page is worse than no capture: it lands in the corpus as a confidently
+    labelled example and teaches the classifier a lie. So a url mismatch is only tolerable when we
+    positively pinned the tab by id (then it's a redirect, and the tab is still the right one). If
+    the tab was NOT pinned, a mismatch means we have no idea what we're looking at — FAIL LOUD.
+    """
     try:
         result = await session.call_tool("evaluate_script", {"function": "() => ({ url: location.href, title: document.title })"})
         payload = normalize_capture_tool_payload(result)
         current_url = payload.get("url", "") if isinstance(payload, dict) else ""
-
-        # Reject if we accidentally landed on the control panel
-        if "localhost:5173" in current_url or "localhost:3000" in current_url:
+    except Exception:
+        # Can't verify. Only safe if the tab itself was pinned by id.
+        if expected_url and not tab_pinned:
             raise RuntimeError(
-                f"Capture is targeting the control panel UI ({current_url}), not the intended page."
-                f"{' Expected: ' + expected_url if expected_url else ''}"
-                " Select a different tab."
+                f"Cannot verify the capture target (expected URL containing {expected_url!r}) and the "
+                "tab was not pinned by id. Refusing to capture an unidentified page."
             )
+        return
 
-        if expected_url and expected_url not in current_url:
-            # Warn but don't block — URL may have redirected
+    # Reject if we accidentally landed on the control panel
+    if "localhost:5173" in current_url or "localhost:3000" in current_url:
+        raise RuntimeError(
+            f"Capture is targeting the control panel UI ({current_url}), not the intended page."
+            f"{' Expected: ' + expected_url if expected_url else ''}"
+            " Select a different tab."
+        )
+
+    if expected_url and expected_url not in current_url:
+        if tab_pinned:
             import logging
             logging.getLogger(__name__).warning(
-                "Tab verification: expected URL containing %r but got %r", expected_url, current_url
-            )
-    except RuntimeError:
-        raise
-    except Exception:
-        # Verification is best-effort; don't block capture if JS eval fails
-        pass
+                "Tab verification: pinned tab redirected — expected URL containing %r, got %r",
+                expected_url, current_url)
+            return
+        raise RuntimeError(
+            f"Capture target mismatch: expected a URL containing {expected_url!r} but the active page "
+            f"is {current_url!r}, and the tab_id did not match any known page. This capture would be "
+            "of the WRONG page — refusing rather than poisoning the corpus with a mislabelled state."
+        )
 
 
 async def run_observer():

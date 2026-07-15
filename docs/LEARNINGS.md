@@ -763,3 +763,38 @@ learned. A widget break must be LOUD. The URL is CONFIRMATION, never the mechani
 
 Also worth knowing: `set_distance` is a FLOOR (`min_miles`), so it short-circuits `already` when the
 current radius is larger — to exercise the widget you must start below the target.
+
+## 2026-07-15 — Multi-tab capture was silently capturing the WRONG page (corpus-poisoning)
+
+Captured the Wellington Workday create-account wall (tab 2) while Indeed (tab 1) was `[selected]`,
+and got back a perfectly healthy-looking artifact **of the Indeed page** — which I then labelled
+`workday_create_account`. A confidently mislabelled example is worse than no example: it teaches L3
+that the Indeed SERP *is* a Workday account wall. Deleted it (`DELETE /api/observations/{filename}`),
+root-caused, fixed, verified. **`tab_id` had never worked.**
+
+**Root cause.** `list_pages` (chrome-devtools-mcp) returns a **dict**, not a list:
+`{"raw_text": "## Pages\n1: <url> [selected]\n2: <url>"}` — a 1-based INDEX + URL, and **no CDP
+targetId at all**. `_select_tab` did `pages = payload if isinstance(payload, list) else []`, so it
+always parsed to `[]`, hit `if not pages: return`, and silently captured whatever page was
+`[selected]`. Then `_verify_target_tab` saw the URL mismatch and — by design — "warned but didn't
+block". Two silent failures in a row produced confident garbage. (This is the *same shape* as the
+`set_distance` url_fallback: a fallback that always yields a plausible answer hides a dead path
+forever. See the staged-commit entry above.)
+
+**Fixed** in `apps/mcp/app/main.py`:
+- `_parse_pages()` parses the real `raw_text` format (still tolerates a list payload).
+- `_select_tab(session, tab_id, tab_url)` pins by **URL** — the only handle list_pages gives us —
+  and returns whether it actually pinned. Ambiguous (>1 URL match) → refuse, don't guess.
+- `_verify_target_tab(..., tab_pinned)` now **RAISES** on a URL mismatch when the tab wasn't pinned.
+  A mismatch is only tolerable when we positively pinned by id/URL (then it's just a redirect).
+- Verified: capturing tab 2 while tab 1 is `[selected]` now yields
+  `page_identity.title = "Financial Reporting Analyst, US Funds"` @ wellington.wd5.myworkdayjobs.com.
+
+**Consequences.** This closes the standing "multi-window/tab captures carry no window identity"
+gap — but note **`tab_id` is decorative for capture**: pass a `tab_url` distinctive enough to match
+exactly one page (a bare `indeed.com` will match several once an ATS tab is open). Any capture taken
+of an ATS/second tab BEFORE this fix should be treated as suspect — it is probably a picture of
+whichever tab was selected, not the one requested.
+
+**The rule this keeps re-teaching:** *never let a fallback quietly substitute a plausible result for
+the real one.* Fail loud, or the flywheel eats the lie.
