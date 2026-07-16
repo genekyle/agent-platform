@@ -8,6 +8,7 @@ STAMP_FILE="$VENV_DIR/.requirements.stamp"
 REQUIREMENTS_FILES=(
   "$ROOT_DIR/apps/controlplane-api/requirements.txt"
   "$ROOT_DIR/apps/mcp/requirements.txt"
+  "$ROOT_DIR/packages/interaction/pyproject.toml"
 )
 
 require_cmd() {
@@ -45,6 +46,10 @@ if requirements_changed; then
   "$VENV_PYTHON" -m pip install \
     -r "$ROOT_DIR/apps/controlplane-api/requirements.txt" \
     -r "$ROOT_DIR/apps/mcp/requirements.txt"
+  # The shared Interaction contract (intent vocabulary, outcome taxonomy, journal,
+  # fingerprint). Editable, because both apps run from source and a stale copy of the
+  # contract in one process is exactly the drift this package exists to prevent.
+  "$VENV_PYTHON" -m pip install -e "$ROOT_DIR/packages/interaction"
   touch "$STAMP_FILE"
 fi
 

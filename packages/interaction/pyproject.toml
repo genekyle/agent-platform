@@ -1,0 +1,17 @@
+[project]
+name = "interaction"
+version = "0.1.0"
+description = "The Interaction API's frozen contract — intent vocabulary, outcome taxonomy, the intent journal, and the state fingerprint. Shared by controlplane-api and mcp."
+requires-python = ">=3.11"
+dependencies = []
+
+# Deliberately dependency-free (stdlib only). Both apps import this, so a dep here
+# is a dep everywhere; and the journal must never fail to import in the hot path.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["interaction*"]
