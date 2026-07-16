@@ -884,6 +884,25 @@ _SCAN_FORM_JS = r"""
 """
 
 
+# DEPRECATED — superseded by /scan_required. Do not add callers.
+#
+# The complaint (PLAN_interaction_api.md §0) is real and stands: on Workday this returns the
+# whole fieldset's text as EVERY field's label, so First/Middle/Last are indistinguishable.
+# It was abandoned mid-session on 2026-07-15 and hand-rolled around. /scan_required fixes
+# exactly that (per-control labelling: label[for] → aria-label → aria-labelledby → …) and
+# adds the two rules this one lacks: `disabled` beats a stale asterisk, and checkbox/radio
+# groups count.
+#
+# STILL WIRED, deliberately. Its two callers (main.py's apply_state + session_state) feed
+# `form_complete_gate` — the invariant that makes the model structurally unable to forget an
+# empty required field. Swapping a SAFETY GATE's input to a scanner that has never run on a
+# real page is precisely what PRINCIPLES §5 forbids ("validate heuristics against real pages
+# before trusting them" — written after `bframe present ≠ shown` burned us twice). If
+# /scan_required under-reports, the gate says `ok` on an incomplete form, which is worse than
+# the labelling bug it fixes.
+#
+# So the migration is gated on the live drive, not on this commit: run both on the same live
+# form, diff them, THEN rewire main.py:1390 and :1566 and delete this.
 @app.post("/scan_form")
 async def scan_form(body: ScanFormRequest):
     """Read-only form scan: report each field's required/filled/valid (no writes), plus a
@@ -1172,6 +1191,312 @@ async def widget_select(body: WidgetSelectRequest):
         "detail": res.get("detail", ""),
         **({"options": res["options"]} if "options" in res else {}),
     }
+
+
+# --- TIER 2: the protocols. Site-agnostic, dispatching on widget_type. ----------------
+class SelectOptionRequest(BaseModel):
+    """Choose `value` in ANY option widget. Absorbs /widget_select + /select_prompt +
+    the react-select dance that was inline-only.
+
+    `widget_type` is the dispatch key. Omit it and the endpoint asks /describe_widget's
+    classifier first — that costs one extra evaluate and is the honest default, because a
+    caller that guesses wrong is the bug we are removing.
+    """
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    selector: str
+    value: str
+    widget_type: Optional[str] = None
+    commit: Optional[str] = None          # footer button label; None = applies on select
+    option_selector: str = "li[role=option], [role=option], [data-automation-id=promptOption], [class*=select__option]"
+    bring_to_front: bool = True
+    ats: Optional[str] = None
+    field: Optional[str] = None
+
+
+async def _classify(cdp, selector: str) -> dict:
+    """Run the /describe_widget classifier in an existing CDP session."""
+    from app.widget_probe import DESCRIBE_WIDGET_JS
+    r = await cdp.send("Runtime.evaluate", {
+        "expression": f"({DESCRIBE_WIDGET_JS})({json.dumps({'selector': selector})})",
+        "returnByValue": True})
+    return (r.get("result") or {}).get("value") or {}
+
+
+@app.post("/select_option")
+@journaled(Intent.SELECT_OPTION)
+async def select_option(body: SelectOptionRequest):
+    """ONE endpoint for every option widget — the caller stops needing to know which it is.
+
+    Dispatch:
+      react_select / month_year  → per-char keystrokes, exact-match, verify at singleValue
+      prompt_hierarchical        → the Workday prompt protocol (native open + trusted search)
+      aria_listbox / native_select → the staged-commit popup protocol (aria-controls scoped)
+
+    This is the generalization the plan asks for, earned at the SECOND site rather than
+    designed up front: _POPUP_SELECT_JS was right to start Indeed-only, then Workday forced
+    aria-controls scoping, then Greenhouse forced keystroke-opening. Frozen after Indeed it
+    would be wrong; delayed until "perfect" it would be three scripts.
+    """
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    from app.protocols import react_select_pick
+
+    common = {"addressed_by": "selector", "target": body.selector}
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        await cdp.send("Page.enable", {})
+        await cdp.send("Runtime.enable", {})
+        if body.bring_to_front:
+            # A popup WILL NOT RENDER in a hidden tab — document.visibilityState must be
+            # 'visible' or the opener click no-ops. A human's tab is visible when they click.
+            await cdp.send("Page.bringToFront", {})
+            await asyncio.sleep(0.3)
+
+        wt = body.widget_type
+        commit = body.commit
+        if not wt:
+            desc = await _classify(cdp, body.selector)
+            if not desc.get("found"):
+                return {**common, "outcome": Outcome.NOT_FOUND,
+                        "detail": f"no node matching {body.selector!r}"}
+            wt = desc.get("widget_type")
+            if commit is None and (desc.get("commit") or {}).get("kind") == "footer_button":
+                commit = (desc["commit"] or {}).get("label")
+        common["widget_type"] = wt
+
+        if wt in (WidgetType.REACT_SELECT.value, WidgetType.MONTH_YEAR.value):
+            outcome, steps, detail = await react_select_pick(
+                cdp, selector=body.selector, value=body.value)
+            return {**common, "outcome": outcome, "steps": steps, "detail": detail,
+                    "actions": ["clear", "type", "click"]}
+
+        if wt == WidgetType.UNKNOWN.value:
+            # Refuse rather than guess. An unclassified widget driven by a guessed protocol
+            # is how every one of 2026-07-15's bugs started.
+            return {**common, "outcome": Outcome.NOT_FOUND,
+                    "detail": "widget_type=unknown — refusing to guess a protocol. Send a "
+                              "/probe to learn its shape, then add it to the classifier."}
+
+    # The listbox/prompt paths open their own sessions (the prompt protocol re-discovers the
+    # target after its native click), so they run outside the block above.
+    if wt == WidgetType.PROMPT_HIERARCHICAL.value:
+        inner = await select_prompt(SelectPromptRequest(
+            browser_url=body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url,
+            field_role=None, field_name=body.field or body.value, value=body.value))
+        return {**common, "outcome": inner.get("outcome", Outcome.ERROR),
+                "steps": inner.get("steps", []), "detail": inner.get("detail", ""),
+                "actions": ["click", "type", "click"]}
+
+    inner = await widget_select(WidgetSelectRequest(
+        browser_url=body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url,
+        opener_selector=body.selector, option_label=body.value,
+        option_selector=body.option_selector,
+        commit_names=[commit] if commit else [], bring_to_front=body.bring_to_front))
+    return {**common, "outcome": inner.get("outcome", Outcome.ERROR),
+            "steps": inner.get("steps", []), "detail": inner.get("detail", ""),
+            "actions": ["click", "click"] + (["click"] if commit else []),
+            **({"options": inner["options"]} if "options" in inner else {})}
+
+
+class CheckGroupRequest(BaseModel):
+    """Set a required checkbox group to exactly `values`. Exact label match."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    selector: str                  # any checkbox in the group, or the group's wrapper
+    values: list[str]
+    ats: Optional[str] = None
+    field: Optional[str] = None
+
+
+@app.post("/check_group")
+@journaled(Intent.CHECK_GROUP)
+async def check_group(body: CheckGroupRequest):
+    """Required checkbox groups — the thing the old scan missed ENTIRELY.
+
+    `restrictions` and `languages` on KKR are required checkbox groups, and a scan that only
+    looked at inputs/selects never saw them. Groups by the id prefix before '[]', matches
+    labels EXACTLY ("No" must not match "Yes, non-compete"), toggles by click so React sees
+    the event, and re-reads the DOM to confirm rather than trusting the clicks.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    from app.protocols import CHECK_GROUP_JS
+
+    common = {"addressed_by": "selector", "target": body.selector,
+              "widget_type": WidgetType.CHECKBOX_GROUP.value}
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        r = await cdp.send("Runtime.evaluate", {
+            "expression": f"({CHECK_GROUP_JS})({json.dumps({'selector': body.selector, 'values': body.values})})",
+            "returnByValue": True})
+    out = (r.get("result") or {}).get("value") or {}
+    return {**common,
+            "outcome": Outcome(out.get("code") or "error"),
+            "steps": out.get("log") or [], "detail": out.get("detail", ""),
+            "actions": ["click"] * len(body.values),
+            **({"options": out["options"]} if "options" in out else {}),
+            **({"checked": out["checked"]} if "checked" in out else {})}
+
+
+class ScanRequiredRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    ats: Optional[str] = None
+
+
+@app.post("/scan_required")
+@journaled(Intent.SCAN_REQUIRED)
+async def scan_required(body: ScanRequiredRequest):
+    """What is required AND unanswered — the honest replacement for /scan_form.
+
+    /scan_form reports the whole fieldset's text as every field's label on Workday, making
+    First/Middle/Last indistinguishable; it was abandoned mid-session and hand-rolled around.
+    This labels PER CONTROL (label[for] → aria-label → aria-labelledby → …), applies
+    `disabled` beats the asterisk, and counts checkbox/radio groups.
+
+    Read-only. Returns [] when the form is complete, which is a real answer — the invariant
+    gate's whole job is refusing to mark a form done while this is non-empty.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    from app.protocols import SCAN_REQUIRED_JS
+
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        r = await cdp.send("Runtime.evaluate", {"expression": f"({SCAN_REQUIRED_JS})()",
+                                                "returnByValue": True})
+    out = (r.get("result") or {}).get("value") or {}
+    unanswered = out.get("unanswered") or []
+    return {"outcome": Outcome.OK, "unanswered": unanswered, "count": len(unanswered),
+            "detail": (f"{len(unanswered)} required field(s) unanswered: "
+                       f"{[u['field'] for u in unanswered][:6]}" if unanswered
+                       else "all required fields answered"),
+            "steps": [{"step": "scan", "unanswered": len(unanswered), "url": out.get("url")}]}
+
+
+class SetDateRequest(BaseModel):
+    """Set a date. The caller says {month, year}; the API figures out the shape."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    selector: str
+    month: int                      # 1-12
+    year: int
+    day: Optional[int] = None
+    widget_type: Optional[str] = None
+    ats: Optional[str] = None
+    field: Optional[str] = None
+
+
+#: Greenhouse's month react-select wants the NAME — typing "08" yields ZERO options. The
+#: caller says month=8 and never has to know that.
+_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
+                "August", "September", "October", "November", "December"]
+
+
+@app.post("/set_date")
+@journaled(Intent.SET_DATE)
+async def set_date(body: SetDateRequest):
+    """Three known date shapes, one intent, verified at commit.
+
+    month_year (Greenhouse)  — month is a REACT-SELECT wanting "August" (typing "08" yields
+                               zero options); year is a plain number input. Two widgets, one
+                               date. The month's transient text READS BACK like a value and
+                               clears on blur, so the month verifies at singleValue and the
+                               year at .value.
+    segmented_date (Workday) — dateSectionMonth/Day/Year spinbuttons, linked and
+                               auto-advancing. CDP click+type+backspace scrambles across the
+                               sub-fields ("12//", "//2012"). Still routed to the operator —
+                               see below.
+    text                     — plain MM/YYYY.
+    """
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    from app.protocols import react_select_pick
+
+    if not 1 <= body.month <= 12:
+        return {"outcome": Outcome.NO_OPTION, "detail": f"month {body.month} out of range 1-12"}
+    common = {"addressed_by": "selector", "target": body.selector}
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        await cdp.send("Page.enable", {})
+        await cdp.send("Runtime.enable", {})
+        await cdp.send("Page.bringToFront", {})
+        await asyncio.sleep(0.2)
+
+        desc = await _classify(cdp, body.selector)
+        if not desc.get("found"):
+            return {**common, "outcome": Outcome.NOT_FOUND,
+                    "detail": f"no node matching {body.selector!r}"}
+        wt = body.widget_type or desc.get("widget_type")
+        common["widget_type"] = wt
+
+        if wt == WidgetType.SEGMENTED_DATE.value:
+            # Honest refusal, not a silent best-effort. WORKDAY_LESSONS lists this as a live
+            # gap: the sub-fields are linked and auto-advance, and CDP typing scrambles across
+            # them. A protocol that "tries anyway" would produce 12// and report success —
+            # which is the exact bug class this API exists to remove.
+            return {**common, "outcome": Outcome.BLOCKED,
+                    "detail": "Workday segmented date (linked auto-advancing spinbuttons) — CDP "
+                              "typing scrambles across sub-fields ('12//', '//2012'). Unsolved; "
+                              "route to the operator. Do not 'try anyway'.",
+                    "steps": [{"step": "precheck", "widget_type": wt, "known_gap": True}]}
+
+        if wt == WidgetType.MONTH_YEAR.value:
+            steps: list[dict] = []
+            month_name = _MONTH_NAMES[body.month - 1]
+            outcome, msteps, mdetail = await react_select_pick(
+                cdp, selector=body.selector, value=month_name)
+            steps += [{**s, "part": "month"} for s in msteps]
+            if outcome != Outcome.OK:
+                return {**common, "outcome": outcome, "steps": steps,
+                        "detail": f"month: {mdetail}"}
+
+            year_sel = desc.get("companion_selector")
+            if not year_sel:
+                return {**common, "outcome": Outcome.NOT_FOUND, "steps": steps,
+                        "detail": f"month set to {month_name}, but no companion year input "
+                                  f"was found next to {body.selector!r} — date is HALF SET"}
+            # The year is a plain number input: set react-safely, then verify at .value
+            # (unlike the month, .value IS the truth here — different widget, different rule).
+            set_year = (
+                "(() => {"
+                f"  const el = document.querySelector({json.dumps(year_sel)});"
+                "   if (!el) return null;"
+                "   const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;"
+                f"  set.call(el, {json.dumps(str(body.year))});"
+                "   el.dispatchEvent(new Event('input', {bubbles: true}));"
+                "   el.dispatchEvent(new Event('change', {bubbles: true}));"
+                "   el.dispatchEvent(new Event('blur', {bubbles: true}));"
+                "   return el.value;"
+                "})()"
+            )
+            r = await cdp.send("Runtime.evaluate", {"expression": set_year, "returnByValue": True})
+            got = (r.get("result") or {}).get("value")
+            steps.append({"step": "commit", "part": "year", "value_read_at": ".value",
+                          "observed": got})
+            if str(got) != str(body.year):
+                return {**common, "outcome": Outcome.NOT_STAGED, "steps": steps,
+                        "detail": f"month={month_name} took but year reads {got!r} not {body.year}"}
+            return {**common, "outcome": Outcome.OK, "steps": steps,
+                    "actions": ["clear", "type", "click", "type"],
+                    "detail": f"{month_name} {body.year} (month verified at singleValue, "
+                              f"year at .value)"}
+
+        return {**common, "outcome": Outcome.NOT_FOUND,
+                "detail": f"no date protocol for widget_type={wt!r} — send a /probe and add one"}
 
 
 DISTANCE_OPTIONS = [0, 5, 10, 15, 25, 35, 50, 100]     # Indeed's own ladder, in miles
