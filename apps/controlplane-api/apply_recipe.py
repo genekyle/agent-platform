@@ -530,9 +530,15 @@ GREENHOUSE_LESSONS = {
 }
 
 def recipe_spec() -> dict[str, Any]:
+    import apply_fields
     return {
         "domain": "indeed",
         "recipe": INDEED_APPLY_RECIPE,
+        # The EXECUTABLE half of the recipe. The `fields`/`selectors` entries in the step
+        # dicts below are documentation — no code reads them (that is what made the recipe
+        # inert). `apply_fields.resolve(ats, field)` is what code calls. Add a new field
+        # THERE, not as a seventh addressing shape in a step dict.
+        "fields": {ats: apply_fields.known_fields(ats) for ats in apply_fields.known_ats()},
         "branches": APPLY_BRANCHES,
         "epilogue": APPLY_EPILOGUE,
         "cross_site": {
