@@ -1,6 +1,42 @@
 # The Interaction API — execution plan
 
-**Status:** plan, 2026-07-15. Successor to `PLAN_execution_api.md` (the *why*); this is the *how*.
+**Status:** **Phase 1 SHIPPED 2026-07-16** (journal-first; see §8 and the deviations below).
+Successor to `PLAN_execution_api.md` (the *why*); this is the *how*.
+
+> ### What changed when Phase 1 met the code
+>
+> **The plan's founding argument was half wrong, and it was the half Phase 1 stood on.** §0 row 5
+> ("Discovery is invisible — `eval:0` vs `type:137`") is a real measurement and a wrong inference: the
+> event log is a 1000-line **ring buffer**, raced by two processes, with no fingerprint/session/
+> outcome, read only by a React console. **No trainer reads it.** The real corpora
+> (`loop_steps.jsonl`, `selection_telemetry.jsonl`) are written only by `runtime/loop.py`, which live
+> drives never go through. Both `eval` and `widget_select` were at **zero**. Shipping §8's Phase 1 as
+> written would have met its own DoD ("finish KKR using only these — zero `/eval`") and produced **no
+> training data**. So **the journal landed first**, and the endpoints were built on top of it.
+> (`docs/LEARNINGS.md` 2026-07-16; `PRINCIPLES.md` §8 corrected.)
+>
+> **Five more corrections, all found by implementing rather than designing:**
+>
+> 1. **The recipes were INERT, not just non-uniform** (§0 row 2, §4). No code path read *any* ATS
+>    recipe's field entries — six addressing shapes across four sites, and nothing resolved against
+>    any of them. The job was "make the recipe executable at all", so `resolve(ats, field)` moved from
+>    Phase 2 into Phase 1 (`apply_fields.py`). Six shapes → two (`role_name`, `selector`).
+> 2. **§6's taxonomy needs two more members.** `error` (a mechanism failure is not a protocol
+>    outcome) and `committed_unconfirmed` (§6 assumes every endpoint *can* verify; the staged-commit
+>    popup destroys its own observer, so `ok` is a silent success and `not_committed` is a false
+>    negative that double-submits).
+> 3. **§7's tiering makes §8's Phase-2 DoD impossible as written.** "Endpoints accept `field` and stop
+>    taking selectors" can't be literal: tier-2 protocols are *"widget-shaped, site-agnostic"*, and a
+>    site-agnostic endpoint cannot take a site-specific field name. Tier 2 takes **resolved
+>    addressing**; the INTENT surface above it takes `field`. **"Zero selectors" = zero in the calls
+>    the MODEL makes.**
+> 4. **§2's `/describe_widget` must be READ-ONLY.** "options after open" contradicts `DESCRIBE` being a
+>    read-only intent — opening dismisses other popups and fires fetches. Options are reported only
+>    when readable without opening.
+> 5. **§3's vocabulary needs `scroll`** (it's in the frozen `ActionId`, the loop emits it, and a verb
+>    the system emits but the vocabulary can't express is a hole in the corpus) **and must not add
+>    `clear`** (clearing is `set_text("")`). And INTENT is an altitude **above** the frozen
+>    `ActionId`, not a rival to it — otherwise L4 trains on verbs the selector can't emit.
 
 **Thesis:** the executor speaks **only** to the API. The model emits **intents from a closed
 vocabulary**; it never writes JS, and it never sees a selector. Everything site-specific is DATA in a
@@ -226,20 +262,39 @@ test.
 
 The 13 remaining jobs do **not** stop. Each phase is shippable and paid for by the work.
 
-**Phase 1 — the spine (unblocks the current backlog)**
-- [ ] `/describe_widget` (the classifier: 6 known `widget_type`s today)
-- [ ] `/select_option` — absorb `/widget_select` + `/select_prompt` + react-select, dispatching on type
-- [ ] `/set_date` — the 3 known date shapes, verified at commit
-- [ ] `/check_group` — required checkbox groups
-- [ ] `/scan_required` — `disabled` beats asterisk; groups included
-- [ ] Fix or retire `/scan_form`
-- Definition of done: **finish KKR using only these** — zero `/eval`.
+**Phase 1 — the spine (unblocks the current backlog)** — SHIPPED 2026-07-16
+- [x] **The intent journal** — append-only, fingerprint-joined, outcome taxonomy, redaction.
+      *Not in the original list; it goes first, because without it Phase 1's DoD is vacuous.*
+      `packages/interaction/` + `apps/mcp/app/intent_api.py`
+- [x] **`resolve(ats, field)`** — pulled forward from Phase 2; `/describe_widget{ats,field}` needs it.
+      `apps/controlplane-api/apply_fields.py` (32 fields, 3 ATS)
+- [x] `/describe_widget` (the classifier: **12** `widget_type`s — the plan's 9 plus `native_select`,
+      `radio_group` and `number`, all already handled as distinct kinds by the code it replaces)
+- [x] `/select_option` — absorbs `/widget_select` + `/select_prompt` + react-select, dispatching on type
+- [x] `/set_date` — month_year verified at commit; **segmented_date refuses (BLOCKED → operator)**,
+      because CDP typing scrambles across the linked spinbuttons and a protocol that "tried anyway"
+      would emit `12//` and report success
+- [x] `/check_group` — required checkbox groups
+- [x] `/scan_required` — `disabled` beats asterisk; groups included
+- [x] `/probe` replaces `/eval` (moved up from Phase 3 — it's ~20 lines and it's the thing that makes
+      discovery visible, which is the point of the phase)
+- [ ] ~~Fix or retire `/scan_form`~~ → **deprecated in place, migration gated on the live drive.** Its
+      callers feed `form_complete_gate`; swapping a *safety gate's* input to a scanner that has never
+      run on a real page is exactly what PRINCIPLES §5 forbids. Diff both on a live form, then rewire.
+- Definition of done: **finish KKR using only these — zero `/eval`.** ⟵ **NOT YET MET.** All the code
+  is in and 119 tests pass, but no live drive has run. The page-side JS is unvalidated (§5), and
+  that is the next session's first job.
 
 **Phase 2 — the resolver**
-- [ ] Unify the recipe field schema (`addressed_by: selector|role_name`)
-- [ ] `resolve(ats, field)`; endpoints accept `field` and stop taking selectors
-- [ ] `/resolve_answer` cascade + alias table with write-back
-- Definition of done: **an application driven with zero selectors in any call.**
+- [x] ~~Unify the recipe field schema~~ — done in Phase 1 (`apply_fields.py`); six shapes → two
+- [x] ~~`resolve(ats, field)`~~ — done in Phase 1
+- [ ] The **intent surface**: `/api/interact/*` on the control plane, taking `{ats, field, value}`,
+      resolving, and proxying to tier 2. *This* is what "endpoints stop taking selectors" means —
+      tier-2 protocols keep taking resolved addressing (see correction 3 above).
+- [ ] `/resolve_answer` cascade + alias table with write-back. The vocabulary data already exists in
+      `apply_fields` (`Bachelor of Science → Bachelor's Degree`, `Sports Science → Kinesiology`,
+      `University of Santo Tomas → Other`); the cascade that reads it does not.
+- Definition of done: **an application driven with zero selectors in any call the MODEL makes.**
 
 **Phase 3 — the contract**
 - [ ] Namespace tiers (`/indeed/*`)

@@ -89,13 +89,30 @@ in code and linking the enforcement point.*
 The model decides WHAT; the API owns HOW. Any interaction whose protocol we have proven is an API
 call, not a hand-rolled `Runtime.evaluate`.
 
-**Why it's a principle and not a preference:** an inline script is invisible to the flywheel. The
-event log for the 2026-07-15 session reads `type:137 clear:92 click:80 select:32 widget_select:12` —
-and `eval:0`. Every API action is recorded, replayable and trainable; the ~25 `/eval` scripts written
-that day left no trace and died with the session. **An action the system can't see is one it can never
-learn** — which is the whole premise of teacher→distill. Correctness follows the same way: every bug
-that day lived in a hand-rolled script (substring match, `.value` verify, stray-option open-check),
-never in an endpoint, because an endpoint encodes the protocol once and the caller can't get it wrong.
+**Why it's a principle and not a preference:** an inline script is invisible to the flywheel. **An
+action the system can't see is one it can never learn** — which is the whole premise of
+teacher→distill. Correctness follows the same way: every bug on 2026-07-15 lived in a hand-rolled
+script (substring match, `.value` verify, stray-option open-check), never in an endpoint, because an
+endpoint encodes the protocol once and the caller can't get it wrong.
+
+> **Corrected 2026-07-16 — this section used to say "Every API action is recorded, replayable and
+> trainable," citing `type:137 … eval:0` in the event log. The counts are real; the claim was false,
+> and it was the claim Phase 1 was about to be built on.** `event_log.jsonl` is a 1000-line **ring
+> buffer** raced by two processes, carrying no fingerprint, no session and no outcome (it's a
+> `detail` substring), read by exactly one consumer — a React console polling every 5s. **No trainer
+> reads it.** Meanwhile the real corpora (`loop_steps.jsonl`, `selection_telemetry.jsonl`) are written
+> only by `runtime/loop.py`, which the live drives never go through: the session that drove a Workday
+> application to submission added **zero rows to either**. So the scoreboard was never `eval:0` vs
+> `type:137` — **both were zero**, and `/widget_select` was only marginally more visible than `/eval`.
+> Being *an API call* was never what made an action learnable. Being *journaled* is.
+> See `docs/LEARNINGS.md` 2026-07-16.
+
+- **Enforced by:** `packages/interaction/interaction/journal.py` — the append-only, fingerprint-joined
+  intent corpus, and `apps/mcp/app/intent_api.py::journaled`, a route decorator (not a helper) so no
+  endpoint can forget and no early return can skip it. The response is *derived* from the journaled
+  record, so the corpus and the HTTP response cannot disagree. `ok` means `outcome == OK`, which an
+  endpoint cannot override — the anti-silent-success contract made mechanical rather than remembered.
+  The event log remains the operator's wall display: a good one, and a bad corpus.
 
 **Promotion rule — promote the MECHANISM eagerly, generalize the ABSTRACTION late, never freeze.**
 Not "when it's perfected": `/select_prompt` was promoted from ONE observation and its imperfection

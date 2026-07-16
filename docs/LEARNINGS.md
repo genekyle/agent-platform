@@ -24,6 +24,168 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-16 — The event log is NOT the flywheel: `eval:0` vs `type:137` was the wrong scoreboard
+
+**What we believed.** `PLAN_execution_api.md` §1(a) — the founding argument for the whole Interaction
+API — says an inline script is un-learnable *because* API calls are recorded and `/eval` isn't, citing
+the event log: `type:137 clear:92 click:80 select:32 widget_select:12` and `eval:0`. `PRINCIPLES.md` §8
+repeated it: *"Every API action is recorded, replayable and trainable."*
+
+**What's actually true.** The counts are real (re-measured independently, exact match). The inference
+was wrong, and it was load-bearing:
+
+- `event_log.jsonl` is a **1000-line RING BUFFER**, not append-only despite its own docstring — every
+  write is `read_text()` → `splitlines()` → truncate → `write_text()` (`event_log.py:44`). A long
+  session silently eats its own oldest rows.
+- Two processes write it with **no cross-process lock** — each has its own `threading.Lock()`, which
+  guards nothing across a process boundary. They race read-modify-write on one file.
+- An event is `{ts, source, kind, summary, detail, domain}`. **No fingerprint, no capture id, no
+  session, no per-step log.** Outcome is smuggled into `detail` as a string. `domain` holds two
+  different vocabularies in one column (`/execute` passes a URL; `/capture` passes a registry slug).
+- **Exactly one consumer:** `EventsConsole.jsx`, polling every 5s. **No trainer reads it.**
+- `record_only` (dry run) and a real drive emit **byte-identical events** — the corpus could not tell a
+  rehearsal from a performance.
+
+So the honest scoreboard was never `eval:0` vs `type:137`. **It was that both are zero.** The real
+corpora — `loop_steps.jsonl` (genuine append, fingerprint-keyed `StepRecord`) and
+`selection_telemetry.jsonl` (whose header literally says *"THIS IS THE TRAINING CORPUS"*) — are written
+**only** by `runtime/loop.py`. The MCP endpoints we actually drive with never touch them. The
+2026-07-15 session drove a Workday application to submission and a Greenhouse one to its last field —
+350+ recorded actions — and contributed **0 rows to each**. `loop_steps.jsonl` was 43 lines;
+`selection_telemetry.jsonl` was 101; both from `run_batch`, not from live drives.
+
+**Why it mattered right now.** Phase 1 as planned (build `/describe_widget` + `/select_option` + …,
+then "finish KKR using only these — zero `/eval`") would have hit its own Definition of Done and still
+produced zero training rows. The session paid for a third time.
+
+**Where it's encoded now.** `packages/interaction/interaction/journal.py` — the intent journal:
+append-only, fingerprint-joined to the existing corpora, carries the per-step log and an `executed`
+flag. `apps/mcp/app/intent_api.py::journaled` is a route decorator, not a helper, because the failure
+mode is *forgetting*: `/execute` logged its success path and returned **silently** on both not-found
+early-returns, so "the recipe is stale" — the most useful row in the corpus — was exactly the row we
+never wrote. The event log stays as the operator wall display; it's a good one and a bad corpus.
+Different jobs, different files.
+
+---
+
+## 2026-07-16 — The ATS recipes were INERT, not merely inconsistent
+
+**What we believed.** `PLAN_interaction_api.md` §4: the recipe schema isn't uniform (Workday uses
+`{role, name}`, Greenhouse uses `"#first_name"`), and unifying it is a Phase-2 migration blocker.
+
+**What's actually true.** Worse on both counts.
+
+- The claim is half wrong: Greenhouse is `{"selector": "#first_name"}` (a dict), not a bare string; and
+  Workday carries **two** shapes — `role+name` in the *account* recipes, bare CSS under a `selectors`
+  key in `WORKDAY_APPLY_RECIPE`. Across four sites there were **six addressing shapes** under two
+  different step keys (`fields` vs `selectors`), with **three selector languages sharing one key**
+  (CSS, a regex in `not_found_text`, and a Playwright `text=` pseudo-selector).
+- And the deeper fact: **no code path read any ATS recipe's `fields`/`selectors` entry.** The only
+  consumer is `recipe_spec()`, serialising them to JSON for one GET endpoint that shows them to the
+  *model*. They are documentation. Call sites re-hardcode them by hand — `routers/career_search.py`
+  re-implements Workday create-account matching with inline substrings and cites
+  `WORKDAY_CREATE_ACCOUNT_RECIPE` only in a **docstring**. 13 of 16 `ATS_PLATFORMS` entries have no
+  field data at all, and `ats_registry` points `appvault` at a recipe that is an empty list.
+
+So the job was never "unify the schema" — it was **"make the recipe executable at all."**
+
+**Where it's encoded now.** `apps/controlplane-api/apply_fields.py` — `resolve(ats, field)` over one
+schema, 32 fields across greenhouse/workday/indeed, with tests (13 of them; not one could have been
+written against the prose it replaces). Six shapes collapse to **two** — `role_name` and `selector` —
+because they're the only two that survive a DOM reshuffle; `addressed_by` is *derived*, never
+hand-written. Everything in it is transcribed from `GREENHOUSE_LESSONS`/`WORKDAY_LESSONS`; the lessons
+stay the narrative, this is the contract.
+
+**The entry that argues the whole case:** Greenhouse's `#country` is the **phone** country code, not
+the address country (the address is `#candidate-location`). The id lies. `phone_country` is where we
+get to tell the truth *once* instead of every caller re-learning it.
+
+---
+
+## 2026-07-16 — The outcome taxonomy needed two members the plan didn't have (found by implementing)
+
+`PLAN_interaction_api.md` §6 lists eight outcomes. Implementing them surfaced two more — which is the
+promotion rule working ("an API's job is not to be right; it's to be the single place the fix lands"):
+
+- **`error`** — every endpoint ends in `except Exception: return {"ok": False, "detail": str(exc)}`,
+  which maps to **none** of the eight. Folding a websocket drop into `not_found` would be the same lie
+  the taxonomy exists to prevent: a *mechanism* failure would read as a stale recipe and send us
+  re-mapping selectors that were fine.
+- **`committed_unconfirmed`** — §6 assumes every endpoint **can** verify. The staged-commit popup
+  proves otherwise: the footer's Update navigates, tearing down the very context that would observe
+  the result. `_POPUP_SELECT_JS` says so itself — *"THE COMMIT DESTROYS ITS OWN OBSERVER … CONFIRM
+  FROM OUTSIDE"* — and then returns `ok:true` anyway. Neither existing member is honest there. `ok` is
+  a **silent success** by §6's own test ("if the primary silently fails, what does the caller see?").
+  `not_committed` is the **opposite lie**: a false negative makes a caller re-fire a commit that
+  already worked, and a double-fired commit is a double submit. Caller's move: confirm from *outside*,
+  as `/set_distance` already does via `_read_radius` ("the URL is CONFIRMATION, never the mechanism").
+
+**Also: tier-1 `ok` ≠ tier-2 `ok`, and that had to be written down.** `DirectDriver.move_and_act`
+(`driver.py:247`) returns `ok=True` on any non-exceptional path — it never reads the result back, and
+`.click()` on a detached or 0×0 node no-ops silently (the same trap as Indeed's hidden decoy cards).
+So `/execute`'s OK means *the mechanism completed*, not *the page accepted it*. Semantic verification
+is the protocol tier's job. Encoded in `/execute`'s docstring and `contract.Outcome`.
+
+---
+
+## 2026-07-16 — Intent sits ABOVE the frozen ActionId; we were one enum away from a fourth vocabulary
+
+**What we believed.** The plan's INTENT layer (§3) is a new closed verb vocabulary the model emits.
+
+**What's actually true.** The repo already carries **three** action vocabularies that don't agree:
+the frozen `select_stage.schema.ActionId` (click/type/select/scroll/submit/clear/none — the Haiku
+output contract, cache-versioned), the DB's `ActionRegistry` seed (adds navigate/wait/press/any), and
+the executor's driver (adds `upload` — which is live). A fourth, unrelated one would mean L4 trains on
+verbs the selector can't emit.
+
+They are **different altitudes**, not competitors:
+
+    Intent   — a SEMANTIC operation on a FIELD.    select_option("Phone Device Type", "Mobile")
+    ActionId — a PRIMITIVE operation on ONE NODE.  click(node 4821)
+
+One intent **expands** into 1..N ActionIds. So Intent doesn't replace the frozen contract: the Haiku
+selector keeps emitting ActionId, L4 learns Intent, and the journal records **both**, which is what
+makes them joinable rather than rival. `contract.intent_expands_to` holds the map and a test pins every
+expansion to a verb `driver.py` actually implements, so we can't mint a rival vocabulary by accident.
+`contract.intent_for_action` is the reverse bridge for tier-1 `/execute`, which takes an `action_id`
+and would otherwise split the corpus in two.
+
+Two vocabulary calls worth recording: **`scroll` IS an intent** (arguably mechanism, but it's in the
+frozen enum, the loop emits it, and the last drive used it constantly — a verb the system really emits
+and the vocabulary can't express is a hole in the corpus, not a purity win). **`clear` is NOT** —
+clearing is `set_text("")`, and the `actions` column keeps the primitive. `clear:92` in the event log
+is the second most common action and it still doesn't earn a verb.
+
+---
+
+## 2026-07-16 — Why `/describe_widget` is read-only, and why jsdom would have tested a fiction
+
+**Read-only.** The plan's §2 sketch has `options: [...] # after open, if enumerable`. Opening is an
+**action**: it can dismiss another widget's popup, fire a server-side fetch, and change the state the
+caller is about to act on. `Intent.DESCRIBE` is in `READ_ONLY_INTENTS` and expands to zero ActionIds,
+so a describe that opens breaks its own contract. `/describe_widget` therefore reports options only
+when they're readable *without* opening (native select, checkbox/radio group, an already-open listbox)
+and otherwise says `options: null, options_enumerable_by: "open"`. `/select_option` opens it anyway and
+reports what it found there.
+
+**No jsdom test.** The obvious move for testing the DOM classifier would be jsdom. It would be
+*actively misleading*: **jsdom's `offsetParent` is always `null`**, and the classifier's `vis()` helper
+is built on it, so every element would read invisible and every assertion would validate a fiction.
+PRINCIPLES §5 already says the right thing — "deterministic detectors are cheap but easy to get subtly
+wrong; validate them against the actual live pages before trusting them" (written after `bframe`
+PRESENT ≠ SHOWN burned us twice). So the classifier is validated on the live drive, and it's cheap to
+audit because every classification lands in the journal: a wrong `widget_type` shows up as a downstream
+`not_opened`/`not_staged` row on the same field.
+
+**Same reasoning killed the `/scan_form` retirement.** `/scan_required` supersedes it and is better on
+every count — but `/scan_form`'s two callers feed `form_complete_gate`, the invariant that makes the
+model structurally unable to forget an empty required field. Swapping a **safety gate's** input to a
+scanner that has never run on a real page is exactly §5's hazard: if `/scan_required` under-reports,
+the gate says `ok` on an incomplete form — worse than the labelling bug it fixes. Deprecated in place;
+migration gated on diffing both against the same live form.
+
+---
+
 ## 2026-07-11 — First full Indeed smartapply flow driven end-to-end (Brigham Sr Data Analyst SUBMITTED)
 
 **What we did.** Drove a complete Indeed "Apply with Indeed" (smartapply) application to SUBMIT, live,
