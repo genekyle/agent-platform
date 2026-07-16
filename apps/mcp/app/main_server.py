@@ -491,6 +491,69 @@ async def probe(body: ProbeRequest):
     }
 
 
+class DescribeWidgetRequest(BaseModel):
+    """Ask a control what it is. TIER 1 — takes resolved addressing, not (ats, field).
+
+    `ats`/`field` are accepted but NOT used to resolve: they ride along so the journal row
+    carries the semantic context. Resolution is the INTENT tier's job (see
+    controlplane-api/apply_fields.resolve) — a tier-1 primitive that reached into a
+    per-site recipe would put DATA inside MECHANISM, which is the layering mistake this
+    whole plan is about.
+    """
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    selector: str
+    ats: Optional[str] = None
+    field: Optional[str] = None
+
+
+@app.post("/describe_widget")
+@journaled(Intent.DESCRIBE)
+async def describe_widget(body: DescribeWidgetRequest):
+    """THE missing primitive: one structured probe that replaces the ~11 hand-written ones.
+
+    Returns the widget's own account of itself — what it IS (`widget_type`), where its TRUTH
+    lives (`value_read_at`), how it OPENS (`opens_on`), which popup it OWNS (`popup.source`),
+    and whether selecting stages or applies (`commit.kind`).
+
+    READ-ONLY: it does not open the widget. See app/widget_probe.py for why that differs
+    from the plan's sketch, and what it means for `options`.
+
+    `unknown` is not a failure — it routes to /probe, and the probe's output is a new
+    widget_type in the classifier. The classifier is the flywheel's memory of widget shapes.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    from app.widget_probe import DESCRIBE_WIDGET_JS
+
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        r = await cdp.send("Runtime.evaluate", {
+            "expression": f"({DESCRIBE_WIDGET_JS})({json.dumps({'selector': body.selector})})",
+            "returnByValue": True})
+    out = (r.get("result") or {}).get("value") or {}
+
+    if not out.get("found"):
+        return {"outcome": Outcome.NOT_FOUND, "addressed_by": "selector", "target": body.selector,
+                "detail": out.get("detail") or f"no node matching {body.selector!r}"}
+    wt = out.get("widget_type") or WidgetType.UNKNOWN.value
+    return {
+        # A widget we cannot classify is a real answer, not an error — but it is NOT `ok`,
+        # because the caller cannot act on it. It routes to /probe, and the probe's output
+        # becomes a new widget_type here.
+        "outcome": Outcome.OK if wt != WidgetType.UNKNOWN.value else Outcome.NOT_FOUND,
+        "widget_type": wt,
+        "addressed_by": "selector", "target": body.selector,
+        "detail": (f"{wt} · {out.get('label','')[:40]} · required={out.get('required')} "
+                   f"({out.get('required_via')}) · answered={out.get('answered')}"),
+        "steps": [{"step": "classify", "widget_type": wt,
+                   "value_read_at": out.get("value_read_at"), "opens_on": out.get("opens_on")}],
+        **{k: v for k, v in out.items() if k not in ("found", "widget_type", "detail")},
+    }
+
+
 class ExtractJobsRequest(BaseModel):
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
