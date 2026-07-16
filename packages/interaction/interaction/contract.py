@@ -58,17 +58,32 @@ class Intent(str, Enum):
     model has to learn, so every verb added here is a verb L4 must distinguish.
     """
 
-    SET_TEXT = "set_text"              # field, value
+    SET_TEXT = "set_text"              # field, value  (value="" IS the clear case)
     SELECT_OPTION = "select_option"    # field, value
     SET_DATE = "set_date"              # field, month, year, [day]
     CHECK_GROUP = "check_group"        # field, values[]
     UPLOAD = "upload"                  # field, path
     CLICK = "click"                    # control (semantic name)
+    SCROLL = "scroll"                  # direction/amount — see the note below
     SUBMIT = "submit"                  # form
     DESCRIBE = "describe"              # field -> the widget's own account of itself
     SCAN_REQUIRED = "scan_required"    # form -> what's required AND unanswered
     RESOLVE_ANSWER = "resolve_answer"  # question + options + canonical -> this widget's word
     PROBE = "probe"                    # DISCOVERY ONLY — raw JS. See the docstring below.
+
+
+# SCROLL is not in docs/PLAN_interaction_api.md §3, and it is arguably a MECHANISM detail
+# rather than a semantic goal — you don't intend to scroll, you intend to click something
+# and the API scrolls it into view (driver._element_act already does exactly that). It is
+# here anyway because pretending otherwise creates an unjournalable action: `scroll` is in
+# the frozen ActionId enum, the loop emits it, and the 2026-07-15 drive used it constantly
+# ("scroll-then-click the visible button"). A verb the system really emits and the
+# vocabulary can't express is a hole in the corpus, not a purity win.
+#
+# There is deliberately NO `clear` intent even though `clear:92` is the event log's second
+# most common action: clearing IS set_text with an empty value. The `actions` column keeps
+# the primitive, so nothing is lost — this is the Intent/ActionId altitude split doing its
+# job rather than the vocabulary drifting down to the primitive layer.
 
 
 # PROBE is the deliberate hole in the closed vocabulary, and it stays forever: a closed
@@ -95,13 +110,28 @@ class Outcome(str, Enum):
     NOT_COMMITTED = "not_committed"  # staged, commit failed -> footer? navigation?
     NO_OPTION = "no_option"          # vocabulary miss -> /resolve_answer
     BLOCKED = "blocked"              # captcha / challenge / session -> escalate, never solve
+    COMMITTED_UNCONFIRMED = "committed_unconfirmed"   # fired; this layer cannot see the result
     ERROR = "error"                  # unexpected exception — NOT a protocol outcome
 
-# ERROR is not in docs/PLAN_interaction_api.md §6, and it earned its place while wiring
-# this up: every endpoint today ends in `except Exception: return {"ok": False, "detail": str(exc)}`,
-# which maps to none of the eight protocol outcomes. Folding a websocket drop into
-# `not_found` would be the same lie the taxonomy exists to prevent — a mechanism failure
-# would read as a stale recipe and send us re-mapping selectors that were fine.
+# Two members are NOT in docs/PLAN_interaction_api.md §6. Both earned their place by being
+# implemented rather than designed, which is the promotion rule working as intended:
+#
+# ERROR — every endpoint today ends in `except Exception: return {"ok": False, "detail": ...}`,
+#   which maps to none of the eight protocol outcomes. Folding a websocket drop into
+#   `not_found` would be the same lie the taxonomy exists to prevent: a mechanism failure
+#   would read as a stale recipe and send us re-mapping selectors that were fine.
+#
+# COMMITTED_UNCONFIRMED — the plan's §6 assumes every endpoint CAN verify. The staged-commit
+#   popup proves otherwise: clicking the footer's Update navigates, which tears down the very
+#   execution context that would observe the result (_POPUP_SELECT_JS says so itself —
+#   "THE COMMIT DESTROYS ITS OWN OBSERVER … CONFIRM FROM OUTSIDE"). Neither existing member is
+#   honest there. `ok` is a silent success — if the commit quietly failed the caller would see
+#   "success", which is precisely the §6 test for a wrong fallback. `not_committed` is the
+#   opposite lie: a false negative makes a caller re-fire a commit that already worked, and a
+#   double-fired commit is a double submit. So the third state is real and gets a name.
+#   Caller's move: confirm from OUTSIDE the page (as /set_distance does via _read_radius —
+#   "the URL is CONFIRMATION, never the mechanism"). `ok` is derived as `outcome == OK`, so
+#   this correctly does NOT read as success.
 
 #: Outcomes that mean "the page is not in the state the caller assumed" — i.e. re-observe
 #: before retrying, don't just try harder.
@@ -163,6 +193,7 @@ _EXPANSIONS: dict[Intent, tuple[str, ...]] = {
     Intent.CHECK_GROUP: ("click",),                  # one click per value
     Intent.UPLOAD: ("upload",),
     Intent.CLICK: ("click",),
+    Intent.SCROLL: ("scroll",),
     Intent.SUBMIT: ("submit",),
     Intent.DESCRIBE: (),                             # read-only
     Intent.SCAN_REQUIRED: (),                        # read-only
@@ -177,6 +208,32 @@ def intent_expands_to(intent: Intent | str) -> tuple[str, ...]:
         return _EXPANSIONS[Intent(intent)]
     except (KeyError, ValueError):
         return ()
+
+
+#: The reverse bridge: which Intent best describes a bare ActionId primitive.
+#: Needed because `/execute` is TIER 1 and polymorphic — it takes an `action_id`, not an
+#: intent — yet its rows must still join to the intent vocabulary or the corpus splits in
+#: two. Total over the driver's seven actions (driver.py:26); `clear` folds into SET_TEXT
+#: because clearing IS setting empty, and the `actions` column keeps the primitive.
+_ACTION_TO_INTENT: dict[str, Intent] = {
+    "click": Intent.CLICK,
+    "type": Intent.SET_TEXT,
+    "clear": Intent.SET_TEXT,
+    "select": Intent.SELECT_OPTION,
+    "scroll": Intent.SCROLL,
+    "submit": Intent.SUBMIT,
+    "upload": Intent.UPLOAD,
+}
+
+
+def intent_for_action(action_id: str) -> Intent:
+    """The Intent a bare ActionId primitive is journaled under. Unknown -> PROBE.
+
+    Unknown routing to PROBE is deliberate: an action_id we don't recognise is, by
+    definition, something being tried for the first time — which is what PROBE means, and
+    it lands in the corpus as discovery to be promoted rather than as a silent mystery.
+    """
+    return _ACTION_TO_INTENT.get((action_id or "").strip().lower(), Intent.PROBE)
 
 
 # --- Secrets ------------------------------------------------------------------------

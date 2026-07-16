@@ -10,8 +10,11 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from interaction.contract import Intent, Outcome, WidgetType, intent_for_action
+
 from app.artifacts import ARTIFACTS_DIR, SCREENSHOTS_DIR, write_observation_artifact
 from app.event_log import log_event as _log_event
+from app.intent_api import journaled
 from app.main import observe_live_capture
 from app.observer.ax_proposer import MODEL_VERSION as AX_MODEL_VERSION
 from app.observer.ax_proposer import AXProposerStats, propose_ax_candidates
@@ -207,32 +210,54 @@ async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab
 
 
 @app.post("/execute")
+@journaled(lambda body: intent_for_action(body.action_id))
 async def execute_action(body: ExecuteRequest):
-    """INTERIM EXECUTOR (v1): perform one resolved action against the live page via the raw-CDP
-    DirectDriver. Actions: click | type | select | clear | upload. When `target_name` is given, the
-    node is RE-RESOLVED from a fresh AX scan at act time (immune to node-id staleness); otherwise
-    `backend_node_id` is used. `files` (absolute paths) drive an `upload` onto a file input. Returns
-    the ExecResult. Best-effort; never raises into the caller."""
+    """TIER 1 PRIMITIVE: perform one resolved action against the live page via raw CDP.
+
+    Actions: click | type | select | scroll | clear | submit | upload. When `target_name` is
+    given the node is RE-RESOLVED from a fresh AX scan at act time (immune to node-id
+    staleness); otherwise `backend_node_id`, then `selector`. `files` (absolute paths) drive
+    an `upload` onto a file input.
+
+    ON WHAT `ok` MEANS HERE — and it is NOT what it means at tier 2. This endpoint's
+    `Outcome.OK` means THE MECHANISM COMPLETED: the node resolved and CDP dispatched without
+    throwing. It does NOT mean the page accepted the action. `DirectDriver.move_and_act`
+    (driver.py:247) returns `ok=True` on any non-exceptional path — it never reads the
+    result back, and `.click()` on a detached or 0x0 node no-ops silently (the same trap as
+    Indeed's hidden decoy cards). Semantic verification is the PROTOCOL tier's job:
+    /select_option verifies at the widget's own `value_read_at`. A tier-1 caller that needs
+    "did it take?" must ask tier 2, not this.
+    """
     from app.executor.driver import ActionRequest, get_driver
 
     node_id = body.backend_node_id
     note = ""
+    addressed_by = "backend_node_id" if node_id is not None else "bbox"
     if body.target_name:
+        addressed_by = "role_name"
         fresh = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
                                        body.target_role, body.target_name)
         if fresh is not None:
             node_id, note = fresh, f"re-resolved {body.target_name!r} -> node {fresh}"
         elif node_id is None:
-            return {"ok": False, "driver": body.driver or "direct", "action_id": body.action_id,
+            # Previously a silent return: no event, no row. This is the single most useful
+            # row in the corpus — it says the recipe is stale — and it was the one we never
+            # wrote.
+            return {"outcome": Outcome.NOT_FOUND, "addressed_by": addressed_by,
+                    "target": f"{body.target_role or '*'}:{body.target_name}",
+                    "driver": body.driver or "direct", "action_id": body.action_id,
                     "css_point": None,
                     "detail": f"target not found by name: {body.target_name!r} (role={body.target_role})"}
     elif body.selector:
+        addressed_by = "selector"
         fresh = await _resolve_node_by_selector(body.browser_url, body.tab_id, body.tab_url, body.selector)
         if fresh is not None:
             node_id, note = fresh, f"re-resolved {body.selector!r} -> node {fresh}"
         elif node_id is None:
-            return {"ok": False, "driver": body.driver or "direct", "action_id": body.action_id,
-                    "css_point": None, "detail": f"target not found by selector: {body.selector!r}"}
+            return {"outcome": Outcome.NOT_FOUND, "addressed_by": addressed_by,
+                    "target": body.selector, "driver": body.driver or "direct",
+                    "action_id": body.action_id, "css_point": None,
+                    "detail": f"target not found by selector: {body.selector!r}"}
 
     driver = get_driver(body.driver)
     req = ActionRequest(
@@ -245,8 +270,16 @@ async def execute_action(body: ExecuteRequest):
     _log_event("drive", f"{body.action_id} {_tgt}".strip()[:90],
                detail=(f"{'ok' if result.ok else 'FAIL'} · {body.tab_url or ''}"), domain=body.tab_url)
     return {
-        "ok": result.ok, "driver": result.driver, "action_id": result.action_id,
-        "css_point": result.css_point, "detail": (note + ("; " if note and result.detail else "") + result.detail),
+        # A driver ok=False got here by catching an exception (driver.py:245), so it is a
+        # mechanism failure — ERROR, not a protocol outcome.
+        "outcome": Outcome.OK if result.ok else Outcome.ERROR,
+        "addressed_by": addressed_by, "target": _tgt or None,
+        "actions": [result.action_id],
+        # record_only returns ok=True while executing nothing (record_only.py:54). Without
+        # this the corpus cannot tell a rehearsal from a performance — the event log can't.
+        "executed": result.driver != "record_only",
+        "driver": result.driver, "action_id": result.action_id, "css_point": result.css_point,
+        "detail": (note + ("; " if note and result.detail else "") + result.detail),
     }
 
 
@@ -308,95 +341,154 @@ async def _trusted_click(cdp, x: float, y: float) -> None:
 
 
 @app.post("/select_prompt")
+@journaled(Intent.SELECT_OPTION)
 async def select_prompt(body: SelectPromptRequest):
     """Atomic Workday prompt-select: open the field → search → trusted-click the matching option.
-    Returns {ok, selected, detail}. Best-effort; never raises. Reusable across all Workday prompts."""
+
+    Reusable across all Workday prompts. Superseded by /select_option once
+    widget_type=prompt_hierarchical dispatches here — kept until then because it is the only
+    thing that drives a Workday prompt, and it works.
+    """
     import asyncio
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
-    try:
-        node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
-                                         body.field_role, body.field_name)
-        if node_id is None:
-            return {"ok": False, "detail": f"prompt field not found: {body.field_name!r}"}
-        # 1. OPEN the prompt via the proven driver node-click (same path /execute uses) — a
-        # trusted-mouse-at-box-center did NOT reliably open Workday prompt popups.
-        from app.executor.driver import ActionRequest, get_driver
-        await get_driver("direct").move_and_act(
-            browser_url=body.browser_url,
-            request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=node_id),
-            tab_id=body.tab_id, tab_url=body.tab_url)
-        await asyncio.sleep(max(0.5, min(body.settle_seconds, 4.0)))
-        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
-        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
-            cdp = _CDPSession(ws)
-            await cdp.send("Page.enable", {})
-            # 2. type the value into the visible searchBox (scoped to the open popup)
-            sb = (await cdp.send("Runtime.evaluate", {"expression": _PROMPT_SEARCHBOX_JS,
-                                                      "returnByValue": True})).get("result", {}).get("value") or {}
-            if sb.get("found"):
-                await _trusted_click(cdp, sb["x"], sb["y"])   # focus the searchBox → it's activeElement
-                await asyncio.sleep(0.2)
-                # TRUSTED per-char key events — Workday's prompt search FETCHES results server-side on
-                # real keystrokes; a programmatic value-set (or insertText) does NOT trigger the fetch,
-                # so nothing appears. Clear first, then type each char with keyDown(text)+keyUp.
-                await cdp.send("Runtime.evaluate", {"expression":
-                    "(()=>{const el=document.activeElement; if(el&&el.value){el.value='';"
-                    "el.dispatchEvent(new Event('input',{bubbles:true}));}})()"})
-                for ch in body.value:
-                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch,
-                                                              "key": ch, "unmodifiedText": ch})
-                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
-                    await asyncio.sleep(0.05)
-                await asyncio.sleep(1.3)   # Workday's debounced search fetch
-        # 3. resolve the option by ACCESSIBLE NAME and NATIVE-click it. Coordinate clicks mis-fire on
-        # long/virtualized lists (picked "American Samoa" for "New Hampshire"); native node-click is the
-        # reliable primitive. No option found here usually means a stale session (refresh first).
-        opt_node = None
-        for _ in range(6):
-            opt_node = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url, None, body.value)
-            if opt_node is not None:
-                break
-            await asyncio.sleep(0.4)
-        if opt_node is None:
-            return {"ok": False, "detail": f"option {body.value!r} not found "
-                    f"(searchBox={'yes' if sb.get('found') else 'no'}; refresh if the session is stale)"}
-        await get_driver("direct").move_and_act(
-            browser_url=body.browser_url,
-            request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=opt_node),
-            tab_id=body.tab_id, tab_url=body.tab_url)
+
+    from app.executor.driver import ActionRequest, get_driver
+
+    # No outer try/except: @journaled catches and journals as Outcome.ERROR. A local catch
+    # would swallow the row — which is how a broken prompt used to surface as a bare
+    # {"ok": false} that taught the system nothing.
+    common = {"addressed_by": "role_name",
+              "target": f"{body.field_role or '*'}:{body.field_name}",
+              "widget_type": WidgetType.PROMPT_HIERARCHICAL.value}
+    steps: list[dict] = []
+
+    node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
+                                     body.field_role, body.field_name)
+    steps.append({"step": "resolve", "field": body.field_name, "node": node_id})
+    if node_id is None:
+        return {**common, "outcome": Outcome.NOT_FOUND, "steps": steps,
+                "detail": f"prompt field not found: {body.field_name!r}"}
+
+    # 1. OPEN the prompt via the proven driver node-click (same path /execute uses) — a
+    # trusted-mouse-at-box-center did NOT reliably open Workday prompt popups.
+    await get_driver("direct").move_and_act(
+        browser_url=body.browser_url,
+        request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=node_id),
+        tab_id=body.tab_id, tab_url=body.tab_url)
+    await asyncio.sleep(max(0.5, min(body.settle_seconds, 4.0)))
+
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        await cdp.send("Page.enable", {})
+        # 2. type the value into the visible searchBox (scoped to the open popup)
+        sb = (await cdp.send("Runtime.evaluate", {"expression": _PROMPT_SEARCHBOX_JS,
+                                                  "returnByValue": True})).get("result", {}).get("value") or {}
+        steps.append({"step": "open", "search_box": bool(sb.get("found"))})
+        if sb.get("found"):
+            await _trusted_click(cdp, sb["x"], sb["y"])   # focus the searchBox → it's activeElement
+            await asyncio.sleep(0.2)
+            # TRUSTED per-char key events — Workday's prompt search FETCHES results server-side on
+            # real keystrokes; a programmatic value-set (or insertText) does NOT trigger the fetch,
+            # so nothing appears. Clear first, then type each char with keyDown(text)+keyUp.
+            await cdp.send("Runtime.evaluate", {"expression":
+                "(()=>{const el=document.activeElement; if(el&&el.value){el.value='';"
+                "el.dispatchEvent(new Event('input',{bubbles:true}));}})()"})
+            for ch in body.value:
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch,
+                                                          "key": ch, "unmodifiedText": ch})
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
+                await asyncio.sleep(0.05)
+            await asyncio.sleep(1.3)   # Workday's debounced search fetch
+
+    # 3. resolve the option by ACCESSIBLE NAME and NATIVE-click it. Coordinate clicks mis-fire on
+    # long/virtualized lists (picked "American Samoa" for "New Hampshire"); native node-click is the
+    # reliable primitive. No option found here usually means a stale session (refresh first).
+    opt_node = None
+    for _ in range(6):
+        opt_node = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url, None, body.value)
+        if opt_node is not None:
+            break
         await asyncio.sleep(0.4)
-        _log_event("drive", f"prompt-select '{body.field_name}' <- {body.value}",
-                   detail=f"searchBox={'yes' if sb.get('found') else 'no'}", domain=body.tab_url)
-        return {"ok": True, "selected": body.value, "detail": f"searchBox={'yes' if sb.get('found') else 'no'}"}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("select_prompt failed: %s", exc)
-        return {"ok": False, "detail": str(exc)}
+    steps.append({"step": "select", "option": body.value, "node": opt_node})
+    if opt_node is None:
+        # The searchBox flag is the diagnostic: found=no means the popup never opened
+        # (not_opened); found=yes means it opened and the value isn't in the list (no_option,
+        # which is a vocabulary miss -> /resolve_answer). Collapsing both into one failure is
+        # what used to make this endpoint's errors un-actionable.
+        return {**common, "steps": steps,
+                "outcome": Outcome.NO_OPTION if sb.get("found") else Outcome.NOT_OPENED,
+                "detail": f"option {body.value!r} not found "
+                          f"(searchBox={'yes' if sb.get('found') else 'no'}; "
+                          f"refresh if the session is stale)"}
+
+    await get_driver("direct").move_and_act(
+        browser_url=body.browser_url,
+        request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=opt_node),
+        tab_id=body.tab_id, tab_url=body.tab_url)
+    await asyncio.sleep(0.4)
+    _log_event("drive", f"prompt-select '{body.field_name}' <- {body.value}",
+               detail=f"searchBox={'yes' if sb.get('found') else 'no'}", domain=body.tab_url)
+    # A Workday prompt applies on select (no footer), and the option node resolving by
+    # accessible name after the search IS the staged confirmation.
+    return {**common, "outcome": Outcome.OK, "steps": steps, "selected": body.value,
+            "detail": f"searchBox={'yes' if sb.get('found') else 'no'}"}
 
 
-class EvalRequest(BaseModel):
-    """DEBUG: run a JS expression in the tab and return its value. For building/tuning actions (e.g.
-    inspecting a Workday prompt popup). Local dev tool — the MCP already fully drives the browser."""
+class ProbeRequest(BaseModel):
+    """DISCOVERY ONLY: run a JS expression in the tab and return its value.
+
+    `note` is required and is the point of the endpoint: it records WHAT WE WERE TRYING TO
+    LEARN, which is the part of a probe worth keeping. The expression itself is the artifact
+    of a question; the question is the training signal.
+    """
     browser_url: str = "http://127.0.0.1:9222"
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
     expression: str
+    note: str                  # e.g. "what shape is Greenhouse's 'How did you hear' widget?"
+    ats: Optional[str] = None
+    field: Optional[str] = None
 
 
-@app.post("/eval")
-async def eval_js(body: EvalRequest):
+@app.post("/probe")
+@journaled(Intent.PROBE)
+async def probe(body: ProbeRequest):
+    """The deliberate hole in the closed vocabulary — and it stays forever.
+
+    A closed vocabulary cannot express the novel, and discovery meets novel contracts by
+    definition. The discipline is not "never script"; it is "scripting is DISCOVERY, and
+    discovery ENDS IN AN ENDPOINT". This is `/eval` with the one thing `/eval` lacked: it
+    leaves a trace. The ~25 /eval scripts written on 2026-07-15 appear nowhere — `eval:0` in
+    the event log against `type:137` — so the knowledge in them (how a react-select commits,
+    how to scope options, how to read a month) lived only in one context window and died with
+    the session.
+
+    Journaled as `kind: probe`, which makes `probe_share` in journal.summarize() a real
+    metric: it should FALL as protocols land. A rising probe share means we are re-deriving
+    contracts we already own.
+    """
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
-    try:
-        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
-        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
-            cdp = _CDPSession(ws)
-            res = await cdp.send("Runtime.evaluate", {"expression": body.expression,
-                                                      "returnByValue": True, "awaitPromise": True})
-        return {"ok": True, "value": (res.get("result") or {}).get("value"),
-                "exception": res.get("exceptionDetails")}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "detail": str(exc)}
+
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        res = await cdp.send("Runtime.evaluate", {"expression": body.expression,
+                                                  "returnByValue": True, "awaitPromise": True})
+    exc = res.get("exceptionDetails")
+    return {
+        # A probe that THREW still ran — the outcome is about the probe, not the page. But a
+        # thrown probe taught us nothing, so it is not OK.
+        "outcome": Outcome.ERROR if exc else Outcome.OK,
+        "detail": body.note[:400],
+        "value": (res.get("result") or {}).get("value"),
+        "exception": exc,
+        # The expression rides in `steps` so the corpus keeps the actual question asked —
+        # that is what a future session greps when the same widget shows up again.
+        "steps": [{"step": "probe", "expression": body.expression[:600]}],
+    }
 
 
 class ExtractJobsRequest(BaseModel):
@@ -926,6 +1018,40 @@ _POPUP_SELECT_JS = r"""
 """
 
 
+def _popup_outcome(res: dict) -> Outcome:
+    """Map _POPUP_SELECT_JS's result onto the outcome taxonomy.
+
+    The JS already knows precisely which step broke — it has always said so in `detail` and
+    thrown the information away at the HTTP boundary, where `ok:false` flattened six distinct
+    failures into one bit. This function is that information being kept.
+
+    The `commit clicked` case is the interesting one: the JS returns ok:true there, but its
+    own comment says the commit navigates and destroys the context that would confirm it. So
+    it maps to COMMITTED_UNCONFIRMED, not OK — see contract.Outcome.
+    """
+    detail = (res.get("detail") or "").lower()
+    if not res.get("ok"):
+        if "no opener matching" in detail:
+            return Outcome.NOT_FOUND          # the recipe's selector is stale
+        if "popup did not open" in detail:
+            return Outcome.NOT_OPENED
+        if "no node matches option_selector" in detail:
+            # It opened, but nothing matches the option selector — the widget is not the
+            # shape we assumed (it may render plain divs). The caller's move is not_opened's
+            # ("this widget works differently than you think"), which is why it lands here
+            # rather than on no_option: /resolve_answer cannot help with a shape mismatch.
+            return Outcome.NOT_OPENED
+        if "would not stage" in detail:
+            return Outcome.NOT_STAGED
+        if "no option" in detail:
+            return Outcome.NO_OPTION          # a genuine vocabulary miss -> /resolve_answer
+        return Outcome.ERROR
+    # ok:true — but only ONE of the two success paths is actually verified.
+    if "applies on select" in detail:
+        return Outcome.OK                     # staged-confirm ran: aria-selected / opener label
+    return Outcome.COMMITTED_UNCONFIRMED      # "commit clicked" / "navigated (commit fired)"
+
+
 class WidgetSelectRequest(BaseModel):
     """Drive ANY staged-commit / listbox popup by its own semantics. The reusable widget layer:
     opener → (aria-controls) popup → option → confirm → optional footer commit."""
@@ -940,37 +1066,49 @@ class WidgetSelectRequest(BaseModel):
 
 
 @app.post("/widget_select")
+@journaled(Intent.SELECT_OPTION)
 async def widget_select(body: WidgetSelectRequest):
     """Select an option in a popup widget, confirming each step. One layer for Indeed's distance
     pill, Workday's dropdowns, and the next unknown-ATS filter — the site-specific part is just the
-    selectors, which belong in that ATS's recipe. Returns {ok, detail, log} where log is the
-    per-step trace (precheck → open → select → commit)."""
+    selectors, which belong in that ATS's recipe.
+
+    The per-step trace (precheck → open → select → commit) is now JOURNALED rather than
+    returned-and-forgotten. That trace is also exactly the intermediate-state vocabulary L3
+    lacks (`popup_open`, `option_staged`) — which is why the loop cannot currently verify its
+    own progress through a multi-step widget. It has been produced on every call for weeks and
+    written down nowhere.
+    """
     import asyncio
 
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
-    try:
-        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
-        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
-            cdp = _CDPSession(ws)
-            await cdp.send("Page.enable", {})
-            await cdp.send("Runtime.enable", {})
-            if body.bring_to_front:
-                await cdp.send("Page.bringToFront", {})
-                await asyncio.sleep(0.3)
-            res = await _popup_select(cdp, {
-                "opener_selector": body.opener_selector,
-                "option_selector": body.option_selector,
-                "option_label": body.option_label,
-                "commit_names": body.commit_names,
-            })
-        _log_event("drive", f"widget_select {body.option_label}",
-                   detail=f"{'ok' if res.get('ok') else 'FAILED'} · {res.get('detail','')}",
-                   domain=(body.tab_url or ""))
-        return res
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("widget_select failed: %s", exc)
-        return {"ok": False, "detail": str(exc), "log": []}
+
+    # NB: no try/except — @journaled catches, journals as Outcome.ERROR, and returns the
+    # error response. A local `except: return {"ok": False}` here would swallow the row.
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        await cdp.send("Page.enable", {})
+        await cdp.send("Runtime.enable", {})
+        if body.bring_to_front:
+            await cdp.send("Page.bringToFront", {})
+            await asyncio.sleep(0.3)
+        res = await _popup_select(cdp, {
+            "opener_selector": body.opener_selector,
+            "option_selector": body.option_selector,
+            "option_label": body.option_label,
+            "commit_names": body.commit_names,
+        })
+    _log_event("drive", f"widget_select {body.option_label}",
+               detail=f"{'ok' if res.get('ok') else 'FAILED'} · {res.get('detail','')}",
+               domain=(body.tab_url or ""))
+    return {
+        "outcome": _popup_outcome(res),
+        "addressed_by": "selector", "target": body.opener_selector,
+        "steps": res.get("log") or [],
+        "detail": res.get("detail", ""),
+        **({"options": res["options"]} if "options" in res else {}),
+    }
 
 
 DISTANCE_OPTIONS = [0, 5, 10, 15, 25, 35, 50, 100]     # Indeed's own ladder, in miles

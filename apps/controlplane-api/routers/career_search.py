@@ -81,19 +81,32 @@ async def _create_appvault_account(body, username: str, password: str) -> dict[s
     cap = settings.capture_server_url
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            async def _eval(expr: str):
-                return (await client.post(f"{cap}/eval", json={**base, "expression": expr})).json().get("value")
+            async def _probe(expr: str, note: str):
+                """A page-state read via /probe (was /eval, which left no trace).
+
+                These reads are journaled as PROBE, which is honest and slightly
+                uncomfortable: they are recurring production assertions, not discovery, so
+                they inflate `probe_share` — the metric that is supposed to fall as
+                protocols land. That is the metric working. Each one is a proven check
+                living as inline JS in a caller instead of as an endpoint (PRINCIPLES §8),
+                and `/scan_required` should absorb them.
+                """
+                return (await client.post(f"{cap}/probe", json={
+                    **base, "expression": expr, "note": note, "ats": "appvault",
+                })).json().get("value")
 
             # Confirm the Create-Account form is up (confirm-password + Continue present).
-            on_form = await _eval("!!document.querySelector('#outlined-adornment-re-password') "
-                                  "&& /Continue/.test(document.body.innerText)")
+            on_form = await _probe("!!document.querySelector('#outlined-adornment-re-password') "
+                                   "&& /Continue/.test(document.body.innerText)",
+                                   "is the AppVault create-account form up?")
             if not on_form:
                 event_log.log_event("account", f"AppVault create skipped: no form for {body.company}",
                                     domain="career_search")
                 return {"ok": False, "status": "no_create_form",
                         "detail": "AppVault 'Create an Account' form not visible (need Email/Password/confirm/"
                                   "First/Last + Continue). Open it on the AppVault tab first, then press Create account."}
-            tagged = await _eval(_APPVAULT_TAG_JS) or {}
+            tagged = await _probe(_APPVAULT_TAG_JS,
+                                  "tag AppVault email/first/last by floating-label text") or {}
             # Fail FAST if a label didn't tag: [data-av=…] would then match nothing and the fill would
             # no-op, surfacing later as a vague "didn't advance" — i.e. a SELECTOR-layer break wearing
             # a validation-layer costume. Name the layer here instead of paying to re-diagnose it.
@@ -135,9 +148,10 @@ async def _create_appvault_account(body, username: str, password: str) -> dict[s
             # that didn't validate, terms not agreed) would falsely mark the account 'created'. Success
             # = the create form is gone OR we advanced to email-verification.
             await asyncio.sleep(2.0)
-            advanced = await _eval(
+            advanced = await _probe(
                 "!document.querySelector('#outlined-adornment-re-password') "
-                "|| /verif|confirm your email|check your email|code (was |has been )?sent/i.test(document.body.innerText)")
+                "|| /verif|confirm your email|check your email|code (was |has been )?sent/i.test(document.body.innerText)",
+                "did the AppVault create-account form actually submit?")
         if not advanced:
             event_log.log_event("account", f"AppVault create did NOT advance: {body.company}",
                                 domain="career_search", detail="Continue no-op — account left pending")
@@ -331,11 +345,12 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
             # mark the account 'active' purely because the click returned — so a stalled form (bad
             # password, unticked ack) would leave a phantom 'active' account with no login behind it.
             await asyncio.sleep(2.0)
-            gone = (await client.post(f"{settings.capture_server_url}/eval", json={
+            gone = (await client.post(f"{settings.capture_server_url}/probe", json={
                 "browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id,
                 "expression": ("(()=>{const f=document.querySelector('[data-automation-id=password]');"
                                "const t=document.body.innerText||'';"
                                "return !f || /verif|check your email|candidate home|my applications/i.test(t);})()"),
+                "note": "did the Workday create-account form actually submit?", "ats": "workday",
             })).json().get("value")
         if not gone:
             event_log.log_event("account", f"Create-account did NOT advance: {body.company} · {body.ats_id}",
