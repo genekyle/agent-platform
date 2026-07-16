@@ -478,6 +478,17 @@ GREENHOUSE_LESSONS = {
                      "(#onetrust-banner-sdk). Decline non-essential: MANAGE PREFERENCES "
                      "(#onetrust-pc-btn-handler) -> 'Reject All' (.ot-pc-refuse-all-handler). The "
                      "banner itself offers only ACCEPT, so the reject lives one level in.",
+    "required_detection": "Do NOT trust the label asterisk or aria-required — both go STALE. KKR's "
+                          "work End date keeps '*' and aria-required='true' after 'Current role' is "
+                          "ticked, but the input is `disabled` => not required. Check `disabled` first. "
+                          "Conversely the conditional 'If yes, provide details' fields keep "
+                          "aria-required='true' even when the parent answer is No: they still need "
+                          "filling — 'N/A' is the form's own stated convention for not-applicable.",
+    "checkbox_groups": "Some REQUIRED questions are checkbox groups, not comboboxes, and a scan that "
+                       "only looks at inputs/selects MISSES them entirely (we missed restrictions + "
+                       "languages on the first pass). Group them by the id prefix before '[]' "
+                       "(question_<id>[]_<optid>) and treat 0-checked as unanswered. Match option "
+                       "labels EXACTLY — 'No' must not match 'Yes, non-compete'.",
     "custom_questions": "Employer-specific questions are appended per posting — they are the part that "
                         "does NOT generalize. Read them live; the rest of the form does generalize. "
                         "They render as #question_<id> (comboboxes carry aria-expanded; each has a "
