@@ -778,151 +778,6 @@ async def autofill_form(body: AutofillFormRequest):
         return {"ok": False, "detail": str(exc), "report": [], "combos": []}
 
 
-class ScanFormRequest(BaseModel):
-    browser_url: str = "http://127.0.0.1:9222"
-    tab_url: Optional[str] = "smartapply"
-
-
-# READ-ONLY form scanner (Layer 1 observation). It reports each field's required/filled/valid
-# and acts on NOTHING, so the state store's invariant gate can refuse to mark a form subtask
-# done while a required field is empty/invalid. required = required attr / aria-required / a
-# "*" or "required" in the label; filled = non-empty value / a checked radio-or-checkbox /
-# a non-placeholder select; valid = not aria-invalid and not :invalid.
-#
-# It must EARN ITS PLACE on the live page, so it is multi-strategy + self-diagnosing: it tries
-# Indeed's question-item container first, falls back to generic form groupings, then to flat
-# controls, and ALWAYS returns a `diagnostics` block (url, strategy that matched, container
-# count, a control inventory, sample class names). A live run is therefore never a silent
-# "0 fields" — when a selector misses we can see the real DOM shape and fix it.
-_SCAN_FORM_JS = r"""
-() => {
-  const txt = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g,' ').trim();
-  const vis = el => { try { return el.offsetParent !== null || el.getClientRects().length > 0; } catch (e) { return true; } };
-  const isReq = (el, c) => {
-    if (el.required || el.getAttribute('aria-required') === 'true') return true;
-    const lbl = txt(c.querySelector('label,legend')) || txt(c);
-    return /\*/.test(lbl) || /\brequired\b/i.test(lbl);
-  };
-  const isInvalid = el => el.getAttribute('aria-invalid') === 'true'
-    || (el.matches && (() => { try { return el.matches(':invalid'); } catch (e) { return false; } })());
-  const SEL = {
-    select: 'select', radio: '[role=radio],input[type=radio]', combobox: '[role=combobox]',
-    text: 'input[type=text],input[type=number],input[type=email],input[type=tel],input:not([type]),textarea',
-    checkbox: 'input[type=checkbox]',
-  };
-
-  function scan(containers) {
-    const fields = []; let idx = 0;
-    for (const c of containers) {
-      const q = txt(c).slice(0, 120) || '(unlabeled)';
-      const selects = [...c.querySelectorAll(SEL.select)].filter(vis);
-      const radios  = [...c.querySelectorAll(SEL.radio)].filter(vis);
-      const aria    = [...c.querySelectorAll(SEL.combobox)].filter(vis);
-      const texts   = [...c.querySelectorAll(SEL.text)].filter(vis);
-      const checks  = [...c.querySelectorAll(SEL.checkbox)].filter(vis);
-      if (!(selects.length || radios.length || aria.length || texts.length || checks.length)) continue;
-      // SELECTS: per-element (multi-field aware — the Country+State case).
-      for (const s of selects) fields.push({ field_id: 'f' + (idx++), label: q, kind: 'select',
-        required: isReq(s, c), filled: s.selectedIndex > 0 && s.value !== '',
-        valid: !isInvalid(s), value_preview: (s.value || '').slice(0, 40) });
-      // RADIOS: one logical field per container.
-      if (radios.length) {
-        const ck = radios.find(r => r.checked || r.getAttribute('aria-checked') === 'true');
-        fields.push({ field_id: 'f' + (idx++), label: q, kind: 'radio',
-          required: isReq(radios[0], c), filled: !!ck, valid: true,
-          value_preview: ck ? txt(ck.closest('label')).slice(0, 40) : '' });
-      }
-      for (const t of texts) fields.push({ field_id: 'f' + (idx++), label: q, kind: 'text',
-        required: isReq(t, c), filled: !!(t.value && t.value.trim()),
-        valid: !isInvalid(t), value_preview: (t.value || '').slice(0, 40) });
-      for (const a of aria) { const v = txt(a) || (a.value || '').trim();
-        fields.push({ field_id: 'f' + (idx++), label: q, kind: 'combobox',
-          required: isReq(a, c), filled: !!v && !/^select\b/i.test(v), valid: true,
-          value_preview: v.slice(0, 40) }); }
-      for (const ch of checks) fields.push({ field_id: 'f' + (idx++), label: q, kind: 'checkbox',
-        required: isReq(ch, c), filled: ch.checked, valid: true,
-        value_preview: ch.checked ? 'checked' : '' });
-    }
-    return fields;
-  }
-
-  const strategies = [
-    ['ia-questions',  '.ia-Questions-item,[class*=Questions-item]'],
-    ['fieldset/group', 'fieldset,[role=group],[role=radiogroup]'],
-    ['question-class', '[class*=question],[class*=Question],[data-testid*=question]'],
-  ];
-  let used = 'none', containers = [], fields = [];
-  for (const [name, sel] of strategies) {
-    containers = [...document.querySelectorAll(sel)].filter(vis);
-    if (containers.length) { const f = scan(containers); if (f.length) { used = name; fields = f; break; } }
-  }
-  // Last resort: enumerate visible controls and group by nearest plausible wrapper.
-  if (!fields.length) {
-    const all = [...document.querySelectorAll('select,input,textarea,[role=combobox],[role=radio]')].filter(vis);
-    const seen = new Set(); const pseudo = [];
-    for (const el of all) {
-      const c = el.closest('label,fieldset,[role=group],li,section,div') || el.parentElement || el;
-      if (!seen.has(c)) { seen.add(c); pseudo.push(c); }
-    }
-    fields = scan(pseudo);
-    used = fields.length ? 'flat-controls' : 'none';
-    containers = pseudo;
-  }
-
-  const inv = sel => document.querySelectorAll(sel).length;
-  const diagnostics = {
-    url: (location.href || '').slice(0, 140),
-    strategy: used,
-    container_count: containers.length,
-    controls: { select: inv(SEL.select), radio: inv(SEL.radio), text: inv(SEL.text),
-      checkbox: inv(SEL.checkbox), combobox: inv(SEL.combobox) },
-    sample_classes: [...document.querySelectorAll('[class*=Questions],[class*=question],fieldset')]
-      .slice(0, 5).map(e => (e.className || '').toString().slice(0, 70)),
-  };
-  return { fields, diagnostics };
-}
-"""
-
-
-# DEPRECATED — superseded by /scan_required. Do not add callers.
-#
-# The complaint (PLAN_interaction_api.md §0) is real and stands: on Workday this returns the
-# whole fieldset's text as EVERY field's label, so First/Middle/Last are indistinguishable.
-# It was abandoned mid-session on 2026-07-15 and hand-rolled around. /scan_required fixes
-# exactly that (per-control labelling: label[for] → aria-label → aria-labelledby → …) and
-# adds the two rules this one lacks: `disabled` beats a stale asterisk, and checkbox/radio
-# groups count.
-#
-# STILL WIRED, deliberately. Its two callers (main.py's apply_state + session_state) feed
-# `form_complete_gate` — the invariant that makes the model structurally unable to forget an
-# empty required field. Swapping a SAFETY GATE's input to a scanner that has never run on a
-# real page is precisely what PRINCIPLES §5 forbids ("validate heuristics against real pages
-# before trusting them" — written after `bframe present ≠ shown` burned us twice). If
-# /scan_required under-reports, the gate says `ok` on an incomplete form, which is worse than
-# the labelling bug it fixes.
-#
-# So the migration is gated on the live drive, not on this commit: run both on the same live
-# form, diff them, THEN rewire main.py:1390 and :1566 and delete this.
-@app.post("/scan_form")
-async def scan_form(body: ScanFormRequest):
-    """Read-only form scan: report each field's required/filled/valid (no writes), plus a
-    diagnostics block so a live run is never a silent "0 fields". The live source for the
-    state store's form_state + invariant gate."""
-    import websockets
-    from app.observer.ax_proposer import _CDPSession, _discover_target
-    try:
-        target = await _discover_target(body.browser_url, tab_id=None, tab_url=body.tab_url)
-        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
-            cdp = _CDPSession(ws)
-            r = await cdp.send("Runtime.evaluate", {
-                "expression": f"({_SCAN_FORM_JS})()", "returnByValue": True})
-            out = (r.get("result") or {}).get("value") or {"fields": [], "diagnostics": {}}
-        return {"ok": True, **out}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("scan_form failed: %s", exc)
-        return {"ok": False, "detail": str(exc), "fields": [], "diagnostics": {}}
-
-
 class JobDescriptionRequest(BaseModel):
     external_id: str                     # Indeed jk
     browser_url: str = "http://127.0.0.1:9222"
@@ -1355,12 +1210,22 @@ class ScanRequiredRequest(BaseModel):
 @app.post("/scan_required")
 @journaled(Intent.SCAN_REQUIRED)
 async def scan_required(body: ScanRequiredRequest):
-    """What is required AND unanswered — the honest replacement for /scan_form.
+    """The required fields that are NOT satisfied. The live source for form_complete_gate.
 
-    /scan_form reports the whole fieldset's text as every field's label on Workday, making
-    First/Middle/Last indistinguishable; it was abandoned mid-session and hand-rolled around.
-    This labels PER CONTROL (label[for] → aria-label → aria-labelledby → …), applies
-    `disabled` beats the asterisk, and counts checkbox/radio groups.
+    Replaced `/scan_form` (deleted 2026-07-16), which labelled every control with its
+    CONTAINER's text — so on Workday First/Middle/Last were indistinguishable, and on
+    Greenhouse 14 language checkboxes each became a separate required field. Measured on
+    KKR's live form: /scan_form reported 21 fields / 18 "required and unfilled" and would
+    have made this gate permanently un-passable, while missing ~16 real required fields it
+    never found containers for. This reported 1 — the truth.
+
+    Labels PER CONTROL (label[for] → aria-label → aria-labelledby → …), applies `disabled`
+    beats a stale asterisk, counts checkbox/radio groups, reads each widget at its OWN truth
+    (never `.value` on a react-select), and skips validation proxies the user cannot tab to.
+
+    "Unsatisfied", not merely "empty": a required field that is FILLED but INVALID is
+    reported too (with answered=true, valid=false), because the gate's rule is
+    `satisfied = (not required) or (filled and valid)`.
 
     Read-only. Returns [] when the form is complete, which is a real answer — the invariant
     gate's whole job is refusing to mark a form done while this is non-empty.

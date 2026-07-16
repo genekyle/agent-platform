@@ -24,6 +24,78 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-16 — `/scan_form` retired: the live diff found THREE bugs, and my own validation was self-confirming
+
+**What we believed.** `/scan_required` is better than `/scan_form` on paper (per-control labels,
+`disabled` beats a stale asterisk, checkbox groups counted), and the only open question was whether it
+MISSED anything before it could feed `form_complete_gate`. Ran both against KKR's live Greenhouse form
+(`gh_jid=5995076004`, the form in a cross-origin OOPIF addressed as its own CDP target).
+
+**What's actually true.** `/scan_form` is worse than "misleading on Workday" — it is unusable, and in
+both directions at once:
+
+- It reported **21 "fields", all "required", 18 "unfilled"** — but it labels every control with its
+  **container's text**, so the 14-checkbox `languages` group became **14 separate required fields all
+  named "Please indicate any languages…"**, 13 of them "empty" *even though the group is answered*
+  (one box ticked). Feeding that to `form_complete_gate` (`ok = not unsatisfied`) would have made the
+  gate **permanently un-passable on this form**.
+- Its `diagnostics.strategy` was `fieldset/group` with `container_count: 5` — so it never saw
+  Country, Location, School, Degree, Discipline, the 7 screening questions or the attestation.
+  **~16 real required fields, invisible**, while inventing 13 phantom ones.
+- `/scan_required` (after the three fixes below) reports **1**: the AI attestation. Ground truth: 30
+  visible+required, 2 `disabled`, 1 genuinely unanswered. It excludes the two disabled End-date fields
+  that keep their `*` **and** `aria-required` (the KKR trap) and omits both answered checkbox groups.
+
+**The three bugs the live run found — none of which a unit test would have.**
+
+1. **`closest('[class*=select__control], .select, [class*=field], div')` silently reads the wrong
+   node.** `closest` walks up to the NEAREST ancestor matching **any** branch, and `div` matches
+   almost immediately — landing *inside* the react-select control, **below** `singleValue`. So every
+   FILLED react-select read as empty. `/scan_required` reported **17 unanswered, of which 15 were
+   already answered.**
+2. **`[class*=singleValue]` does not exist until the widget is answered.** react-select renders a
+   placeholder when empty and only mounts `singleValue` on pick. So detecting a react-select *by*
+   `singleValue` fails on exactly the fields the scan returns. It fell through to `.value` — and
+   **react-select's `.value` holds transient search text**, so a half-typed field reads ANSWERED,
+   drops out of the list, and the gate passes an incomplete form. Latent only because nothing had
+   typed there yet. The tell that works on an unanswered field is `select__control` /
+   `aria-autocomplete=list`.
+3. **`opacity: 0` defeats an `offsetParent` + rect visibility check.** Greenhouse mounts a hidden
+   proxy input (`class*=requiredInput`, `tabIndex=-1`, `opacity:0`) purely so native validation
+   fires. It is `required`, unanswered, and `offsetParent`-visible with a 608×22 rect — a phantom
+   required question. This is the "hidden required twin" `GREENHOUSE_LESSONS` already warned about.
+   **Do not reach for `Element.checkVisibility({opacityProperty:true})`** — measured: it rejects the
+   proxy (good) *and* rejects `#country` and `#school--0` (fatal), because react-select's own search
+   input is `opacity:0` whenever the singleValue is showing. **Opacity does not separate them;
+   `tabIndex` does** (1 proxy at -1, all 29 real fields at 0). The rule generalises without being
+   site-specific: *a required control the user cannot TAB to is a validation proxy, not a question.*
+
+**The methodological lesson, which is the biggest one.** My first "ground truth" probe used the same
+`closest('…, div')` selector as `SCAN_REQUIRED_JS`. It agreed with the scanner **17/17**, and I read
+that perfect match as "zero misses". **They agreed because they were both wrong in the same way** — a
+self-confirming measurement. A validation written by the same hand, at the same time, with the same
+assumption, validates nothing. The disagreement only surfaced when the *fixed* scanner returned 2
+instead of 17 and forced a re-derivation from a different angle. **When a check and its oracle share
+an author, they share its blind spots — vary the method, not just the code.**
+
+**Also: two of MY OWN JS blocks had already drifted.** `DESCRIBE_WIDGET_JS` detected a react-select by
+`select__control` (right); `SCAN_REQUIRED_JS` by `singleValue` (wrong). Written an hour apart, same
+session, same app, same author. That is the exact failure the shared `interaction` package exists to
+prevent, reproduced inside one session. Encoded now in `apps/mcp/app/js_common.py` — `__vis`, `__txt`,
+`__isReactSelect`, `__isUserField`, `__invalid`, `__valueTruth` — injected into both blocks, so there
+is one definition of what a react-select is and where its truth lives.
+
+**Where it's encoded now.** `apps/mcp/app/js_common.py` (the tells); `protocols.py::SCAN_REQUIRED_JS`
+(uses them; also now reports FILLED-but-INVALID rows, because the gate's rule is
+`satisfied = (not required) or (filled and valid)` and reporting only unanswered fields would have
+silently dropped that blocker); `main.py::_scan_required_fields` (ONE adapter for both callers — they
+were byte-identical copies, and a fix landing in one and not its twin has bitten us three times);
+`test_scan_required_adapter.py` (the gate-verdict invariants, incl. `None` ≠ `[]` — a down capture
+server returning `[]` would read as "form complete" and unblock the gate). `/scan_form`,
+`ScanFormRequest` and `_SCAN_FORM_JS` are **deleted** (144 lines).
+
+---
+
 ## 2026-07-16 — The event log is NOT the flywheel: `eval:0` vs `type:137` was the wrong scoreboard
 
 **What we believed.** `PLAN_execution_api.md` §1(a) — the founding argument for the whole Interaction

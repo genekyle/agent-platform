@@ -24,6 +24,8 @@ from typing import Any, Optional
 
 from interaction.contract import Outcome
 
+from app.js_common import WIDGET_TELLS_JS
+
 # --- shared page-side helpers -------------------------------------------------------
 
 # Focus a node the way a real mousedown would. `.click()` DOES NOT FOCUS — a synthetic click
@@ -248,9 +250,11 @@ CHECK_GROUP_JS = r"""
 
 
 # --- the required-field scan --------------------------------------------------------
-# Replaces /scan_form, which is actively misleading: on Workday every field returns the whole
-# fieldset's text as its label, so First/Middle/Last are indistinguishable — it was abandoned
-# mid-session and hand-rolled instead.
+# Replaced /scan_form (deleted 2026-07-16), which labelled every control with its CONTAINER's
+# text — on Workday First/Middle/Last were indistinguishable; on Greenhouse each of 14 language
+# checkboxes became its own required field. Measured against KKR's live form: /scan_form said 21
+# fields / 18 "required and unfilled" (which would have made form_complete_gate permanently
+# un-passable) while never finding ~16 real required fields; this said 1, which was the truth.
 #
 # The two rules that make this one honest where that one wasn't:
 #   1. `disabled` BEATS the label asterisk and a stale aria-required. KKR's End date keeps
@@ -261,11 +265,8 @@ CHECK_GROUP_JS = r"""
 #      at inputs/selects. Group by id prefix before '[]'; 0-checked = unanswered.
 SCAN_REQUIRED_JS = r"""
 () => {
-  const vis = e => { try { const r = e.getBoundingClientRect();
-                           return e.offsetParent !== null && r.width > 0 && r.height > 0; }
-                     catch (x) { return false; } };
-  const txt = e => ((e && (e.innerText || e.textContent)) || '').replace(/\s+/g, ' ').trim();
-  const attr = (e, a) => (e && e.getAttribute ? e.getAttribute(a) : null);
+  __WIDGET_TELLS__
+  const vis = __vis, txt = __txt, attr = __attr;
 
   // Per-control label, NOT the container's whole text — that is exactly what makes
   // /scan_form useless on Workday (First/Middle/Last all report the fieldset's text).
@@ -283,9 +284,12 @@ SCAN_REQUIRED_JS = r"""
     return lbl ? txt(lbl) : '(unlabeled)';
   };
 
+  // __isUserField, not __vis: a required control the user cannot TAB to is a validation
+  // proxy, not a question. react-select mounts exactly such a proxy (opacity:0, tabIndex=-1)
+  // which a rect-based visibility check happily reports as a phantom required field.
   const singles = [...document.querySelectorAll(
     'input:not([type=checkbox]):not([type=radio]):not([type=hidden]), select, textarea, [role=combobox]'
-  )].filter(vis);
+  )].filter(__isUserField);
 
   const out = [];
   const seen = new Set();
@@ -299,21 +303,26 @@ SCAN_REQUIRED_JS = r"""
     else if (/\*/.test(label)) { required = true; via = 'label-asterisk'; }
     if (!required) continue;
 
-    // Answered? Read at the widget's own truth, not blindly at .value.
-    const wrap = el.closest('[class*=select__control], .select, [class*=field], div') || el.parentElement;
-    const sv = wrap && wrap.querySelector('[class*=singleValue]');
-    let answered, readAt;
-    if (sv !== null && sv !== undefined) { answered = !!txt(sv); readAt = '[class*=singleValue]'; }
-    else if (el.tagName === 'SELECT') { answered = el.selectedIndex > 0 && el.value !== ''; readAt = '.value'; }
-    else { answered = !!(el.value && String(el.value).trim()); readAt = '.value'; }
-    if (answered) continue;
+    // Answered? Ask the SHARED tell where this widget's truth lives — never guess .value.
+    // This used to detect a react-select by the presence of [class*=singleValue], which only
+    // MOUNTS once the widget is answered: so every react-select this scan returned (i.e. the
+    // unanswered ones, i.e. all of them) fell through to `.value`. Latent danger, not just a
+    // wrong label — react-select's .value holds transient search text, so a half-typed field
+    // would read ANSWERED, drop out of this list, and let form_complete_gate pass an
+    // incomplete form. Verified live on KKR 2026-07-16. See app/js_common.py.
+    const truth = __valueTruth(el);
+    const invalid = __invalid(el);
+    if (truth.answered && !invalid) continue;   // satisfied — nothing to report
 
     const id = el.id || label;
     if (seen.has(id)) continue;          // a hidden required TWIN is not a second question
     seen.add(id);
     out.push({field: label.slice(0, 90), selector: el.id ? '#' + el.id : null,
-              kind: el.tagName.toLowerCase(), required_via: via, value_read_at: readAt,
-              answered: false});
+              kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
+              required_via: via, value_read_at: truth.read_at,
+              // `answered` is NOT always false here: a FILLED-but-INVALID field is reported
+              // too, and the gate needs the distinction (reason "invalid" vs "empty").
+              answered: truth.answered, valid: !invalid, value_preview: truth.preview});
   }
 
   // rule 2 — checkbox groups, which the old scan missed entirely.
@@ -335,7 +344,7 @@ SCAN_REQUIRED_JS = r"""
     if (group.some(b => b.checked)) continue;      // 0 checked = unanswered
     out.push({field: label.slice(0, 90), selector: group[0].id ? '#' + group[0].id : null,
               kind: 'checkbox_group', required_via: 'group', value_read_at: 'checked',
-              answered: false});
+              answered: false, valid: true, value_preview: ''});
   }
 
   // Radio groups, same reasoning.
@@ -351,9 +360,15 @@ SCAN_REQUIRED_JS = r"""
     if (!req) continue;
     out.push({field: label.slice(0, 90), selector: group[0].id ? '#' + group[0].id : null,
               kind: 'radio_group', required_via: 'group', value_read_at: 'aria-checked',
-              answered: false});
+              answered: false, valid: true, value_preview: ''});
   }
 
   return {unanswered: out, url: (location.href || '').slice(0, 140)};
 }
 """
+
+# Inject the shared tells. A placeholder + replace (rather than an f-string) keeps the JS
+# above readable as JS — it has braces everywhere, and an f-string would need every one
+# doubled.
+SCAN_REQUIRED_JS = SCAN_REQUIRED_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
+assert "__WIDGET_TELLS__" not in SCAN_REQUIRED_JS, "the tells placeholder did not substitute"

@@ -1344,6 +1344,57 @@ async def autofill_form(training_session_id: int, db: Session = Depends(get_db))
         raise HTTPException(status_code=502, detail=f"autofill unreachable: {exc}")
 
 
+async def _scan_required_fields(browser_url: str, tab_url: str = "smartapply") -> Optional[list[dict]]:
+    """The live apply form's UNSATISFIED required fields, in `build_form_state`'s shape.
+
+    Feeds `form_complete_gate` — the invariant that makes the model structurally unable to
+    mark a form done with an empty required field. ONE function for both callers
+    (apply_state + session_state) on purpose: they were byte-identical copies, and a fix
+    landing in one call-site and not its twin has bitten this repo three times.
+
+    ON THE NARROWING. `/scan_form` returned EVERY field; `/scan_required` returns only the
+    required ones that are unsatisfied. The gate's verdict is unchanged:
+    `form_complete_gate` computes `ok = not unsatisfied` and every row here is
+    `required=True`, so an empty list means "nothing blocks" exactly as before. What is lost
+    is the `satisfied` list (informational only). What is GAINED is that the verdict is now
+    correct — see below.
+
+    WHY THE SWAP (measured live on KKR's Greenhouse form, 2026-07-16, both scanners against
+    the same tab; ground truth: 30 required, 2 disabled, 1 genuinely unanswered):
+      - /scan_form reported 21 "fields" / 18 "required and unfilled". It labels every control
+        with its CONTAINER's text, so 14 language checkboxes each became a separate required
+        field named "Please indicate any languages…" — 13 of them "empty" even though the
+        GROUP is answered. It would have made this gate permanently un-passable.
+      - It also found only 5 fieldsets, so it never saw Country, School, Degree, Discipline,
+        the 7 screening questions, or the attestation: ~16 real required fields, invisible.
+      - /scan_required reports exactly 1: the AI attestation. It excludes the two `disabled`
+        End-date fields that keep their '*' and aria-required (the KKR trap), and omits both
+        answered checkbox groups.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            fr = await client.post(f"{settings.capture_server_url}/scan_required",
+                                   json={"browser_url": browser_url, "tab_url": tab_url})
+            fr.raise_for_status()
+            body = fr.json()
+    except httpx.HTTPError:
+        return None   # scan unreachable → leave prior form_state; don't crash the readout
+    if not body.get("ok"):
+        return None
+    return [{
+        "field_id": u.get("selector") or u.get("field") or "",
+        "label": u.get("field") or "",
+        "kind": u.get("kind") or "unknown",
+        "required": True,                       # the endpoint returns ONLY required fields
+        # NOT always False: a FILLED-but-INVALID required field is reported too, and the gate
+        # needs it (satisfied = filled AND valid), which is why `valid` is carried through
+        # rather than defaulted.
+        "filled": bool(u.get("answered")),
+        "valid": bool(u.get("valid", True)),
+        "value_preview": u.get("value_preview") or "",
+    } for u in body.get("unanswered", [])]
+
+
 @router.get("/api/runtime/apply_state")
 async def apply_state(training_session_id: int, scan_form: bool = True,
                       db: Session = Depends(get_db)):
@@ -1354,8 +1405,12 @@ async def apply_state(training_session_id: int, scan_form: bool = True,
     (human branches + unsatisfied required fields). This is the store that stops us holding
     tab/step/field state in our heads; it persists between calls instead of recomputing blind.
 
-    `scan_form=true` (default) additionally reads the active apply form's per-field
-    required/filled/valid from the capture server; set false to skip the form read."""
+    `scan_form=true` (default) additionally reads the active apply form's unsatisfied
+    required fields from the capture server; set false to skip the form read. (The param
+    keeps its name for compatibility even though the `/scan_form` endpoint it was named after
+    is gone — see _scan_required_fields. Renaming it would be tidier and silently wrong:
+    FastAPI ignores unknown query params, so an existing `?scan_form=false` would quietly
+    start scanning instead of erroring.)"""
     import apply_recipe
     import apply_state_store as store
     import escalation_rules
@@ -1385,16 +1440,7 @@ async def apply_state(training_session_id: int, scan_form: bool = True,
     # nothing to check otherwise, and we avoid a wasted CDP round-trip on search pages.
     form_fields = None
     if scan_form and apply_tabs:
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                fr = await client.post(f"{settings.capture_server_url}/scan_form",
-                                       json={"browser_url": browser_url, "tab_url": "smartapply"})
-                fr.raise_for_status()
-                body = fr.json()
-                if body.get("ok"):
-                    form_fields = body.get("fields", [])
-        except httpx.HTTPError:
-            form_fields = None  # scan unreachable → leave prior form_state; don't crash the readout
+        form_fields = await _scan_required_fields(browser_url)
 
     bb = store.load_or_create(training_session_id)
     store.reconcile(bb, tabs=tabs, form_fields=form_fields, block=block)
@@ -1561,16 +1607,7 @@ async def session_state(training_session_id: int, scan_form: bool = True,
     # form gate to check, and we avoid a wasted CDP round-trip.
     form_fields = None
     if scan_form and apply_tabs:
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                fr = await client.post(f"{settings.capture_server_url}/scan_form",
-                                       json={"browser_url": browser_url, "tab_url": "smartapply"})
-                fr.raise_for_status()
-                body = fr.json()
-                if body.get("ok"):
-                    form_fields = body.get("fields", [])
-        except httpx.HTTPError:
-            form_fields = None
+        form_fields = await _scan_required_fields(browser_url)
 
     # Fold the results-page number off the active search tab's ?start= offset (best-effort).
     search_update = None

@@ -278,12 +278,24 @@ The 13 remaining jobs do **not** stop. Each phase is shippable and paid for by t
 - [x] `/scan_required` — `disabled` beats asterisk; groups included
 - [x] `/probe` replaces `/eval` (moved up from Phase 3 — it's ~20 lines and it's the thing that makes
       discovery visible, which is the point of the phase)
-- [ ] ~~Fix or retire `/scan_form`~~ → **deprecated in place, migration gated on the live drive.** Its
-      callers feed `form_complete_gate`; swapping a *safety gate's* input to a scanner that has never
-      run on a real page is exactly what PRINCIPLES §5 forbids. Diff both on a live form, then rewire.
-- Definition of done: **finish KKR using only these — zero `/eval`.** ⟵ **NOT YET MET.** All the code
-  is in and 119 tests pass, but no live drive has run. The page-side JS is unvalidated (§5), and
-  that is the next session's first job.
+- [x] **`/scan_form` RETIRED** (deleted 2026-07-16), after diffing both against KKR's live form —
+      which is exactly why it was gated. `/scan_form` reported 21 fields / 18 "required and unfilled"
+      (14 of them one-per-checkbox from a single answered group) and would have made
+      `form_complete_gate` **permanently un-passable**, while missing ~16 real required fields it
+      never found containers for. `/scan_required` reports 1 — the truth. The gate now reads it via
+      `main.py::_scan_required_fields`.
+      **The diff paid for itself three times over**: it found (1) a `closest('…, div')` that read
+      react-selects at the wrong node so 15 ANSWERED fields reported as unanswered, (2) `singleValue`
+      not existing until a widget is answered — so the scan fell through to `.value`, which on a
+      react-select holds transient search text and would have let a half-typed field pass the gate,
+      and (3) an `opacity:0` proxy input that an offsetParent+rect check calls visible. See
+      `docs/LEARNINGS.md` 2026-07-16.
+- Definition of done: **finish KKR using only these — zero `/eval`.** ⟵ **STILL NOT MET.** The
+  read-only half is now live-validated (`/scan_required`, `/probe`, and the classifier's tells,
+  against KKR's real form). The WRITE half — `/select_option`, `/set_date`, `/check_group` — has
+  still never touched a live page. Next session: KKR's form is one unanswered field (the AI
+  attestation, `#question_17811150004`, a react-select) away from Submit; driving that ONE field
+  through `/select_option` is the smallest honest test of the write path.
 
 **Phase 2 — the resolver**
 - [x] ~~Unify the recipe field schema~~ — done in Phase 1 (`apply_fields.py`); six shapes → two

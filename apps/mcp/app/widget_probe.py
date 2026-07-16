@@ -30,6 +30,8 @@ and reports what it found there.
 
 from __future__ import annotations
 
+from app.js_common import WIDGET_TELLS_JS
+
 # The classifier. Returns the widget's own account of itself.
 #
 # ORDER MATTERS: checks run most-specific-first. A Greenhouse month field is BOTH a
@@ -38,14 +40,11 @@ from __future__ import annotations
 # generic ones do.
 DESCRIBE_WIDGET_JS = r"""
 (cfg) => {
+  __WIDGET_TELLS__
+  const vis = __vis, txt = __txt, attr = __attr;
+
   const el = document.querySelector(cfg.selector);
   if (!el) return {found: false, detail: 'no node matching ' + cfg.selector};
-
-  const vis = (n) => { try { const r = n.getBoundingClientRect();
-                             return n.offsetParent !== null && r.width > 0 && r.height > 0; }
-                       catch (e) { return false; } };
-  const txt = (n) => ((n && (n.innerText || n.textContent)) || '').replace(/\s+/g, ' ').trim();
-  const attr = (n, a) => (n && n.getAttribute ? n.getAttribute(a) : null);
 
   // The field's WRAPPER — react-select and Workday both render the real control as a
   // sibling/descendant of a container, so classification has to look around the node, not
@@ -54,13 +53,10 @@ DESCRIBE_WIDGET_JS = r"""
                           '[class*=field], fieldset, [role=group], li, div') || el.parentElement || el;
 
   // ---- SHAPE TELLS ------------------------------------------------------------------
-  // react-select: renders a .select__* / *singleValue subtree and drives an input with
-  // aria-autocomplete=list. THE tell that matters is singleValue: it is where the chosen
-  // value actually lives, because the input's own .value goes EMPTY after a pick.
-  const reactSelect = !!(wrap.querySelector('[class*=singleValue], [class*=select__control], ' +
-                                            '[class*=select__value-container]') ||
-                         (attr(el, 'aria-autocomplete') === 'list' &&
-                          wrap.className && /select/i.test(String(wrap.className))));
+  // react-select — via the SHARED tell (app/js_common.py), not a local copy. A local copy
+  // is exactly how this block and SCAN_REQUIRED_JS came to disagree about what a
+  // react-select even is, an hour apart, in one session.
+  const reactSelect = __isReactSelect(el);
 
   // Workday hierarchical prompt: a formField-* whose popup carries a searchBox. We cannot
   // see the searchBox without opening, so classify on the STABLE tenant-independent tell —
@@ -227,3 +223,7 @@ DESCRIBE_WIDGET_JS = r"""
   };
 }
 """
+
+# See protocols.py for why this is a placeholder-replace and not an f-string.
+DESCRIBE_WIDGET_JS = DESCRIBE_WIDGET_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
+assert "__WIDGET_TELLS__" not in DESCRIBE_WIDGET_JS, "the tells placeholder did not substitute"
