@@ -94,10 +94,23 @@ def journaled(intent: Intent | Callable[[Any], Intent], *,
                 # distinguishable from `not_found`, which would send us re-mapping
                 # selectors that were fine.
                 logger.warning("%s raised: %s", this_intent.value, exc)
+                # Keep the caller's own description of what it was doing. For /probe that
+                # `note` IS the training signal — the question being asked, of which the
+                # expression is only the artifact — and losing it precisely when the probe
+                # fails would keep the most interesting rows in the corpus mute.
+                note = _body_attr(body, "note")
+                detail = f"{type(exc).__name__}: {exc}" + (f" · {note}" if note else "")
                 log_intent(intent=this_intent, outcome=Outcome.ERROR, sensitive=sensitive,
-                           detail=f"{type(exc).__name__}: {exc}",
+                           detail=detail,
+                           # An exception means nothing VERIFIABLY reached the page. Letting
+                           # `executed` default to True would mark a connection-refused as a
+                           # real action on a real page — the same rehearsal/performance
+                           # confusion the event log has. (An exception AFTER the action
+                           # fired is the staged-commit case, which has its own outcome:
+                           # COMMITTED_UNCONFIRMED, returned normally, never raised.)
+                           executed=False,
                            duration_ms=int((time.perf_counter() - started) * 1000), **ctx)
-                return {"ok": False, "outcome": Outcome.ERROR.value, "detail": str(exc)}
+                return {"ok": False, "outcome": Outcome.ERROR.value, "detail": detail}
 
             if not isinstance(result, dict):
                 raise TypeError(f"{fn.__name__} must return a dict, got {type(result).__name__}")

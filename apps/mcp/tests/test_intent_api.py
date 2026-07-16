@@ -73,6 +73,25 @@ def test_an_endpoint_that_raises_is_journaled_as_error_not_lost(corpus):
     # ERROR, not NOT_FOUND: a mechanism failure must not read as a stale recipe.
     assert row["outcome"] == "error"
     assert "websocket closed" in row["detail"]
+    # Nothing verifiably reached the page. Marking a connection-refused `executed` would be
+    # the same rehearsal/performance confusion the event log has.
+    assert row["executed"] is False
+
+
+def test_a_raising_probe_keeps_the_question_it_was_asking(corpus):
+    """For /probe the `note` IS the training signal; the expression is its artifact.
+
+    Losing it exactly when the probe fails would keep the most interesting rows mute.
+    """
+    class ProbeBody(Body):
+        note: str = "what shape is Greenhouse's attestation widget?"
+
+    @journaled(Intent.PROBE)
+    async def ep(body):
+        raise RuntimeError("target closed")
+
+    run(ep(ProbeBody()))
+    assert "attestation widget" in rows(corpus)[0]["detail"]
 
 
 def test_an_endpoint_that_declares_no_outcome_is_journaled_as_error_loudly(corpus):
