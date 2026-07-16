@@ -1,9 +1,14 @@
 SHELL := /bin/bash
 
-.PHONY: dev dev-stop infra-up infra-down chrome doctor setup python-setup ui-setup
+.PHONY: dev dev-stop infra-up infra-down chrome doctor data-check setup python-setup ui-setup
 
 dev:
 	./scripts/dev-up.sh
+
+# Pre-flight for a roaming / hard-capped connection: "would anything download?"
+# Exits non-zero if it would. See docs/LOW_DATA_MODE.md.
+data-check:
+	./scripts/data-check.sh
 
 dev-stop:
 	./scripts/dev-down.sh

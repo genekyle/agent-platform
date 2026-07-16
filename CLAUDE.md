@@ -24,6 +24,12 @@ every correction becomes training data for local models that take work off the e
 - **Capture per meaningful page *state*, never secrets** (state identity only in credential flows). §4
 - **Resource-efficiency is a hard constraint** (solo founder; $5/week autonomous spend cap enforced).
 - **Solo dev: commit directly to `main`, no feature branches**, unless told otherwise.
+- **Low-data mode** — when the operator says they're on roaming/tethered data (hard cap), run
+  `make data-check` first and **defer anything that downloads to wifi**. The short version: once the
+  machine is warm, almost nothing here costs data *except live browser driving* (a page load is
+  ~5–20M; react-select typing fetches per keystroke). Read-only CDP against an already-open tab is a
+  local socket and free — so audit, plan and write code freely; defer the live drive.
+  See `docs/LOW_DATA_MODE.md`.
 
 ## Working alongside other sessions
 
