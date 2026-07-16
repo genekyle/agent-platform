@@ -83,3 +83,31 @@ verify each edge, never assume URL implies state.
 
 *Add a principle here whenever a mental model proves load-bearing. Prefer encoding it as an invariant
 in code and linking the enforcement point.*
+
+## §8 — Execution = API. Discovery is a probe; its output is an endpoint.
+
+The model decides WHAT; the API owns HOW. Any interaction whose protocol we have proven is an API
+call, not a hand-rolled `Runtime.evaluate`.
+
+**Why it's a principle and not a preference:** an inline script is invisible to the flywheel. The
+event log for the 2026-07-15 session reads `type:137 clear:92 click:80 select:32 widget_select:12` —
+and `eval:0`. Every API action is recorded, replayable and trainable; the ~25 `/eval` scripts written
+that day left no trace and died with the session. **An action the system can't see is one it can never
+learn** — which is the whole premise of teacher→distill. Correctness follows the same way: every bug
+that day lived in a hand-rolled script (substring match, `.value` verify, stray-option open-check),
+never in an endpoint, because an endpoint encodes the protocol once and the caller can't get it wrong.
+
+**Promotion rule — promote the MECHANISM eagerly, generalize the ABSTRACTION late, never freeze.**
+Not "when it's perfected": `/select_prompt` was promoted from ONE observation and its imperfection
+cost a single parameter, fixed once, forever — while a "perfect" inline regex was wrong on first
+contact with a real option list and had nowhere for the fix to live. An API's job is not to be right;
+it's to be **the single place the fix lands**. Generality is earned at the SECOND site (the popup
+protocol went Indeed → Workday's `aria-controls` scoping → Greenhouse's keystroke-open).
+
+**Discovery stays inline forever** — it meets novel contracts by definition. But its output is always
+a new/extended endpoint + a recipe entry + captured, labelled states. Discovery that ends in a working
+script and nothing else is a session paid for twice.
+
+Enforcement: `docs/PLAN_execution_api.md` (protocol inventory, backlog, best practices). Corollary of
+§6 (drive the AX/node layer) and of [[project_widget_protocol_layer]]: AX finds elements, the API
+models widgets.
