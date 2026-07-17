@@ -24,6 +24,42 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-16 — The authoritative docs were three eras stale; reconciled + the endgame written down
+
+**What we believed.** That the doc set described the system. It described three different past
+systems: `architecture.md` (April) still said screenshot-primary / grounding-first and had never
+been amended through the AX-primary shift it forbids drifting past; `PROJECT_STATUS.md` (06-15)
+described the SELECT-cascade era — its "corpora are being collected NOW" claim predated the
+07-16 finding that live drives fed none of them; and "L3/L4" silently changed meaning when the
+Interaction API moved L4's target from element-picks (selection telemetry) to intents (the journal),
+with no doc saying so.
+
+**What's actually true.** For a solo project whose collaborators are stateless sessions, stale
+authoritative docs are an *architecture* problem, not a documentation problem — they are the only
+shared memory, and each stale claim gets re-paid every session (this file's own founding rule,
+applied one level up). Corrections were landing here in LEARNINGS but not propagating upstream to
+the docs they corrected.
+
+**Where it's encoded now.**
+- `architecture.md` amended per its own change discipline (invariant #1 reworded, #9 journal and
+  #10 closed-vocabulary added, chosen path re-sequenced L3-first, alternative B marked partially
+  adopted, amendment log added).
+- `PROJECT_STATUS.md` rewritten for the Interaction-API era, with measured corpus numbers
+  (journal 6 / loop_steps 43 / telemetry 101) instead of intentions, and a terminology section
+  fixing the L3/L4 overload.
+- `DECISION_two-stacks-one-spine.md` (new) — the journal is the corpus spine; one action surface
+  for teacher and loop; the loop's future is intent-emitting; the escalation ladder R0–R5 encoding
+  the operator's endgame: learned scenarios graduate off Claude per-scenario, Claude teaches novel
+  work indefinitely, verification failures (intent didn't land on the expected state) trigger
+  escalation, and every escalation trains the rung below.
+- `PLAN_flywheel_first_revolution.md` (new) — definition of done for the first full flywheel
+  revolution, pre-flight so no teacher drive is wasted, promotion gates, and the metrics wall.
+
+**The ritual gains a clause:** when an entry here corrects a claim in an upstream doc, patch the
+upstream doc in the same commit — a correction that only lives in the log is half-landed.
+
+---
+
 ## 2026-07-16 — `/scan_form` retired: the live diff found THREE bugs, and my own validation was self-confirming
 
 **What we believed.** `/scan_required` is better than `/scan_form` on paper (per-control labels,

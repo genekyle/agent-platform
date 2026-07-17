@@ -1,181 +1,125 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-06-15_
+_Last updated: 2026-07-16 — **full rewrite**. The previous version (2026-06-15) described the
+SELECT-cascade era and no longer matched the system; it's in git history. This version describes the
+Interaction-API era and, unlike its predecessor, states the corpus numbers instead of the corpus
+intentions._
 
 ## What we're building (one paragraph)
 
-A **supervised browser agent** that runs a per-step loop — classify → propose →
-select → act → verify — where each decision is made by the **cheapest tool that's
-confident**, a human catches anything that reaches the top, and every escalation/
-correction is logged as training data. Over time the logged data trains **cheaper
-local models** that take work off the expensive LLM, so the same task gets cheaper
-and more autonomous the longer it runs. This is the "flywheel." Hard constraint:
-resource-efficient (solo founder) — a **$5/week autonomous spend cap** is enforced.
+A **supervised browser agent** that runs a per-step loop — classify → propose → select → act →
+verify — where each decision is made by the **cheapest tool that's confident**, a human catches
+anything that reaches the top, and every action is **journaled** as training data. The model emits
+**intents from a closed vocabulary** through the Interaction API (the model says WHAT, the recipe
+says WHERE, the API says HOW, the journal says WHAT HAPPENED). Claude is the **teacher**: it drives
+novel domains, and its journaled work distills into local models (L3 perception, L4 intent policy)
+that graduate learned scenarios off the expensive models entirely. Hard constraint: resource-efficient
+(solo founder) — a **$5/week autonomous spend cap** is enforced.
 
----
+## Terminology (one overload, fixed here)
 
-## The per-step loop — status of each stage
+- **Cascade layers L1–L6** — the SELECT cascade rungs (rules / cache / tiny classifier / micro
+  selector / Haiku / vision+human).
+- **L3 and L4 as model names** — L3 = the **page-state (perception) model**; L4 = the **intent
+  (policy) model**. Historically these named the cascade layers they were to occupy; since the
+  Interaction API, **L4's job changed**: it emits *intents* (trained from the journal), not raw
+  element picks (trained from selection telemetry). When a doc says "L3/L4" it means the models.
+- **API tiers 1–3** — the Interaction API namespace: tier 1 primitives, tier 2 site-agnostic
+  protocols, tier 3 domain skills (`PLAN_interaction_api.md` §7).
+- **Rungs** — the resolve_answer cascade (exact → normalised → alias → Haiku → ask).
 
-| Stage | What it does | Status | Where |
+## What changed since the last status (2026-06-15 → 2026-07-16)
+
+1. **The agent did real work.** Indeed smartapply submitted end-to-end (07-11); FB create-listing
+   driven live (07-10); cross-domain Gmail login-code errand (07-10); **first full Workday
+   application submitted** (Wellington, 07-15); Greenhouse (KKR) driven to its last field (07-15).
+   Career Search became a parent domain with an ATS taxonomy (Workday, Greenhouse, AppVault, iCIMS…),
+   an accounts system, and an apply epilogue.
+2. **The widget protocol layer was discovered** (the Indeed distance pill): AX finds *elements*, but
+   widgets are elements + a *protocol* (open → stage → confirm → commit → confirm outside). See
+   `interaction-layers.md`; PRINCIPLES gained §6–§8.
+3. **The corpus reckoning (07-16).** The event log was never a training corpus (1000-line ring
+   buffer, no fingerprint/session/outcome, no trainer reads it), and the real corpora are written
+   only by `runtime/loop.py`, which live drives never touch — so three months of live work produced
+   **zero** training rows. This is the finding that forced the journal-first Interaction API and the
+   spine decision. See LEARNINGS 2026-07-16 and `DECISION_two-stacks-one-spine.md`.
+4. **Interaction API Phase 1 shipped (07-16), journal-first**: `packages/interaction` (contract +
+   fingerprint + append-only journal), `intent_api.journaled` route decorator,
+   `resolve(ats, field)` over one recipe schema (`apply_fields.py`, 32 fields / 3 ATS),
+   `/describe_widget` (12 widget types), `/select_option`, `/set_date`, `/check_group`,
+   `/scan_required`, `/probe` (journaled discovery). 119 tests green.
+   **Phase 1's Definition of Done is NOT met**: no live drive has run through the new endpoints;
+   the page-side JS is unvalidated (PRINCIPLES §5). That is the next session's first job.
+
+## The per-step loop — status
+
+| Stage | Status | Where | Note |
 |---|---|---|---|
-| **classify** | Is this a STOP screen (captcha/2FA/checkpoint)? → escalate to human, $0 | ✅ built | `escalation_rules.py` |
-| **propose** | CDP accessibility tree → candidate elements (role+name+bbox+backend_node_id) | ✅ built | `mcp/app/observer/ax_proposer.py` |
-| **select** | Pick the target element, cheapest-first: cache → Haiku SoM | ✅ built | `select_stage/` |
-| **act** | Move + click in the live browser (pluggable cursor drivers) | ✅ built (not yet fired live) | `mcp/app/executor/` |
-| **verify** | Did the page change as predicted? retry once → escalate | ✅ built | `select_stage/verifier.py` |
+| classify | ✅ built | `escalation_rules.py` | verified on real reCAPTCHA / 2FA |
+| propose | ✅ built | `mcp/app/observer/ax_proposer.py` | AX sidecars emitted unconditionally on every capture |
+| select | ✅ built | `select_stage/` | cache + Haiku SoM live; L1/L3/L4 cascade slots still empty by design |
+| act | ✅ built, **fired live extensively** | `mcp/app/executor/` + tier-2 protocols | via teacher drives; the autonomous loop remains record-only/`run_live`-limited |
+| verify | ✅ built (element-level) | `select_stage/verifier.py` | protocol-level verification now lives in tier-2 outcomes (`ok` = verified at commit) |
 
-**Guardrails (all built):** $5/week budget cap (`anthropic_usage.enforce_budget`),
-human escalation on stop-state / over-budget / low-confidence / no-match /
-verifier-fail, and per-selection telemetry logging.
+Guardrails all live: $5/week cap (`anthropic_usage.enforce_budget`), human escalation on
+stop-state / over-budget / low-confidence / no-match / verifier-fail, never auto-solve
+captcha/2FA, secrets never captured.
 
----
+## The two execution stacks — and the corpus reality (measured 2026-07-16)
 
-## The inner loop (the SELECT cascade) — cheapest-first
+The **runtime loop** (`runtime/loop.py` + `select_stage/`) is the flywheel machine and the only
+writer of the June-era corpora; the **live-drive path** (teacher driving the MCP/API endpoints) is
+where all real work happened. Until the journal, they didn't share a corpus. Numbers as of today:
 
-The "inner loop" is how a candidate gets selected. Layers, cheapest first:
-
-| Layer | Tier | Status |
-|---|---|---|
-| 1 | Deterministic state machine (known url+state+template) | ⬜ not built → falls through |
-| 2 | **Cache / fingerprint** (reuse a prior pick, FREE) | ✅ built |
-| 3 | Tiny local page-state classifier (no API cost) | ⬜ not built → falls through |
-| 4 | Micro-model candidate selector (cheap) | ⬜ not built → falls through |
-| 5 | **Claude Haiku SoM** (budget-gated catchall) | ✅ built |
-| 6 | Vision-native / human (canvas, AX-blind, low-conf) | ⬜ escalate to human for now |
-
-Today work is done by **Layer 2 (cache)** and **Layer 5 (Haiku)**. Layers 1/3/4
-are deliberately empty — they get **earned from data** once the logs show Haiku is
-being reached too often (don't build ahead of evidence).
-
----
-
-## Phases completed (the SELECT-stage V1 build)
-
-| Phase | Deliverable | Status |
-|---|---|---|
-| 0 | Frozen schema (enums, dataclasses, Haiku output schema, version) | ✅ |
-| 1 | StateFingerprintV1 (route template + viewport + AX/DOM summary) | ✅ |
-| 2 | SelectionCacheV1 (exact-match, versioned key) | ✅ |
-| 3 | HaikuSelectorV1 (frozen schema, budget-gated, prompt-cached) | ✅ |
-| 4 | Selector orchestrator + SelectionTelemetry | ✅ |
-| 5 | TrajectoryDriver + DirectDriver + RecordOnlyDriver | ✅ |
-| 6 | MinimumJerkDriver (feature-flag off) | ✅ |
-| 7 | ActionVerifierV1 (AX/DOM delta + bounded retry → escalate) | ✅ |
-
-**Also built along the way:** CDP-AX proposer; $5/wk budget cap + API Usage
-panel; captcha stop-state (verified on a real reCAPTCHA); session purpose flag
-(data_collection vs production); Lab UI (Model Test, Select Metrics, Visualization,
-**Movement Playground**); menu slimmed 8→4 top keys; OmniParser demoted to parked
-super-fallback. Test coverage: 24 select_stage tests + 6 executor tests, all green.
-
----
-
-## The models — what exists vs what needs training
-
-**Nothing in the loop is a trained model yet.** Everything is currently zero-shot
-(Haiku), deterministic (min-jerk, cache, rules), or not-yet-built. That's by
-design — we collect data first, train later. Here's the full model roster:
-
-| Model | Role | State | Trained from |
+| Corpus | Rows | Writer | Read by a trainer? |
 |---|---|---|---|
-| Haiku SoM selector | select Layer 5 | zero-shot (no training) | n/a — it's the API |
-| **Tiny page-state classifier** | select Layer 3 | ⬜ not built | `selection_telemetry.jsonl` |
-| **Micro-model selector** | select Layer 4 | ⬜ not built | `selection_telemetry.jsonl` |
-| **Diffusion input model** | act / cursor motion | ⬜ not built (min-jerk placeholder) | `cursor_trajectories.jsonl` |
-| vision_element_grounding | grounding (legacy track) | zero-shot baseline; has train+eval scaffolding | training captures + labels |
-| page_state_classifier | perception | ⬜ planned | training captures + labels |
-| state_transition | look-ahead | ⬜ planned | run/trajectory labels |
-| task_outcome | per-task success | ⬜ planned | run/trajectory labels |
-| Vision-native grounder | select Layer 6 super-fallback | ⬜ later (Modal GPU) | distilled from corpus |
+| `intent_journal.jsonl` | **6** | `journaled` endpoints (live drives) | will feed L4 — the spine going forward |
+| `loop_steps.jsonl` | 43 | `runtime/loop.py` only (mostly `run_batch`) | L4/state-transition (legacy framing) |
+| `selection_telemetry.jsonl` | 101 | `select_stage` via the loop | L3/L4 (legacy framing) |
+| `event_log.jsonl` | 416 (ring) | everything | **NO — operator wall display only, never a corpus** |
+| Captures + AX sidecars + labels | 157+ captures, all with AX candidates | `/capture` | grounding + L3 |
 
-### The corpora are being collected NOW (this is the key part)
+**Nothing in the loop is a trained model yet, and no model has ever been trained-and-promoted from
+live-work data.** Baselines: L3 v0 stage-observer **94%** held-out on 98 labels (2026-07-09);
+grounding **0%** on 19 records (data-starved). The flywheel has never completed one revolution —
+that is the project's single most important open item.
 
-| Corpus | File | Feeds |
-|---|---|---|
-| Loop steps | `cache/loop_steps.jsonl` | L4 selector, state_transition (per-step trajectory) |
-| Selection telemetry | `cache/selection_telemetry.jsonl` | tiny classifier (L3), micro-model (L4) |
-| Cursor trajectories | `cache/cursor_trajectories.jsonl` | diffusion input model |
-| Training captures + labels | `observer-traces/` + `.ax.json` + annotations | grounding, page_state_classifier |
-| Escalation examples | labeled stop-state captures | the classifier's "STOP" class |
+## Priorities (ordered — everything else queues behind these)
 
-Every time you run a selection, record a path in the Playground, or label a
-capture, the relevant corpus grows. **The data plumbing is done; the trainers are
-the remaining work.**
+1. **Live-validate Phase 1** — finish KKR using only the new endpoints, zero `/eval` in model-made
+   calls. This is Phase 1's DoD and it doubles as the start of #2 (the drive fills the journal).
+2. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
+   measure. The full plan with gates and metrics: `PLAN_flywheel_first_revolution.md`.
+3. **Spine convergence** — one corpus spine (the journal), one action surface for teacher and loop
+   alike. Decision + component dispositions: `DECISION_two-stacks-one-spine.md`. (The loop emitting
+   intents is Phase 4 of `PLAN_interaction_api.md` — decided direction, not current work.)
+4. **Interaction API Phase 2** — the intent surface (`/api/interact/*`, `{ats, field, value}`),
+   `/resolve_answer` rungs + alias-table writeback.
+5. **Parked** (do not resume until the wheel turns once, unless one blocks a drive): `main.py`
+   split resumption (5,061 lines, 170 routes — it's growing again; the route-inventory guardrail
+   still holds), movement playground / diffusion input model, OmniParser removal, Account Manager
+   build-out (`PLAN_account_manager_and_l3.md` — its capture/label directive is *absorbed into* #2),
+   `/scan_form` retirement (gated on a live diff vs `/scan_required`), FB Marketplace expansion.
 
----
+## Endgame (recorded 2026-07-16 so every session aims the same direction)
 
-## "Are we building toward constantly training all parts of the loop?"
+Operator-stated: the inner system (L3/L4, and whatever inner layers come later) becomes strong
+enough that **learned, cached scenarios — the recipes Claude taught — run without Claude at all**,
+and generalize across similar scenarios. Claude remains the **teacher for novel work indefinitely**
+— that door stays open by design. When the inner system gets stuck, or an intent does not land on
+the state it expected (the verifier/outcome taxonomy is the trigger), it escalates up the ladder:
+protocol retry → Haiku (bounded decisions) → Claude (teaching: discovery → endpoint + recipe +
+labels) → human (stop-states, credentials, irreversibles — always). "Claude-free" is a
+**per-scenario graduation**, never a global switch. The ladder is specified in
+`DECISION_two-stacks-one-spine.md`.
 
-**Yes — and here's exactly where that stands.** The vision is a multi-model
-flywheel: each layer/model has (a) its own corpus, (b) its own trainer, (c) a
-shared eval contract + model registry, so they can each be retrained
-independently and repeatedly as data accumulates.
+## Short term vs long term
 
-- ✅ **Data collection** for every model — built (the corpora above).
-- ✅ **Eval + registry substrate** — built (`model_lib`, eval-runs, Lab metrics,
-  the telemetry that IS the feature set).
-- ⬜ **The trainers themselves** — not built for the new layers (L3/L4, diffusion).
-  The grounding track has training scaffolding; the select-stage + input models do not.
-- ⬜ **Continuous/scheduled retraining** — not built. Today retraining would be
-  manual. The end state is periodic auto-retrain of each layer from its corpus.
+**Short term:** priorities 1–2 above — validate live, then spin the wheel on the existing 13-job
+apply backlog (the crank is the work itself, not extra work).
 
-So: **we have built the foundation that makes continuous multi-model training
-possible** (data + eval + registry + the cheapest-first architecture that lets a
-trained layer slot in without touching the rest), but the **training jobs and the
-retrain scheduler are still ahead.**
-
----
-
-## What still needs help (remaining work)
-
-1. ✅ **Runtime loop orchestrator wired (record-only)** — `runtime/loop.py` drives
-   classify→propose→select→act→verify→repeat as a pure, port-based engine
-   (`Proposer`/`Actor` injected, so it's unit-tested without a browser; 7 tests).
-   `RecordOnlyActor` is the default: it logs the decided intent and executes
-   nothing. Endpoint `POST /api/runtime/run` runs it against a real capture, safely.
-   Every step appends to a new corpus, `cache/loop_steps.jsonl` (feeds L4 / state-
-   transition). **Next increment:** the live multi-step driver — a `Proposer` that
-   re-captures each step + a real executor driver for autonomous action. Held pending
-   go-ahead (still record-only until then).
-   - ✅ **Batch corpus replay** — `POST /api/runtime/run_batch` replays every stored
-     capture through the record-only loop, filling `loop_steps.jsonl` +
-     `selection_telemetry.jsonl` with **no inputs fired**. Idempotent (skips states
-     whose fingerprint is already in the corpus); `force=True` refreshes cache/
-     telemetry at ~$0 (cache hits) without duplicating trajectory rows; `limit=N`
-     caps spend on a cold run. This is the mechanism that turns accumulated captures
-     into training rows for L3/L4.
-   - ⚠️ **Corpus can't be backfilled from history — but the faucet is open and flowing.**
-     Select needs AX candidates, which come only from a capture's `.ax.json` sidecar
-     (live CDP at capture time), so captures from *before* emission began (2026-06-15,
-     commit `80dd253b`) can never get one — a dead session can't be re-scanned. That's
-     the real dead end. But emission is **unconditional** on every live path
-     (`_write_ax_sidecar` in `POST /capture`), and the current DB has **157 captures,
-     all carrying AX candidates** (the old "3 of 175" was an early snapshot, now stale).
-     Per-capture yield is recorded on `TrainingCapture.ax_candidate_count` (v16) and
-     summarised as `dry_captures` in `/api/training/coverage`. See `docs/LEARNINGS.md`
-     (2026-07-08 faucet entry) for the full picture and the two senses of "backfill".
-2. **Fire real inputs** — DirectDriver can click the live browser; held pending go-ahead.
-3. **Build the trainers** — diffusion input model (#7), tiny classifier (L3),
-   micro-model (L4), and the planned brain models (page_state/transition/outcome).
-4. **Continuous retraining** — a mechanism to retrain each layer from its corpus on
-   a cadence and promote it into the cascade when it beats the current tier.
-5. **Cleanup** — full OmniParser removal (UI vision code + dropped eval runner).
-
----
-
-## Short-term vs long-term goals
-
-**Short term (next):**
-- Wire the runtime loop (record-only/safe), so the agent runs a real task and the
-  corpora fill from real usage, not hand-tests.
-- Run the 30-day n=1 and watch the Lab flywheel metrics (cache-hit↑, escalation↓,
-  cost/task↓).
-
-**Long term:**
-- Train each cheap local layer from its corpus → push work down the cascade →
-  Haiku reached less → cost falls.
-- Train the diffusion input model on Playground recordings → human-like motion
-  replaces min-jerk.
-- Add the vision-native super-fallback on Modal GPU for canvas/AX-blind pages.
-- Stand up continuous retraining so all layers improve repeatedly as data grows —
-  the full flywheel.
+**Long term:** L3 owns state recognition per ATS; L4 emits intents for learned scenarios (shadow →
+gated promotion); the teacher's journaled drives keep expanding the recipe/protocol library; cost
+per submitted application falls as scenarios graduate; the vision catchall earns its keep on
+protocol discovery and AX-blind pages; continuous retraining on a cadence once the manual crank has
+proven the loop.
