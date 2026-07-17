@@ -202,6 +202,9 @@ class DecisionRecord:
 
     # --- measurement (M5): a shadow row decided without acting, beside a teacher step
     shadow: bool = False
+    # A PII/selector-free snapshot of the Bundle, stored on the rows that are REPLAY CASES
+    # (golden + shadow) so the offline replay suite can re-run decide() on the exact input.
+    bundle_snapshot: Optional[dict] = None
 
     # --- cost / provenance
     session_id: Optional[str] = None
@@ -280,6 +283,28 @@ def bundle_to_prompt(bundle: Bundle) -> str:
         _fmt_recent(bundle.recent),
     ]
     return "\n".join(parts)
+
+
+def replay_snapshot(bundle: Bundle) -> dict:
+    """The minimal, PII/selector-free projection of a Bundle sufficient to re-run `decide()`
+    deterministically offline. Stored on golden/shadow rows so a correction becomes a permanent,
+    self-contained regression case (drops url/lessons — route is the join key, lessons only feed
+    the model rung, which CI does not replay)."""
+    return {
+        "task": bundle.task,
+        "goal_text": bundle.goal_text,
+        "done": bundle.done,
+        "url": bundle.route,          # route, not the raw url (join key, no query PII)
+        "route": bundle.route,
+        "state": bundle.state,
+        "is_branch": bundle.is_branch,
+        "human_required": bundle.human_required,
+        "ats": bundle.ats,
+        "fingerprint": bundle.fingerprint,
+        "recipe_step": bundle.recipe_step,
+        "expected_next": list(bundle.expected_next),
+        "unanswered": [dict(u) for u in bundle.unanswered],   # already sanitised
+    }
 
 
 def bundle_digest(bundle: Bundle) -> str:

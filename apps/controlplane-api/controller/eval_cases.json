@@ -1,0 +1,36 @@
+{
+  "_comment": "Curated decide() regression cases — deterministic, program-independent, offline, free. Run by `make controller-evals`. Every controller correction that reveals a decide() bug should be added here as a permanent case (PLAN_controller_v1 §4: 'every correction ever captured becomes a permanent test case').",
+  "cases": [
+    {
+      "name": "unknown-state escalates to the teacher",
+      "bundle": {"task": "indeed_apply", "state": null, "route": "example.com/x"},
+      "expect": {"escalate": true, "rung": "teacher"}
+    },
+    {
+      "name": "credential boundary (workday sign-in) escalates to a human, never auto-fills",
+      "bundle": {"task": "workday_apply", "state": "workday_sign_in", "ats": "workday",
+                 "route": "acme.wd1.myworkdayjobs.com/login", "human_required": true, "is_branch": true},
+      "expect": {"escalate": true, "rung": "human"}
+    },
+    {
+      "name": "captcha branch escalates to a human, never auto-solves",
+      "bundle": {"task": "indeed_apply", "state": "captcha", "is_branch": true,
+                 "route": "smartapply.indeed.com/x"},
+      "expect": {"escalate": true, "rung": "human"}
+    },
+    {
+      "name": "a completed task is not a decision",
+      "bundle": {"task": "indeed_apply", "state": "indeed_apply_submitted", "done": true,
+                 "route": "smartapply.indeed.com/post-apply"},
+      "expect": {"escalate": true}
+    },
+    {
+      "name": "a known state with no compiled program and no model escalates to teach it",
+      "bundle": {"task": "indeed_apply", "state": "indeed_apply_questions",
+                 "route": "smartapply.indeed.com/questions/{id}",
+                 "unanswered": [{"field": "Work authorization", "kind": "radio_group",
+                                 "required_via": "required-attr", "answered": false, "valid": true}]},
+      "expect": {"escalate": true, "rung": "teacher"}
+    }
+  ]
+}

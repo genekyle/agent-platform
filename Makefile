@@ -1,9 +1,15 @@
 SHELL := /bin/bash
 
-.PHONY: dev dev-stop infra-up infra-down chrome doctor data-check setup python-setup ui-setup
+.PHONY: dev dev-stop infra-up infra-down chrome doctor data-check setup python-setup ui-setup controller-evals
 
 dev:
 	./scripts/dev-up.sh
+
+# The controller regression suite (PLAN_controller_v1 M5): re-run curated + journaled bundles
+# through decide(). Deterministic, offline, FREE (no model rung, no browser) — safe in low-data
+# mode. Every controller correction becomes a permanent case in controller/eval_cases.json.
+controller-evals:
+	cd apps/controlplane-api && ../../.venv/bin/python -m pytest test_controller_evals.py -q
 
 # Pre-flight for a roaming / hard-capped connection: "would anything download?"
 # Exits non-zero if it would. See docs/LOW_DATA_MODE.md.

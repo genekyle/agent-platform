@@ -32,6 +32,7 @@ from interaction.decision import (
     DecisionRecord,
     bundle_digest,
     looks_like_selector,
+    replay_snapshot,
 )
 
 _lock = threading.Lock()
@@ -118,6 +119,9 @@ def record_for(
         proposed_params=dict(proposed.params) if proposed else None,
         proposed_rung=proposed.rung if proposed else None,
         shadow=shadow,
+        # Replay cases (golden corrections + shadow comparisons) carry a self-contained,
+        # PII-free snapshot so the offline eval suite can re-run decide() on the exact input.
+        bundle_snapshot=replay_snapshot(bundle) if (golden or shadow) else None,
         session_id=session_id,
         duration_ms=duration_ms,
         cost_usd=cost_usd,

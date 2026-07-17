@@ -41,6 +41,7 @@ from interaction.decision import (
     bundle_digest,
     bundle_to_prompt,
     looks_like_selector,
+    replay_snapshot,
     sanitize_unanswered,
 )
 from interaction.decision_journal import log_decision, record_for
@@ -66,6 +67,7 @@ __all__ = [
     "bundle_digest",
     "bundle_to_prompt",
     "looks_like_selector",
+    "replay_snapshot",
     "sanitize_unanswered",
     "log_decision",
     "record_for",
