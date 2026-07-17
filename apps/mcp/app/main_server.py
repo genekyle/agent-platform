@@ -788,25 +788,46 @@ class JobDescriptionRequest(BaseModel):
 # apply FLOW the planner uses). This is the "click into the posting" the operator does by hand.
 _JOB_DESC_JS = r"""
 (() => {
-  const descEl = document.querySelector('#jobDescriptionText, [id*=jobDescription], .jobsearch-JobComponent-description');
-  const description = descEl ? descEl.innerText.trim() : '';
-  const salEl = document.querySelector('#salaryInfoAndJobType, [id*=salaryInfo], [class*=salary]');
-  const salary = salEl ? salEl.innerText.trim() : '';
-  // Prefer the posting's own header (present on both the in-pane SERP view and the viewjob page).
-  // Plain h1 is LAST — on the results page h1 is the search title ("reporting analyst jobs in …"),
-  // not the job, so it must not win over the pane header.
-  const titleEl = document.querySelector(
-    '#vjs-jobtitle, [data-testid="jobsearch-JobInfoHeader-title"], h2.jobsearch-JobInfoHeader-title,'
-    + ' .jobsearch-RightPane h1, .jobsearch-JobComponent h1, h1');
-  const title = titleEl ? titleEl.innerText.trim() : '';
+  // SCOPE to the open detail PANE, not the document. On the SERP the left results list holds one
+  // salary/title node PER card, so a document-wide read grabs the FIRST card's — which is why
+  // opening any job returned the previous (first) job's salary (2026-07-17). The pane wrapper is
+  // present only on the SERP; on the standalone /viewjob page there is no wrapper and the whole
+  // document IS the one job, so root falls back to document there. `#jobDescriptionText` is a
+  // unique id (safe either way), but title/company/salary MUST be pane-scoped.
+  const root = document.querySelector(
+    '[data-testid=jobsearch-ViewJobPaneWrapper], .jobsearch-RightPane, .jobsearch-JobComponent'
+  ) || document;
+
+  // Try selectors in PRIORITY order — NOT `querySelector('a, b, h1')`, which returns the first
+  // match in DOCUMENT order regardless of list position. That exact trap put the SERP's search
+  // <h1> ("data analyst jobs in Nashua, NH") ahead of the pane's own header, because the h1
+  // sits earlier in the tree. `pick` honours our order instead of the DOM's.
+  const pick = (el, sels) => {
+    for (const s of sels) { const n = el.querySelector(s); if (n && n.innerText.trim()) return n.innerText.trim(); }
+    return '';
+  };
+
+  const description = pick(root, ['#jobDescriptionText', '[id*=jobDescription]',
+                                  '.jobsearch-JobComponent-description']);
+  const salary = pick(root, ['#salaryInfoAndJobType', '[id*=salaryInfo]', '[class*=salary]']);
+  const title = pick(root, ['#vjs-jobtitle', '[data-testid="jobsearch-JobInfoHeader-title"]',
+                            'h2.jobsearch-JobInfoHeader-title', 'h1', 'h2']);
+  const company = pick(root, ['[data-testid=inlineHeader-companyName]',
+                              '[data-testid=jobsearch-CompanyInfoContainer] a',
+                              '[data-company-name]', '.jobsearch-CompanyInfoWithoutHeaderImage a']);
+
   // apply_type drives the routing: 'company_site' → cross-site ATS (Workday/...), 'quick_apply' →
-  // Indeed-native (smartapply, end-to-end driveable). "Apply with Indeed" is quick-apply too — the
-  // earlier omission read those as 'unknown'. Match button/aria text; check company-site first.
-  const btnText = Array.from(document.querySelectorAll('button, a'))
+  // Indeed-native (smartapply, end-to-end driveable). "Apply with Indeed" is quick-apply too. Read
+  // the pane's buttons first; fall back to document only if the pane names no apply control (the
+  // /viewjob page keeps its apply button outside these wrappers).
+  const buttonsIn = (el) => Array.from(el.querySelectorAll('button, a'))
     .map(b => (b.innerText || b.getAttribute('aria-label') || '').trim()).join(' | ').toLowerCase();
-  const apply_type = /apply on company site|apply on employer|you are leaving indeed/.test(btnText) ? 'company_site'
-                   : /apply with indeed|easily apply|apply now/.test(btnText) ? 'quick_apply' : 'unknown';
-  return { description, salary, title, apply_type };
+  const classify = (t) => /apply on company site|apply on employer|you are leaving indeed/.test(t) ? 'company_site'
+                        : /apply with indeed|easily apply|apply now/.test(t) ? 'quick_apply' : 'unknown';
+  let apply_type = classify(buttonsIn(root));
+  if (apply_type === 'unknown' && root !== document) apply_type = classify(buttonsIn(document));
+
+  return { description, salary, title, company, apply_type };
 })()
 """
 
@@ -1592,26 +1613,35 @@ async def open_job_card(body: OpenJobCardRequest):
                 "returnByValue": True})).get("result", {}).get("value") or {}
             if not box.get("found"):
                 return {"ok": False, "detail": f"card data-jk={body.external_id} not found"}
+            # Snapshot the WHOLE pane (from the same scoped reader), not just the description.
+            # The old check watched description alone — so when the pane switched but a field was
+            # read from a stale node, that field silently kept the previous job's value and the
+            # check never noticed. We now require the pane itself to have changed.
             before = (await cdp.send("Runtime.evaluate", {
-                "expression": "(document.querySelector('#jobDescriptionText')||{}).innerText||''",
-                "returnByValue": True})).get("result", {}).get("value") or ""
+                "expression": _JOB_DESC_JS, "returnByValue": True})).get("result", {}).get("value") or {}
             for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
                 ev = {"type": typ, "x": box["x"], "y": box["y"]}
                 if typ != "mouseMoved":
                     ev.update({"button": "left", "clickCount": 1})
                 await cdp.send("Input.dispatchMouseEvent", ev)
-            # Poll until the pane's description changes (the job loaded), bounded by settle_seconds.
+            # Poll until the pane has switched to the clicked job, bounded by settle_seconds. The
+            # switch signal is description OR title changing from the before-snapshot — description
+            # is the most reliable per-job field, title catches the rare identical-description case.
             deadline = max(0.6, min(body.settle_seconds, 8.0))
             waited, data = 0.0, {}
+            def _switched(d):
+                return bool(d.get("description")) and (
+                    d.get("description") != before.get("description")
+                    or (d.get("title") and d.get("title") != before.get("title")))
             while waited < deadline:
                 await asyncio.sleep(0.4)
                 waited += 0.4
                 data = (await cdp.send("Runtime.evaluate", {
                     "expression": _JOB_DESC_JS, "returnByValue": True})).get("result", {}).get("value") or {}
-                if data.get("description") and data["description"] != before:
+                if _switched(data):
                     break
         data["ok"] = bool(data.get("description"))
-        data["switched"] = bool(data.get("description") and data.get("description") != before)
+        data["switched"] = _switched(data)
         data["external_id"] = body.external_id
         return data
     except Exception as exc:  # noqa: BLE001

@@ -67,6 +67,7 @@ class Intent(str, Enum):
     SCROLL = "scroll"                  # direction/amount — see the note below
     SUBMIT = "submit"                  # form
     DESCRIBE = "describe"              # field -> the widget's own account of itself
+    OBSERVE = "observe"                # page -> one structured observation (see below)
     SCAN_REQUIRED = "scan_required"    # form -> what's required AND unanswered
     RESOLVE_ANSWER = "resolve_answer"  # question + options + canonical -> this widget's word
     PROBE = "probe"                    # DISCOVERY ONLY — raw JS. See the docstring below.
@@ -79,6 +80,14 @@ class Intent(str, Enum):
 # the frozen ActionId enum, the loop emits it, and the 2026-07-15 drive used it constantly
 # ("scroll-then-click the visible button"). A verb the system really emits and the
 # vocabulary can't express is a hole in the corpus, not a purity win.
+#
+# OBSERVE is the read the teacher performed BY HAND, constantly: 4-5 probes per step to
+# establish "where am I, what's unanswered, is anything blocking" before every decision. The
+# 2026-07-17 live drive journaled 32 probes and most were exactly this. One structured verb
+# replaces them — and it is the REASONER'S INPUT: observe() -> decide() -> act() is the loop
+# a local model will eventually run, so the observation's shape is a training feature set,
+# not just a convenience. Same admission test as SCROLL: a thing the system really does that
+# the vocabulary can't express is a hole in the corpus.
 #
 # There is deliberately NO `clear` intent even though `clear:92` is the event log's second
 # most common action: clearing IS set_text with an empty value. The `actions` column keeps
@@ -96,7 +105,8 @@ DISCOVERY_INTENTS = frozenset({Intent.PROBE})
 
 # Read-only intents: they observe and change nothing, so a failure is cheap and they need
 # no confirmation gate. Kept explicit because the gating logic must not have to guess.
-READ_ONLY_INTENTS = frozenset({Intent.DESCRIBE, Intent.SCAN_REQUIRED, Intent.RESOLVE_ANSWER})
+READ_ONLY_INTENTS = frozenset({Intent.DESCRIBE, Intent.OBSERVE, Intent.SCAN_REQUIRED,
+                               Intent.RESOLVE_ANSWER})
 
 
 class Outcome(str, Enum):
@@ -196,6 +206,7 @@ _EXPANSIONS: dict[Intent, tuple[str, ...]] = {
     Intent.SCROLL: ("scroll",),
     Intent.SUBMIT: ("submit",),
     Intent.DESCRIBE: (),                             # read-only
+    Intent.OBSERVE: (),                              # read-only
     Intent.SCAN_REQUIRED: (),                        # read-only
     Intent.RESOLVE_ANSWER: (),                       # read-only (may cost a Haiku call)
     Intent.PROBE: (),                                # discovery
