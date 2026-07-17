@@ -113,6 +113,7 @@
   "POST /api/channels/{channel}/login",
   "POST /api/controller/decide",
   "POST /api/controller/decide_model",
+  "POST /api/controller/observe",
   "POST /api/events",
   "POST /api/facebook/listings",
   "POST /api/inventory/check-responses",

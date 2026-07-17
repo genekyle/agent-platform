@@ -8,18 +8,22 @@ it decided, at which rung, what it escalated, and how well it agrees with the te
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-import apply_recipe
 from controller import metrics as controller_metrics
 from controller import programs as programs_mod
+from controller.bundle import build_bundle
 from controller.decide import decide
-from controller.reason import HaikuReasoner, parse_decision
+from controller.reason import HaikuReasoner
 from interaction import decision_journal
-from interaction.decision import Bundle
+from interaction.decision import Bundle, bundle_to_prompt
+from settings import settings
 
 router = APIRouter()
 
@@ -121,3 +125,64 @@ def programs() -> dict[str, Any]:
                           "expected_exit": list(p.expected_exit), "stale": p.stale,
                           "compiled_from": list(p.compiled_from), "verified_at": p.verified_at}
                          for p in progs], "count": len(progs)}
+
+
+class ObserveBody(BaseModel):
+    """Preview the controller on a live tab (read-only) or on a supplied url+text. Never acts."""
+    task: str = "indeed_apply"
+    goal_text: str = ""
+    tab_url: Optional[str] = None       # live: fetch scan_required for this tab (read-only, free)
+    tab_id: Optional[str] = None
+    url: Optional[str] = None           # manual: use this url directly (no browser needed)
+    page_text: str = ""                 # manual: page text for Workday/Greenhouse state
+    allow_model: bool = False           # allow the Haiku rung (budget-gated); default free
+    budget_limit: Optional[float] = None
+
+
+async def _fetch_scan(tab_url: str, tab_id: Optional[str]) -> tuple[Optional[list], str, str]:
+    """Read-only /scan_required for one tab. Degrades gracefully: returns (None, url, detail) if
+    the capture server is unreachable so the preview still builds a bundle from the URL alone."""
+    payload = {"tab_url": tab_url, "tab_id": tab_id} if tab_id else {"tab_url": tab_url}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(f"{settings.capture_server_url}/scan_required", json=payload)
+            data = r.json()
+        return data.get("unanswered"), tab_url, data.get("detail", "")
+    except Exception as exc:  # noqa: BLE001 — a preview must not require a live browser
+        return None, tab_url, f"scan_required unavailable ({type(exc).__name__}); state from URL only"
+
+
+@router.post("/api/controller/observe")
+async def observe(body: ObserveBody) -> dict[str, Any]:
+    """OBSERVE -> DECIDE for one tab, WITHOUT acting — the cockpit's 'watch it think' surface.
+
+    Safe by construction: reads the tab read-only (a local CDP socket, free even in low-data mode),
+    and the model rung is off unless `allow_model` is set. Returns the Bundle (and its frozen
+    prompt serialization) plus the Decision the controller would make.
+    """
+    url = body.tab_url or body.url or ""
+    scan: Optional[list] = None
+    scan_detail = ""
+    if body.tab_url:
+        scan, url, scan_detail = await _fetch_scan(body.tab_url, body.tab_id)
+
+    tail = decision_journal.read_rows(limit=5)
+    bundle = build_bundle(body.task, url, body.page_text, goal_text=body.goal_text,
+                          scan=scan, journal_tail=tail)
+
+    reasoner = HaikuReasoner(budget_limit=body.budget_limit) if body.allow_model else None
+    decision = await run_in_threadpool(
+        decide, bundle, programs=programs_mod.ProgramStore(), model=reasoner)
+
+    return {
+        "bundle": dataclasses.asdict(bundle),
+        "prompt": bundle_to_prompt(bundle),
+        "decision": {
+            "intent": decision.intent, "params": decision.params,
+            "confidence": decision.confidence, "rung": decision.rung,
+            "rationale": decision.rationale, "expected_next": list(decision.expected_next),
+            "escalate": decision.escalate,
+        },
+        "scan_detail": scan_detail,
+        "model_cost_usd": reasoner.last_cost_usd if reasoner else 0.0,
+    }

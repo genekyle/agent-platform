@@ -130,3 +130,22 @@ def test_controller_endpoints_wired(monkeypatch, tmp_path):
                        "expected_next": ["indeed_apply_review"], "unanswered": [], "recent": []}}
     d = client.post("/api/controller/decide", json=body).json()["decision"]
     assert d["escalate"] is True and d["rung"] == "teacher"
+
+
+def test_observe_endpoint_manual_mode(monkeypatch, tmp_path):
+    """Preview mode with a supplied url+text needs no browser and never acts."""
+    monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTROLLER_PROGRAMS_DIR", str(tmp_path / "progs"))
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    resp = client.post("/api/controller/observe", json={
+        "task": "indeed_apply", "goal_text": "apply with indeed",
+        "url": "https://smartapply.indeed.com/questions/8839201"}).json()
+    assert resp["bundle"]["state"] == "indeed_apply_questions"
+    assert resp["bundle"]["ats"] == "indeed_quick_apply"
+    assert "# GOAL" in resp["prompt"]
+    # no program yet -> escalate to teacher, no spend
+    assert resp["decision"]["rung"] == "teacher" and resp["decision"]["escalate"] is True
+    assert resp["model_cost_usd"] == 0.0

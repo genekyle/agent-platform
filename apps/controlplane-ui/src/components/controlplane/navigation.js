@@ -74,8 +74,9 @@ export const CONTROL_PLANE_NAV = {
   lab: {
     label: "Lab",
     title: "Lab",
-    subtitle: "Input-model playground, the SELECT-stage flywheel, and grounding models.",
+    subtitle: "The decide-stage reasoner, input-model playground, the SELECT-stage flywheel, and grounding models.",
     sections: [
+      { id: "controller", label: "🧠 Controller", subtitle: "The teachable decide(): observe → decide → act. Watch it reason on a tab, the rung mix, the intent programs, and the decision corpus." },
       { id: "playground", label: "Movement Playground", subtitle: "Record real cursor paths, compare against generated motion, and grow the input-model corpus." },
       { id: "test", label: "Model Test", subtitle: "Run the live SELECT cascade against a capture + goal." },
       { id: "eval", label: "Select Metrics", subtitle: "Flywheel metrics: cache-hit rate, escalation rate, cost-per-task." },

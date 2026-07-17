@@ -20,6 +20,7 @@ import { DomainWorkspace } from "./components/controlplane/workspace/DomainWorks
 import { DOMAIN_CATALOG, DOMAINS_BY_ID } from "./components/controlplane/workspace/domains";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
+import { ControllerSection } from "./components/controlplane/ControllerSection";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
@@ -1170,7 +1171,9 @@ export default function App() {
   } else if (activePrimaryView === "lab") {
     // Lab merges the grounding-model pipeline (Models/Eval Runs/Run Detail) with
     // the SELECT-stage flywheel + Movement Playground.
-    if (["models", "eval-runs", "run-detail"].includes(activeSectionId)) {
+    if (activeSectionId === "controller") {
+      sectionContent = <ControllerSection />;
+    } else if (["models", "eval-runs", "run-detail"].includes(activeSectionId)) {
       sectionContent = <ModelsSection section={activeSectionId === "models" ? "registry" : activeSectionId} />;
     } else if (activeSectionId === "scorecard") {
       sectionContent = <ScorecardSection />;
