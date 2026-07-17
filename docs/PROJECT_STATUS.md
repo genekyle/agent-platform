@@ -1,9 +1,10 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-07-16 — **full rewrite**. The previous version (2026-06-15) described the
-SELECT-cascade era and no longer matched the system; it's in git history. This version describes the
-Interaction-API era and, unlike its predecessor, states the corpus numbers instead of the corpus
-intentions._
+_Last updated: 2026-07-17 — priorities reordered (operator-directed): **Controller v1
+(`PLAN_controller_v1.md`) is now priority #1** and absorbs the old #1 (its M2 milestone IS the live
+validation of Interaction API Phase 1). Session briefs for the controller build live in
+`docs/sessions/`. The 2026-07-16 full rewrite below otherwise stands; the previous version
+(2026-06-15, SELECT-cascade era) is in git history._
 
 ## What we're building (one paragraph)
 
@@ -26,7 +27,9 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
   element picks (trained from selection telemetry). When a doc says "L3/L4" it means the models.
 - **API tiers 1–3** — the Interaction API namespace: tier 1 primitives, tier 2 site-agnostic
   protocols, tier 3 domain skills (`PLAN_interaction_api.md` §7).
-- **Rungs** — the resolve_answer cascade (exact → normalised → alias → Haiku → ask).
+- **Rungs** — the resolve_answer cascade (exact → normalised → alias → Haiku → ask). The
+  **controller** (`PLAN_controller_v1.md`) reuses this shape one altitude up: recipe/program →
+  Haiku → teacher → human.
 
 ## What changed since the last status (2026-06-15 → 2026-07-16)
 
@@ -49,7 +52,12 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
    `/describe_widget` (12 widget types), `/select_option`, `/set_date`, `/check_group`,
    `/scan_required`, `/probe` (journaled discovery). 119 tests green.
    **Phase 1's Definition of Done is NOT met**: no live drive has run through the new endpoints;
-   the page-side JS is unvalidated (PRINCIPLES §5). That is the next session's first job.
+   the page-side JS is unvalidated (PRINCIPLES §5). Meeting it is controller Session 02's job
+   (`docs/sessions/SESSION_02_rung0_indeed_replay.md`).
+5. **(07-17) The controller was adopted as priority #1** — the missing `decide()` in
+   `observe() → decide() → act()`. Plan: `PLAN_controller_v1.md`; five sessioned milestones
+   (contract → rung-0 Indeed replay → Haiku rung → propose-approve teaching → shadow metric).
+   Career Search proves it before any expansion.
 
 ## The per-step loop — status
 
@@ -58,6 +66,7 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
 | classify | ✅ built | `escalation_rules.py` | verified on real reCAPTCHA / 2FA |
 | propose | ✅ built | `mcp/app/observer/ax_proposer.py` | AX sidecars emitted unconditionally on every capture |
 | select | ✅ built | `select_stage/` | cache + Haiku SoM live; L1/L3/L4 cascade slots still empty by design |
+| **decide** | **🔨 in build — priority #1** | `controller/` (new) | the teachable reasoner; `PLAN_controller_v1.md`, sessions 01–05 |
 | act | ✅ built, **fired live extensively** | `mcp/app/executor/` + tier-2 protocols | via teacher drives; the autonomous loop remains record-only/`run_live`-limited |
 | verify | ✅ built (element-level) | `select_stage/verifier.py` | protocol-level verification now lives in tier-2 outcomes (`ok` = verified at commit) |
 
@@ -69,7 +78,7 @@ captcha/2FA, secrets never captured.
 
 The **runtime loop** (`runtime/loop.py` + `select_stage/`) is the flywheel machine and the only
 writer of the June-era corpora; the **live-drive path** (teacher driving the MCP/API endpoints) is
-where all real work happened. Until the journal, they didn't share a corpus. Numbers as of today:
+where all real work happened. Until the journal, they didn't share a corpus. Numbers as of 07-16:
 
 | Corpus | Rows | Writer | Read by a trainer? |
 |---|---|---|---|
@@ -82,17 +91,28 @@ where all real work happened. Until the journal, they didn't share a corpus. Num
 **Nothing in the loop is a trained model yet, and no model has ever been trained-and-promoted from
 live-work data.** Baselines: L3 v0 stage-observer **94%** held-out on 98 labels (2026-07-09);
 grounding **0%** on 19 records (data-starved). The flywheel has never completed one revolution —
-that is the project's single most important open item.
+that is the project's single most important open item, and the controller build is how it turns:
+every controller step journals, and controller Session 02 starts the crank on the apply backlog.
 
 ## Priorities (ordered — everything else queues behind these)
 
-1. **Live-validate Phase 1** — finish KKR using only the new endpoints, zero `/eval` in model-made
-   calls. This is Phase 1's DoD and it doubles as the start of #2 (the drive fills the journal).
+_Reordered 2026-07-17 (operator-directed). **The controller is the most important work in the repo
+and starts now.** Its M2 milestone absorbs the old #1 — the rung-0 replay IS the live validation of
+Interaction API Phase 1 — and every controller drive feeds the old #2 (the journal is the crank)._
+
+1. **Controller v1 — the teachable `decide()`** (`PLAN_controller_v1.md`; session briefs
+   `docs/sessions/SESSION_01`–`SESSION_05`). **Career Search only — prove it in this domain first,
+   then expand.** M1 Decision contract + Bundle → M2 rung-0 Indeed replay through the Interaction
+   API with zero model calls (doubles as Phase 1's DoD) → M3 Haiku rung + escalation ladder →
+   M4 propose-approve teaching (corrections as golden rows) → M5 shadow agreement + replay evals +
+   promotion gate.
 2. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
-   measure. The full plan with gates and metrics: `PLAN_flywheel_first_revolution.md`.
+   measure. Fed directly by controller drives. The full plan with gates and metrics:
+   `PLAN_flywheel_first_revolution.md`.
 3. **Spine convergence** — one corpus spine (the journal), one action surface for teacher and loop
    alike. Decision + component dispositions: `DECISION_two-stacks-one-spine.md`. (The loop emitting
-   intents is Phase 4 of `PLAN_interaction_api.md` — decided direction, not current work.)
+   intents is Phase 4 of `PLAN_interaction_api.md` — the controller's `decide()` is exactly the
+   piece the loop will adopt; still not current work to rewrite the loop itself.)
 4. **Interaction API Phase 2** — the intent surface (`/api/interact/*`, `{ats, field, value}`),
    `/resolve_answer` rungs + alias-table writeback.
 5. **Parked** (do not resume until the wheel turns once, unless one blocks a drive): `main.py`
@@ -111,15 +131,17 @@ the state it expected (the verifier/outcome taxonomy is the trigger), it escalat
 protocol retry → Haiku (bounded decisions) → Claude (teaching: discovery → endpoint + recipe +
 labels) → human (stop-states, credentials, irreversibles — always). "Claude-free" is a
 **per-scenario graduation**, never a global switch. The ladder is specified in
-`DECISION_two-stacks-one-spine.md`.
+`DECISION_two-stacks-one-spine.md`; the controller's cascade is its running implementation.
 
 ## Short term vs long term
 
-**Short term:** priorities 1–2 above — validate live, then spin the wheel on the existing 13-job
-apply backlog (the crank is the work itself, not extra work).
+**Short term:** controller sessions 01–02 — the Decision contract, then the rung-0 Indeed replay.
+The replay doubles as Phase-1 live validation and starts filling the journal against the existing
+13-job apply backlog (the crank is the work itself, not extra work).
 
-**Long term:** L3 owns state recognition per ATS; L4 emits intents for learned scenarios (shadow →
-gated promotion); the teacher's journaled drives keep expanding the recipe/protocol library; cost
-per submitted application falls as scenarios graduate; the vision catchall earns its keep on
-protocol discovery and AX-blind pages; continuous retraining on a cadence once the manual crank has
-proven the loop.
+**Long term:** L3 owns state recognition per ATS; L4 slots into the controller's rung 1 for learned
+scenarios (shadow → gated promotion per `docs/CONTROLLER_PROMOTION.md` once Session 05 writes it);
+the teacher's journaled drives keep expanding the recipe/protocol/program library; cost per
+submitted application falls as scenarios graduate; the vision catchall earns its keep on protocol
+discovery and AX-blind pages; continuous retraining on a cadence once the manual crank has proven
+the loop.
