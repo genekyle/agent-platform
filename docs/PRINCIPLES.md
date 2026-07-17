@@ -128,3 +128,40 @@ script and nothing else is a session paid for twice.
 Enforcement: `docs/PLAN_execution_api.md` (protocol inventory, backlog, best practices). Corollary of
 §6 (drive the AX/node layer) and of [[project_widget_protocol_layer]]: AX finds elements, the API
 models widgets.
+
+## §9 — The student is the central cog; the teacher bootstraps it; Haiku is a backstop, not a student
+
+The decision cascade has FOUR sources, and they are **not** interchangeable "models." Naming the
+middle rung "Model (Haiku)" (as `PLAN_controller_v1` §2 and `PLAN_reasoner_v2` §5 originally did) was
+a drift: it let a cheap API backstop squat in the **student's** seat and read as *the reasoner*. It is
+not. Every design choice should ask *"does this grow the student?"* — because the student is the whole
+point of the machine.
+
+- **The student is the most important cog** — the local trained models (`L3` perception, `L4` intent
+  policy; in v2 the **planner** and the **critic**). This is the central model we are building and
+  bringing to the forefront. It leads the routine work as scenarios graduate, and it becomes *its own
+  teacher*: the critic learns the teacher's critique function and takes over the routine critiquing
+  (`PLAN_reasoner_v2` Loop 4). Bringing the student to the front is the goal, not a side effect.
+- **The teacher (Claude — Opus/Fable/Mythos-tier) bootstraps the student**: demonstrates, corrects,
+  and critiques — on the states the student actually reaches (DAgger). It steps aside from the
+  *routine* as the student graduates, and stays for *novel terrain* indefinitely (the ladder's teacher
+  rung never closes). The teacher is scaffolding for the student, never the destination.
+- **Haiku is the cheap deployed BACKSTOP — not a student.** We know what Haiku can do and we do **not**
+  train it further. In the live product (where we deliberately don't pay for Opus-tier on
+  straightforward calls) it is the cheap fallback for when there is no program and no confident
+  student. During teaching it **shadows** — a free "does the cheap model already agree with the
+  teacher?" baseline — it does not act as the brain, and it never occupies the student's seat as a
+  training target.
+- **The human owns the irreversible** — Submit, credentials, stop-states. Never closes.
+
+**Ordering (cheapest-confident-first):** program/cache ($0) → **student** (leads) → **Haiku backstop**
+(catches what the student ducks) → **teacher** (catches what Haiku ducks, and teaches) → human. A
+trained student does **not replace** Haiku and throw the net away — it sits **above** it. Invariant #6
+(the model behind an HTTP endpoint) is how the student drops into its seat: a deployment swap that adds
+the student *above* the backstop, not a rename of the backstop.
+
+- **Status:** documented here; plans amended (`PLAN_controller_v1` §2/§8, `PLAN_reasoner_v2` §5). The
+  shadow-agreement metric already measures the backstop (Haiku) against the teacher. Code follow-up
+  (a v1 completion item): the cascade's `rung` vocabulary distinguishes `student` from `backstop`
+  rather than collapsing both into one `model` rung, and `run_live_apply` defaults to
+  teacher-demonstrates / Haiku-shadows (not Haiku-proposes).

@@ -183,10 +183,15 @@ serialized pack within a distillable size.
 
 - **Cache:** a graded plan for `(task, origin_state)` whose verdicts were all-ok and whose hops
   still ground → replay it. Plans cache exactly like intent programs, and go stale the same way.
-- **Model:** Haiku (Sonnet if Haiku's plans won't ground) prompted with `pack_to_prompt`, output
-  parsed strictly into `Plan` (reject: unknown states, click-level steps, missing success tests,
-  ungrounded non-exploration hops). Malformed or `confidence < 0.75` → escalate. Served behind an
-  endpoint; the future distilled planner is a deployment swap.
+- **Student (planner), backstopped by Haiku:** this rung is the **student planner's seat** — the
+  central model we are building (PRINCIPLES §9), which leads once trained. Until then it is occupied
+  by **Haiku as the cheap backstop** (Sonnet only if Haiku's plans won't ground), prompted with
+  `pack_to_prompt`, output parsed strictly into `Plan` (reject: unknown states, click-level steps,
+  missing success tests, ungrounded non-exploration hops). Malformed or `confidence < 0.75` →
+  escalate. Served behind an endpoint; the distilled planner drops into this seat *above* the Haiku
+  backstop (invariant #6) — Haiku is not a student and is not trained further, it is the live
+  product's cheap fallback. The **critic** (Loop 4) is the student that becomes the routine *teacher*;
+  Haiku never does.
 - **Teacher:** Claude — for exploration plans, repeated divergence, and everything novel. Teacher
   plans flow through the same contract, journal, and grader: no private path, which is precisely
   what makes the teaching distillable (spine decision §2.2, unchanged).

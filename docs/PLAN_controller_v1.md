@@ -106,11 +106,17 @@ Rungs, cheapest first:
 `scan_required` must agree the program's fields are the unanswered ones; `human_required` and
 `done` short-circuit everything. This rung is the graduated path (ladder R0).
 
-**Rung 1 — model (Haiku, budget-gated, ~$0.002).** No cached program: prompt = the serialized
-Bundle (which is why Bundle is frozen — the prompt surface IS the future feature set, same trick as
-`SemanticQuestion`). Output parsed into `Decision`; malformed or `confidence < 0.75` → escalate.
-The model is called behind an HTTP endpoint per invariant #6, so swapping Haiku → local L4 later is
-a deployment change.
+**Rung 1 — the student's seat (L4), backstopped by Haiku (budget-gated, ~$0.002).** This rung is
+where the **student** — the local `L4` intent policy, the central model we are building
+(PRINCIPLES §9) — leads once trained. Until then it is occupied by **Haiku as a cheap backstop**
+(and, in a teaching drive, as the DAgger stand-in that proposes so the teacher can correct on the
+student's own states). Haiku is *not* a student and is *not* trained further — it is the cheap
+fallback the live product runs when there is no program and no confident student. No cached program:
+prompt = the serialized Bundle (which is why Bundle is frozen — the prompt surface IS the future
+feature set, same trick as `SemanticQuestion`). Output parsed into `Decision`; malformed or
+`confidence < 0.75` → escalate. The model is called behind an HTTP endpoint per invariant #6, so the
+trained L4 drops into this seat *above* the Haiku backstop as a deployment change — it does not
+replace the backstop, it leads it.
 
 **Rung 2 — teacher (Claude).** Novel state, stale recipe, rung-1 low-confidence, or two
 consecutive verify-fails. The teacher's decisions go through the *same* Decision contract and the
@@ -212,8 +218,10 @@ and proves the loop shape — three open project priorities paid by one build.
 
 ## 8. Deliberately NOT in v1
 
-- **No trained L4.** The journal must fatten first; the cascade's rung 1 slot is where L4 slots in
-  later with zero contract change (invariant #6 makes it a deployment swap).
+- **No trained L4 yet — but L4 (the student) is the whole point.** The journal must fatten first;
+  rung 1 is the **student's seat**, and the trained L4 drops in *above* the Haiku backstop with zero
+  contract change (invariant #6). Haiku is the cheap backstop, not the student and not a training
+  target — see PRINCIPLES §9. The student is the central cog; Haiku just catches what it ducks.
 - **No lookahead/search.** `state_transition.predict` stays a verify-side sanity check; planning
   over it is v2, and only if single-step + escalation measurably stalls. The full search→apply
   cadence `decide()` must *ultimately* own (state-check → search → distance → apply-everything →
