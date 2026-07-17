@@ -67,7 +67,20 @@ APPLY_EPILOGUE = {
 # --- Branches: the "random events" off the spine (project_apply_random_events) -----
 # human_required => STOP and hand to the operator; never auto-handle.
 APPLY_BRANCHES = {
-    "captcha":                     {"human_required": True,  "note": "reCAPTCHA box (often expired) — human checks it, then submit promptly"},
+    "captcha":                     {"human_required": True,
+                                    "note": "reCAPTCHA box — human checks it, then SUBMIT WITHIN SECONDS. "
+                                            "THE TOKEN HAS A SHORT TTL (~1-2 min) and its expiry is SILENT: "
+                                            "'Submit your application' simply goes disabled=true with NO error "
+                                            "text, no aria-describedby, no alert — the page looks identical to a "
+                                            "ready one. Proven live 2026-07-17 (Purple Carrot): solved -> gate "
+                                            "read cleared -> our submit fired and no-op'd; by the next poll the "
+                                            "checkbox was unsolved again. A human round-trip between the solve "
+                                            "and the submit ALWAYS loses this race. So: never ask the operator to "
+                                            "solve and then go do something else. Poll the gate and fire submit in "
+                                            "the SAME loop iteration it clears (no re-probe, no confirmation "
+                                            "question in between), and if submit is disabled with no error, "
+                                            "suspect an expired token FIRST — re-check /challenge_visibility "
+                                            "before diagnosing fields (extends the captcha-first rule)."},
     "indeed_apply_ai_recruiter_gate": {"human_required": True, "note": "AI recruiter interview (video/audio/text) — human does it"},
     "interview_review":            {"human_required": True,  "note": "review AI-interview answers, 'Submit all'"},
     "survey_assessment":           {"human_required": True,  "note": "survey / skills assessment"},

@@ -907,11 +907,45 @@ _POPUP_SELECT_JS = r"""
   opener.scrollIntoView({block: 'center'});
   opener.focus();
   const expanded = () => opener.getAttribute('aria-expanded');
+  // Count document-scope options BEFORE the click: the DELTA is the honest open signal for a
+  // widget whose ARIA lies. smartapply's EEO combobox declares aria-expanded and then never
+  // flips it — it renders its options in a portal while the attribute stays "false" — so all
+  // three original open-clauses failed on a popup that was visibly on screen (found live
+  // 2026-07-17). Options that exist only AFTER our click are ours; the pre-existing ones are
+  // the Workday strays the scope rule exists for.
+  const preCount = OPTS().length;
+  const isOpen = () => expanded() === 'true' || (scope() !== document && OPTS().length > 0)
+                       || (scope() === document && expanded() === null && OPTS().length > 0)
+                       || (scope() === document && OPTS().length > preCount);
+  // assume_open: the caller ALREADY opened the popup with a TRUSTED mouse click (a synthetic
+  // page-side .click() does not register on some widgets — smartapply's EEO combobox, like
+  // Workday's prompts before it). Skip our own open; just confirm something is showing.
+  if (cfg.assume_open) {
+    // NB not isOpen(): the popup is already open when this script starts, so preCount counted
+    // the OPEN popup and the delta clause can never fire. Options being visible IS the signal
+    // here — the trusted click already happened, and exact-match + the stage-confirm guard
+    // against acting on strays.
+    const ok0 = await until(() => OPTS().length > 0, 10);
+    if (!ok0) return {ok: false, log: [...log, {step: 'open', assumed: true, n_options: OPTS().length}],
+                      detail: 'popup did not open (even after a trusted-mouse open)'};
+    log.push({step: 'open', assumed: true, n_options: OPTS().length, trusted: true});
+    // fall through to SELECT below
+  } else {
   if (expanded() !== 'true') opener.click();
-  // Wait for the widget's OWN popup: aria-expanded flipping, or (for widgets that never set it)
-  // options appearing inside a resolved scope.
-  const opened = await until(() => expanded() === 'true' || (scope() !== document && OPTS().length > 0)
-                                   || (scope() === document && expanded() === null && OPTS().length > 0));
+  // Wait for the widget's OWN popup: aria-expanded flipping, options inside a resolved scope,
+  // options appearing where the widget declares nothing — or NEW options under a lying ARIA.
+  let opened = await until(isOpen, 12);
+  // THE FOCUS-TOGGLE CASE (smartapply's EEO combobox, live 2026-07-17): some comboboxes open
+  // on FOCUS — so the protocol's own focus() opened it and the click() TOGGLED IT CLOSED.
+  // The picker that historically worked here clicked WITHOUT focusing first. We keep
+  // focus-then-click (Workday's keyboard protocol needs the focus), and when the popup
+  // hasn't shown, click once more: on a toggler that re-opens it; on a genuinely dead
+  // widget it changes nothing and we still report not_opened honestly.
+  if (!opened) {
+    log.push({step: 'open', retry: 'reclick (focus may have toggled it shut)'});
+    opener.click();
+    opened = await until(isOpen, 13);
+  }
   if (!opened)
     return {ok: false, log: [...log, {step: 'open', n_options: OPTS().length, expanded: expanded()}],
             detail: 'popup did not open'};
@@ -919,6 +953,7 @@ _POPUP_SELECT_JS = r"""
   if (OPTS().length === 0)
     return {ok: false, log, detail: `popup opened but no node matches option_selector `
             + `(${cfg.option_selector}) — this widget may render plain divs, not [role=option]`};
+  }  // end of the self-open path (assume_open skips it)
 
   // SELECT — exact match first (a "Mobile" must not match "Mobile Phone"), then prefix.
   const txt = (o) => (o.innerText || '').trim();
@@ -997,7 +1032,12 @@ class WidgetSelectRequest(BaseModel):
     tab_url: Optional[str] = None
     opener_selector: str                 # e.g. '[data-automation-id="formField-phoneType"] button'
     option_label: str                    # e.g. 'Mobile'
-    option_selector: str = "li[role=option], [role=option], [data-automation-id=promptOption]"
+    option_selector: str = ("li[role=option], [role=option], [data-automation-id=promptOption], "
+                            # bare <li>s under a [role=listbox]: smartapply's EEO combobox
+                            # renders these with NO role=option — the picker that worked
+                            # (autofill) always included them; the protocol didn't, so it
+                            # saw n_options=0 forever on an open popup (live, 2026-07-17)
+                            "[role=listbox] li")
     commit_names: list[str] = []         # e.g. ['Update','Apply'] — empty = applies on select
     bring_to_front: bool = True
 
@@ -1036,6 +1076,32 @@ async def widget_select(body: WidgetSelectRequest):
             "option_label": body.option_label,
             "commit_names": body.commit_names,
         })
+        # TRUSTED-OPEN FALLBACK. Some widgets ignore a synthetic page-side .click() entirely
+        # (smartapply's EEO combobox — the same class of widget as Workday's prompts, whose
+        # options "only register TRUSTED CDP mouse events"). Page-side JS cannot dispatch a
+        # trusted event, so when the one-shot script reports not_opened we open with a real
+        # CDP mouse click here, then re-run the script with assume_open to stage + confirm.
+        # Two evaluations are safe: the popup dismisses on BLUR, and nothing here blurs.
+        if not res.get("ok") and "did not open" in (res.get("detail") or ""):
+            center = (await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression":
+                "(() => { const el = document.querySelector(" + json.dumps(body.opener_selector) + ");"
+                " if (!el) return null; el.scrollIntoView({block:'center'});"
+                " const r = el.getBoundingClientRect();"
+                " return {x: r.x + r.width/2, y: r.y + r.height/2}; })()"
+            })).get("result", {}).get("value")
+            if center:
+                await _trusted_click(cdp, center["x"], center["y"])
+                await asyncio.sleep(0.8)
+                res2 = await _popup_select(cdp, {
+                    "opener_selector": body.opener_selector,
+                    "option_selector": body.option_selector,
+                    "option_label": body.option_label,
+                    "commit_names": body.commit_names,
+                    "assume_open": True,
+                })
+                res2["log"] = (res.get("log") or []) + [{"step": "open", "via": "trusted_mouse"}] \
+                              + (res2.get("log") or [])
+                res = res2
     _log_event("drive", f"widget_select {body.option_label}",
                detail=f"{'ok' if res.get('ok') else 'FAILED'} · {res.get('detail','')}",
                domain=(body.tab_url or ""))
@@ -1064,7 +1130,7 @@ class SelectOptionRequest(BaseModel):
     value: str
     widget_type: Optional[str] = None
     commit: Optional[str] = None          # footer button label; None = applies on select
-    option_selector: str = "li[role=option], [role=option], [data-automation-id=promptOption], [class*=select__option]"
+    option_selector: str = "li[role=option], [role=option], [data-automation-id=promptOption], [class*=select__option], [role=listbox] li"
     bring_to_front: bool = True
     ats: Optional[str] = None
     field: Optional[str] = None

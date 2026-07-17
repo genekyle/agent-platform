@@ -325,6 +325,41 @@ SCAN_REQUIRED_JS = r"""
               answered: truth.answered, valid: !invalid, value_preview: truth.preview});
   }
 
+  // A GROUP's question container is, BY CONSTRUCTION, the lowest common ancestor of its
+  // members — not `closest('…, div')`, which lands on ONE option's own row div and reads
+  // "True" where the question (and its required asterisk) lives two levels up. Third
+  // encounter with the closest-div trap (react-select truth, ground-truth probe, now this):
+  // smartapply's radios carry NO required attribute at all — the asterisk in the question
+  // text is the only signal, so reading the wrong container silently drops the whole group.
+  // Found live: scan said 0 while three required radio questions sat unanswered.
+  const lca = (group) => {
+    let node = group[0];
+    while (node && node !== document.body && !group.every(m => node.contains(m)))
+      node = node.parentElement;
+    return node || group[0].parentElement;
+  };
+  const groupLabel = (group, fallback) => {
+    // The LCA alone is NOT the question container: measured live on smartapply, the radio
+    // pair's LCA text is exactly "True False" — the question ("Are you able to commute…*")
+    // is a SIBLING of the options' wrapper, a level or two up. So climb from the LCA to the
+    // LOWEST ancestor whose text reads like a question (carries '?' or '*', or is an
+    // explicit question container). Stopping at the first hit keeps us from swallowing the
+    // whole form (every higher ancestor also contains '?').
+    // Text only — no class shortcut. The first attempt also accepted
+    // `[class*=question]` containers, and smartapply's options wrapper is itself
+    // class=single-select-question-*, so the shortcut matched the very node whose text is
+    // "True False" and ended the climb one level short. A structural tell that can name the
+    // options box is no tell; the question text ('?' or the required '*') is the signal.
+    let node = lca(group);
+    for (let i = 0; i < 5 && node && node !== document.body; i++) {
+      const t = txt(node).slice(0, 160);
+      if (/[?*]/.test(t))
+        return t || fallback;
+      node = node.parentElement;
+    }
+    return txt(lca(group)).slice(0, 160) || fallback;
+  };
+
   // rule 2 — checkbox groups, which the old scan missed entirely.
   const boxes = [...document.querySelectorAll('input[type=checkbox]')].filter(vis);
   const groups = {};
@@ -334,9 +369,7 @@ SCAN_REQUIRED_JS = r"""
     (groups[k] = groups[k] || []).push(b);
   }
   for (const [k, group] of Object.entries(groups)) {
-    const wrap = group[0].closest('fieldset, [role=group], [class*=field], li, div');
-    const legend = wrap && wrap.querySelector('legend, label');
-    const label = legend ? txt(legend) : k;
+    const label = groupLabel(group, k);
     const anyDisabled = group.every(b => b.disabled);
     const req = !anyDisabled &&
                 (group.some(b => b.required || attr(b, 'aria-required') === 'true') || /\*/.test(label));
@@ -347,15 +380,15 @@ SCAN_REQUIRED_JS = r"""
               answered: false, valid: true, value_preview: ''});
   }
 
-  // Radio groups, same reasoning.
+  // Radio groups, same reasoning. NB group by NAME before id: smartapply gives every radio
+  // on the page the SAME id (single-select-question) while the name (q_<hash>) is the real
+  // group identity — id-first grouping would fuse three questions into one.
   const radios = [...document.querySelectorAll('input[type=radio]')].filter(vis);
   const rgroups = {};
   for (const r of radios) { const k = r.name || r.id; if (k) (rgroups[k] = rgroups[k] || []).push(r); }
   for (const [k, group] of Object.entries(rgroups)) {
     if (group.some(r => r.checked)) continue;
-    const wrap = group[0].closest('fieldset, [role=group], [class*=field], li, div');
-    const legend = wrap && wrap.querySelector('legend, label');
-    const label = legend ? txt(legend) : k;
+    const label = groupLabel(group, k);
     const req = group.some(r => r.required || attr(r, 'aria-required') === 'true') || /\*/.test(label);
     if (!req) continue;
     out.push({field: label.slice(0, 90), selector: group[0].id ? '#' + group[0].id : null,
