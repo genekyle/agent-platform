@@ -1,0 +1,216 @@
+"""The decision journal — one append-only row per decide() call. THE CONTROLLER'S CORPUS.
+
+Sibling of `journal.py` (the intent/actor corpus), joinable to it on `route`/`fingerprint`.
+`journal.py` records what the ACTOR did; this records what the REASONER decided and whether
+it was right. Same rules, because they are the same discipline:
+
+  - append-only, best-effort, NEVER raises into the hot path (a journal write must not break
+    a live drive);
+  - values are redacted HERE, unconditionally, so no call site can leak a secret by forgetting;
+  - **no row without a join key** — the spine rule. Enforced against `route` (route_template,
+    always present), not the opportunistic AX `fingerprint`; see `decision.py` for why.
+
+A golden row (M4) and a shadow row (M5) are ordinary rows with a flag set — the corpus stays
+one file, and `golden=True` / `shadow=True` are mechanically filterable.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+from interaction.contract import redact
+from interaction.decision import (
+    DECISION_SCHEMA_VERSION,
+    Bundle,
+    Decision,
+    DecisionRecord,
+    bundle_digest,
+    looks_like_selector,
+)
+
+_lock = threading.Lock()
+_JOURNAL_NAME = "decision_journal.jsonl"
+
+
+def _default_artifacts_dir() -> Path:
+    """The corpus dir both apps share — same resolution as `journal._default_artifacts_dir`,
+    so the decision journal sits beside the intent journal in `mcp/output/cache/`."""
+    env = os.environ.get("INTERACTION_ARTIFACTS_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[3] / "apps" / "mcp" / "output"
+
+
+def _path() -> Path:
+    p = _default_artifacts_dir() / "cache" / _JOURNAL_NAME
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _redact_params(params: Optional[dict]) -> dict:
+    """A params dict as it may be journaled: the carried value redacted, and any
+    selector-shaped key OR value dropped (invariant #10 — addressing must never reach the
+    corpus, or a policy trained on it learns the wrong altitude).
+
+    A Decision's params are shaped `{field: <name>, value: <the value>, ...}`, so the
+    `value` entry's sensitivity is governed by the SIBLING `field` name, not by the key
+    "value" — the same split `log_intent(field=, value=)` makes. Any other string entry is
+    redacted defensively by its own key (a stray secret under an odd key still gets caught).
+    """
+    if not isinstance(params, dict):
+        return {}
+    field_name = params.get("field") if isinstance(params.get("field"), str) else None
+    out: dict[str, Any] = {}
+    for k, v in params.items():
+        if looks_like_selector(k) or looks_like_selector(v):
+            continue  # addressing — never journal it
+        if isinstance(v, str):
+            out[k] = redact(v, field=(field_name if k == "value" else k))
+        else:
+            out[k] = v
+    return out
+
+
+def record_for(
+    decision: Decision,
+    bundle: Bundle,
+    *,
+    outcome: Optional[str] = None,
+    landed_state: Optional[str] = None,
+    verified: Optional[bool] = None,
+    golden: bool = False,
+    proposed: Optional[Decision] = None,
+    shadow: bool = False,
+    session_id: Optional[str] = None,
+    duration_ms: int = 0,
+    cost_usd: float = 0.0,
+) -> DecisionRecord:
+    """Build a DecisionRecord from a Decision + the Bundle it decided on. PURE — no IO, no
+    time; `log_decision` stamps `ts`. Keeps construction replayable from journaled inputs."""
+    return DecisionRecord(
+        ts="",
+        schema_version=DECISION_SCHEMA_VERSION,
+        intent=decision.intent,
+        rung=decision.rung,
+        outcome=outcome,
+        params=dict(decision.params or {}),
+        confidence=decision.confidence,
+        escalate=decision.escalate,
+        rationale=decision.rationale,
+        expected_next=tuple(decision.expected_next),
+        landed_state=landed_state,
+        verified=verified,
+        bundle_digest=bundle_digest(bundle),
+        task=bundle.task,
+        state=bundle.state,
+        ats=bundle.ats,
+        route=bundle.route,
+        fingerprint=bundle.fingerprint,
+        url=bundle.url,
+        golden=golden,
+        proposed_intent=proposed.intent if proposed else None,
+        proposed_params=dict(proposed.params) if proposed else None,
+        proposed_rung=proposed.rung if proposed else None,
+        shadow=shadow,
+        session_id=session_id,
+        duration_ms=duration_ms,
+        cost_usd=cost_usd,
+    )
+
+
+def log_decision(record: DecisionRecord) -> Optional[DecisionRecord]:
+    """Append one decision row. Best-effort — never raises into the hot path.
+
+    Enforces the spine rule (`route` required) and redacts params (values + proposed_params)
+    before the row lands. Returns the redacted record (or None if refused/failed) so a caller
+    can echo it without re-deriving.
+    """
+    try:
+        if not (record.route or "").strip():
+            # The spine rule: a row that cannot join to anything is not a corpus row.
+            return None
+        if not record.ts:
+            record.ts = datetime.now(timezone.utc).isoformat()
+        record.params = _redact_params(record.params)
+        if record.proposed_params is not None:
+            record.proposed_params = _redact_params(record.proposed_params)
+        with _lock:
+            with _path().open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+        return record
+    except Exception:  # noqa: BLE001 — a journal write must never break a live drive
+        return None
+
+
+def read_rows(*, limit: Optional[int] = None) -> list[dict[str, Any]]:
+    """Read the corpus (oldest first). `limit` returns the most recent N."""
+    p = _path()
+    if not p.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    except Exception:  # noqa: BLE001
+        return rows
+    return rows[-limit:] if limit else rows
+
+
+def recent_for_run(session_id: str, *, k: int = 5) -> tuple[dict, ...]:
+    """The last k (intent, field, outcome) rows for one run — the Bundle's history half.
+    Reads the journal so the loop's `recent` survives a process restart mid-run."""
+    if not session_id:
+        return ()
+    rows = [r for r in read_rows() if r.get("session_id") == session_id and not r.get("shadow")]
+    tail = rows[-k:]
+    return tuple(
+        {"intent": r.get("intent"), "field": (r.get("params") or {}).get("field"),
+         "outcome": r.get("outcome")}
+        for r in tail
+    )
+
+
+def summarize() -> dict[str, Any]:
+    """Aggregate the corpus — the controller scoreboard, mirror of `journal.summarize`.
+
+    `verified_rate` is the number to watch: an unverified corpus is not a healthy one. Rung
+    and escalation shares are the promotion signals PLAN §6 gates on.
+    """
+    rows = read_rows()
+    summary: dict[str, Any] = {
+        "corpus_size": len(rows),
+        "by_rung": [], "by_intent": [], "by_state": [], "by_ats": [],
+        "verified_rate": 0.0, "escalation_rate": 0.0, "golden_count": 0, "shadow_count": 0,
+    }
+    if not rows:
+        return summary
+
+    def tally(key: str) -> list[dict[str, Any]]:
+        counts: dict[str, int] = {}
+        for r in rows:
+            c = r.get(key) or "?"
+            counts[c] = counts.get(c, 0) + 1
+        return sorted(({key: k, "count": v} for k, v in counts.items()),
+                      key=lambda x: x["count"], reverse=True)
+
+    acted = [r for r in rows if not r.get("escalate")]
+    verifiable = [r for r in acted if r.get("verified") is not None]
+    summary["by_rung"] = tally("rung")
+    summary["by_intent"] = tally("intent")
+    summary["by_state"] = tally("state")
+    summary["by_ats"] = tally("ats")
+    summary["escalation_rate"] = round(sum(1 for r in rows if r.get("escalate")) / len(rows), 4)
+    if verifiable:
+        summary["verified_rate"] = round(
+            sum(1 for r in verifiable if r.get("verified")) / len(verifiable), 4)
+    summary["golden_count"] = sum(1 for r in rows if r.get("golden"))
+    summary["shadow_count"] = sum(1 for r in rows if r.get("shadow"))
+    return summary

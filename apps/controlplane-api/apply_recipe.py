@@ -542,6 +542,148 @@ GREENHOUSE_LESSONS = {
                    "cheap: just reload the iframe and re-fill. Refresh freely here; never on Workday.",
 }
 
+# --- Cross-ATS state readout: describe_tab, one altitude up (the controller Bundle) --------------
+# The controller's Bundle needs the SAME "where are we" readout for every Career Search ATS, not
+# just Indeed. Indeed reads state from the URL (map_url_to_state); Workday and Greenhouse are
+# single-origin SPAs whose step is in the PAGE, not the URL, so they are classified from page_text
+# markers here. These are SEED heuristics — the cheap deterministic tool before L3 (the page-state
+# model) graduates — and they fail HONESTLY: no marker => state "unknown", which makes the bundle
+# escalate rather than guess. Site knowledge lives HERE with the recipe, never in the bundle builder.
+
+# page_text substring (lowercased) -> state, checked in order (most specific first). Ordering
+# matters: "create account"/"sign in" are checked before the generic apply steps, and the weak
+# "review" marker is phrased specifically so it doesn't fire on an incidental "review" elsewhere.
+_WORKDAY_STATE_MARKERS: list[tuple[str, str]] = [
+    ("verify new password", "workday_create_account"),
+    ("create account", "workday_create_account"),
+    ("my information", "workday_my_information"),
+    ("my experience", "workday_my_experience"),
+    ("voluntary disclosures", "workday_voluntary_disclosures"),
+    ("self identify", "workday_voluntary_disclosures"),
+    ("application questions", "workday_questions"),
+    ("review and submit", "workday_review"),
+    ("please review your application", "workday_review"),
+    ("password", "workday_sign_in"),   # a password field with none of the above => the login wall
+]
+
+_GREENHOUSE_STATE_MARKERS: list[tuple[str, str]] = [
+    ("thank you for applying", "greenhouse_apply_submitted"),
+    ("application submitted", "greenhouse_apply_submitted"),
+    ("your application has been submitted", "greenhouse_apply_submitted"),
+]
+
+# The credential boundary as STATE: at any of these the agent stops — it never types a password or
+# creates an account (WORKDAY_ACCOUNT_LOOP runs_as the operator). Marking them human_required here
+# is what makes the bundle refuse to drive them, per PRINCIPLES and the ATS-accounts boundary.
+_CREDENTIAL_STATES = frozenset({"workday_sign_in", "workday_create_account",
+                                "appvault_login", "appvault_create_account"})
+
+# Anti-bot / challenge markers — classify -> escalate, NEVER auto-solve (same rule everywhere).
+_CHALLENGE_MARKERS = ("verify you are human", "i'm not a robot", "recaptcha",
+                      "complete the captcha", "select all images")
+
+# Terminal states per ATS — the recipe's own "arrived" set. Used as a done fallback when no
+# TaskSpec matches (task_spec.py is the primary source; this covers ATSs without a spec yet).
+_TERMINAL_STATES: dict[str, frozenset[str]] = {
+    "indeed_quick_apply": frozenset({"indeed_apply_submitted"}),
+    "workday": frozenset({"submitted", "workday_submitted"}),
+    "greenhouse": frozenset({"greenhouse_apply_submitted"}),
+}
+
+_LESSONS_BY_ATS: dict[str, dict[str, Any]] = {
+    "workday": WORKDAY_LESSONS,
+    "greenhouse": GREENHOUSE_LESSONS,
+}
+
+
+def _classify_from_markers(page_text: str, markers: list[tuple[str, str]]) -> Optional[str]:
+    t = (page_text or "").lower()
+    if any(m in t for m in _CHALLENGE_MARKERS):
+        return "captcha"
+    for needle, state in markers:
+        if needle in t:
+            return state
+    return None
+
+
+def map_workday_state(url: str, page_text: str = "") -> str:
+    hit = _classify_from_markers(page_text, _WORKDAY_STATE_MARKERS)
+    if hit:
+        return hit
+    # On a Workday origin with no step marker yet, we're at the job posting; otherwise unknown.
+    if "myworkdayjobs" in (url or ""):
+        return "workday_job_posting"
+    return "unknown"
+
+
+def map_greenhouse_state(url: str, page_text: str = "") -> str:
+    hit = _classify_from_markers(page_text, _GREENHOUSE_STATE_MARKERS)
+    if hit:
+        return hit
+    # The whole Greenhouse application is one form; if we're on it at all, that's the state.
+    return "greenhouse_apply_form" if ("greenhouse" in (url or "") or "gh_jid" in (url or "")
+                                       or page_text) else "unknown"
+
+
+def _describe_from_recipe(url: str, state: str, recipe: list[dict], branches: dict) -> dict[str, Any]:
+    """Shared 'where are we' builder — the Workday/Greenhouse twin of Indeed's describe_tab."""
+    entry = next((s for s in recipe if s["state"] == state), None)
+    branch = branches.get(state)
+    human = bool(branch and branch.get("human_required")) or state in _CREDENTIAL_STATES
+    note = (branch.get("note") if branch else None) or (
+        "credential step — the operator signs in / creates the account; the agent never types "
+        "a password" if state in _CREDENTIAL_STATES else None)
+    return {
+        "url": (url or "")[:90],
+        "state": state,
+        "role": "apply",
+        "recipe_step": entry["step"] if entry else None,
+        "next_action": entry["action"] if entry else None,
+        "expected_next": entry["expect"] if entry else [],
+        "is_branch": (branch is not None) or state in _CREDENTIAL_STATES,
+        "human_required": human,
+        "branch_note": note,
+    }
+
+
+def describe_workday_tab(url: str, page_text: str = "") -> dict[str, Any]:
+    return _describe_from_recipe(url, map_workday_state(url, page_text),
+                                 WORKDAY_APPLY_RECIPE, WORKDAY_APPLY_BRANCHES)
+
+
+def describe_greenhouse_tab(url: str, page_text: str = "") -> dict[str, Any]:
+    branches = {"captcha": {"human_required": True, "note": GREENHOUSE_APPLY_RECIPE[0]["captcha"]}}
+    return _describe_from_recipe(url, map_greenhouse_state(url, page_text),
+                                 GREENHOUSE_APPLY_RECIPE, branches)
+
+
+def lessons_for(ats: str) -> dict[str, Any]:
+    """The ATS's LESSONS dict (the teacher's seed knowledge) — {} for Indeed (no LESSONS dict;
+    its branch notes carry the equivalent). Serialised into the Bundle's `lessons` field."""
+    return _LESSONS_BY_ATS.get(ats, {})
+
+
+def is_terminal_state(ats: str, state: Optional[str]) -> bool:
+    """Whether `state` is a recipe-known 'arrived' state for `ats` — the done fallback when no
+    TaskSpec matches. Accepts the ats_registry id or the short group name."""
+    if not state:
+        return False
+    key = "workday" if "workday" in (ats or "") else "greenhouse" if "greenhouse" in (ats or "") \
+        else ats
+    return state in _TERMINAL_STATES.get(key, frozenset())
+
+
+def describe_for_ats(ats: Optional[str], url: str, page_text: str = "") -> dict[str, Any]:
+    """Dispatch the 'where are we' readout to the recipe that owns this ATS. Career Search only;
+    an unrecognised ATS falls back to the Indeed reader (the URL-state path degrades gracefully)."""
+    a = ats or ""
+    if "workday" in a:
+        return describe_workday_tab(url, page_text)
+    if "greenhouse" in a:
+        return describe_greenhouse_tab(url, page_text)
+    return describe_tab(url, page_text)   # indeed_quick_apply + graceful default
+
+
 def recipe_spec() -> dict[str, Any]:
     import apply_fields
     return {
