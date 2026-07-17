@@ -23,6 +23,7 @@ from interaction.decision import Bundle, Decision, DecisionRecord
 from interaction.decision_journal import log_decision, record_for
 from controller import programs as programs_mod
 from controller.decide import DecisionReasoner, ProgramLookup, decide
+from controller.teach import PROPOSE_RUNGS, ReviewAction, Reviewer
 
 MAX_STEPS = 40
 
@@ -58,6 +59,7 @@ STATUS_HUMAN = "human_required"
 STATUS_BLOCKED = "blocked"
 STATUS_ESCALATED = "escalated"
 STATUS_CONSEQUENTIAL = "consequential_gate"
+STATUS_ABORTED = "aborted"
 
 
 @dataclass
@@ -88,6 +90,8 @@ def run_controller(
     model: Optional[DecisionReasoner] = None,
     session_id: str = "",
     max_steps: int = MAX_STEPS,
+    reviewer: Optional[Reviewer] = None,
+    propose_rungs: frozenset = PROPOSE_RUNGS,
     on_escalate: Optional[Callable[[Bundle, Decision], None]] = None,
     on_consequential: Optional[Callable[[Bundle, Decision], None]] = None,
     on_step: Optional[Callable[[Bundle, Decision, Optional[ActOutcome]], None]] = None,
@@ -107,9 +111,10 @@ def run_controller(
 
     def journal(dec: Decision, bundle: Bundle, *, outcome: Optional[str] = None,
                 landed: Optional[str] = None, verified: Optional[bool] = None,
-                cost: float = 0.0) -> None:
+                cost: float = 0.0, proposed: Optional[Decision] = None,
+                golden: bool = False) -> None:
         rec = record_for(dec, bundle, outcome=outcome, landed_state=landed, verified=verified,
-                         session_id=session_id, cost_usd=cost)
+                         session_id=session_id, cost_usd=cost, proposed=proposed, golden=golden)
         saved = log_decision(rec)
         records.append(saved or rec)
 
@@ -143,24 +148,55 @@ def run_controller(
                                   "two consecutive escalations — handing to the teacher/operator",
                                   bundle, decision, records)
             continue
-        escalations_in_a_row = 0
+        # NB: escalations_in_a_row is reset only after a VERIFIED action (below), not merely on a
+        # non-decide-escalate iteration — otherwise review-escalates and verify-fails could never
+        # accumulate to the two-in-a-row stop (they land after this point in the loop).
 
-        # --- a consequential intent: hold it for the operator, never auto-act
-        if decision.intent in CONSEQUENTIAL_INTENTS:
-            journal(decision, bundle, outcome=None)
+        # --- propose-approve (DAgger): a non-recipe decision is reviewed before acting. The
+        # decision that actually ACTS (`acting`) may be the proposal or the teacher's correction;
+        # a correction journals a GOLDEN row carrying BOTH halves on the controller's own state.
+        acting = decision
+        proposed_for_golden: Optional[Decision] = None
+        if reviewer is not None and decision.rung in propose_rungs:
+            review = reviewer(bundle, decision)
+            if review.action == ReviewAction.ABORT:
+                journal(decision, bundle)
+                return LoopResult(STATUS_ABORTED, step, "operator aborted the drive",
+                                  bundle, decision, records)
+            if review.action == ReviewAction.ESCALATE:
+                journal(decision, bundle)
+                if on_escalate:
+                    on_escalate(bundle, decision)
+                escalations_in_a_row += 1
+                if escalations_in_a_row >= 2:
+                    return LoopResult(STATUS_ESCALATED, step, "escalated at review", bundle,
+                                      decision, records)
+                continue
+            if review.action == ReviewAction.CORRECT and review.correction is not None:
+                acting = review.correction
+                proposed_for_golden = decision
+            last_decision = acting
+
+        # --- a consequential intent: hold it for the operator, never auto-act (gate the ACTING
+        # decision — a correction could itself be a Submit).
+        if acting.intent in CONSEQUENTIAL_INTENTS:
+            journal(acting, bundle, outcome=None, proposed=proposed_for_golden,
+                    golden=bool(proposed_for_golden))
             if on_consequential:
-                on_consequential(bundle, decision)
+                on_consequential(bundle, acting)
             if on_step:
-                on_step(bundle, decision, None)
+                on_step(bundle, acting, None)
             return LoopResult(STATUS_CONSEQUENTIAL, step,
-                              f"{decision.intent} held for the operator (consequential gate)",
-                              bundle, decision, records)
+                              f"{acting.intent} held for the operator (consequential gate)",
+                              bundle, acting, records)
 
         # --- act through the Interaction API, then verify
-        result = actuator.act(decision)
-        verified = _verify(decision, result)
-        journal(decision, bundle, outcome=result.outcome, landed=result.landed_state,
-                verified=verified, cost=result.cost_usd)
+        result = actuator.act(acting)
+        verified = _verify(acting, result)
+        journal(acting, bundle, outcome=result.outcome, landed=result.landed_state,
+                verified=verified, cost=result.cost_usd, proposed=proposed_for_golden,
+                golden=bool(proposed_for_golden))
+        decision = acting          # downstream stale/escalation logic acts on what actually ran
         if on_step:
             on_step(bundle, decision, result)
 
@@ -172,6 +208,7 @@ def run_controller(
 
         if verified:
             stale_retry_used = False
+            escalations_in_a_row = 0        # a verified action breaks any escalation streak
             continue
 
         # verify failed. A stale-state outcome means "re-observe before retrying" — do it ONCE.
