@@ -1422,3 +1422,38 @@ shadow, metrics, replay) + `packages/interaction/interaction/decision*.py` (the 
 Lab → 🧠 Controller. Owed, operator-present: the M2 teacher-compile + replay drives on the Indeed
 apply backlog (which also close out Interaction API Phase 1's DoD), and the first real shadow
 agreement numbers into PROJECT_STATUS. `make controller-evals` is the offline regression suite.
+
+## 2026-07-17 — LiveActuator built (the controller's live seam) + the north-star cadence
+
+Operator directed the controller toward a full teaching cadence (fresh Indeed session → search
+`reporting analyst` / Manchester NH / 50mi → apply to EVERYTHING end to end → record → paginate),
+recorded as the `apply_sweep` mode (`search_cadence.py`) + `docs/PLAN_cadence_northstar.md`: v1
+EXECUTES the known cadence (the goal is outlined, not reasoned per step), v2 REASONS it (the planner).
+Then built the owed seam — `controller/live_actuator.py` (`run_controller`'s live `Actuator`) — and
+validated its read path against the real browser. Load-bearing findings:
+
+- **Reaching a SPECIFIC live session from the capture server needs `browser_url=<its CDP port>`.** A
+  bare `/auth_state {}` returns "All connection attempts failed" — it defaults to a dead browser. The
+  session manager (`GET /api/sessions`, control plane :8081) knows each session's port; the live
+  Indeed session was id 16 on **:9328**, persistent authed profile, `logged_in:true`. The capture
+  server (:8082) is NOT bound to a session by default — you pass it the port.
+- **Address a multi-step drive by `tab_id`, never `tab_url`.** A tab_url handle breaks the instant a
+  Continue click navigates; the tab id is stable across navigation. `/close_tab` and `/navigate` take
+  either; the LiveActuator uses tab_id only.
+- **`classify_ats(smartapply) == "indeed_quick_apply"`, but `apply_fields` keys Indeed under
+  `"indeed"` and `INDEED_FIELDS` is ~empty (only the distance pill).** So Indeed's apply-question
+  selectors CANNOT come from the static resolver — they only exist at runtime, in `/scan_required`.
+  The LiveActuator addresses fields **resolve-first (Workday/Greenhouse static), then live-scan
+  fallback (Indeed dynamic)**; that dual path is required, not a nicety. The Bundle gets the
+  *sanitized* scan (no selectors → decide() stays selector-blind, invariant #10); the actuator keeps
+  the *raw* scan (with selectors) for act(). That split is the invariant made mechanical.
+- **The loop stops after 2 consecutive escalations, so a pure teacher-hand-authored compile drive
+  stalls** (every step escalates with no programs/model). The live teaching mode is therefore
+  **Haiku (rung 1) proposes + a reviewer corrects** (propose-approve / DAgger) — which is also what
+  the operator asked for ("its early decisions will be inaccurate → corrected → training data").
+- **Still owed for Claude/operator to BE the live reviewer:** `run_controller`'s `cli_reviewer`
+  blocks on stdin, which Claude can't drive mid-loop. Owed: a step-wise HTTP surface (observe→decide→
+  return proposal; then act the approved/corrected decision → verify → journal golden) — the cockpit
+  propose-approve panel's backend. The LiveActuator + `run_live_apply` are done and tested (9 offline
+  tests, fake transport); a live read-only `observe()` classified `indeed_home` correctly and decide()
+  escalated honestly ($0). What remains before the drive: the step surface, then search→apply→teach.

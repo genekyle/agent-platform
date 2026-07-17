@@ -117,7 +117,13 @@ Interaction API Phase 1 — and every controller drive feeds the old #2 (the jou
    then expand.** M1 Decision contract + Bundle → M2 rung-0 Indeed replay through the Interaction
    API with zero model calls (doubles as Phase 1's DoD) → M3 Haiku rung + escalation ladder →
    M4 propose-approve teaching (corrections as golden rows) → M5 shadow agreement + replay evals +
-   promotion gate.
+   promotion gate. **North star (operator-directed 2026-07-17):** `decide()` must ultimately own the
+   whole `apply_sweep` cadence — state-check → search (`reporting analyst` / Manchester NH / 50mi) →
+   apply to *everything* end to end → record → paginate — executed as a known program in v1, reasoned
+   by the planner in v2. See `PLAN_cadence_northstar.md`. **The `LiveActuator` seam is now BUILT +
+   offline-tested** (`controller/live_actuator.py`, 9 tests; live read-only `observe()` classified
+   `indeed_home` against the real session). Owed before the drive: a step-wise reviewer surface (so
+   Claude/operator approves-corrects each turn — `cli_reviewer` blocks stdin), then search→apply→teach.
 2. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
    measure. Fed directly by controller drives. The full plan with gates and metrics:
    `PLAN_flywheel_first_revolution.md`.

@@ -129,6 +129,53 @@ CADENCE_MODES = {
         # to return to search is the expected epilogue (see BOUNDS.tab_hygiene), not churn.
         "does_not": ["auto-submit without approval", "URL-jump to jobs", "churn tabs to browse"],
     },
+    # ---- TASK 3: the TEACHING sweep — apply to EVERYTHING, end to end -----------
+    # The controller's training mode (operator-directed 2026-07-17). NOT the day-to-day loop:
+    # here we deliberately DON'T handpick. The goal is fixed and known — apply to every result of
+    # one query — so decide() executes the WHOLE cadence and every step becomes training data
+    # (right calls verify; wrong calls get corrected at the point of disagreement = golden rows).
+    # "You must do everything in order to learn" — breadth of extraction_sweep, but each result is
+    # driven end to end like apply_triage, minus the per-job handpick (the operator batch-approves
+    # the sweep up front instead). This is a decide()-owned flow: it must know the cadence ALWAYS,
+    # because the north star is outlined, not reasoned per step (that high-level reasoning is v2 —
+    # see docs/PLAN_cadence_northstar.md). The HARD gates do NOT relax: the final Submit is still a
+    # per-application operator confirm (consequential gate), account walls / captcha / AI-recruiter
+    # branches still hand to the human (classify_apply_outcome human_required=True), navigation is
+    # still human-like. Batch-approving the sweep authorizes ENTERING each apply, never the Submit.
+    "apply_sweep": {
+        "goal": "Breadth + depth for TEACHING: apply to EVERY result of one query, end to end, "
+                "recording found + applied. No handpick — the operator batch-approves the sweep; "
+                "decide() drives every step so the whole cadence is exercised and journaled.",
+        "steps": [
+            "STATE CHECK: confirm we're logged in and on a fresh Indeed page. Not logged in / a "
+            "challenge → ESCALATE to the operator (never type a password, never auto-solve). This "
+            "is cadence step 0 and it gates everything below.",
+            "Enter the query + location on the existing tab and run the search (human-paced typing).",
+            "Set the DISTANCE filter to >= min_radius_miles by CLICKING the pill (never a radius= "
+            "URL param). Refuse to proceed below the floor.",
+            "READ SEARCH META off page 1 (total results + page count) and record it with the query.",
+            "Per page: extract ALL cards -> observed_jobs (deduped by platform:external_id).",
+            "For EVERY card on the page (not a shortlist): click it to open the in-page pane, VERIFY "
+            "the pane is that job (verify_job_identity — near-miss guard), then run the apply "
+            "cadence for its platform (classify_apply_platform -> the right recipe).",
+            "Drive each apply END TO END through decide(): fill every field (autofill + answer "
+            "store), route the random-event branches (classify_apply_outcome), PAUSE at the final "
+            "Submit for the operator's per-application approval, then record applied + provenance.",
+            "APPLY EPILOGUE per result: close the ONE finished apply tab (submitted OR abandoned at "
+            "a human-required wall) and refocus the search tab (mcp /close_tab). No orphan tabs.",
+            "Only after the whole page is handled: CLICK pagination to the next page. Repeat until "
+            "the query's pages are exhausted (bounds), then record_outcome on the target.",
+        ],
+        "records": ["observed_jobs (ALL, deduped)", "search meta (total + page count)",
+                    "application_status + provenance (per result)", "the decision journal (every "
+                    "decide() step — the whole point)"],
+        "stops_when": "pages exhausted, bounds hit, a live captcha/challenge, logout, the weekly "
+                      "budget cap, or the operator pauses",
+        "does_not": ["type passwords or create accounts (operator-owned; escalate at the wall)",
+                     "auto-solve captchas/2FA", "auto-submit without the per-application approval",
+                     "open job-detail URLs / churn tabs to browse", "gather below min_radius_miles",
+                     "handpick or skip results — the sweep applies to everything it can reach"],
+    },
 }
 
 # Where an application actually routes — apply is CROSS-SITE, not Indeed-only.

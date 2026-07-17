@@ -215,7 +215,11 @@ and proves the loop shape — three open project priorities paid by one build.
 - **No trained L4.** The journal must fatten first; the cascade's rung 1 slot is where L4 slots in
   later with zero contract change (invariant #6 makes it a deployment swap).
 - **No lookahead/search.** `state_transition.predict` stays a verify-side sanity check; planning
-  over it is v2, and only if single-step + escalation measurably stalls.
+  over it is v2, and only if single-step + escalation measurably stalls. The full search→apply
+  cadence `decide()` must *ultimately* own (state-check → search → distance → apply-everything →
+  record → paginate) is the v2 planner's domain; v1 executes that cadence as a known program. The
+  north star is recorded in `PLAN_cadence_northstar.md` (+ the `apply_sweep` mode in
+  `search_cadence.py`) so we build toward it without pulling it into v1.
 - **No embeddings / vector memory.** Retrieval in v1 is exact: `(task, state)` keys and the
   journal tail. Add similarity retrieval only when exact-match provably misses.
 - **No loop rewrite, no new domains, no FB port** — all already declared non-goals; the controller
