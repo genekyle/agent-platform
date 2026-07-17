@@ -1370,3 +1370,55 @@ NOTE the store holds canonical values (`08/2015`, `Sports Science`); the FORM ma
 vocabulary — Greenhouse wanted the month NAME, and its school list has no University of Santo Tomas
 at all (it does carry Ateneo de Manila, so the absence is real, not a search miss) → "Other". Map
 store → widget vocabulary at fill time; don't assume the stored string is what the widget accepts.
+
+## 2026-07-17 — Controller v1 built end-to-end (the teachable decide(), M1–M5 + cockpit)
+
+Built the missing `decide()` in observe()→decide()→act() across all five PLAN_controller_v1
+milestones in one session, offline-testable core + UI. 84 new tests, full suite 442 green. The
+live drives (teacher-compile, replay, propose-approve Workday) are the operator-present next step;
+everything they need is wired and the loop shape is proven offline. Load-bearing lessons:
+
+- **Two join keys, and the spine rule attaches to the CHEAP one.** Everywhere else "fingerprint"
+  means the AX sha256 — and it is OPPORTUNISTIC (only exists when a scan ran). The controller must
+  journal a joinable row on EVERY step, so the Bundle carries BOTH `route` (route_template, always
+  present) and `fingerprint` (AX sha256, may be None). "No row without a fingerprint" (PLAN §1) is
+  enforced against `route`. Don't conflate them — the plan's Bundle comment did, and it's the first
+  thing that trips you up in `decision.py`.
+- **`/scan_required`'s `unanswered` items are NOT bundle-safe verbatim.** They carry `selector`
+  (`#id`) and `value_read_at` (`[class*=singleValue]`) — selector-shaped, banned by invariant #10 —
+  and `value_preview`, a slice of the field's value (PII, §4). `sanitize_unanswered` whitelists the
+  semantic set `{field, kind, required_via, answered, valid}`. The plan said "verbatim"; the
+  invariants win. This is exactly the "gap the existing surface didn't cleanly give" §6 warns about.
+- **The credential boundary is a STATE, enforced at the bundle.** `workday_sign_in` /
+  `workday_create_account` / `appvault_*` map to `human_required=True` in `describe_for_ats`, so the
+  controller structurally cannot drive them — the agent never types a password / creates an account,
+  and that rule now lives in the recipe layer (apply_recipe), not in a hope that decide() remembers.
+- **Rung 0 replays by reading LIVE form truth, not a step counter.** decide() fills the first
+  unanswered field the program covers, and advances only when `unanswered` is empty. This is
+  naturally re-entrant to Indeed skipping prefilled fields (the thing that breaks index-based
+  replay), and a guard-miss (an unanswered field the program never saw = the form changed) escalates
+  instead of guessing.
+- **Programs are PII-free BY CONSTRUCTION.** A step carries `{field}` (+ optional `value_ref`),
+  never a value — the value is resolved from the answer store at act time. `save_program` re-sanitises
+  every step at the boundary (drops `value`/selectors), so a committed `programs/*.json` is
+  grep-clean of the operator's name/email without anyone remembering to redact.
+- **The escalation streak resets only on a VERIFIED action, never merely on a non-escalate
+  iteration.** First cut reset it at the top of each loop pass; that zeroed the counter before the
+  propose-approve review and the verify-fail path, so a reviewer that kept saying "escalate" (or a
+  step that kept verify-failing) could never hit the two-in-a-row stop. Caught by the M4 escalate
+  test. Reset belongs next to `verified = True`.
+- **A rejected model output is TRAINING SIGNAL, not an error to swallow.** `parse_decision` turns a
+  bad Haiku output (unknown intent, a selector smuggled into params, a missing confidence) into a
+  journaled model-rung escalation whose rationale names the fault — so the malformed row is visible
+  in the corpus, the same discipline as the Outcome taxonomy.
+- **The safe always-available UI surface is observe→decide WITHOUT act.** `/api/controller/observe`
+  reads a tab read-only (free local CDP; degrades if the capture server is down), builds a bundle,
+  runs the cascade, and shows the Decision — the operator can "watch it think" on any Career Search
+  page with zero risk and zero spend (model rung off by default). This is what makes the controller
+  demoable before a single live drive.
+
+Where it stands: `apps/controlplane-api/controller/` (bundle, programs, decide, reason, loop, teach,
+shadow, metrics, replay) + `packages/interaction/interaction/decision*.py` (the frozen contract) +
+Lab → 🧠 Controller. Owed, operator-present: the M2 teacher-compile + replay drives on the Indeed
+apply backlog (which also close out Interaction API Phase 1's DoD), and the first real shadow
+agreement numbers into PROJECT_STATUS. `make controller-evals` is the offline regression suite.

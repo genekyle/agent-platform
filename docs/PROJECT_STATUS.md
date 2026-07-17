@@ -1,10 +1,11 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-07-17 — priorities reordered (operator-directed): **Controller v1
-(`PLAN_controller_v1.md`) is now priority #1** and absorbs the old #1 (its M2 milestone IS the live
-validation of Interaction API Phase 1). Session briefs for the controller build live in
-`docs/sessions/`. The 2026-07-16 full rewrite below otherwise stands; the previous version
-(2026-06-15, SELECT-cascade era) is in git history._
+_Last updated: 2026-07-17 — **Controller v1 (`PLAN_controller_v1.md`) BUILT end-to-end (M1–M5) and
+surfaced in the cockpit** (Lab → 🧠 Controller); 84 new tests, full suite 442 green. What remains is
+the operator-present live drive (M2 teacher-compile + replay, which also closes Interaction API
+Phase 1's DoD). Priorities were reordered earlier the same day to make the controller #1. Session
+briefs live in `docs/sessions/`. The 2026-07-16 full rewrite below otherwise stands; the previous
+version (2026-06-15, SELECT-cascade era) is in git history._
 
 ## What we're building (one paragraph)
 
@@ -58,6 +59,17 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
    `observe() → decide() → act()`. Plan: `PLAN_controller_v1.md`; five sessioned milestones
    (contract → rung-0 Indeed replay → Haiku rung → propose-approve teaching → shadow metric).
    Career Search proves it before any expansion.
+6. **(07-17) Controller v1 built end-to-end (M1–M5) + cockpit surface.** The frozen contract
+   (`interaction/decision*.py`: Bundle/Decision/DecisionRecord + `bundle_to_prompt`), the pure
+   `build_bundle`, the compile-on-first-drive intent programs, the `resolve_answer`-shaped cascade
+   (rung 0 recipe → rung 1 Haiku behind an HTTP seam → escalate), the thin loop harness with the
+   consequential gate + escalation ladder, the propose-approve DAgger gate (corrections → golden
+   rows), and the measurement layer (`shadow_agreement`, `make controller-evals`, `CONTROLLER_
+   PROMOTION.md`). Surfaced at **Lab → 🧠 Controller** (scoreboard, rung mix, a read-only
+   observe→decide preview, the program library, the decision feed). **84 new tests; full suite 442
+   green.** NOT yet done — the operator-present live drives: the M2 teacher-compile + replay on the
+   Indeed apply backlog (which double as Interaction API Phase 1's unmet DoD), and the first real
+   shadow-agreement numbers. Everything those drives need is wired; only the driving remains.
 
 ## The per-step loop — status
 
@@ -66,7 +78,7 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
 | classify | ✅ built | `escalation_rules.py` | verified on real reCAPTCHA / 2FA |
 | propose | ✅ built | `mcp/app/observer/ax_proposer.py` | AX sidecars emitted unconditionally on every capture |
 | select | ✅ built | `select_stage/` | cache + Haiku SoM live; L1/L3/L4 cascade slots still empty by design |
-| **decide** | **🔨 in build — priority #1** | `controller/` (new) | the teachable reasoner; `PLAN_controller_v1.md`, sessions 01–05 |
+| **decide** | **✅ built (offline) — live drive owed** | `controller/` | the teachable reasoner; M1–M5 landed 2026-07-17 (`PLAN_controller_v1.md`). Cascade + loop + teach + shadow/replay all tested; the operator-present live drives remain |
 | act | ✅ built, **fired live extensively** | `mcp/app/executor/` + tier-2 protocols | via teacher drives; the autonomous loop remains record-only/`run_live`-limited |
 | verify | ✅ built (element-level) | `select_stage/verifier.py` | protocol-level verification now lives in tier-2 outcomes (`ok` = verified at commit) |
 
