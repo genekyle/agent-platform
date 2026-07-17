@@ -120,10 +120,12 @@ Interaction API Phase 1 — and every controller drive feeds the old #2 (the jou
    promotion gate. **North star (operator-directed 2026-07-17):** `decide()` must ultimately own the
    whole `apply_sweep` cadence — state-check → search (`reporting analyst` / Manchester NH / 50mi) →
    apply to *everything* end to end → record → paginate — executed as a known program in v1, reasoned
-   by the planner in v2. See `PLAN_cadence_northstar.md`. **The `LiveActuator` seam is now BUILT +
-   offline-tested** (`controller/live_actuator.py`, 9 tests; live read-only `observe()` classified
-   `indeed_home` against the real session). Owed before the drive: a step-wise reviewer surface (so
-   Claude/operator approves-corrects each turn — `cli_reviewer` blocks stdin), then search→apply→teach.
+   by the planner in v2. See `PLAN_cadence_northstar.md`. **The live seam is BUILT + offline-tested:**
+   `controller/live_actuator.py` (the `Actuator` — resolve→journaled endpoints, Submit held; 9 tests;
+   live read-only `observe()` classified `indeed_home`) and `controller/teach_session.py` (the §9
+   teaching surface — `propose()`/`commit()`, teacher decides + Haiku shadows; 6 tests). Reasoning
+   roles re-anchored in PRINCIPLES §9 (student = central cog; Haiku = backstop). **Owed = the live
+   teaching drive itself** (journal flows, programs compile) + search-phase/tab states in the Bundle.
 2. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
    measure. Fed directly by controller drives. The full plan with gates and metrics:
    `PLAN_flywheel_first_revolution.md`.

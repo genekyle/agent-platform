@@ -244,12 +244,16 @@ class LiveActuator:
 
 
 def run_live_apply(*, browser_url: str, tab_id: str, task: str = "indeed_apply",
-                   capture_server_url: Optional[str] = None, use_model: bool = True,
+                   capture_server_url: Optional[str] = None, use_model: bool = False,
                    budget_limit: Optional[float] = None, reviewer=None, record_only: bool = False,
                    session_id: str = "", max_steps: int = 40, transport: Optional[Transport] = None):
-    """Wire a live controller drive: LiveActuator + Haiku (rung 1, proposes) + a reviewer (you/me,
-    corrects) + the program store, then run_controller. Haiku's early calls will be wrong; the
-    reviewer corrects at the point of disagreement -> golden rows. SUBMIT is held by the loop."""
+    """Wire a run_controller drive over the live tab (LiveActuator + program store), then run it.
+
+    NOTE (PRINCIPLES §9): for a live *teaching* drive, prefer `teach_session.open_live_teach_session`
+    — the teacher demonstrates each step and Haiku SHADOWS. This entrypoint runs the autonomous loop,
+    and `use_model=True` puts Haiku in the ACTING seat as the DAgger stand-in (proposes under the
+    `reviewer`) — that is off by default, because Haiku is the cheap backstop, not the acting brain.
+    Use it only when a reviewer (or, later, a trained L4) is in the seat. SUBMIT is held by the loop."""
     from settings import settings
     from controller import programs as programs_mod
     from controller.loop import run_controller
