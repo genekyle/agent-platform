@@ -107,6 +107,12 @@ def cli_reviewer(*, input_fn=input, print_fn=print) -> Reviewer:
             field = input_fn("    field (blank if none) > ").strip() or None
             value = input_fn("    value (blank if none) > ").strip() or None
             control = input_fn("    control name (blank if none) > ").strip() or None
+            # §10 — the Open Brain: capture the teacher's REAL reasoning, not a stub. This used to be
+            # hardcoded "operator correction", so every human correction taught WHAT to do with no
+            # WHY — the highest-value rows in the corpus arrived reasoning-blank. Pass what's typed
+            # verbatim (an empty "why" journals empty and gets flagged by the reasoned_rate metric —
+            # honest beats a placeholder that masquerades as content).
+            why = input_fn("    why? (one line — this is the training signal) > ").strip()
             params: dict = {}
             if field:
                 params["field"] = field
@@ -115,8 +121,7 @@ def cli_reviewer(*, input_fn=input, print_fn=print) -> Reviewer:
             if control:
                 params["control"] = control
             return correct(Decision(intent=intent, params=params, confidence=1.0, rung="teacher",
-                                    rationale="operator correction",
-                                    expected_next=decision.expected_next))
+                                    rationale=why, expected_next=decision.expected_next))
         return approve()
 
     return _review

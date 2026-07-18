@@ -75,13 +75,25 @@ class TrajectoryDriver(ABC):
         start: Optional[tuple[float, float]] = None,
     ) -> ExecResult: ...
 
+    async def _dispatch_mouse(self, cdp, params: dict, timeout: float = 0.8) -> None:
+        """Dispatch a mouse event, TOLERATING a dropped/late CDP ack. Chrome's ack for mouse events
+        is unreliable in some builds — a click that opens a new tab steals the CDP context, a wheel
+        during smooth scroll — but the EVENT still lands. So we don't block on the reply past a short
+        bound (seen live 2026-07-18: a trusted press on a new-tab "Apply" button hung ~40s). The
+        `_CDPSession.send` recv-timeout is the last-ditch net; this keeps normal driving snappy."""
+        import asyncio
+        try:
+            await asyncio.wait_for(cdp.send("Input.dispatchMouseEvent", params), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+
     async def _click_sequence(self, cdp, x: float, y: float, path: Optional[list[tuple[float, float]]] = None) -> None:
         """Optional pre-move along `path` (CSS px), then a left click at (x,y)."""
         for px, py in (path or []):
-            await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
-        await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
-        await cdp.send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
-        await cdp.send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
+            await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": px, "y": py})
+        await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": x, "y": y})
+        await self._dispatch_mouse(cdp, {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
+        await self._dispatch_mouse(cdp, {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
 
     async def _path_to(self, x: float, y: float, start: Optional[tuple[float, float]] = None):
         """Cursor path (CSS px) to (x,y). Base = teleport (no path); the motion drivers
@@ -95,9 +107,9 @@ class TrajectoryDriver(ABC):
         Humanized/MinJerk wiggle to the point. The node action itself stays native (robust)."""
         path = await self._path_to(x, y, start)
         for px, py in (path or []):
-            await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
+            await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": px, "y": py})
         if path:
-            await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+            await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": x, "y": y})
 
     async def _apply_value(self, cdp, request: ActionRequest) -> None:
         """For type/select/clear actions, apply the value after focusing via click."""
@@ -154,8 +166,18 @@ class TrajectoryDriver(ABC):
             await call("function(){ this.focus(); if(this.select)this.select(); }")
             await self._apply_value(cdp, request)
         else:  # click / submit / default
-            await call("function(){ this.click(); }")
+            await self._element_click(cdp, object_id, pt)
         return "element"
+
+    async def _element_click(self, cdp, object_id: str, pt: dict) -> None:
+        """The click portion of a node-based action. Base = the native synthetic `this.click()` —
+        the robotic baseline (isTrusted=false, and it doesn't move/focus like a hand). HumanizedDriver
+        overrides this to a TRUSTED CDP mouse press/release at the node's freshly-measured centre
+        (`pt`), so the robust `backend_node_id` path clicks like a human instead of scripting a click.
+        Trusted clicks are the system-wide standard (operator-directed 2026-07-18); this is the seam."""
+        await cdp.send("Runtime.callFunctionOn",
+                       {"objectId": object_id, "functionDeclaration": "function(){ this.click(); }",
+                        "awaitPromise": False})
 
     def _scroll_plan(self, total: float) -> list[tuple[float, float]]:
         """Break a vertical scroll of `total` CSS px into (deltaY, pause_seconds) steps. Base = one
@@ -172,8 +194,8 @@ class TrajectoryDriver(ABC):
         if not x and not y:  # no anchor bbox → scroll over mid-viewport
             x, y = 400.0, 400.0
         for delta, pause in self._scroll_plan(total):
-            await cdp.send("Input.dispatchMouseEvent",
-                           {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta})
+            # tolerate a dropped wheel ack per notch (the wheel lands regardless) — see _dispatch_mouse
+            await self._dispatch_mouse(cdp, {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta}, timeout=0.6)
             if pause:
                 await asyncio.sleep(pause)
         return "scroll"
@@ -249,12 +271,19 @@ class DirectDriver(TrajectoryDriver):
 
 
 def get_driver(name: Optional[str] = None) -> TrajectoryDriver:
-    """Factory. Default 'direct'; EXECUTOR_DRIVER env overrides. Min-jerk is Phase 6."""
+    """Factory. **Default 'humanized' — the system-wide standard for real driving** (trusted clicks,
+    human wiggle, human wheel-scroll, cadence typing). `EXECUTOR_DRIVER` or an explicit `name`
+    overrides. `direct` is the robotic teleport baseline, kept for tests / record-only / internal
+    atomic actions that must not move the mouse. An unknown name resolves to the humanized default,
+    not an error (fail toward human-like, never toward the robotic signature). Operator-directed
+    2026-07-18: humanized/trusted is the default everywhere the agent actually drives."""
     import os
-    choice = (name or os.environ.get("EXECUTOR_DRIVER", "direct")).lower()
+    choice = (name or os.environ.get("EXECUTOR_DRIVER", "humanized")).lower()
     if choice == "record_only":
         from .record_only import RecordOnlyDriver
         return RecordOnlyDriver()
+    if choice == "direct":
+        return DirectDriver()
     if choice == "minimum_jerk":
         try:
             from .minimum_jerk import MinimumJerkDriver
@@ -262,11 +291,10 @@ def get_driver(name: Optional[str] = None) -> TrajectoryDriver:
         except Exception:
             logger.warning("minimum_jerk driver unavailable — falling back to direct")
             return DirectDriver()
-    if choice == "humanized":
-        try:
-            from .humanized import HumanizedDriver
-            return HumanizedDriver()
-        except Exception:
-            logger.warning("humanized driver unavailable — falling back to direct")
-            return DirectDriver()
-    return DirectDriver()
+    # default ("humanized") and any unknown name -> the human-motion standard
+    try:
+        from .humanized import HumanizedDriver
+        return HumanizedDriver()
+    except Exception:
+        logger.warning("humanized driver unavailable — falling back to direct")
+        return DirectDriver()

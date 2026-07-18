@@ -17,7 +17,7 @@ from controller.teach import (
     scripted_reviewer,
 )
 from interaction import decision_journal
-from interaction.decision import Bundle, Decision
+from interaction.decision import Bundle, Decision, is_real_rationale
 
 
 def _bundle(state, fields=(), *, done=False, expected=("next_state",)) -> Bundle:
@@ -161,10 +161,15 @@ def test_cli_reviewer_approve_and_correct():
     r = cli_reviewer(input_fn=lambda *_: "", print_fn=lambda *_: None)(b, d)
     assert r.action == ReviewAction.APPROVE
 
-    # 'c' then a scripted correction
-    answers = iter(["c", "select_option", "Source", "Indeed", ""])
+    # 'c' then a scripted correction — last answer is the §10 "why" (the training signal)
+    answers = iter(["c", "select_option", "Source", "Indeed", "",
+                    "Source is a dropdown, not free text — set_text would never commit it"])
     r = cli_reviewer(input_fn=lambda *_: next(answers), print_fn=lambda *_: None)(b, d)
     assert r.action == ReviewAction.CORRECT
     assert r.correction.intent == "select_option"
     assert r.correction.params == {"field": "Source", "value": "Indeed"}
     assert r.correction.rung == "teacher"
+    # §10 — the Open Brain: the operator's real reasoning is captured, not the old "operator
+    # correction" stub. A golden row without a real why is a lesson thrown away.
+    assert "dropdown" in r.correction.rationale
+    assert is_real_rationale(r.correction.rationale)

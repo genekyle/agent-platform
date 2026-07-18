@@ -61,6 +61,10 @@ DECISION_JSON_SCHEMA: dict[str, Any] = {
         # is enforced in parse_decision (the trustworthy, tested half) instead. (Live 2026-07-18.)
         "confidence": {"type": "number"},
         "rationale": {"type": "string"},
+        # §10 (the Open Brain): the Bundle facts the rationale leans on — the receipts. Optional so
+        # a terse call still parses, but requested in the system prompt so the backstop's "why" is
+        # checkable and its proposal, when the teacher overrides it, carries its own cited reasoning.
+        "evidence": {"type": "array", "items": {"type": "string"}},
         "expected_next": {"type": "array", "items": {"type": "string"}},
         "escalate": {"type": "boolean"},
     },
@@ -82,6 +86,9 @@ _SYSTEM = (
     "- Set `confidence` in [0,1]. If you are unsure, if the state looks novel, or if this needs a "
     "human (a login, a captcha, a Submit), set `escalate` true and a low confidence — asking is "
     "cheaper than a wrong action on someone's real job application.\n"
+    "- `rationale` is one sentence saying WHY this action (not a restatement of it); `evidence` "
+    "(optional) lists the Bundle facts it leans on — e.g. \"state\", \"unanswered[0].field\", "
+    "\"recent[-1].outcome\" — so your reasoning is checkable, not asserted.\n"
     "- `expected_next` lists the state ids you expect to land on."
 )
 
@@ -136,6 +143,7 @@ def parse_decision(payload: Any, bundle: Bundle) -> Decision:
         confidence=float(conf),
         rung="model",
         rationale=str(payload.get("rationale", "") or ""),
+        evidence=tuple(str(s) for s in (payload.get("evidence") or ())),
         expected_next=tuple(str(s) for s in (payload.get("expected_next") or ())),
         escalate=bool(payload.get("escalate", False)),
     )

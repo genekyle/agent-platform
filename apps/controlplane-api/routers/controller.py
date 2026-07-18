@@ -22,7 +22,8 @@ from controller.bundle import build_bundle
 from controller.decide import decide
 from controller.reason import HaikuReasoner
 from interaction import decision_journal
-from interaction.decision import Bundle, bundle_to_prompt
+from interaction.contract import Outcome
+from interaction.decision import Bundle, Decision, bundle_to_prompt
 from settings import settings
 
 router = APIRouter()
@@ -68,7 +69,8 @@ def decide_model(body: DecideModelBody) -> dict[str, Any]:
         "decision": {
             "intent": decision.intent, "params": decision.params,
             "confidence": decision.confidence, "rung": decision.rung,
-            "rationale": decision.rationale, "expected_next": list(decision.expected_next),
+            "rationale": decision.rationale, "evidence": list(decision.evidence),
+            "expected_next": list(decision.expected_next),
             "escalate": decision.escalate,
         },
         "cost_usd": reasoner.last_cost_usd,
@@ -86,6 +88,7 @@ def decide_cascade(body: DecideModelBody) -> dict[str, Any]:
     return {"decision": {
         "intent": decision.intent, "params": decision.params, "confidence": decision.confidence,
         "rung": decision.rung, "rationale": decision.rationale,
+        "evidence": list(decision.evidence),
         "expected_next": list(decision.expected_next), "escalate": decision.escalate}}
 
 
@@ -180,9 +183,111 @@ async def observe(body: ObserveBody) -> dict[str, Any]:
         "decision": {
             "intent": decision.intent, "params": decision.params,
             "confidence": decision.confidence, "rung": decision.rung,
-            "rationale": decision.rationale, "expected_next": list(decision.expected_next),
+            "rationale": decision.rationale, "evidence": list(decision.evidence),
+            "expected_next": list(decision.expected_next),
             "escalate": decision.escalate,
         },
         "scan_detail": scan_detail,
         "model_cost_usd": reasoner.last_cost_usd if reasoner else 0.0,
     }
+
+
+# --- The live TEACHING surface (PLAN_controller_v1 §4; PRINCIPLES §9 + §10 — the Open Brain) --------
+# The owed live-teaching drive, reachable over HTTP: the teacher decides, we ACT it through the
+# LiveActuator (humanized/trusted driving) and JOURNAL a DecisionRecord carrying the teacher's
+# rationale + evidence — so the reasoning transfers into the students' corpus. SUBMIT is HELD for the
+# operator (the human owns the irreversible). Stateless: each call re-observes the live tab first, so
+# the row records the exact bundle acted on and never a stale one (PRINCIPLES §1).
+
+class TeachObserveBody(BaseModel):
+    browser_url: str
+    tab_id: str
+    task: str = "indeed_apply"
+    goal_text: str = ""
+
+
+class TeachDecisionIn(BaseModel):
+    intent: str
+    params: dict[str, Any] = {}
+    rationale: str = ""
+    evidence: list[str] = []
+    expected_next: list[str] = []
+    confidence: float = 1.0
+
+
+class TeachCommitBody(BaseModel):
+    browser_url: str
+    tab_id: str
+    task: str = "indeed_apply"
+    goal_text: str = ""
+    decision: TeachDecisionIn
+    proposed: Optional[TeachDecisionIn] = None   # the backstop's competing take (golden contrast, §10)
+    session_id: Optional[str] = None
+
+
+def _live_actuator(body: Any):
+    """A LiveActuator on the humanized/trusted driver — the system-wide standard for real driving."""
+    from controller.live_actuator import LiveActuator
+    return LiveActuator(base_url=settings.capture_server_url, browser_url=body.browser_url,
+                        tab_id=body.tab_id, task=body.task, goal_text=body.goal_text,
+                        driver="humanized")
+
+
+def _decision_from(d: TeachDecisionIn, *, rung: str) -> Decision:
+    return Decision(intent=d.intent, params=dict(d.params or {}), confidence=d.confidence,
+                    rung=rung, rationale=d.rationale, evidence=tuple(d.evidence),
+                    expected_next=tuple(d.expected_next))
+
+
+@router.post("/api/controller/teach/observe")
+def teach_observe(body: TeachObserveBody) -> dict[str, Any]:
+    """Read-only observe of the live tab + what the deterministic cascade would do (the teacher's
+    cue). Never acts. The teacher reads this, authors a Decision, and posts it to /teach/commit."""
+    actuator = _live_actuator(body)
+    bundle = actuator.observe()
+    suggestion = decide(bundle, programs=programs_mod.ProgramStore(), model=None)
+    return {
+        "state": bundle.state, "ats": bundle.ats, "url": bundle.url, "done": bundle.done,
+        "human_required": bundle.human_required, "is_branch": bundle.is_branch,
+        "unanswered": [dict(u) for u in bundle.unanswered],
+        "prompt": bundle_to_prompt(bundle),
+        "suggestion": {"intent": suggestion.intent, "params": suggestion.params,
+                       "rung": suggestion.rung, "rationale": suggestion.rationale,
+                       "escalate": suggestion.escalate},
+    }
+
+
+@router.post("/api/controller/teach/commit")
+def teach_commit(body: TeachCommitBody) -> dict[str, Any]:
+    """Act ONE teacher-authored Decision through the humanized LiveActuator and JOURNAL it with the
+    teacher's rationale + evidence (the Open Brain). SUBMIT is HELD — the operator owns it."""
+    from controller.loop import CONSEQUENTIAL_INTENTS
+
+    decision = _decision_from(body.decision, rung="teacher")
+    proposed = _decision_from(body.proposed, rung="model") if body.proposed is not None else None
+
+    actuator = _live_actuator(body)
+    bundle = actuator.observe()   # fresh: the row records the bundle actually acted on
+
+    # HUMAN GATE — never act a consequential intent (Submit). Journal it held, hand to the operator.
+    if decision.intent in CONSEQUENTIAL_INTENTS:
+        rec = decision_journal.record_for(decision, bundle, proposed=proposed,
+                                          golden=bool(proposed), outcome=None,
+                                          session_id=body.session_id)
+        decision_journal.log_decision(rec)
+        return {"held": True, "intent": decision.intent, "journaled": True,
+                "detail": "SUBMIT held for the operator (consequential gate, PRINCIPLES §9)"}
+
+    result = actuator.act(decision)
+    landed = result.landed_state
+    verified: Optional[bool] = None
+    if decision.expected_next:
+        verified = (landed in decision.expected_next) and (result.outcome == Outcome.OK.value)
+    rec = decision_journal.record_for(
+        decision, bundle, proposed=proposed, golden=bool(proposed),
+        outcome=result.outcome, landed_state=landed, verified=verified,
+        session_id=body.session_id, cost_usd=getattr(result, "cost_usd", 0.0))
+    saved = decision_journal.log_decision(rec)
+    return {"held": False, "intent": decision.intent, "outcome": result.outcome,
+            "landed_state": landed, "verified": verified, "detail": result.detail,
+            "journaled": saved is not None}

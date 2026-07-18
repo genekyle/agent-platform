@@ -456,6 +456,50 @@ input[type="checkbox"] {
   color: #991b1b;
 }
 
+/* The drive-lock banner — "CDP is driving; keyboard owned". Loud on purpose: an amber strip with a
+   candy-stripe edge, sticky under the topbar so it's unmissable on every view while a drive holds
+   the keyboard. Not an OS seize — an ownership signal + a one-click release. */
+.drive-lock-banner {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 18px;
+  background: #7c2d12;
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  border-bottom: 3px solid #f59e0b;
+  box-shadow: 0 4px 12px rgba(124, 45, 18, 0.25);
+  animation: drive-lock-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes drive-lock-pulse {
+  0%, 100% { background: #7c2d12; }
+  50% { background: #9a3412; }
+}
+
+.drive-lock-banner__msg { flex: 1 1 auto; }
+.drive-lock-banner__lock { letter-spacing: 0.2px; }
+.drive-lock-banner__holder { opacity: 0.95; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.drive-lock-banner__reason { opacity: 0.85; font-weight: 500; }
+.drive-lock-banner__hint { opacity: 0.8; font-weight: 500; font-style: italic; }
+
+.drive-lock-banner__release {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.drive-lock-banner__release:hover { background: rgba(255, 255, 255, 0.24); }
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

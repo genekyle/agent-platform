@@ -31,6 +31,7 @@ from interaction.decision import (
     Decision,
     DecisionRecord,
     bundle_digest,
+    is_real_rationale,
     looks_like_selector,
     replay_snapshot,
 )
@@ -104,6 +105,7 @@ def record_for(
         confidence=decision.confidence,
         escalate=decision.escalate,
         rationale=decision.rationale,
+        evidence=tuple(decision.evidence),
         expected_next=tuple(decision.expected_next),
         landed_state=landed_state,
         verified=verified,
@@ -118,6 +120,9 @@ def record_for(
         proposed_intent=proposed.intent if proposed else None,
         proposed_params=dict(proposed.params) if proposed else None,
         proposed_rung=proposed.rung if proposed else None,
+        # §10: the proposal's OWN reasoning, kept beside the teacher's — the correction's contrast.
+        proposed_rationale=proposed.rationale if proposed else None,
+        proposed_evidence=tuple(proposed.evidence) if proposed else (),
         shadow=shadow,
         # Replay cases (golden corrections + shadow comparisons) carry a self-contained,
         # PII-free snapshot so the offline eval suite can re-run decide() on the exact input.
@@ -193,6 +198,10 @@ def summarize() -> dict[str, Any]:
         "corpus_size": len(rows),
         "by_rung": [], "by_intent": [], "by_state": [], "by_ats": [],
         "verified_rate": 0.0, "escalation_rate": 0.0, "golden_count": 0, "shadow_count": 0,
+        # §10 (the Open Brain): of the rows that are SUPPOSED to teach (the teacher's demonstrations
+        # + golden corrections), how many actually carry reasoning. Trends to 1.0 once the teaching
+        # seams solicit a real "why"; a persistent gap means reasoning is being paid for and dropped.
+        "teach_row_count": 0, "reasoned_rate": 0.0, "unreasoned_teach_count": 0,
     }
     if not rows:
         return summary
@@ -217,4 +226,11 @@ def summarize() -> dict[str, Any]:
             sum(1 for r in verifiable if r.get("verified")) / len(verifiable), 4)
     summary["golden_count"] = sum(1 for r in rows if r.get("golden"))
     summary["shadow_count"] = sum(1 for r in rows if r.get("shadow"))
+    # §10: reasoning coverage on the teaching rows (teacher-rung or golden corrections).
+    teach_rows = [r for r in rows if r.get("golden") or r.get("rung") == "teacher"]
+    if teach_rows:
+        reasoned = sum(1 for r in teach_rows if is_real_rationale(r.get("rationale")))
+        summary["teach_row_count"] = len(teach_rows)
+        summary["reasoned_rate"] = round(reasoned / len(teach_rows), 4)
+        summary["unreasoned_teach_count"] = len(teach_rows) - reasoned
     return summary

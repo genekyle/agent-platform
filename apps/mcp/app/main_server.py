@@ -245,7 +245,7 @@ async def execute_action(body: ExecuteRequest):
             # wrote.
             return {"outcome": Outcome.NOT_FOUND, "addressed_by": addressed_by,
                     "target": f"{body.target_role or '*'}:{body.target_name}",
-                    "driver": body.driver or "direct", "action_id": body.action_id,
+                    "driver": body.driver or "humanized", "action_id": body.action_id,
                     "css_point": None,
                     "detail": f"target not found by name: {body.target_name!r} (role={body.target_role})"}
     elif body.selector:
@@ -255,7 +255,7 @@ async def execute_action(body: ExecuteRequest):
             node_id, note = fresh, f"re-resolved {body.selector!r} -> node {fresh}"
         elif node_id is None:
             return {"outcome": Outcome.NOT_FOUND, "addressed_by": addressed_by,
-                    "target": body.selector, "driver": body.driver or "direct",
+                    "target": body.selector, "driver": body.driver or "humanized",
                     "action_id": body.action_id, "css_point": None,
                     "detail": f"target not found by selector: {body.selector!r}"}
 

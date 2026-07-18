@@ -22,10 +22,15 @@ def test_target_css_point_divides_by_dpr():
 
 
 def test_factory_defaults_and_choices():
-    assert isinstance(get_driver(), DirectDriver)
-    assert isinstance(get_driver("direct"), DirectDriver)
+    import os
+    os.environ.pop("EXECUTOR_DRIVER", None)
+    from app.executor.humanized import HumanizedDriver
+    # humanized (trusted clicks + wiggle + human scroll) is the system-wide default for real driving
+    assert isinstance(get_driver(), HumanizedDriver)
+    assert get_driver().name == "humanized"
+    assert isinstance(get_driver("direct"), DirectDriver)     # the robotic baseline, explicit only
     assert isinstance(get_driver("record_only"), RecordOnlyDriver)
-    assert isinstance(get_driver("nonsense"), DirectDriver)  # unknown -> safe default
+    assert isinstance(get_driver("nonsense"), HumanizedDriver)  # unknown -> the humanized default
 
 
 def test_record_only_logs_and_does_not_execute(tmp_path, monkeypatch):
@@ -62,7 +67,7 @@ def test_minimum_jerk_path():
 def test_minimum_jerk_off_by_default():
     import os
     os.environ.pop("EXECUTOR_DRIVER", None)
-    assert get_driver().name == "direct"  # min-jerk is opt-in only
+    assert get_driver().name == "humanized"  # default is humanized; min-jerk is opt-in only
 
 
 # --- humanized body: path is randomized, masks the robotic signature, lands on target ---

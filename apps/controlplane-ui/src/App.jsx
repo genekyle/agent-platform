@@ -60,6 +60,38 @@ export default function App() {
   const [activeDomainTabByDomain, setActiveDomainTabByDomain] = useState({});
 
   const [health, setHealth] = useState({ loading: true, ok: false, error: null });
+  // The drive lock — "CDP is driving; keyboard owned" (see apps/controlplane-api/drive_lock.py).
+  // Polled globally so the loud banner shows on every view the moment a live drive engages it.
+  const [driveLock, setDriveLock] = useState({ locked: false, reason: "", holder: null, since: null });
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const r = await fetch(`${API}/api/drive_lock`).then((res) => res.json());
+        if (alive) setDriveLock(r);
+      } catch {
+        /* transient — keep the last known state */
+      }
+    };
+    poll();
+    const t = setInterval(poll, 3000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+  const releaseDriveLock = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/drive_lock`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locked: false }),
+      }).then((res) => res.json());
+      setDriveLock(r);
+    } catch {
+      /* ignore — the poll re-syncs */
+    }
+  }, []);
   const [systemStatus, setSystemStatus] = useState({ loading: false, data: null, error: null });
   const [usage, setUsage] = useState({ loading: false, data: null, error: null });
   const [runs, setRuns] = useState({ loading: true, data: [], error: null });
@@ -1329,6 +1361,18 @@ export default function App() {
             </div>
           </div>
         </header>
+
+        {driveLock.locked ? (
+          <div className="drive-lock-banner" role="status" aria-live="polite">
+            <span className="drive-lock-banner__msg">
+              <span className="drive-lock-banner__lock">🔒 CDP DRIVING — keyboard owned by the agent</span>
+              {driveLock.holder ? <span className="drive-lock-banner__holder"> · {driveLock.holder}</span> : null}
+              {driveLock.reason ? <span className="drive-lock-banner__reason"> · {driveLock.reason}</span> : null}
+              <span className="drive-lock-banner__hint"> — type in the cockpit, not the browser</span>
+            </span>
+            <button className="drive-lock-banner__release" onClick={releaseDriveLock}>Release lock</button>
+          </div>
+        ) : null}
 
         <div className="workspace-content">{sectionContent}</div>
       </main>

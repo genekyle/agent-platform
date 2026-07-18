@@ -39,6 +39,74 @@ function RungBadge({ rung }) {
   );
 }
 
+// A display-side mirror of interaction.decision.is_real_rationale — the AUTHORITATIVE gate is
+// server-side (summarize's reasoned_rate); this only tints a blank/stub "why" red in the feed.
+const PLACEHOLDER_WHY = new Set([
+  "", "operator correction", "correction", "teacher correction", "manual", "n/a", "na", "none",
+  "-", "--", "x", "t", "r", "login", "test", "todo", "tbd", "fixme", "wip", "placeholder",
+]);
+function isRealWhy(s) {
+  if (!s) return false;
+  const t = String(s).trim().toLowerCase();
+  return !PLACEHOLDER_WHY.has(t) && t.length >= 8;
+}
+
+// The Bundle facts a rationale cites — rendered as small chips (§10: the receipts, not a vibe).
+function EvidenceChips({ items }) {
+  const list = items || [];
+  if (!list.length) return null;
+  return (
+    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", verticalAlign: "middle" }}>
+      {list.map((e, i) => (
+        <span key={i} className="mono" style={{ fontSize: "0.68rem", background: "#0f172a0a", color: "#475569", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 5px" }}>
+          {e}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// One entry in the reasoning feed — the teacher's (or model's) WHY + the facts it cites. On a
+// golden correction it shows BOTH sides: the contrast between the backstop's why and the teacher's
+// is the lesson (§10 — the Open Brain).
+function ReasoningEntry({ d }) {
+  const isCorrection = d.golden && d.proposed_intent;
+  const real = isRealWhy(d.rationale);
+  const color = RUNG_STYLE[d.rung]?.color || "#64748b";
+  return (
+    <div className="panel" style={{ padding: "12px 14px", borderLeft: `4px solid ${color}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <RungBadge rung={d.rung} />
+        <strong className="mono">{d.escalate ? "↑ escalate" : d.intent}</strong>
+        {d.params?.field ? <span className="mono system-micro-copy">{d.params.field}</span> : null}
+        {isCorrection ? (
+          <span className="inline-badge" style={{ background: "#a855f71a", color: "#a855f7", borderColor: "#a855f755" }}>correction</span>
+        ) : null}
+        <span className="system-micro-copy" style={{ marginLeft: "auto" }}>{d.state || ""}</span>
+      </div>
+      <p style={{ margin: "8px 0 0", fontStyle: "italic", color: real ? "#334155" : "#dc2626" }}>
+        {d.rationale ? d.rationale : "⚠ no reasoning captured (§10)"}
+      </p>
+      {d.evidence?.length ? (
+        <div className="system-micro-copy" style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          cites <EvidenceChips items={d.evidence} />
+        </div>
+      ) : null}
+      {isCorrection ? (
+        <div style={{ marginTop: 8, padding: "8px 10px", background: "#a855f70d", borderRadius: 6, border: "1px solid #a855f722" }}>
+          <div className="system-micro-copy" style={{ marginBottom: 3 }}>
+            backstop proposed <span className="mono">{d.proposed_intent}</span>
+            {d.proposed_rung ? <> · <RungBadge rung={d.proposed_rung} /></> : null}
+          </div>
+          <div className="system-micro-copy" style={{ fontStyle: "italic", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {d.proposed_rationale || "(no why given)"} <EvidenceChips items={d.proposed_evidence} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DecisionCard({ decision, prompt, bundle, cost }) {
   if (!decision) return null;
   const esc = decision.escalate;
@@ -59,6 +127,11 @@ function DecisionCard({ decision, prompt, bundle, cost }) {
         </span>
       </div>
       <p style={{ margin: "10px 0 0", fontStyle: "italic", color: "#475569" }}>{decision.rationale}</p>
+      {decision.evidence?.length ? (
+        <div className="system-micro-copy" style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          cites <EvidenceChips items={decision.evidence} />
+        </div>
+      ) : null}
       {decision.expected_next?.length ? (
         <div className="system-micro-copy" style={{ marginTop: 6 }}>
           expects → <span className="mono">{decision.expected_next.join(", ")}</span>
@@ -142,6 +215,9 @@ export function ControllerSection() {
   const totalRung = rungMix.reduce((a, r) => a + (r.count || 0), 0) || 1;
   const agreement = summary?.agreement || { agreement: 0, n: 0, by_scenario: [] };
   const programs = summary?.programs || [];
+  // The reasoning feed shows the rows that actually REASON — teacher/model decisions and golden
+  // corrections. Recipe replays carry a templated rationale, not a taught "why".
+  const reasoningRows = decisions.filter((d) => d.golden || d.rung === "teacher" || d.rung === "model");
 
   return (
     <div className="section-stack">
@@ -174,6 +250,12 @@ export function ControllerSection() {
             sub={agreement.n ? `over ${agreement.n} paired steps` : "no shadow runs yet"}
             accent="#a855f7"
           />
+          <Tile
+            label="Reasoning coverage"
+            value={summary?.teach_row_count ? pct(summary?.reasoned_rate) : "—"}
+            sub={summary?.teach_row_count ? `${summary.unreasoned_teach_count} blank / ${summary.teach_row_count} taught` : "§10 — no teaching rows yet"}
+            accent={summary?.teach_row_count && summary?.reasoned_rate < 1 ? "#dc2626" : "#16a34a"}
+          />
         </div>
 
         {rungMix.length ? (
@@ -200,6 +282,33 @@ export function ControllerSection() {
             </div>
           </div>
         ) : null}
+      </section>
+
+      {/* The reasoning feed — the OPEN BRAIN: the why, with receipts, both sides of a correction (§10) */}
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>🧠 Reasoning feed <span className="system-micro-copy">the open brain</span></h2>
+            <p>
+              Every teacher/model decision's <em>why</em> and the Bundle facts it cites. On a correction
+              you see <strong>both</strong> sides — the contrast between the backstop's why and the
+              teacher's is the lesson. This is how the teacher's reasoning transfers into the students'
+              corpus (PRINCIPLES §10).
+            </p>
+          </div>
+        </div>
+        {reasoningRows.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {reasoningRows.slice(0, 20).map((d, i) => (
+              <ReasoningEntry key={i} d={d} />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">
+            No reasoned decisions yet. During a teacher-supervised drive, every decision streams here
+            with its why + evidence — watch the open brain fill.
+          </div>
+        )}
       </section>
 
       {/* Watch it think — observe→decide on a tab, WITHOUT acting */}

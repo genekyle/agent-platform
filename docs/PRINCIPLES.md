@@ -26,7 +26,11 @@ run) can **look valid but isn't** — acting on it is a "thought-bubble" error.
   Manager's Create-Account / ▶ Login button, which AX-scans the live form) — reload the tab and
   re-verify the expected state.** Never assume the tab is where you left it. This is cheap insurance
   against the "button did nothing / it clicked the wrong element / it closed the wrong tab" surprises
-  (all seen live 2026-07-12). Treat stale live state as a first-class hazard, like stale data.
+  (all seen live 2026-07-12). Treat stale live state as a first-class hazard, like stale data. This
+  freshness gate binds **every** reasoner — the trained student (L3/L4/planner) included, not just the
+  teacher; when the student's rung leads, it re-verifies the drive exactly as Claude does, and the
+  check is part of the startup/pre-flight ritual, not only a per-action step (operator-directed
+  2026-07-18).
 
 ## 2. Authenticate before you automate
 The agent must not run searches or task automation on a logged-out session. Login first, automate
@@ -165,3 +169,50 @@ the student *above* the backstop, not a rename of the backstop.
   (a v1 completion item): the cascade's `rung` vocabulary distinguishes `student` from `backstop`
   rather than collapsing both into one `model` rung, and `run_live_apply` defaults to
   teacher-demonstrates / Haiku-shadows (not Haiku-proposes).
+
+## §10 — The Open Brain: the teacher reasons ON THE RECORD, and both sides of a correction are kept
+
+Every decision the teacher makes must carry its real reasoning — the *why*, plus the Bundle facts it
+cites — as structured, journaled, trainable context; and when the teacher overrides the backstop, the
+corpus keeps **both** whys. Reasoning that lives only in the teacher's context window (or in chat) is
+the event-log mistake again (§8): vivid in the moment, invisible to the students, paid for once and
+lost. §9 says the teacher bootstraps the student; **§10 is HOW the reasoning transfers** — an
+always-on pipe from the teacher's head into the one corpus every student reads. This is one of the
+system's load-bearing ideas (operator-directed 2026-07-18), not a nicety.
+
+**Why it's a principle and not a preference:**
+- **A policy cloned from actions alone copies moves, not rules.** Given only `(state → intent)`, the
+  student imitates what the teacher did on the states the teacher saw and has nothing to generalise.
+  Given `(state → intent + rationale + evidence)`, it learns the *rule* and the rule is checkable
+  against its cited receipts. Chain-of-thought with citations is the trainable object (the same
+  result `PLAN_reasoner_v2` §3 Loop 5 reaches at plan altitude — bring it down to `decide()`).
+- **The contrast on a correction is the densest signal we have.** "The backstop said `set_text`
+  because the field looked like text; the teacher said `select_option` because it's a dropdown
+  `set_text` never commits" teaches the exact boundary. The code used to journal the teacher's move
+  and the backstop's move but **drop the backstop's why** — discarding the half that makes a golden
+  row a *lesson* instead of a *label*.
+- **A "history of good habits" only exists if habits are recorded AS they form.** The teacher (Claude)
+  is the source; if the reasoning isn't captured on the step, no later session — and no student — can
+  ever recover it.
+
+**Enforced by:**
+- **The contract carries reasoning as data, not prose-in-passing.** `Decision.rationale` +
+  `Decision.evidence` (the cited Bundle keys — the receipts, mirroring `PlanStep.evidence`);
+  `DecisionRecord.evidence` / `proposed_rationale` / `proposed_evidence` keep both sides. `record_for`
+  copies them at the **single** choke point, so no seam can forget
+  (`packages/interaction/interaction/decision.py`, `decision_journal.py`).
+- **The teaching seams SOLICIT the why.** `cli_reviewer` used to hardcode `rationale="operator
+  correction"` — every human correction taught reasoning-blind. It now asks ("why? — this is the
+  training signal") and journals what's given verbatim; the model rung's structured-output schema
+  requests `evidence` so the backstop cites too (`controller/teach.py`, `controller/reason.py`).
+- **A placeholder cannot masquerade as reasoning.** `is_real_rationale` / `PLACEHOLDER_RATIONALES`
+  define what counts; `summarize()` reports `reasoned_rate` + `unreasoned_teach_count` over the
+  teaching rows (teacher-rung + golden). **Falsifier:** if `reasoned_rate` on a scenario stays below
+  1.0 while corrections accumulate, reasoning is being paid for and dropped — fix the seam, don't
+  shrug. Promotion (`PLAN_controller_v1` §6) gates on it beside shadow-agreement.
+
+- **Status:** contract + capture + metric + the `cli_reviewer` fix landed 2026-07-18 (tests green).
+  Owed: the reasoning-feed cockpit surface (watch the teacher's *why* stream into the corpus — the
+  literal open brain), and the first teacher-supervised live drive (Workday) that fills these columns
+  with real reasoning. Corollary of §8 one altitude up (journaled *reasoning*, not just journaled
+  action), and the operational core of §9.

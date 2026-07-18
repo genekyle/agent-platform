@@ -61,6 +61,13 @@ logger = logging.getLogger("mcp.ax_proposer")
 DEFAULT_BROWSER_URL = "http://127.0.0.1:9222"
 MODEL_VERSION = "cdp-ax/getFullAXTree+getBoxModel"
 
+# A CDP command that never gets its matching response must NOT hang the executor forever — a live
+# drive that locks up is worse than one that escalates. Bound the wait for a matching id and raise
+# (the driver's try/except turns it into an ExecResult(ok=False) -> escalation). Generous, so normal
+# fast commands are unaffected; it only fires on a genuinely dropped/late response (seen live on the
+# humanized mouseWheel scroll, 2026-07-18).
+_CDP_RECV_TIMEOUT = 25.0
+
 # AX roles we treat as actionable candidates. A node is also kept if it is
 # non-ignored and has a non-empty accessible name (covers custom-role widgets
 # that still carry a screen-reader label). Tune from the 30-day logs, not now.
@@ -114,8 +121,17 @@ class _CDPSession:
         await self._ws.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
         # Drain until we see our id. We don't subscribe to events, but Chrome may
         # still emit some on the default session; ignore anything without our id.
+        # Bounded by a deadline so a dropped/late response ESCALATES instead of hanging forever.
+        deadline = asyncio.get_event_loop().time() + _CDP_RECV_TIMEOUT
         while True:
-            raw = await self._ws.recv()
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise CDPError(method, {"message": f"no matching CDP response within "
+                                        f"{_CDP_RECV_TIMEOUT:.0f}s — dropped/late response, escalated not hung"})
+            try:
+                raw = await asyncio.wait_for(self._ws.recv(), timeout=remaining)
+            except asyncio.TimeoutError:
+                raise CDPError(method, {"message": f"no matching CDP response within {_CDP_RECV_TIMEOUT:.0f}s"})
             msg = json.loads(raw)
             if msg.get("id") != msg_id:
                 continue

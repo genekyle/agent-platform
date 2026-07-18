@@ -15,6 +15,7 @@ from interaction.decision import (
     Decision,
     bundle_digest,
     bundle_to_prompt,
+    is_real_rationale,
     looks_like_selector,
     sanitize_unanswered,
 )
@@ -216,3 +217,61 @@ def test_summarize_reports_rung_and_verified(monkeypatch):
         assert s["escalation_rate"] == 0.5          # 1 of 2 escalated
         rungs = {r["rung"]: r["count"] for r in s["by_rung"]}
         assert rungs == {"recipe": 1, "model": 1}
+
+
+# --- §10, the Open Brain: reasoning is captured on both sides and its coverage is measured ------
+def test_is_real_rationale_rejects_stubs_and_empties():
+    assert is_real_rationale("clicked Continue — every required field is now answered")
+    assert not is_real_rationale("")
+    assert not is_real_rationale(None)
+    assert not is_real_rationale("operator correction")   # the old hardcoded stub
+    assert not is_real_rationale("x")                     # too short / placeholder
+    assert not is_real_rationale("   TODO   ")            # stripped + lowercased into the stub set
+
+
+def test_open_brain_keeps_both_sides_of_a_correction(monkeypatch):
+    # A golden correction: the backstop proposed set_text (with its own why), the teacher chose
+    # select_option (with theirs). Both "why"s and both citations must survive into the row —
+    # the contrast is the lesson (§10). Before proposed_rationale existed, the proposal's why was
+    # dropped at record_for.
+    with tempfile.TemporaryDirectory() as tmp:
+        monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", tmp)
+        proposed = Decision("set_text", {"field": "Source", "value": "Indeed"}, 0.6, "model",
+                            "Source looks like a text field", evidence=("unanswered[0].field",))
+        teacher = Decision("select_option", {"field": "Source", "value": "Indeed"}, 1.0, "teacher",
+                           "Source is a dropdown — set_text never commits it", evidence=("state",))
+        rec = decision_journal.record_for(teacher, _bundle(fingerprint="f"), proposed=proposed,
+                                          golden=True, outcome="ok", verified=True)
+        row = decision_journal.log_decision(rec)
+        assert row is not None
+        # the acted (teacher) side
+        assert row.rationale == "Source is a dropdown — set_text never commits it"
+        assert row.evidence == ("state",)
+        # the proposal (backstop) side — kept, not dropped
+        assert row.proposed_intent == "set_text"
+        assert row.proposed_rationale == "Source looks like a text field"
+        assert row.proposed_evidence == ("unanswered[0].field",)
+
+
+def test_summarize_measures_reasoning_coverage_on_teaching_rows(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", tmp)
+        b = _bundle()
+        # a well-reasoned teacher demonstration
+        decision_journal.log_decision(decision_journal.record_for(
+            Decision("click", {"control": "Continue"}, 1.0, "teacher",
+                     "all required fields on this step are answered", expected_next=("s",)), b,
+            outcome="ok", verified=True))
+        # a golden correction that arrived reasoning-blank (the failure §10 makes visible)
+        decision_journal.log_decision(decision_journal.record_for(
+            Decision("select_option", {"field": "Source"}, 1.0, "teacher", "", expected_next=("s",)),
+            b, proposed=Decision("set_text", {"field": "Source"}, 0.6, "model", "guess"),
+            golden=True, outcome="ok", verified=True))
+        # a recipe row is NOT a teaching row — it must not dilute the coverage metric
+        decision_journal.log_decision(decision_journal.record_for(
+            Decision("click", {}, 1.0, "recipe", "program replay", expected_next=("s",)), b,
+            outcome="ok", verified=True))
+        s = decision_journal.summarize()
+        assert s["teach_row_count"] == 2                 # the two teacher/golden rows
+        assert s["reasoned_rate"] == 0.5                 # one real why, one blank
+        assert s["unreasoned_teach_count"] == 1

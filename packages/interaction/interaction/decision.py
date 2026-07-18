@@ -59,6 +59,32 @@ DECISION_CONFIDENCE_THRESHOLD = 0.75
 RUNGS = ("recipe", "cache", "model", "teacher", "human")
 
 
+# --- the Open Brain: a "why" is training signal only if it's really there (PRINCIPLES §10) ------
+#: What the `rationale` column fills with when a rung emits a template or a teaching seam forgot
+#: to solicit one. §10 treats these as MISSING reasoning (not present-but-terse): `summarize()`
+#: counts them and the eval fails a teacher/golden row that carries one, so the teacher's real
+#: "why" cannot silently degrade to a stub the way `cli_reviewer` used to hardcode "operator
+#: correction". Lowercased, stripped comparison.
+PLACEHOLDER_RATIONALES = frozenset({
+    "", "operator correction", "correction", "teacher correction", "manual", "n/a", "na",
+    "none", "-", "--", "x", "t", "r", "login", "test", "todo", "tbd", "fixme", "wip", "placeholder",
+})
+
+
+def is_real_rationale(rationale: Optional[str]) -> bool:
+    """True when a rationale carries actual reasoning (§10 — the Open Brain).
+
+    A real "why" is non-empty, is not a known stub, and clears a small length floor — enough to
+    tell "clicked Continue because every required field on this step is now answered" apart from
+    "x". The teacher's reasoning only *transfers* to the students if it is actually written down;
+    this is the predicate the placeholder-metric and the teacher/golden-row gate agree on.
+    """
+    if not rationale:
+        return False
+    s = rationale.strip().lower()
+    return s not in PLACEHOLDER_RATIONALES and len(s) >= 8
+
+
 # --- selector guard (invariant #10) -------------------------------------------------
 #: Params and bundle fields must carry SEMANTIC references (field names, values), never a
 #: selector / xpath / backend_node_id — those are the recipe's and the API's business, and a
@@ -153,6 +179,11 @@ class Decision:
     rationale: str                        # one sentence; journaled, becomes training signal
     expected_next: tuple[str, ...] = ()   # states this should land on; a miss => escalate
     escalate: bool = False                # True -> hand up the ladder instead of acting
+    # The Bundle keys this rationale CITES — the teachable receipts (§10, mirrors v2's
+    # PlanStep.evidence). e.g. ("state", "unanswered[0].field", "recent[-1].outcome"). Makes the
+    # "why" a citation the students can check, not a vibe; appended LAST so positional callers and
+    # every existing journalled row stay valid (schema note above: adding an optional field is safe).
+    evidence: tuple[str, ...] = ()
 
     @property
     def acts(self) -> bool:
@@ -179,6 +210,7 @@ class DecisionRecord:
     confidence: float = 0.0
     escalate: bool = False
     rationale: str = ""
+    evidence: tuple[str, ...] = ()        # Bundle keys the rationale cites (§10 — the Open Brain)
     expected_next: tuple[str, ...] = ()
 
     # --- verify: did the intent land where it expected?
@@ -199,6 +231,11 @@ class DecisionRecord:
     proposed_intent: Optional[str] = None
     proposed_params: Optional[dict] = None
     proposed_rung: Optional[str] = None
+    # §10 — the Open Brain: keep the PROPOSAL's reasoning too, not just what it proposed. On a
+    # correction the contrast between the backstop's wrong "why" and the teacher's right "why" is
+    # the densest lesson in the corpus; dropping it (as the code did before) threw that away.
+    proposed_rationale: Optional[str] = None
+    proposed_evidence: tuple[str, ...] = ()
 
     # --- measurement (M5): a shadow row decided without acting, beside a teacher step
     shadow: bool = False
