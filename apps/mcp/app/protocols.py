@@ -363,9 +363,14 @@ SCAN_REQUIRED_JS = r"""
   // rule 2 — checkbox groups, which the old scan missed entirely.
   const boxes = [...document.querySelectorAll('input[type=checkbox]')].filter(vis);
   const groups = {};
+  let synth = 0;
   for (const b of boxes) {
-    const k = (b.id || b.name || '').split('[')[0];
-    if (!k) continue;
+    let k = (b.id || b.name || '').split('[')[0];
+    // A LONE checkbox with no id/name used to be skipped here — which silently dropped the
+    // smartapply certification ("I have read and accept the above acknowledgement *"): scan said
+    // 0-unanswered while Continue was blocked with "Choose an option to continue" (live 2026-07-18).
+    // A checkbox with no group identity is its own required question, a group of one.
+    if (!k) k = '__lone_checkbox_' + (synth++);
     (groups[k] = groups[k] || []).push(b);
   }
   for (const [k, group] of Object.entries(groups)) {
@@ -385,7 +390,10 @@ SCAN_REQUIRED_JS = r"""
   // group identity — id-first grouping would fuse three questions into one.
   const radios = [...document.querySelectorAll('input[type=radio]')].filter(vis);
   const rgroups = {};
-  for (const r of radios) { const k = r.name || r.id; if (k) (rgroups[k] = rgroups[k] || []).push(r); }
+  let rsynth = 0;
+  // Same lone-control fix as checkboxes: a single required radio with no name/id (rare but seen on
+  // one-option acknowledgment radios) was skipped by the old `if (k)` — give it a group of one.
+  for (const r of radios) { let k = r.name || r.id; if (!k) k = '__lone_radio_' + (rsynth++); (rgroups[k] = rgroups[k] || []).push(r); }
   for (const [k, group] of Object.entries(rgroups)) {
     if (group.some(r => r.checked)) continue;
     const label = groupLabel(group, k);

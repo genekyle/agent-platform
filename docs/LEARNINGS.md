@@ -1500,3 +1500,13 @@ Outcome: the form submitted; the AI-recruiter interview is the operator's (human
 left OPEN for them (not the close-and-refocus epilogue — the application isn't DONE until the human
 step). "Apply = done only when submitted" now has a corollary: some ATS submits are followed by a
 human-required gate that the sweep must record as a HANDOFF, not a completed apply.
+
+**Update — 4 of 6 findings now fixed (with tests):** finding 1 (Haiku schema) fixed live in the drive
+(`reason.py`); findings 2, 3, 6 fixed after: **radio path** — `LiveActuator.act()` routes a
+`radio_group` (and affirmation/consent checkboxes) through `/autofill_form`'s native click, keeping
+the journaled intent semantic (`select_option`/`check_group`); **scan** — lone required checkboxes get
+a synthetic group key in `SCAN_REQUIRED_JS` so an acknowledgment is no longer skipped; **settle** —
+`LiveActuator._current_state()` polls `/auth_state` until the url stabilises before classifying (6 new
+offline tests). Still OPEN: finding 4 (the Ethnicity react-single-select stage-vs-commit — needs the
+tier-2 select protocol to handle it) and finding 5 (the location combobox race — worked around with a
+settle gap in the drive; not yet a driver-level fix).

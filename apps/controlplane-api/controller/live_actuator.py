@@ -28,6 +28,7 @@ Two disciplines carried from the hard-won lessons:
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import replace
 from typing import Any, Callable, Optional
 
@@ -51,6 +52,20 @@ _READ_INTENTS = frozenset({
     Intent.OBSERVE.value, Intent.SCAN_REQUIRED.value, Intent.DESCRIBE.value,
     Intent.PROBE.value, Intent.RESOLVE_ANSWER.value,
 })
+
+#: Native single-choice controls the tier-2 endpoints CANNOT drive (found live 2026-07-18):
+#: /check_group errors on native radios and /select_option only handles react-select/listbox.
+#: The only mechanism that works is /autofill_form's native input.click()-by-question-text.
+_RADIO_WIDGETS = frozenset({"radio_group", "radio"})
+
+#: An affirmation value marks a consent/acknowledgment CHECKBOX ("I have read and accept" -> Accept):
+#: checking it is a native click, same mechanism as a radio — not a labelled multi-select group.
+_AFFIRM_PREFIXES = ("accept", "agree", "yes", "true", "i accept", "i agree", "i acknowledge",
+                    "i certify", "i consent", "i have read")
+
+
+def _is_affirmation(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower().startswith(_AFFIRM_PREFIXES)
 
 
 def _httpx_transport(base_url: str, *, timeout: float = 60.0) -> Transport:
@@ -83,13 +98,20 @@ class LiveActuator:
 
     def __init__(self, *, base_url: str, browser_url: str, tab_id: str,
                  task: str = "indeed_apply", goal_text: str = "",
-                 driver: str = "direct", transport: Optional[Transport] = None) -> None:
+                 driver: str = "direct", transport: Optional[Transport] = None,
+                 settle_tries: int = 3, settle_delay: float = 0.7,
+                 sleep_fn: Optional[Callable[[float], None]] = None) -> None:
         self._browser_url = browser_url
         self._tab_id = tab_id
         self._task = task
         self._goal = goal_text
         self._driver = driver                       # 'direct' (real) | 'record_only' (dry run)
         self._post_fn: Transport = transport or _httpx_transport(base_url)
+        # Settling after a navigating click: how many times to re-read the url waiting for it to
+        # stabilise, and how long between reads. sleep_fn is injectable so offline tests don't wait.
+        self._settle_tries = settle_tries
+        self._settle_delay = settle_delay
+        self._sleep: Callable[[float], None] = sleep_fn or time.sleep
         # Carried between observe() and act(): the RAW scan (field -> selector, for Indeed's
         # dynamic fields), the current url, the current ats + state.
         self._last_scan: list[dict] = []
@@ -181,7 +203,13 @@ class LiveActuator:
                 exe["target_role"], exe["target_name"] = addr.get("role"), addr.get("name")
             return self._field_result(self._post("/execute", exe))
 
+        wt = (addr.get("widget_type") or "").lower()
+
         if intent == Intent.SELECT_OPTION.value:
+            # A native radio group is not driveable by /select_option (react-select/listbox only) —
+            # route it to the native-click mechanism. react-select / listbox stay on the endpoint.
+            if wt in _RADIO_WIDGETS:
+                return self._field_result(self._autofill_native(field, p.get("value", "")))
             res = self._post("/select_option", {
                 **self._addr(), "selector": addr.get("selector"), "value": p.get("value", ""),
                 "ats": self._ats, "field": field, "commit": addr.get("commit"),
@@ -197,6 +225,11 @@ class LiveActuator:
 
         if intent == Intent.CHECK_GROUP.value:
             values = p.get("values") or ([p["value"]] if p.get("value") else [])
+            first = values[0] if values else ""
+            # A radio group mislabelled check_group, OR a single consent/acknowledgment checkbox
+            # (affirmation value): both are a native click, not a labelled multi-select group.
+            if wt in _RADIO_WIDGETS or _is_affirmation(first):
+                return self._field_result(self._autofill_native(field, first))
             res = self._post("/check_group", {
                 **self._addr(), "selector": addr.get("selector"), "values": values,
                 "ats": self._ats, "field": field})
@@ -216,11 +249,42 @@ class LiveActuator:
             return {"selector": e["selector"], "role": e["role"], "name": e["name"],
                     "widget_type": e["widget_type"], "commit": e["commit"]}
         except apply_fields.FieldNotFound:
+            # Match the live scan by field. Do NOT require a selector: a native radio group is
+            # addressed by its QUESTION TEXT (autofill), not a selector — Indeed gives every radio
+            # the same id, so the group often has no usable selector at all. widget_type carries
+            # the routing signal; a null selector is fine for the native-click path.
             for u in (self._last_scan or []):
-                if u.get("field") == field and u.get("selector"):
-                    return {"selector": u["selector"], "role": None, "name": None,
+                if u.get("field") == field:
+                    return {"selector": u.get("selector"), "role": None, "name": None,
                             "widget_type": u.get("kind"), "commit": None}
         return None
+
+    @staticmethod
+    def _question_patterns(field: str) -> list[str]:
+        """Substrings of the question text the autofill matcher can find. The scan's `field` often
+        carries the option labels appended ('… ? * Yes No'), which are NOT in the DOM question
+        text — so strip to the question itself, or a pattern would never match."""
+        field = (field or "").strip()
+        out = {field}
+        for cut in ("?", "*"):
+            if cut in field:
+                head = field.split(cut)[0].strip()
+                if len(head) > 4:
+                    out.add(head + ("?" if cut == "?" else ""))
+        return [p for p in out if len(p) > 4]
+
+    def _autofill_native(self, field: str, value: str) -> dict:
+        """Drive a native single-choice control (radio group, consent checkbox) via /autofill_form's
+        native input.click()-by-question — the ONLY mechanism that works on them (the tier-2
+        endpoints don't; found live 2026-07-18). One inline single-answer autofill, matched to the
+        question by text. The caller journals the SEMANTIC intent (select_option/check_group); this
+        is just the HOW."""
+        answers = [{"key": "_teach_native", "value": value, "options": [value],
+                    "patterns": self._question_patterns(field)}]
+        res = self._post("/autofill_form", {**self._addr(), "answers": answers})
+        filled = any((r or {}).get("status") == "filled" for r in (res.get("report") or []))
+        return {"ok": filled, "outcome": Outcome.OK.value if filled else Outcome.NOT_FOUND.value,
+                "detail": f"native autofill by question text (filled={filled})"}
 
     def _field_result(self, res: dict) -> ActOutcome:
         """A field-fill stays on the same page — its landed state is where we were; the endpoint's
@@ -228,10 +292,25 @@ class LiveActuator:
         return ActOutcome(outcome=_outcome_of(res), landed_state=self._last_state,
                           cost_usd=float(res.get("cost_usd") or 0.0), detail=res.get("detail", ""))
 
-    def _current_state(self) -> Optional[str]:
-        """Re-classify the CURRENT url into a state (used after a click that may have navigated)."""
+    def _read_url(self) -> str:
         auth = self._post("/auth_state", self._addr())
-        url = auth.get("url") or self._last_url or ""
+        return auth.get("url") or ""
+
+    def _current_state(self) -> Optional[str]:
+        """Re-classify the CURRENT url into a state (used after a click that may have navigated).
+
+        SETTLE FIRST: /auth_state can return the OLD url before a navigation completes — observed
+        live reporting `resume_selection` right after a Continue that had already reached
+        `questions/1`. Poll until two consecutive reads agree (or the settle budget runs out), THEN
+        classify, so the loop verifies against where we ACTUALLY landed."""
+        url = self._read_url()
+        for _ in range(max(0, self._settle_tries)):
+            self._sleep(self._settle_delay)
+            nxt = self._read_url()
+            if nxt == url:          # stable — navigation has settled
+                break
+            url = nxt               # still moving — keep following it
+        url = url or self._last_url or ""
         self._last_url = url
         ats = ats_registry.classify_ats(url)
         desc = apply_recipe.describe_for_ats(ats, url, "")
