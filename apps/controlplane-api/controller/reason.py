@@ -40,9 +40,26 @@ DECISION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "intent": {"type": "string", "enum": sorted(_INTENTS)},
-        "params": {"type": "object",
-                   "description": "field names and values ONLY — never a selector/id/xpath"},
-        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        # params is the CLOSED param vocabulary — a strict json_schema needs every object to set
+        # additionalProperties:false (Anthropic 400s otherwise), which also pins params to the
+        # known semantic keys (a field label, a value, a control name, a date, a group) and keeps
+        # a selector/id/xpath from ever being a valid key. Discovered live 2026-07-18.
+        "params": {
+            "type": "object",
+            "description": "semantic references ONLY — never a selector/id/xpath",
+            "properties": {
+                "field": {"type": "string"},
+                "value": {"type": "string"},
+                "control": {"type": "string"},
+                "month": {"type": "integer"},
+                "year": {"type": "integer"},
+                "values": {"type": "array", "items": {"type": "string"}},
+            },
+            "additionalProperties": False,
+        },
+        # No minimum/maximum: Anthropic structured output rejects numeric bounds. The [0,1] range
+        # is enforced in parse_decision (the trustworthy, tested half) instead. (Live 2026-07-18.)
+        "confidence": {"type": "number"},
         "rationale": {"type": "string"},
         "expected_next": {"type": "array", "items": {"type": "string"}},
         "escalate": {"type": "boolean"},

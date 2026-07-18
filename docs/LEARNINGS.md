@@ -1457,3 +1457,46 @@ validated its read path against the real browser. Load-bearing findings:
   propose-approve panel's backend. The LiveActuator + `run_live_apply` are done and tested (9 offline
   tests, fake transport); a live read-only `observe()` classified `indeed_home` correctly and decide()
   escalated honestly ($0). What remains before the drive: the step surface, then search→apply→teach.
+
+## 2026-07-18 — First live teaching drive (Lactalis apply, apply_sweep) — 6 findings
+
+Drove the first end-to-end live teaching run through `TeachSession`/`LiveActuator`: search (`reporting
+analyst`/Manchester/50mi) → Lactalis "Analyst, Trade Management" (Bedford NH, quick-apply) → resume →
+4 question pages → demographics → review → **Submit** → hit the **`ai_recruiter_gate`** (video/audio/text
+interview, `classify_apply_outcome` correctly returned `human_required=True` → HANDOFF, not auto-solved).
+Decision journal **15 → 26 rows** (11 this drive); 4 paired teacher-vs-Haiku rows, **0% agreement, all
+`wrong_intent`** — the dense "where the cheap backstop fails" signal, exactly as designed. Six load-bearing findings:
+
+- **The Haiku rung's structured-output schema was INVALID — it had never actually worked.** Anthropic
+  structured output (a) requires `additionalProperties:false` on EVERY object (the nested `params`
+  lacked it → 400), and (b) rejects `minimum`/`maximum` on numbers (`confidence` had them → 400).
+  FIXED in `controller/reason.py` (params pinned to the closed key vocab; range enforced in
+  `parse_decision`, the tested half). This is why the M3 "Haiku rung" was green in unit tests
+  (`parse_decision` is pure) yet dead in the field — the live call was never exercised. **The first
+  live drive is what caught it.**
+- **Native radio groups are not driveable by the tier-2 endpoints.** `/check_group` errors on them and
+  `/select_option` only handles react-select/listbox — the ONLY working radio mechanism is
+  `/autofill_form`'s native-`input.click()`-by-group-name. LiveActuator gap: it needs a radio path
+  (route `select_option`/`check_group` on a `radio_group` widget to the autofill click), or radios stay
+  autofill-only. Worked around live by executing radios via autofill inline while journaling the
+  semantic `select_option` decision.
+- **`/scan_required` misses a lone required acknowledgment checkbox.** The certification ("I have read
+  and accept the above acknowledgement") returned 0-unanswered while Continue was blocked with "Choose
+  an option to continue." The scan detects inputs/radio-groups but not a single required checkbox → a
+  false "form complete." Rule reinforced: a no-op Continue means re-scan the DOM for a missed required
+  control (and check the challenge first — did that, no captcha).
+- **The Ethnicity react-single-select STAGES but doesn't COMMIT on a plain click** (widget-protocol
+  §6/§7): the field showed "Asian" visually while `scan_required` still saw it unanswered and Continue
+  no-opped — until it committed a step later (another timing artifact). Composite selects need the
+  stage→commit protocol, not a click.
+- **The Indeed location combobox races on clear+type** (react per-keystroke): `action_id=clear` then
+  immediate `type` produced `Manchester, NHu` / `Manchester, NHNashua, NH`; a ~1.3s settle between
+  clear and type fixed it. Same lesson as project_humanized_body_driver — type races React.
+- **`LiveActuator._current_state()` classifies before navigation settles** → it reported the OLD state
+  (`resume_selection`) right after a Continue that had already navigated to `questions/1`. Needs a
+  settle/poll after a control click before re-classifying (the loop's verify would mis-fire otherwise).
+
+Outcome: the form submitted; the AI-recruiter interview is the operator's (human-required). The tab is
+left OPEN for them (not the close-and-refocus epilogue — the application isn't DONE until the human
+step). "Apply = done only when submitted" now has a corollary: some ATS submits are followed by a
+human-required gate that the sweep must record as a HANDOFF, not a completed apply.
