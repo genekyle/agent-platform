@@ -394,13 +394,15 @@ async def create_account_on_site(body: CreateAccountOnSite, db: Session = Depend
                 })).json().get("value")) or ""
         if not gone:
             if already_msg:
+                # The account DOES exist on the ATS → it's created. Flip to 'active' so Login becomes
+                # available (and Create is now blocked); the operator just corrects the password.
+                ats_accounts.mark_created(body.company, body.ats_id)
                 event_log.log_event("account", f"Create-account: email already registered — {body.company} · {body.ats_id}",
                                     domain="career_search", detail=already_msg[:120])
                 return {"ok": False, "status": "already_exists_on_site",
                         "detail": (f"Workday says an account already exists for this email — «{already_msg}». "
-                                   "We tried to create it with the generated credential but the login is already "
-                                   "there. Change the password on your side (edit this account's creds to the real "
-                                   "one), then use ▶ Sign In. Left PENDING (not marked created).")}
+                                   "The account is already there, so I marked it CREATED — now use ▶ Sign In "
+                                   "(not Create). Set the real password in the Account Manager first if it differs.")}
             event_log.log_event("account", f"Create-account did NOT advance: {body.company} · {body.ats_id}",
                                 domain="career_search",
                                 detail="submit clicked but the create form is still up — left PENDING")

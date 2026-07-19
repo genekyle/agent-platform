@@ -113,34 +113,39 @@ def clear_account_credentials_ep(account_id: str):
 
 
 class LoginRequest(BaseModel):
-    # Which live browser + tab the login form is in. Defaults target the training Chrome + any
-    # Workday tab, which fits the current cross-site-apply context; override to point elsewhere.
+    # Targeting is DISCOVERED (tab_finder) from the account's ATS across live Career-Search sessions;
+    # these are optional explicit overrides (an operator-picked tab_id wins).
     browser_url: str = "http://127.0.0.1:9322"
-    tab_url: Optional[str] = "myworkdayjobs.com"
+    tab_url: Optional[str] = None
     tab_id: Optional[str] = None
+    reason: bool = True               # use the Haiku login reasoner (falls back to the deterministic policy)
 
 
-def _match_login_fields(candidates: list) -> dict:
-    """Best-effort {email, password, submit} backend_node_ids from AX candidates for a generic login
-    form. Skips the 'verify new password' (account-create) field and the bot-honeypot inputs. The
-    submit is taken as the LAST sign-in/log-in control — the header 'Sign In' comes before the fields;
-    the real submit is the one after them."""
-    out: dict = {}
-    submit_nodes: list = []
-    for c in candidates:
-        role = (c.get("role") or "").lower()
-        name = (c.get("name") or c.get("caption") or "").lower()
-        nid = c.get("backend_node_id")
-        if role == "textbox" and "robot" not in name and "website" not in name:
-            if "email" in name and "email" not in out:
-                out["email"] = nid
-            elif "password" in name and "verify" not in name and "password" not in out:
-                out["password"] = nid
-        elif role == "button" and any(k in name for k in ("sign in", "log in", "login")) and "robot" not in name:
-            submit_nodes.append(nid)
-    if submit_nodes:
-        out["submit"] = submit_nodes[-1]
-    return out
+def _journal_login_step(account_id: str, state: str, step) -> None:
+    """Record one login reasoning step in the decision corpus — the Open Brain (PRINCIPLES §10), so
+    login reasoning is transferable + shows in the reasoning feed. Best-effort; never raises."""
+    from interaction import decision_journal
+    from interaction.decision import Bundle, Decision
+    _intent = {"fill_credentials": "set_text", "click": "click", "done": "observe", "escalate": "observe"}
+    bundle = Bundle(task="ats_login", goal_text=f"log in — {account_id}", done=(step.action == "done"),
+                    url="", route=f"ats_login/{account_id}", state=state, is_branch=False,
+                    human_required=step.escalate)
+    decision = Decision(intent=_intent.get(step.action, "observe"), params={}, confidence=1.0,
+                        rung=step.rung, rationale=step.rationale, evidence=(f"login_state:{state}",),
+                        escalate=step.escalate)
+    decision_journal.log_decision(decision_journal.record_for(decision, bundle, session_id="ats_login"))
+
+
+def _mark_ats_created(account_id: str) -> None:
+    """A verified sign-in proves the account exists → flip it to the 'active' (created) checkpoint."""
+    try:
+        import accounts as accounts_mod
+        import ats_accounts
+        acct = accounts_mod.get_account(account_id) or {}
+        if acct.get("kind") == "ats" and acct.get("company") and acct.get("ats_id"):
+            ats_accounts.mark_created(acct["company"], acct["ats_id"])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.post("/api/accounts/{account_id}/login")
@@ -172,35 +177,28 @@ async def account_login_ep(account_id: str, body: LoginRequest, db: Session = De
                 "detail": (f"No live Career-Search tab for this ATS (looked for {tgt['looked_for']}). "
                            f"{tgt['hint']} Open the Sign In screen there, then press Login.")}
     browser_url, tab_id = tgt["browser_url"], tgt["tab_id"]
-    scanned_url = (tgt.get("tab") or {}).get("tab_url", "")
 
-    scan_req = {"browser_url": browser_url, "tab_url": None, "tab_id": tab_id}
+    import login_reasoner
+
+    def _journal(step, state, idx):  # each reasoning step -> the Open Brain
+        _journal_login_step(account_id, state, step)
+
+    reasoner = login_reasoner.haiku_login_reasoner() if body.reason else None
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            scan = (await client.post(f"{settings.capture_server_url}/ax_scan", json=scan_req)).json()
-            fields = _match_login_fields(scan.get("candidates", []))
-            if "password" not in fields or "submit" not in fields:
-                errs = scan.get("errors") or []
-                return {"ok": False, "status": "no_login_form",
-                        "detail": (f"Found the tab ({scanned_url[:70] or '?'}) but no Sign-In form "
-                                   f"(saw {sorted(fields)}; {scan.get('count', 0)} controls). Open the "
-                                   f"site's Sign In screen on that tab, then retry."
-                                   + (f" [scan: {errs}]" if errs else ""))}
-
-            async def _exec(action_id: str, node_id: int, value: Optional[str] = None) -> None:
-                await client.post(f"{settings.capture_server_url}/execute", json={
-                    "action_id": action_id, "backend_node_id": node_id, "target_bbox": {},
-                    "value": value, "browser_url": browser_url, "tab_url": None,
-                    "tab_id": tab_id, "driver": "humanized"})
-
-            if "email" in fields:
-                await _exec("type", fields["email"], username)
-            await _exec("type", fields["password"], password)
-            await _exec("click", fields["submit"])
-        return {"ok": True, "status": "submitted",
-                "detail": "Sign-in submitted. If the site now asks for 2FA or a captcha, that step is yours."}
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            result = await login_reasoner.run_login(
+                client=client, capture_url=settings.capture_server_url,
+                browser_url=browser_url, tab_id=tab_id, username=username, password=password,
+                reasoner=reasoner, journal=_journal)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Login driver unreachable: {exc}")
+
+    # A VERIFIED sign-in is the created checkpoint — flip the account 'active' so Login stays
+    # available + Create is blocked going forward (the two lifecycles stay consistent).
+    if result.ok:
+        _mark_ats_created(account_id)
+    return {"ok": result.ok, "status": result.status, "steps": result.steps,
+            "detail": result.detail, "trail": result.trail}
 
 
 @router.delete("/api/accounts/{account_id}")
