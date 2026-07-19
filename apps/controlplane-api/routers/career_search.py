@@ -292,13 +292,15 @@ async def create_account_on_site(body: CreateAccountOnSite, db: Session = Depend
     import tab_finder
     from settings import settings
 
-    # ALREADY EXISTS? Don't create a duplicate for a company↔ATS that's already set up — Workday would
-    # reject "email already registered". Point the operator at Sign In instead.
+    # ALREADY CREATED? Only an account at the 'active' checkpoint (created + verified on-site, via a
+    # prior create run or an explicit mark-created) blocks Create — a merely-pending account with
+    # creds set can still be created. status=="active" is the single 'fully created' gate (it's what
+    # also unlocks Sign In), so the two stay consistent.
     aid = ats_accounts.ats_account_id(body.company, body.ats_id)
     existing = accounts_mod.get_account(aid) or {}
-    if existing.get("status") == "active" or existing.get("has_creds"):
+    if existing.get("status") == "active":
         return {"ok": False, "status": "already_exists",
-                "detail": (f"A {body.company} · {body.ats_id} account already exists "
+                "detail": (f"A {body.company} · {body.ats_id} account is already created "
                            f"(username {existing.get('username_hint') or '?'}). Use ▶ Sign In, not Create "
                            "— creating it again will hit 'email already registered'.")}
 
@@ -313,9 +315,8 @@ async def create_account_on_site(body: CreateAccountOnSite, db: Session = Depend
     tgt = tab_finder.resolve_target(db, existing, tab_id=body.tab_id, browser_url=body.browser_url)
     if not tgt["found"]:
         return {"ok": False, "status": "no_target_tab",
-                "detail": (f"No live tab for this ATS. Looked for {tgt['looked_for']} across live "
-                           f"sessions. Open the Create-Account screen in the browser, then retry. "
-                           f"Live tabs now: {tgt['live_tabs'] or 'none'}.")}
+                "detail": (f"No live Career-Search tab for this ATS (looked for {tgt['looked_for']}). "
+                           f"{tgt['hint']} Open the Create-Account screen there, then retry.")}
     body.browser_url, body.tab_id, body.tab_url = tgt["browser_url"], tgt["tab_id"], None
     scanned_url = (tgt.get("tab") or {}).get("tab_url", "")
 
@@ -378,7 +379,28 @@ async def create_account_on_site(body: CreateAccountOnSite, db: Session = Depend
                                "return !f || /verif|check your email|candidate home|my applications/i.test(t);})()"),
                 "note": "did the Workday create-account form actually submit?", "ats": "workday",
             })).json().get("value")
+            # If it did NOT advance, is it because the email is ALREADY REGISTERED? That's the common
+            # "I think I already have an account" case — surface it distinctly so the operator edits
+            # the password + signs in, instead of an opaque "didn't submit".
+            already_msg = ""
+            if not gone:
+                already_msg = ((await client.post(f"{settings.capture_server_url}/probe", json={
+                    "browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id,
+                    "expression": ("(()=>{const t=document.body.innerText||'';const m=t.match("
+                                   "/[^.\\n]*account already exists[^.\\n]*|[^.\\n]*already (?:have|has) an account[^.\\n]*"
+                                   "|[^.\\n]*already (?:in use|registered|associated|been used)[^.\\n]*"
+                                   "|[^.\\n]*email[^.\\n]*already[^.\\n]*/i);return m?m[0].trim().slice(0,160):'';})()"),
+                    "note": "does the Workday create form show an 'account already exists' error?", "ats": "workday",
+                })).json().get("value")) or ""
         if not gone:
+            if already_msg:
+                event_log.log_event("account", f"Create-account: email already registered — {body.company} · {body.ats_id}",
+                                    domain="career_search", detail=already_msg[:120])
+                return {"ok": False, "status": "already_exists_on_site",
+                        "detail": (f"Workday says an account already exists for this email — «{already_msg}». "
+                                   "We tried to create it with the generated credential but the login is already "
+                                   "there. Change the password on your side (edit this account's creds to the real "
+                                   "one), then use ▶ Sign In. Left PENDING (not marked created).")}
             event_log.log_event("account", f"Create-account did NOT advance: {body.company} · {body.ats_id}",
                                 domain="career_search",
                                 detail="submit clicked but the create form is still up — left PENDING")

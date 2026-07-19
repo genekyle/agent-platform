@@ -169,9 +169,8 @@ async def account_login_ep(account_id: str, body: LoginRequest, db: Session = De
     tgt = tab_finder.resolve_target(db, acct, tab_id=body.tab_id, browser_url=body.browser_url)
     if not tgt["found"]:
         return {"ok": False, "status": "no_target_tab",
-                "detail": (f"No live tab for this account's ATS. Looked for {tgt['looked_for']} across "
-                           f"live sessions. Open the Sign In screen in the browser, then press Login. "
-                           f"Live tabs now: {tgt['live_tabs'] or 'none'}.")}
+                "detail": (f"No live Career-Search tab for this ATS (looked for {tgt['looked_for']}). "
+                           f"{tgt['hint']} Open the Sign In screen there, then press Login.")}
     browser_url, tab_id = tgt["browser_url"], tgt["tab_id"]
     scanned_url = (tgt.get("tab") or {}).get("tab_url", "")
 

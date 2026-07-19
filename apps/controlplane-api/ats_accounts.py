@@ -125,7 +125,12 @@ def next_account_action(company: str, ats_id: str) -> dict[str, Any]:
     aid = ats_account_id(company, ats_id)
     acct = accounts_mod.get_account(aid) or {}
     status = acct.get("status", "pending")
-    created = status == "active" or acct.get("has_creds")
+    # 'Login' (the sign_in leg) becomes available ONLY at the fully-created checkpoint —
+    # status=='active', set by a VERIFIED create-account run or an explicit mark-created. Merely
+    # having creds saved does NOT count: the operator can stage the intended password before the
+    # account exists on the ATS, and Login must not light up until it's really been created
+    # (operator directive 2026-07-19).
+    created = status == "active"
     leg = "sign_in" if created else "create_account"
     recipes = {"workday": {"create_account": "WORKDAY_CREATE_ACCOUNT_RECIPE",
                            "sign_in": "WORKDAY_SIGN_IN_RECIPE"},
