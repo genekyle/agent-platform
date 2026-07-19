@@ -1817,7 +1817,11 @@ async def ax_scan(body: AXScanRequest):
             "bbox": c.get("bbox"),
             "dpr": (c.get("_debug") or {}).get("dpr", body.device_scale_factor),
         } for c in candidates]
-        return {"ok": True, "count": len(out), "candidates": out, "target_url": stats.target_url}
+        # `errors` carries WHY a scan came back empty (e.g. target-tab discovery raised: no matching
+        # tab, unreachable browser, ambiguous). Callers used to see count:0 with no reason — that
+        # opacity made "wrong/dead browser" and "form simply not open" look identical.
+        return {"ok": True, "count": len(out), "candidates": out,
+                "target_url": stats.target_url, "errors": list(stats.errors)}
     except Exception as exc:  # noqa: BLE001
         logger.warning("ax_scan failed: %s", exc)
         return {"ok": False, "count": 0, "candidates": [], "detail": str(exc)}

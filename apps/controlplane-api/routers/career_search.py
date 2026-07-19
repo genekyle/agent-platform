@@ -273,7 +273,7 @@ class CreateAccountOnSite(BaseModel):
 
 
 @router.post("/api/career_search/accounts/create-account")
-async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
+async def create_account_on_site(body: CreateAccountOnSite, db: Session = Depends(get_db)) -> dict[str, Any]:
     """OPERATOR-TRIGGERED account creation — the create-account leg of the Account Manager loop, the
     exact analogue of the panel's `/api/accounts/{id}/login` button. Resolves the GENERATED credential
     server-side (username + derived password — never returned), scans the live Workday Create-Account
@@ -289,13 +289,36 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
     import httpx
 
     import accounts as accounts_mod
+    import tab_finder
     from settings import settings
+
+    # ALREADY EXISTS? Don't create a duplicate for a company↔ATS that's already set up — Workday would
+    # reject "email already registered". Point the operator at Sign In instead.
+    aid = ats_accounts.ats_account_id(body.company, body.ats_id)
+    existing = accounts_mod.get_account(aid) or {}
+    if existing.get("status") == "active" or existing.get("has_creds"):
+        return {"ok": False, "status": "already_exists",
+                "detail": (f"A {body.company} · {body.ats_id} account already exists "
+                           f"(username {existing.get('username_hint') or '?'}). Use ▶ Sign In, not Create "
+                           "— creating it again will hit 'email already registered'.")}
 
     creds = ats_accounts.suggested_credentials(body.company, body.ats_id)
     username, password = creds.get("username"), creds.get("suggested_password")
     if not username or not password:
         raise HTTPException(status_code=400,
                             detail="No generated credential (set ATS_ACCOUNT_PW_SUFFIX in .env).")
+
+    # Find the RIGHT live tab (fix for the dead 9322 default + multi-tab) and retarget body at it, so
+    # BOTH legs (Workday here, AppVault below) drive the tab that actually holds the Create-Account form.
+    tgt = tab_finder.resolve_target(db, existing, tab_id=body.tab_id, browser_url=body.browser_url)
+    if not tgt["found"]:
+        return {"ok": False, "status": "no_target_tab",
+                "detail": (f"No live tab for this ATS. Looked for {tgt['looked_for']} across live "
+                           f"sessions. Open the Create-Account screen in the browser, then retry. "
+                           f"Live tabs now: {tgt['live_tabs'] or 'none'}.")}
+    body.browser_url, body.tab_id, body.tab_url = tgt["browser_url"], tgt["tab_id"], None
+    scanned_url = (tgt.get("tab") or {}).get("tab_url", "")
+
     # Per-ATS create-account flow. Workday matches fields by AX name; AppVault's MUI form is nameless
     # (selector/label-based) with a Terms LINK + First/Last + Continue — its own leg.
     if body.ats_id == "appvault":
@@ -306,11 +329,14 @@ async def create_account_on_site(body: CreateAccountOnSite) -> dict[str, Any]:
             scan = (await client.post(f"{settings.capture_server_url}/ax_scan", json=scan_req)).json()
             fields = _match_create_account_fields(scan.get("candidates", []))
             if "password" not in fields or "submit" not in fields:
+                errs = scan.get("errors") or []
                 event_log.log_event("account", f"Create-account skipped: no form for {body.company} · {body.ats_id}",
-                                    domain="career_search", detail=f"matched {sorted(fields)}")
+                                    domain="career_search", detail=f"matched {sorted(fields)}; tab {scanned_url[:60]}")
                 return {"ok": False, "status": "no_create_form",
-                        "detail": f"No Create-Account form visible (found {sorted(fields)}). Open the "
-                                  "ATS 'Create Account' screen first, then press Create account."}
+                        "detail": (f"Found the tab ({scanned_url[:70] or '?'}) but no Create-Account form "
+                                   f"(saw {sorted(fields)}; {scan.get('count', 0)} controls). Open the ATS "
+                                   f"'Create Account' screen on that tab, then retry."
+                                   + (f" [scan: {errs}]" if errs else ""))}
 
             async def _exec(action_id: str, node_id: int, value: Optional[str] = None,
                             driver: str = "direct") -> None:

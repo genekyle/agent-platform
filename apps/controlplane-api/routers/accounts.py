@@ -7,8 +7,11 @@ record, never returned, never logged (responses only reflect has_creds + a maske
 """
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from deps import get_db
 
 router = APIRouter()
 
@@ -141,15 +144,17 @@ def _match_login_fields(candidates: list) -> dict:
 
 
 @router.post("/api/accounts/{account_id}/login")
-async def account_login_ep(account_id: str, body: LoginRequest):
+async def account_login_ep(account_id: str, body: LoginRequest, db: Session = Depends(get_db)):
     """OPERATOR-TRIGGERED login (the panel's Login button). Resolves the account's credential from the
     vault SERVER-SIDE (never returned) and drives the currently-open login form with the humanized
     browser driver — the app's own password-manager-style auto-login, fired by the human's click.
     Returns a STATUS ONLY (never the password). Does NOT solve 2FA/captcha — those escalate to the
-    human. If no login form is visible, it says so instead of guessing."""
+    human. FINDS the live ATS tab across sessions (no hardcoded browser); if it can't, or no form is
+    on it, it says exactly why instead of an opaque 'no form'."""
     import httpx
 
     import accounts as accounts_mod
+    import tab_finder
     from settings import settings
 
     creds = accounts_mod.resolve_creds(account_id)
@@ -157,21 +162,37 @@ async def account_login_ep(account_id: str, body: LoginRequest):
         raise HTTPException(status_code=400,
                             detail="No stored credentials for this account — add them in the panel first.")
     username, password = creds
-    scan_req = {"browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id}
+    acct = accounts_mod.get_account(account_id) or {}
+
+    # Find the RIGHT live tab (the fix for the dead 9322 default + multi-tab). An explicit tab_id in
+    # the request wins; otherwise discover the account's ATS tab across live sessions.
+    tgt = tab_finder.resolve_target(db, acct, tab_id=body.tab_id, browser_url=body.browser_url)
+    if not tgt["found"]:
+        return {"ok": False, "status": "no_target_tab",
+                "detail": (f"No live tab for this account's ATS. Looked for {tgt['looked_for']} across "
+                           f"live sessions. Open the Sign In screen in the browser, then press Login. "
+                           f"Live tabs now: {tgt['live_tabs'] or 'none'}.")}
+    browser_url, tab_id = tgt["browser_url"], tgt["tab_id"]
+    scanned_url = (tgt.get("tab") or {}).get("tab_url", "")
+
+    scan_req = {"browser_url": browser_url, "tab_url": None, "tab_id": tab_id}
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             scan = (await client.post(f"{settings.capture_server_url}/ax_scan", json=scan_req)).json()
             fields = _match_login_fields(scan.get("candidates", []))
             if "password" not in fields or "submit" not in fields:
+                errs = scan.get("errors") or []
                 return {"ok": False, "status": "no_login_form",
-                        "detail": f"No sign-in form visible in the target tab (found {sorted(fields)}). "
-                                  "Open the site's Sign In screen first, then press Login."}
+                        "detail": (f"Found the tab ({scanned_url[:70] or '?'}) but no Sign-In form "
+                                   f"(saw {sorted(fields)}; {scan.get('count', 0)} controls). Open the "
+                                   f"site's Sign In screen on that tab, then retry."
+                                   + (f" [scan: {errs}]" if errs else ""))}
 
             async def _exec(action_id: str, node_id: int, value: Optional[str] = None) -> None:
                 await client.post(f"{settings.capture_server_url}/execute", json={
                     "action_id": action_id, "backend_node_id": node_id, "target_bbox": {},
-                    "value": value, "browser_url": body.browser_url, "tab_url": body.tab_url,
-                    "tab_id": body.tab_id, "driver": "humanized"})
+                    "value": value, "browser_url": browser_url, "tab_url": None,
+                    "tab_id": tab_id, "driver": "humanized"})
 
             if "email" in fields:
                 await _exec("type", fields["email"], username)

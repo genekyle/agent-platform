@@ -50,6 +50,19 @@ def list_sessions(db: Session = Depends(get_db)):
     return {"sessions": rows}
 
 
+@router.get("/api/sessions/tabs")
+def list_live_tabs(match: Optional[str] = None, db: Session = Depends(get_db)):
+    """The 'tab manager' — every open tab across all LIVE session Chromes, so the operator (and the
+    account login/create drives) can find the right tab by URL instead of guessing a browser/port.
+    `match` filters by URL substring (e.g. 'myworkdayjobs.com')."""
+    import tab_finder
+    tabs = tab_finder.live_tabs(db)
+    if match:
+        m = match.lower()
+        tabs = [t for t in tabs if m in t["tab_url"].lower()]
+    return {"tabs": tabs, "count": len(tabs)}
+
+
 class ProtectBody(BaseModel):
     protected: bool = True
 

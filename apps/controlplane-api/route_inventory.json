@@ -65,6 +65,7 @@
   "GET /api/select/telemetry",
   "GET /api/select/trajectories/count",
   "GET /api/sessions",
+  "GET /api/sessions/tabs",
   "GET /api/system/status",
   "GET /api/tabs",
   "GET /api/training/actions",
