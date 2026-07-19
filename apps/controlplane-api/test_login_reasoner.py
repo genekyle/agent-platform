@@ -61,6 +61,16 @@ def test_deterministic_policy_handles_signin_and_account_exists():
     assert step.escalate and step.escalate_status == "account_exists"
 
 
+def test_find_login_fields_submit_is_robust():
+    # named "Sign In" — found.
+    assert lr.find_login_fields(SIGNIN) == {"email": 1, "password": 2, "submit": 3}
+    # submit named "Continue" (not "Sign In") — the rigid matcher missed this on Workday; now found.
+    assert lr.find_login_fields([_tb("Email", 1), _tb("Password", 2), _btn("Continue", 5)])["submit"] == 5
+    # a generically-named primary — falls back to the LAST button on the form.
+    fields = lr.find_login_fields([_tb("Email", 1), _tb("Password", 2), _btn("Show password", 8), _btn("Foobar", 9)])
+    assert fields["submit"] == 9
+
+
 def test_reasoner_click_resolves_and_bad_output_falls_back():
     # A reasoner naming a real control -> click it.
     r = lambda obs: {"action": "click", "control": "sign in", "rationale": "switch to sign-in"}

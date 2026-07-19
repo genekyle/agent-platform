@@ -91,23 +91,30 @@ def classify_login_state(candidates: list[dict], page_text: str, logged_in: Opti
 # --- control finders --------------------------------------------------------------------------------
 def find_login_fields(candidates: list[dict]) -> dict:
     """{email, password, submit} backend_node_ids from AX candidates. Skips the create-only 'verify'
-    field and the honeypot inputs; submit is the LAST sign-in control (the header comes before the
-    fields)."""
+    field and the honeypot inputs. Submit is a sign-in-ish button if named, ELSE the last real button
+    on the form — a rigid 'name must say Sign In' matcher is exactly what broke on Workday, whose
+    submit's accessible name varied (found email+password but 'no submit', live 2026-07-19)."""
     out: dict = {}
-    submit_nodes: list = []
+    buttons: list[tuple] = []    # (nid, name) for every real button, in order
     for c in candidates:
         role = (c.get("role") or "").lower()
         name = (c.get("name") or "").lower()
         nid = c.get("backend_node_id")
+        if nid is None:
+            continue
         if role in ("textbox", "searchbox") and "robot" not in name and "website" not in name:
             if "email" in name and "email" not in out:
                 out["email"] = nid
             elif "password" in name and "verify" not in name and "confirm" not in name and "password" not in out:
                 out["password"] = nid
-        elif role == "button" and any(k in name for k in ("sign in", "log in", "login")) and "robot" not in name:
-            submit_nodes.append(nid)
-    if submit_nodes:
-        out["submit"] = submit_nodes[-1]
+        elif role == "button" and "robot" not in name:
+            buttons.append((nid, name))
+    named = [nid for nid, name in buttons
+             if any(k in name for k in ("sign in", "log in", "login", "submit", "continue", "next", "go"))]
+    if named:
+        out["submit"] = named[-1]
+    elif buttons:
+        out["submit"] = buttons[-1][0]      # the primary on a login form is almost always the last button
     return out
 
 
