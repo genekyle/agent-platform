@@ -96,6 +96,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 # Domain routers extracted from main.py; the module-level `router` below holds the CORE routes not
 # yet extracted into a domain module. create_app() (bottom of file) wires all of them into the app.
 from routers import accounts as accounts_router  # noqa: E402
+from routers import activity as activity_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
 from routers import career_search as career_search_router  # noqa: E402
 from routers import controller as controller_router  # noqa: E402
@@ -5079,11 +5080,31 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def _api_access_log(request, call_next):
+        """Record each API touch into the in-memory ring — the 'api' source of the Session Activity
+        feed (what's going in/out of the system). Never affects the response; skips the feed's own
+        endpoint so it doesn't observe itself."""
+        import time
+        t0 = time.perf_counter()
+        response = await call_next(request)
+        try:
+            path = request.url.path
+            if path.startswith("/api/") and not path.startswith("/api/activity"):
+                import api_access
+                api_access.record(request.method, path, response.status_code,
+                                  (time.perf_counter() - t0) * 1000.0)
+        except Exception:  # noqa: BLE001
+            pass
+        return response
+
     _assets.ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
     app.mount("/assets", StaticFiles(directory=str(_assets.ASSETS_ROOT)), name="assets")
 
     app.include_router(router)  # core routes not yet extracted into a domain module
     app.include_router(accounts_router.router)
+    app.include_router(activity_router.router)
     app.include_router(application_answers_router.router)
     app.include_router(career_search_router.router)
     app.include_router(controller_router.router)

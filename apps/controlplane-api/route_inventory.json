@@ -15,6 +15,7 @@
   "DELETE /api/training/tasks/{task_id}",
   "GET /api/accounts",
   "GET /api/accounts/{account_id}",
+  "GET /api/activity",
   "GET /api/application-answers",
   "GET /api/assets",
   "GET /api/assets/documents",

@@ -10,6 +10,12 @@ export const CONTROL_PLANE_NAV = {
     subtitle: "What needs you across every domain, health at a glance, and what just happened.",
     sections: [],
   },
+  activity: {
+    label: "🩺 Activity",
+    title: "Session Activity",
+    subtitle: "One live timeline of what the system is doing and WHY — reasoning, actions, escalations, errors, API touches.",
+    sections: [],
+  },
   domains: {
     label: "Domains",
     title: "Domains",

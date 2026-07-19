@@ -21,6 +21,7 @@ import { DOMAIN_CATALOG, DOMAINS_BY_ID } from "./components/controlplane/workspa
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 import { ControllerSection } from "./components/controlplane/ControllerSection";
+import { SessionActivitySection } from "./components/controlplane/SessionActivitySection";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
@@ -1076,6 +1077,8 @@ export default function App() {
   let sectionContent = null;
   if (activePrimaryView === "command") {
     sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} onOpenLabeler={openLabeler} />;
+  } else if (activePrimaryView === "activity") {
+    sectionContent = <SessionActivitySection />;
   } else if (activePrimaryView === "domains") {
     sectionContent = activeDomain
       ? <DomainWorkspace domain={activeDomain} activeTab={activeDomainTab} onChangeTab={setDomainTab} onOpenTraining={openTrainingCoverage} onOpenDomain={openDomain} />
