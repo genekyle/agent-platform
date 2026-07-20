@@ -23,7 +23,9 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
+
+from controller import unexpected
 
 logger = logging.getLogger("login_reasoner")
 
@@ -45,6 +47,38 @@ LoginState = str
 
 # Actions: done | fill_credentials | click | escalate
 ACTIONS = ("done", "fill_credentials", "click", "escalate")
+
+
+# --- tab-level staleness ---------------------------------------------------------------------
+#: Markers the capture server emits when the CDP target we pinned is GONE (an SSO redirect spawned
+#: a new target, an OOPIF iframe form was replaced after submit, the operator reloaded the Sign-In
+#: screen). Found live 2026-07-19: a stale tab does NOT raise and does NOT return an error from
+#: /ax_scan — `propose_ax_candidates` swallows the discovery failure into `errors[]`, so the reply
+#: is a *successful* scan with zero candidates, indistinguishable from "the form isn't open". That
+#: is precisely how login died silently. We look for the reason instead of inferring from silence.
+_STALE_TAB_MARKERS = ("no target with id", "target_discovery", "no attachable page target")
+
+_STALE_TAB_REASON = ("The Sign-In tab I was driving no longer exists — it navigated away, was "
+                     "reloaded, or was closed. Reopen the ATS Sign In screen in the Career-Search "
+                     "browser, then press Login again.")
+
+
+def _mentions_stale_tab(payload) -> bool:
+    """True when a capture-server reply says the tab we addressed is gone. Reads the places the
+    reason actually lands: `/ax_scan`'s `errors[]`, and the `detail` of the `ok:false` /
+    `outcome:"error"` bodies returned by `/probe`, `/auth_state` and `/execute`."""
+    if not isinstance(payload, dict):
+        return False
+    blobs: list[str] = []
+    errors = payload.get("errors")
+    if isinstance(errors, (list, tuple)):
+        blobs.extend(str(e) for e in errors)
+    for key in ("detail", "error", "message"):
+        value = payload.get(key)
+        if value:
+            blobs.append(str(value))
+    haystack = " ".join(blobs).lower()
+    return any(marker in haystack for marker in _STALE_TAB_MARKERS)
 
 
 def _has(text: str, subs) -> bool:
@@ -289,7 +323,7 @@ def haiku_login_reasoner(*, budget_limit: Optional[float] = None) -> Callable[[d
 @dataclass
 class LoginResult:
     ok: bool
-    status: str                       # authenticated | captcha | mfa | bad_credentials | account_exists | unknown_state | max_steps
+    status: str                       # authenticated | captcha | mfa | bad_credentials | account_exists | unknown_state | stale_tab | max_steps
     steps: int = 0
     detail: str = ""
     trail: list[dict] = field(default_factory=list)   # per-step {state, action, rationale} — the reasoning trail
@@ -298,40 +332,84 @@ class LoginResult:
 async def run_login(*, client, capture_url: str, browser_url: str, tab_id: str,
                     username: str, password: str, reasoner: Optional[Callable[[dict], dict]] = None,
                     journal: Optional[Callable[[LoginStep, str, int], None]] = None,
+                    re_resolve: Optional[Callable[[], Optional[dict]]] = None,
                     max_steps: int = 5) -> LoginResult:
     """observe → classify → reason → act → verify, until authenticated / escalation / max steps. The
-    reasoning is journaled per step (the Open Brain). `client` is an httpx.AsyncClient."""
+    reasoning is journaled per step (the Open Brain). `client` is an httpx.AsyncClient.
+
+    `re_resolve` is the BACKUP PLAN for a stale tab: called at most once, it re-finds the account's
+    live ATS tab (tab_finder) and returns `{"browser_url", "tab_id"}` — or None if it's really gone.
+    It is injected rather than imported so this module stays free of the DB/tab_finder and remains
+    unit-testable with a fake. Without it a stale tab still escalates honestly; it just can't recover.
+    """
     import asyncio
 
     addr = {"browser_url": browser_url, "tab_id": tab_id}
     trail: list[dict] = []
     attempted_creds = False
+    stale_retry_used = False
 
-    async def _probe_text() -> str:
+    def _record(step_obj: LoginStep, state: str, idx: int) -> None:
+        trail.append({"step": idx, "state": state, "action": step_obj.action,
+                      "rationale": step_obj.rationale})
+        if journal is not None:
+            journal(step_obj, state, idx)
+
+    def _recover_from_stale(idx: int) -> Optional[LoginResult]:
+        """The unexpected-state policy applied to a dead tab (controller/unexpected.py): RE_OBSERVE
+        → re-resolve the tab ONCE and carry on; ESCALATE → stop and say so plainly. Returns a
+        LoginResult to stop, or None to continue the loop against the freshly-resolved tab."""
+        nonlocal stale_retry_used
+        if unexpected.respond(unexpected.STALE_TAB,
+                              already_retried=stale_retry_used) is unexpected.Response.RE_OBSERVE:
+            fresh = re_resolve() if re_resolve is not None else None
+            if fresh and fresh.get("tab_id"):
+                stale_retry_used = True
+                addr["browser_url"] = fresh.get("browser_url") or addr["browser_url"]
+                addr["tab_id"] = fresh["tab_id"]
+                _record(LoginStep("stale_tab", "re_observe", rung="recipe",
+                                  rationale="the tab I was driving was gone (stale CDP target) — "
+                                            "re-resolved the account's live ATS tab and carried on"),
+                        "stale_tab", idx)
+                return None
+        step_obj = LoginStep("stale_tab", "escalate", escalate=True, escalate_status="stale_tab",
+                             rung="recipe",
+                             rationale="the tab being driven no longer exists and could not be re-found",
+                             reason=_STALE_TAB_REASON)
+        _record(step_obj, "stale_tab", idx)
+        return LoginResult(False, "stale_tab", idx + 1, _STALE_TAB_REASON, trail)
+
+    async def _post(path: str, payload: Optional[dict] = None) -> dict:
+        """POST to the capture server and return the parsed body. A stale tab comes back as a
+        200 with the reason inside, so the BODY is the signal — never discard it."""
         try:
-            r = (await client.post(f"{capture_url}/probe", json={
-                **addr, "expression": "(document.body.innerText||'').slice(0,3000)",
-                "note": "login page text", "ats": "login"})).json()
-            return str(r.get("value") or "")
-        except Exception:  # noqa: BLE001
-            return ""
+            r = await client.post(f"{capture_url}{path}", json={**addr, **(payload or {})})
+            return r.json() or {}
+        except Exception:  # noqa: BLE001 — a transport/JSON failure is not a staleness signal
+            return {}
 
     for step in range(max_steps):
-        scan = (await client.post(f"{capture_url}/ax_scan", json=addr)).json()
+        scan = await _post("/ax_scan")
+        probe = await _post("/probe", {"expression": "(document.body.innerText||'').slice(0,3000)",
+                                       "note": "login page text", "ats": "login"})
+        auth = await _post("/auth_state")
+
+        # Check the tab BEFORE reading the page: a stale tab yields an empty scan that otherwise
+        # reads as "no form here", and re-resolving is the backup plan rather than a guess.
+        if any(_mentions_stale_tab(r) for r in (scan, probe, auth)):
+            stop = _recover_from_stale(step)
+            if stop is not None:
+                return stop
+            continue
+
         candidates = scan.get("candidates", [])
-        page_text = await _probe_text()
-        try:
-            auth = (await client.post(f"{capture_url}/auth_state", json=addr)).json()
-            logged_in = auth.get("logged_in")
-        except Exception:  # noqa: BLE001
-            logged_in = None
+        page_text = str(probe.get("value") or "")
+        logged_in = auth.get("logged_in")
 
         state = classify_login_state(candidates, page_text, logged_in)
         decision = reason_step(state, candidates, page_text, has_creds=bool(username and password),
                                attempted_creds=attempted_creds, reasoner=reasoner)
-        trail.append({"step": step, "state": state, "action": decision.action, "rationale": decision.rationale})
-        if journal is not None:
-            journal(decision, state, step)
+        _record(decision, state, step)
 
         if state == "authenticated" or decision.action == "done":
             return LoginResult(True, "authenticated", step + 1, "signed in", trail)
@@ -345,20 +423,35 @@ async def run_login(*, client, capture_url: str, browser_url: str, tab_id: str,
                 return LoginResult(False, "no_login_form", step + 1,
                                    f"expected a sign-in form but couldn't address it (found {sorted(fields)}).", trail)
 
-            async def _exec(action_id, node_id, value=None):
-                await client.post(f"{capture_url}/execute", json={
-                    **addr, "action_id": action_id, "backend_node_id": node_id, "target_bbox": {},
-                    "value": value, "driver": "humanized"})
+            async def _exec(action_id, node_id, value=None) -> dict:
+                return await _post("/execute", {"action_id": action_id, "backend_node_id": node_id,
+                                                "target_bbox": {}, "value": value, "driver": "humanized"})
 
+            replies = []
             if "email" in fields:
-                await _exec("clear", fields["email"]); await _exec("type", fields["email"], username)
-            await _exec("clear", fields["password"]); await _exec("type", fields["password"], password)
-            await _exec("click", fields["submit"])
+                replies.append(await _exec("clear", fields["email"]))
+                replies.append(await _exec("type", fields["email"], username))
+            replies.append(await _exec("clear", fields["password"]))
+            replies.append(await _exec("type", fields["password"], password))
+            replies.append(await _exec("click", fields["submit"]))
+            if any(_mentions_stale_tab(r) for r in replies):
+                # The tab died mid-fill, so the credentials never landed. Do NOT set
+                # attempted_creds: that would make the next pass report bad_credentials and tell
+                # the operator their stored password is wrong when the tab simply vanished.
+                stop = _recover_from_stale(step)
+                if stop is not None:
+                    return stop
+                continue
             attempted_creds = True
         elif decision.action == "click" and decision.control:
-            await client.post(f"{capture_url}/execute", json={
-                **addr, "action_id": "click", "backend_node_id": decision.control["backend_node_id"],
-                "target_bbox": {}, "driver": "humanized"})
+            reply = await _post("/execute", {"action_id": "click", "target_bbox": {},
+                                             "backend_node_id": decision.control["backend_node_id"],
+                                             "driver": "humanized"})
+            if _mentions_stale_tab(reply):
+                stop = _recover_from_stale(step)
+                if stop is not None:
+                    return stop
+                continue
 
         await asyncio.sleep(1.4)  # settle before re-observing
 

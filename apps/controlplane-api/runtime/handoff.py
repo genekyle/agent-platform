@@ -79,6 +79,36 @@ _REASON_GUIDANCE: dict[str, dict[str, str]] = {
         "suggestion": "Log in to the site in the session's browser window (do any 2FA/checkpoint "
                       "by hand), then run again — a persistent profile keeps you signed in after.",
     },
+    # --- "we are not where we assumed" (controller/unexpected.py) ---------------------------
+    "stale_tab": {
+        "why": "The tab being driven no longer exists — it navigated away, was reloaded, or was "
+               "closed — and re-finding the site's live tab didn't turn one up.",
+        "suggestion": "Reopen the page in the Career-Search browser, then run the step again.",
+    },
+    "unexpected_state": {
+        "why": "The page wasn't a state the agent recognises, so it stopped instead of guessing.",
+        "suggestion": "Check what's on screen. If it's a legitimate new page, label it — it's been "
+                      "recorded as a candidate state, so approving it teaches the agent for next time.",
+    },
+    # --- login-drive escalations (login_reasoner statuses) ----------------------------------
+    "captcha": {
+        "why": "A captcha is blocking sign-in. The agent never solves these.",
+        "suggestion": "Solve it in the browser, then press Login again.",
+    },
+    "mfa": {
+        "why": "Sign-in needs a 2FA / verification code — that step is always yours.",
+        "suggestion": "Enter the code in the browser, then press Login again.",
+    },
+    "bad_credentials": {
+        "why": "The site rejected the stored sign-in. It was NOT retried — repeated attempts against "
+               "a real account risk locking it.",
+        "suggestion": "Fix the password in the Account Manager, then press Login again.",
+    },
+    "account_exists": {
+        "why": "This email already has an account, but the Sign In control couldn't be found to "
+               "switch to it.",
+        "suggestion": "Sign in yourself (or fix the password), then mark the account created.",
+    },
 }
 
 
@@ -289,3 +319,72 @@ def emit(result: Any, *, task_goal: str, training_session_id: Optional[int] = No
     persist(handoff)
     notify(handoff)
     return handoff
+
+
+def emit_escalation(*, reason: str, task_goal: str, detail: str = "", url: str = "",
+                    tab_url: Optional[str] = None, tried: Optional[list[dict[str, Any]]] = None,
+                    training_session_id: Optional[int] = None,
+                    loop_status: str = "escalated") -> Optional[HandoffRecord]:
+    """The same alert, for callers that DON'T have a `runtime.loop.LoopResult`.
+
+    `build_handoff`/`emit` are shaped around that one result object, which is why the login drive
+    and the controller — neither of which produces one — had no operator alert at all: they failed
+    into a JSON field and a log line. This is the plain-fields entry point so every escalation,
+    whichever loop raised it, lands in the SAME handoffs log (and therefore the same Session
+    Activity timeline, as `kind:"escalation"`) and fires the same notification.
+
+    Best-effort by construction — an alert must never break the drive it is reporting on.
+    """
+    try:
+        g = _REASON_GUIDANCE.get(reason, {
+            "why": "The agent stopped and needs a human.",
+            "suggestion": "Review the detail below and complete or unblock the step.",
+        })
+        handoff = HandoffRecord(
+            id=f"hoff_{uuid.uuid4().hex[:12]}",
+            ts=datetime.now(timezone.utc).isoformat(),
+            status="open",
+            task_goal=task_goal,
+            training_session_id=training_session_id,
+            loop_status=loop_status,
+            escalation_reason=reason,
+            why=g["why"],
+            detail=detail or "",
+            suggestion=g["suggestion"],
+            url=url or "",
+            screenshot_path="",
+            tried=list(tried or []),
+            tab_url=tab_url,
+        )
+        persist(handoff)
+        notify(handoff)
+        return handoff
+    except Exception:  # noqa: BLE001 — never raise into the drive being reported on
+        logger.exception("failed to emit escalation handoff (reason=%s)", reason)
+        return None
+
+
+def escalation_callback(*, task_goal: str, reason: str = "unexpected_state",
+                        training_session_id: Optional[int] = None):
+    """An `on_escalate`-shaped callback `(bundle, decision) -> None` for `controller/loop.py`'s
+    seam, so a controller escalation raises a real operator alert instead of only a journal row.
+
+    Kept here (and injected) rather than called inside `run_controller` on purpose: the loop stays
+    pure control-flow with no disk/notification I/O, which is what makes it testable offline with a
+    fake actuator. Wire this in at the live call site.
+    """
+    def _on_escalate(bundle: Any, decision: Any) -> None:
+        emit_escalation(
+            reason=reason,
+            task_goal=task_goal or getattr(bundle, "goal_text", "") or getattr(bundle, "task", ""),
+            detail=getattr(decision, "rationale", "") or "",
+            url=getattr(bundle, "url", "") or "",
+            training_session_id=training_session_id,
+            tried=[{
+                "state": getattr(bundle, "state", None),
+                "action": getattr(decision, "intent", None),
+                "layer": getattr(decision, "rung", None),
+                "confidence": getattr(decision, "confidence", None),
+            }],
+        )
+    return _on_escalate

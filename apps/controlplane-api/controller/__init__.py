@@ -10,6 +10,8 @@ Modules, in build order:
   - programs  (M2) compile verified decision sequences into replayable intent programs
   - decide    (M2/M3) the cascade: rung 0 (program) -> rung 1 (model) -> escalate
   - loop      (M2) the thin harness: observe -> decide -> act (Interaction API) -> verify
+  - unexpected      the "we are not where we assumed" policy — re-observe once, then escalate;
+                    shared with the login drive so both decide staleness identically
   - teach     (M4) propose-approve — corrections on the controller's own states (DAgger)
   - shadow    (M5) decide-without-acting beside a teacher, for the agreement metric
   - metrics   (M5) per-scenario shadow agreement — the promotion number

@@ -1,8 +1,14 @@
 """Tests for the reasoning login loop — the classifier and the HARD SAFETY RAILS (MFA/captcha/
 wrong-password always escalate and can't be reasoned around), which is the whole point of adding
-reasoning to a sensitive flow."""
+reasoning to a sensitive flow.
+
+Plus the STALE TAB path (2026-07-19): the pinned CDP target can vanish mid-drive, and the capture
+server reports that as a *successful* empty scan — so it must be detected explicitly, recovered
+once, and otherwise escalated honestly."""
 
 from __future__ import annotations
+
+import asyncio
 
 import login_reasoner as lr
 
@@ -83,3 +89,123 @@ def test_reasoner_click_resolves_and_bad_output_falls_back():
     step = lr.reason_step("unknown", [_btn("Apply Manually", 1)], "start", has_creds=True,
                           attempted_creds=False, reasoner=r2)
     assert step.action == "escalate"           # deterministic fallback for unknown
+
+
+# --- the stale tab ------------------------------------------------------------------------------
+#: What /ax_scan ACTUALLY returns when the pinned tab is gone: ok:true, zero candidates, and the
+#: real reason buried in errors[]. Indistinguishable from "no form here" unless you look.
+STALE_SCAN = {"ok": True, "count": 0, "candidates": [],
+              "errors": ["target_discovery: No target with id 'DEAD1' — refusing to fall back to "
+                         "another tab."]}
+LIVE_SCAN = {"ok": True, "count": 3, "candidates": SIGNIN, "errors": []}
+
+
+class _Resp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class FakeClient:
+    """Stands in for httpx.AsyncClient. Canned per-path replies (queues that repeat their last
+    entry once exhausted) plus a call log, so we can assert WHICH tab each call addressed."""
+
+    def __init__(self, *, scans, probes=None, auths=None, executes=None):
+        self.calls = []                       # (path, payload)
+        self._q = {
+            "/ax_scan": list(scans),
+            "/probe": list(probes or [{"ok": True, "value": "Sign in to your account"}]),
+            "/auth_state": list(auths or [{"ok": True, "logged_in": None}]),
+            "/execute": list(executes or [{"outcome": "ok"}]),
+        }
+
+    def _next(self, path):
+        q = self._q.get(path) or [{}]
+        return q.pop(0) if len(q) > 1 else q[0]
+
+    async def post(self, url, json=None):
+        path = url[url.rfind("/"):]
+        self.calls.append((path, dict(json or {})))
+        return _Resp(self._next(path))
+
+    def tabs_used(self, path):
+        return [p.get("tab_id") for c, p in self.calls if c == path]
+
+
+def _run(client, *, re_resolve=None, max_steps=3):
+    return asyncio.run(lr.run_login(
+        client=client, capture_url="http://cap", browser_url="http://127.0.0.1:9328",
+        tab_id="DEAD1", username="u@example.com", password="pw",
+        re_resolve=re_resolve, max_steps=max_steps))
+
+
+def test_mentions_stale_tab_reads_every_shape_the_server_uses():
+    assert lr._mentions_stale_tab(STALE_SCAN)                                     # ax_scan errors[]
+    assert lr._mentions_stale_tab({"ok": False, "detail": "No target with id 'X'"})  # auth_state
+    assert lr._mentions_stale_tab({"outcome": "error", "detail": "no attachable page target"})  # execute
+    assert not lr._mentions_stale_tab({"ok": True, "candidates": [], "errors": []})  # genuinely no form
+    assert not lr._mentions_stale_tab(None)
+
+
+def test_stale_tab_is_not_mistaken_for_a_missing_form():
+    """The bug: a dead tab read as 'no form here' and died as no_login_form/max_steps, telling the
+    operator nothing useful. It must now be named."""
+    client = FakeClient(scans=[STALE_SCAN])
+    result = _run(client, re_resolve=lambda: None)
+    assert result.ok is False
+    assert result.status == "stale_tab"          # NOT no_login_form, NOT max_steps
+    assert "no longer exists" in result.detail   # a real, actionable message
+    assert result.trail[-1]["state"] == "stale_tab"
+
+
+def test_stale_tab_re_resolves_once_and_carries_on():
+    """The backup plan: re-find the live tab and keep going, addressing the FRESH tab id."""
+    calls = []
+
+    def re_resolve():
+        calls.append(1)
+        return {"browser_url": "http://127.0.0.1:9400", "tab_id": "FRESH"}
+
+    client = FakeClient(
+        scans=[STALE_SCAN, LIVE_SCAN],
+        auths=[{"ok": True, "logged_in": None}, {"ok": True, "logged_in": True}],
+    )
+    result = _run(client, re_resolve=re_resolve)
+    assert len(calls) == 1                       # re-resolved exactly once
+    assert result.ok is True and result.status == "authenticated"
+    # the drive switched tabs: first scan hit the dead id, the next hit the fresh one
+    assert client.tabs_used("/ax_scan") == ["DEAD1", "FRESH"]
+
+
+def test_stale_tab_re_resolve_happens_at_most_once():
+    """A re-resolve that keeps landing on a dead tab must escalate, not loop forever."""
+    calls = []
+
+    def re_resolve():
+        calls.append(1)
+        return {"browser_url": "http://127.0.0.1:9400", "tab_id": "ALSO_DEAD"}
+
+    client = FakeClient(scans=[STALE_SCAN, STALE_SCAN, STALE_SCAN])
+    result = _run(client, re_resolve=re_resolve)
+    assert len(calls) == 1                       # the one-shot latch held
+    assert result.status == "stale_tab"
+
+
+def test_stale_tab_mid_fill_never_blames_the_stored_password():
+    """If the tab dies while the credentials are being typed they never landed — reporting
+    bad_credentials there would tell the operator their password is wrong when it isn't."""
+    client = FakeClient(
+        scans=[LIVE_SCAN],                                  # a real sign-in form is visible
+        executes=[{"outcome": "error", "detail": "No target with id 'DEAD1'"}],
+    )
+    result = _run(client, re_resolve=lambda: None)
+    assert result.status == "stale_tab"                     # NOT bad_credentials
+    assert "password" not in result.detail.lower()
+
+
+def test_no_re_resolve_still_escalates_honestly():
+    """Without the backup plan wired, a stale tab must still be named rather than swallowed."""
+    result = _run(FakeClient(scans=[STALE_SCAN]), re_resolve=None)
+    assert result.status == "stale_tab"

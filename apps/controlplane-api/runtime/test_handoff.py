@@ -144,3 +144,68 @@ def test_notify_off_channel_is_silent(monkeypatch):
     monkeypatch.setattr(handoff_mod, "_notify_channel", lambda: "off")
     handoff_mod.notify(handoff_mod.build_handoff(_escalated_result(), task_goal="g"))
     assert banners == []
+
+
+# --- emit_escalation: the alert for loops that have no LoopResult -------------------------------
+def _quiet(monkeypatch, tmp_path):
+    """Redirect persistence to tmp and capture banners instead of shelling out."""
+    monkeypatch.setattr(handoff_mod, "_handoffs_path", lambda: tmp_path / "handoffs.jsonl")
+    banners = []
+    monkeypatch.setattr(handoff_mod, "_macos_banner",
+                        lambda title, message: banners.append((title, message)))
+    monkeypatch.setattr(handoff_mod, "_notify_channel", lambda: "macos")
+    return banners
+
+
+def test_emit_escalation_alerts_without_a_loop_result(monkeypatch, tmp_path):
+    """The login drive and the controller produce no LoopResult — before this they had no alert
+    at all. A stale tab must now reach the same handoffs log and the same banner."""
+    banners = _quiet(monkeypatch, tmp_path)
+    h = handoff_mod.emit_escalation(reason="stale_tab", task_goal="ATS login — acme",
+                                    detail="the tab went away", url="https://acme.wd1.com/login")
+    assert h is not None
+    rows = handoff_mod.list_handoffs()
+    assert rows[0]["id"] == h.id and rows[0]["escalation_reason"] == "stale_tab"
+    assert "no longer exists" in h.why           # plain-language guidance, not a raw status
+    assert h.suggestion and len(banners) == 1
+
+
+def test_emit_escalation_maps_login_statuses_to_plain_language(monkeypatch, tmp_path):
+    _quiet(monkeypatch, tmp_path)
+    for reason, needle in [("captcha", "captcha"), ("mfa", "2fa"),
+                           ("bad_credentials", "rejected"), ("unexpected_state", "recognise")]:
+        h = handoff_mod.emit_escalation(reason=reason, task_goal="g")
+        assert needle in h.why.lower(), reason
+
+    # An unmapped status still produces a usable alert rather than an empty one.
+    h = handoff_mod.emit_escalation(reason="something_new", task_goal="g")
+    assert h.why and h.suggestion
+
+
+def test_emit_escalation_never_raises_into_the_drive(monkeypatch, tmp_path):
+    """An alert must never break the drive it is reporting on."""
+    _quiet(monkeypatch, tmp_path)
+
+    def boom(_):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(handoff_mod, "persist", boom)
+    assert handoff_mod.emit_escalation(reason="stale_tab", task_goal="g") is None
+
+
+def test_escalation_callback_shapes_a_controller_escalation(monkeypatch, tmp_path):
+    """The on_escalate seam: (bundle, decision) -> an alert carrying the state + rung."""
+    _quiet(monkeypatch, tmp_path)
+
+    class B:
+        goal_text, task, url, state = "apply to acme", "apply", "https://acme/apply", "acme_questions"
+
+    class D:
+        rationale, intent, rung, confidence = "no program for this state", "click", "model", 0.4
+
+    handoff_mod.escalation_callback(task_goal="apply run")(B(), D())
+    row = handoff_mod.list_handoffs()[0]
+    assert row["escalation_reason"] == "unexpected_state"
+    assert row["detail"] == "no program for this state"
+    assert row["tried"][0]["state"] == "acme_questions"
+    assert row["tried"][0]["layer"] == "model"

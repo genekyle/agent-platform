@@ -183,13 +183,26 @@ async def account_login_ep(account_id: str, body: LoginRequest, db: Session = De
     def _journal(step, state, idx):  # each reasoning step -> the Open Brain
         _journal_login_step(account_id, state, step)
 
+    def _re_resolve():
+        """Backup plan for a STALE TAB (the pinned CDP target vanished — SSO redirect, iframe
+        teardown, a reload). Re-finds the account's live ATS tab. Deliberately ignores any explicit
+        `body.tab_id`: that handle is precisely the one that went stale, so reusing it would
+        re-fail. Returns None if the tab is genuinely gone, which escalates honestly."""
+        try:
+            fresh = tab_finder.resolve_target(db, acct)
+        except Exception:  # noqa: BLE001 — a failed re-resolve escalates; it never breaks login
+            return None
+        if not fresh.get("found") or not fresh.get("tab_id"):
+            return None
+        return {"browser_url": fresh.get("browser_url"), "tab_id": fresh.get("tab_id")}
+
     reasoner = login_reasoner.haiku_login_reasoner() if body.reason else None
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             result = await login_reasoner.run_login(
                 client=client, capture_url=settings.capture_server_url,
                 browser_url=browser_url, tab_id=tab_id, username=username, password=password,
-                reasoner=reasoner, journal=_journal)
+                reasoner=reasoner, journal=_journal, re_resolve=_re_resolve)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Login driver unreachable: {exc}")
 
@@ -197,6 +210,21 @@ async def account_login_ep(account_id: str, body: LoginRequest, db: Session = De
     # available + Create is blocked going forward (the two lifecycles stay consistent).
     if result.ok:
         _mark_ats_created(account_id)
+    else:
+        # A failed login is a real "agent needs help" event. Alert the operator — banner + the
+        # handoffs log + the Session Activity timeline (kind:"escalation") — instead of burying
+        # the reason in a JSON field nobody is watching, which is how the stale-tab failure went
+        # unnoticed in the first place. Best-effort; never turns a login result into a 500.
+        from runtime import handoff as handoff_mod
+        handoff_mod.emit_escalation(
+            reason=result.status,
+            task_goal=f"ATS login — {account_id}",
+            detail=result.detail,
+            tab_url=tgt.get("tab_url"),
+            tried=[{"step": t.get("step"), "state": t.get("state"),
+                    "action": t.get("action"), "reason": t.get("rationale")}
+                   for t in result.trail],
+        )
     return {"ok": result.ok, "status": result.status, "steps": result.steps,
             "detail": result.detail, "trail": result.trail}
 

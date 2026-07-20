@@ -18,10 +18,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
-from interaction.contract import STALE_STATE_OUTCOMES, Intent, Outcome
+from interaction.contract import Intent, Outcome
 from interaction.decision import Bundle, Decision, DecisionRecord
 from interaction.decision_journal import log_decision, record_for
 from controller import programs as programs_mod
+from controller import unexpected
 from controller.decide import DecisionReasoner, ProgramLookup, decide
 from controller.teach import PROPOSE_RUNGS, ReviewAction, Reviewer
 
@@ -31,8 +32,6 @@ MAX_STEPS = 40
 #: application (irreversible, consequential); "apply = done only when SUBMITTED", and the
 #: final Submit is the operator's, always (SESSION_02 DoD, and the apply preferences).
 CONSEQUENTIAL_INTENTS = frozenset({Intent.SUBMIT.value})
-
-_STALE = frozenset(o.value for o in STALE_STATE_OUTCOMES)
 
 
 @dataclass
@@ -206,14 +205,16 @@ def run_controller(
             return LoopResult(STATUS_BLOCKED, step, "BLOCKED — challenge/session, hand to human",
                               bundle, decision, records)
 
-        if verified:
+        # The unexpected-state policy — shared with the login drive so "not where we assumed"
+        # is decided identically in both (controller/unexpected.py).
+        response = unexpected.respond(result.outcome, verified=verified,
+                                      already_retried=stale_retry_used)
+        if response is unexpected.Response.CONTINUE:
             stale_retry_used = False
             escalations_in_a_row = 0        # a verified action breaks any escalation streak
             continue
-
-        # verify failed. A stale-state outcome means "re-observe before retrying" — do it ONCE.
-        if result.outcome in _STALE and not stale_retry_used:
-            stale_retry_used = True
+        if response is unexpected.Response.RE_OBSERVE:
+            stale_retry_used = True         # re-observe once; a second miss escalates
             continue
         stale_retry_used = False
 
