@@ -311,3 +311,51 @@ def test_loop_stale_outcome_reobserves_once_then_escalates(monkeypatch, tmp_path
     # acted twice (initial + one re-observe retry) before escalating
     assert acts["n"] == 2
     assert programs_mod.load_program("indeed_apply", "s").stale is True   # program flagged
+
+
+# --- the treadmill guard (found live 2026-07-19, Longroad) --------------------------
+def test_verified_actions_that_never_move_the_page_stall_instead_of_spinning():
+    """`expected_next` legitimately contains the CURRENT state (Indeed's questions module spans
+    several pages that are all `indeed_apply_questions`), so a self-loop verifies exactly like
+    progress. Live, that let a BLOCKED Continue be clicked 8 times and report 100% autonomous /
+    100% verified while the page never moved. Landing where you expected != getting somewhere."""
+    from controller.loop import STATUS_STALLED
+
+    class Treadmill:
+        """Always the same page; every click 'succeeds' and lands on the same state."""
+        def observe(self):
+            return Bundle(task="indeed_apply", goal_text="apply", done=False,
+                          url="https://smartapply.indeed.com/questions/2",
+                          route="smartapply/questions", state="indeed_apply_questions",
+                          is_branch=False, human_required=False,
+                          expected_next=("indeed_apply_questions", "indeed_apply_review"))
+
+        def act(self, decision):
+            return ActOutcome(outcome="ok", landed_state="indeed_apply_questions")
+
+    # expected_exit INCLUDES the current state, exactly as the compiled program does: the recipe's
+    # edges for indeed_apply_questions list indeed_apply_questions itself (the module spans several
+    # pages). That self-inclusion is precisely what made the treadmill verify.
+    store = DictStore({("indeed_apply", "indeed_apply_questions"): programs_mod.IntentProgram(
+        task="indeed_apply", state="indeed_apply_questions", guard_fields=(),
+        steps=({"intent": "click", "params": {"control": "Continue"}},),
+        expected_exit=("indeed_apply_questions", "indeed_apply_review"))})
+
+    res = run_controller(Treadmill(), programs=store, max_steps=20, session_id="t")
+    assert res.status == STATUS_STALLED
+    assert res.steps < 20                      # stopped early, did NOT burn the budget
+    assert "unchanged" in res.reason
+
+
+def test_progress_signature_distinguishes_moving_from_standing_still():
+    from controller.loop import progress_signature
+
+    def b(url, unanswered=()):
+        return Bundle(task="t", goal_text="g", done=False, url=url, route="r",
+                      state="indeed_apply_questions", is_branch=False, human_required=False,
+                      unanswered=tuple({"field": f} for f in unanswered))
+
+    assert progress_signature(b("/q/1")) == progress_signature(b("/q/1"))
+    assert progress_signature(b("/q/1")) != progress_signature(b("/q/2"))   # moved pages
+    # same url, but a field got answered -> that IS progress
+    assert progress_signature(b("/q/1", ("a", "b"))) != progress_signature(b("/q/1", ("a",)))

@@ -268,6 +268,16 @@ SCAN_REQUIRED_JS = r"""
   __WIDGET_TELLS__
   const vis = __vis, txt = __txt, attr = __attr;
 
+  // An id -> a USABLE '#id' selector. React 18's useId emits ids like ':r16:', and a raw
+  // '#rich-text-question-input-:r16:' makes querySelector THROW SyntaxError — so the field is
+  // unaddressable even though getElementById finds it fine. Caught live 2026-07-19 on Indeed's
+  // free-text question, which stalled the drive at NOT_FOUND. labelFor below already escaped
+  // for exactly this reason; the selector we hand OUT has to as well.
+  const __idSel = (el) => {
+    if (!el || !el.id) return null;
+    try { return '#' + CSS.escape(el.id); } catch (e) { return null; }
+  };
+
   // Per-control label, NOT the container's whole text — that is exactly what makes
   // /scan_form useless on Workday (First/Middle/Last all report the fieldset's text).
   const labelFor = (el) => {
@@ -317,7 +327,7 @@ SCAN_REQUIRED_JS = r"""
     const id = el.id || label;
     if (seen.has(id)) continue;          // a hidden required TWIN is not a second question
     seen.add(id);
-    out.push({field: label.slice(0, 90), selector: el.id ? '#' + el.id : null,
+    out.push({field: label.slice(0, 90), selector: __idSel(el),
               kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
               required_via: via, value_read_at: truth.read_at,
               // `answered` is NOT always false here: a FILLED-but-INVALID field is reported
@@ -380,7 +390,7 @@ SCAN_REQUIRED_JS = r"""
                 (group.some(b => b.required || attr(b, 'aria-required') === 'true') || /\*/.test(label));
     if (!req) continue;
     if (group.some(b => b.checked)) continue;      // 0 checked = unanswered
-    out.push({field: label.slice(0, 90), selector: group[0].id ? '#' + group[0].id : null,
+    out.push({field: label.slice(0, 90), selector: __idSel(group[0]),
               kind: 'checkbox_group', required_via: 'group', value_read_at: 'checked',
               answered: false, valid: true, value_preview: ''});
   }
@@ -399,7 +409,7 @@ SCAN_REQUIRED_JS = r"""
     const label = groupLabel(group, k);
     const req = group.some(r => r.required || attr(r, 'aria-required') === 'true') || /\*/.test(label);
     if (!req) continue;
-    out.push({field: label.slice(0, 90), selector: group[0].id ? '#' + group[0].id : null,
+    out.push({field: label.slice(0, 90), selector: __idSel(group[0]),
               kind: 'radio_group', required_via: 'group', value_read_at: 'aria-checked',
               answered: false, valid: true, value_preview: ''});
   }

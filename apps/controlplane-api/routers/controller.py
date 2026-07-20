@@ -203,6 +203,11 @@ async def run_live(body: RunBody) -> dict[str, Any]:
     verified = [t for t in acted
                 if t["outcome"] == Outcome.OK.value
                 and t["landed_state"] and t["landed_state"] in t["expected_next"]]
+    # PROGRESS, not just success. A verified action that leaves the page where it was has
+    # achieved nothing, and reporting it as autonomy is how a treadmill scores 100% (live,
+    # 2026-07-19: 8 verified Continue clicks on one blocked page). Count the steps that actually
+    # moved us.
+    progressed = sum(1 for a, b in zip(trail, trail[1:]) if a["url"] != b["url"])
     return {
         "ok": True, "status": result.status, "reason": result.reason, "steps": result.steps,
         "mode": body.mode,
@@ -211,6 +216,7 @@ async def run_live(body: RunBody) -> dict[str, Any]:
             "steps_acted": len(acted),
             "steps_rung0": len(autonomous),
             "steps_verified": len(verified),
+            "steps_progressed": progressed,
             "escalations": len([t for t in trail if t["escalate"]]),
             "rung0_share": round(len(autonomous) / len(trail), 3) if trail else 0.0,
         },

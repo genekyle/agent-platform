@@ -51,8 +51,22 @@ class Actuator(Protocol):
     def act(self, decision: Decision) -> ActOutcome: ...
 
 
+#: Consecutive VERIFIED actions that leave the page byte-identical before we call it a stall.
+#: One is normal (a field fill doesn't move the page); two in a row means the thing we keep
+#: "successfully" doing is achieving nothing.
+NO_PROGRESS_LIMIT = 2
+
+
+def progress_signature(bundle: Bundle) -> tuple:
+    """What "the page moved" means, mechanically: where we are, what state that is, and what is
+    still unanswered. Compared between steps to tell PROGRESS from a treadmill."""
+    return (bundle.url, bundle.state,
+            tuple(sorted(str(u.get("field")) for u in (bundle.unanswered or ()))))
+
+
 # Loop statuses — every one is a definite verdict, never an ambiguous "ran out".
 STATUS_DONE = "done"
+STATUS_STALLED = "stalled"
 STATUS_MAX_STEPS = "max_steps"
 STATUS_HUMAN = "human_required"
 STATUS_BLOCKED = "blocked"
@@ -105,6 +119,8 @@ def run_controller(
     records: list[DecisionRecord] = []
     escalations_in_a_row = 0
     stale_retry_used = False
+    no_progress = 0
+    last_progress_sig: Optional[tuple] = None
     last_bundle: Optional[Bundle] = None
     last_decision: Optional[Decision] = None
 
@@ -120,6 +136,26 @@ def run_controller(
     for step in range(max_steps):
         bundle = actuator.observe()
         last_bundle = bundle
+
+        # NO-PROGRESS GUARD. `expected_next` legitimately contains the CURRENT state (Indeed's
+        # questions module spans several pages that are all `indeed_apply_questions`), so a
+        # self-loop verifies exactly like real progress: outcome ok + landed in expected_next.
+        # Live on 2026-07-19 that let a blocked Continue be clicked 8 times and score 100%
+        # autonomous / 100% verified while the page never moved — a perfect-looking treadmill.
+        # Landing where you expected is NOT the same as getting somewhere.
+        sig = progress_signature(bundle)
+        if last_progress_sig is not None and sig == last_progress_sig:
+            no_progress += 1
+            if no_progress >= NO_PROGRESS_LIMIT:
+                if on_escalate and last_decision is not None:
+                    on_escalate(bundle, last_decision)
+                return LoopResult(STATUS_STALLED, step,
+                                  f"{no_progress} verified actions left the page unchanged "
+                                  f"({bundle.state}) — acting without progressing, handing up",
+                                  bundle, last_decision, records)
+        else:
+            no_progress = 0
+        last_progress_sig = None      # only a VERIFIED action arms the comparison (set below)
 
         if bundle.done:
             return LoopResult(STATUS_DONE, step, "task complete", bundle, last_decision, records)
@@ -212,6 +248,7 @@ def run_controller(
         if response is unexpected.Response.CONTINUE:
             stale_retry_used = False
             escalations_in_a_row = 0        # a verified action breaks any escalation streak
+            last_progress_sig = sig         # arm the treadmill check: this action claimed success
             continue
         if response is unexpected.Response.RE_OBSERVE:
             stale_retry_used = True         # re-observe once; a second miss escalates
