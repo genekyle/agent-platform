@@ -264,3 +264,54 @@ def test_current_state_settles_to_the_landed_url_not_a_stale_read():
     out = act.act(_dec("click", control="Continue"))
     # settled to the NEW url's state, not the stale first read (would have been resume_selection)
     assert out.landed_state == "indeed_apply_questions"
+
+
+# --- field addressing vs the scan's mangled labels (found live 2026-07-19, Longroad) ---------
+def test_question_of_recovers_the_stable_half():
+    from controller.live_actuator import _question_of
+    scan = "Do you now or will you in the future require sponsorship for a work visa? * No, I do not r"
+    assert _question_of(scan) == (
+        "do you now or will you in the future require sponsorship for a work visa?")
+    assert _question_of("Gender *") == "gender"
+    assert _question_of(None) == ""
+
+
+def test_same_field_matches_the_scans_truncated_option_padded_label():
+    """/scan_required labels a radio group with its question PLUS its first option, truncated. No
+    answer key or program step will ever EQUAL that, so exact matching made every Indeed question
+    page unaddressable — the drive stalled at NOT_FOUND on all four fields."""
+    same = LiveActuator._same_field
+    scan = "Do you now or will you in the future require sponsorship for a work visa? * No, I do not r"
+    asked = "Do you now or will you in the future require sponsorship for a work visa?"
+    assert same(scan, asked)
+
+    # truncated mid-question (a very long question) still matches from the other direction
+    assert same("Do you have at least 1-2 years of demonstrated experience in Treasury, Fin",
+                "Do you have at least 1-2 years of demonstrated experience in Treasury, Finance, "
+                "or Accounting?")
+
+
+def test_same_field_does_not_collide_across_different_questions():
+    same = LiveActuator._same_field
+    assert not same("Are you currently legally authorized to work in the United States? * Yes",
+                    "Do you now or will you in the future require sponsorship for a work visa?")
+    assert not same("", "anything")
+    # a short shared prefix must not be enough to call two questions the same
+    assert not same("Do you have a car? * Yes", "Do you have a degree? * Yes")
+
+
+def test_ambiguous_field_refuses_to_pick_rather_than_answering_the_wrong_question():
+    """Two scan rows answering to one name means we cannot tell them apart. Choosing the first
+    would fill the WRONG radio group on a real application, so addressing returns None and the
+    step escalates — the same refusal _discover_target makes for tabs."""
+    act = LiveActuator(base_url="http://x", browser_url="http://b", tab_id="t",
+                       task="indeed_apply", transport=FakeTransport(url=_INDEED))
+    act._ats = "indeed_quick_apply"
+    act._last_scan = [
+        {"field": "Are you authorized to work? * Yes", "kind": "radio_group", "selector": "#a"},
+        {"field": "Are you authorized to work? * No", "kind": "radio_group", "selector": "#b"},
+    ]
+    assert act._address("Are you authorized to work?") is None
+
+    act._last_scan = act._last_scan[:1]          # unambiguous again -> addressable
+    assert act._address("Are you authorized to work?") is not None

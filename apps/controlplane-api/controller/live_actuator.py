@@ -28,6 +28,7 @@ Two disciplines carried from the hard-won lessons:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import replace
 from typing import Any, Callable, Optional
@@ -62,6 +63,23 @@ _RADIO_WIDGETS = frozenset({"radio_group", "radio"})
 #: checking it is a native click, same mechanism as a radio — not a labelled multi-select group.
 _AFFIRM_PREFIXES = ("accept", "agree", "yes", "true", "i accept", "i agree", "i acknowledge",
                     "i certify", "i consent", "i have read")
+
+
+def _question_of(name: Optional[str]) -> str:
+    """The question half of a field label, normalised for comparison.
+
+    `/scan_required` labels a radio group with its question AND its option text, truncated —
+    'Do you … require sponsorship for a work visa? * No, I do not r'. The ' *' required-marker is
+    the boundary between the two, so cutting there recovers the stable half that answer keys,
+    recipe fields and program steps actually refer to.
+    """
+    n = re.sub(r"\s+", " ", (name or "").strip())
+    for marker in (" * ", " *"):
+        i = n.find(marker)
+        if i >= 0:
+            n = n[:i]
+            break
+    return n.strip().strip("*").strip().lower()
 
 
 def _is_affirmation(value: Any) -> bool:
@@ -179,11 +197,13 @@ class LiveActuator:
             if not control:
                 return self._out(Outcome.NOT_FOUND.value, self._last_state,
                                  detail="click with no control name")
+            before = self._read_url()      # the baseline the settle waits to LEAVE
             res = self._post("/execute", {**self._addr(), "action_id": "click", "target_bbox": {},
                                           "target_role": p.get("role", "button"),
                                           "target_name": control, "driver": self._driver})
             # A click usually navigates — re-classify the current url into the landed state.
-            return ActOutcome(outcome=_outcome_of(res), landed_state=self._current_state(),
+            return ActOutcome(outcome=_outcome_of(res),
+                              landed_state=self._current_state(changed_from=before),
                               detail=res.get("detail", ""))
 
         # Field intents need addressing (selector, or role+name).
@@ -253,11 +273,40 @@ class LiveActuator:
             # addressed by its QUESTION TEXT (autofill), not a selector — Indeed gives every radio
             # the same id, so the group often has no usable selector at all. widget_type carries
             # the routing signal; a null selector is fine for the native-click path.
-            for u in (self._last_scan or []):
-                if u.get("field") == field:
-                    return {"selector": u.get("selector"), "role": None, "name": None,
-                            "widget_type": u.get("kind"), "commit": None}
+            # AMBIGUITY IS NOT A PICK. If two rows answer to the same name we cannot tell them
+            # apart, and choosing the first would answer the WRONG question on someone's real
+            # application — the same reason _discover_target refuses to fall back to another tab.
+            hits = [u for u in (self._last_scan or [])
+                    if self._same_field(u.get("field"), field)]
+            if len(hits) == 1:
+                u = hits[0]
+                return {"selector": u.get("selector"), "role": None, "name": None,
+                        "widget_type": u.get("kind"), "commit": None}
+            if len(hits) > 1:
+                logger.warning("field %r matches %d scan rows — refusing to guess which",
+                               field, len(hits))
         return None
+
+    @staticmethod
+    def _same_field(scan_name: Optional[str], wanted: str) -> bool:
+        """Is this scan row the field we asked for?
+
+        Exact equality is NOT usable here, and assuming it cost a live drive (2026-07-19, Longroad):
+        `/scan_required` names a radio group by its question PLUS its first option text and then
+        truncates (~90 chars) — 'Do you … require sponsorship for a work visa? * No, I do not r'.
+        No stored answer key, recipe field, or program step will ever equal that string, so every
+        Indeed question page was unaddressable and the drive stalled at NOT_FOUND.
+
+        So compare the QUESTION halves: everything before the ' *' required-marker, normalised.
+        Prefix matching both ways covers the truncation (the scan's copy may be cut mid-question).
+        The length floor keeps a short prefix from colliding with a different question.
+        """
+        a, b = _question_of(scan_name), _question_of(wanted)
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        return len(min(a, b, key=len)) >= 12 and (a.startswith(b) or b.startswith(a))
 
     @staticmethod
     def _question_patterns(field: str) -> list[str]:
@@ -296,18 +345,32 @@ class LiveActuator:
         auth = self._post("/auth_state", self._addr())
         return auth.get("url") or ""
 
-    def _current_state(self) -> Optional[str]:
+    def _current_state(self, *, changed_from: Optional[str] = None) -> Optional[str]:
         """Re-classify the CURRENT url into a state (used after a click that may have navigated).
 
         SETTLE FIRST: /auth_state can return the OLD url before a navigation completes — observed
         live reporting `resume_selection` right after a Continue that had already reached
-        `questions/1`. Poll until two consecutive reads agree (or the settle budget runs out), THEN
-        classify, so the loop verifies against where we ACTUALLY landed."""
+        `questions/1`.
+
+        "Two consecutive reads agree" is NOT sufficient on its own, and that bug bit us live
+        (2026-07-19, the Longroad drive): a SPA transition that hasn't STARTED yet is also
+        perfectly stable, so the first two reads agreed on the OLD url, the loop verified against
+        the wrong state, and a working program got marked stale for a click that had actually
+        succeeded. A false stale-mark is expensive — it evicts a good program from rung 0.
+
+        So when the caller knows the url the action started from (`changed_from`), we wait for the
+        url to actually LEAVE it before confirming stability. A click that legitimately doesn't
+        navigate just spends the settle budget and returns the same state, which is correct.
+        """
         url = self._read_url()
         for _ in range(max(0, self._settle_tries)):
+            if changed_from is not None and url == changed_from:
+                self._sleep(self._settle_delay)     # hasn't moved yet — not "settled"
+                url = self._read_url()
+                continue
             self._sleep(self._settle_delay)
             nxt = self._read_url()
-            if nxt == url:          # stable — navigation has settled
+            if nxt == url:          # stable AND (if asked) already off the starting url
                 break
             url = nxt               # still moving — keep following it
         url = url or self._last_url or ""

@@ -107,6 +107,19 @@ SEED_ANSWERS: list[dict[str, Any]] = [
                  "get the wrong answer.",
     },
     {
+        "answer_key": "finance_domain_experience",
+        "display_name": "Treasury / finance / accounting experience",
+        "category": "eligibility", "value": "Yes", "input_hint": "radio",
+        "question_patterns": ["treasury, finance, or accounting", "treasury, finance or accounting",
+                              "treasury, finance", "finance, or accounting", "finance or accounting",
+                              "experience in treasury", "accounting experience"],
+        "options": ["Yes", "Yes, I have worked in treasury, finance or accounting"],
+        "notes": "Operator-confirmed 2026-07-19: has the 1-2+ years these analyst postings ask for. "
+                 "Recurs constantly on analyst roles, which is why it's stored rather than asked "
+                 "each time. Patterns stay multi-word so a generic 'finance' in a job blurb can't "
+                 "trigger a claim about the operator's background.",
+    },
+    {
         "answer_key": "sponsorship_required", "display_name": "Requires visa sponsorship",
         "category": "eligibility", "value": "No", "input_hint": "radio",
         "question_patterns": ["require sponsorship", "need sponsorship", "visa sponsorship",

@@ -197,7 +197,12 @@ async def run_live(body: RunBody) -> dict[str, Any]:
     # The number the whole exercise is for: how much ran without a human.
     acted = [t for t in trail if not t["escalate"]]
     autonomous = [t for t in acted if t["rung"] == "recipe"]
-    verified = [t for t in acted if t["landed_state"] and t["landed_state"] in t["expected_next"]]
+    # Verified means BOTH halves, exactly as loop._verify defines it. Checking only the landed
+    # state counted a `not_found` click as a success in the first live run — a metric that
+    # flatters itself is worse than no metric.
+    verified = [t for t in acted
+                if t["outcome"] == Outcome.OK.value
+                and t["landed_state"] and t["landed_state"] in t["expected_next"]]
     return {
         "ok": True, "status": result.status, "reason": result.reason, "steps": result.steps,
         "mode": body.mode,
