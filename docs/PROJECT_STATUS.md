@@ -1,6 +1,10 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-07-19 — **the unexpected-state pass**: the ATS-login stale-tab blocker is fixed,
+_Last updated: 2026-07-20 — **the supervisor became priority #1** (`PLAN_supervisor.md`): a
+per-turn observer that names what went wrong from a taxonomy mined from our own logs, instead of a
+boolean `verified`. S11 landed — `interaction/delta.py`, the always-on state delta we had assumed
+existed and did not; the treadmill guard now runs on it. 25 new tests; controlplane-api 427 → 452
+green, interaction 78 → 102, mcp 53. Previously (2026-07-19) **the unexpected-state pass**: the ATS-login stale-tab blocker is fixed,
 and "we are not where we assumed" is now one shared policy (`controller/unexpected.py`) with an
 operator alert, a candidate-state store, and a blackboard gate. 26 new tests; controlplane-api
 401 → 427 green, mcp 53 green, controller-evals green. Previously (2026-07-17) **Controller v1
@@ -99,6 +103,7 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
 | **decide** | **✅ built (offline) — live drive owed** | `controller/` | the teachable reasoner; M1–M5 landed 2026-07-17 (`PLAN_controller_v1.md`). Cascade + loop + teach + shadow/replay all tested; the operator-present live drives remain |
 | act | ✅ built, **fired live extensively** | `mcp/app/executor/` + tier-2 protocols | via teacher drives; the autonomous loop remains record-only/`run_live`-limited |
 | verify | ✅ built (element-level) | `select_stage/verifier.py` | protocol-level verification now lives in tier-2 outcomes (`ok` = verified at commit) |
+| **supervise** | **🔨 in progress — S11 of 6 done** | `interaction/delta.py`, `controller/loop.py` | the post-act diagnosis (`PLAN_supervisor.md`). The state delta + the treadmill guard on it landed 2026-07-20; the `SupervisorVerdict` contract, rung 0, the taxonomy, the commentary pane and the shadow drives are S12–S16 |
 
 Guardrails all live: $5/week cap (`anthropic_usage.enforce_budget`), human escalation on
 stop-state / over-budget / low-confidence / no-match / verifier-fail, never auto-solve
@@ -126,11 +131,29 @@ every controller step journals, and controller Session 02 starts the crank on th
 
 ## Priorities (ordered — everything else queues behind these)
 
-_Reordered 2026-07-17 (operator-directed). **The controller is the most important work in the repo
-and starts now.** Its M2 milestone absorbs the old #1 — the rung-0 replay IS the live validation of
-Interaction API Phase 1 — and every controller drive feeds the old #2 (the journal is the crank)._
+_Reordered 2026-07-20 (operator-directed): **the supervisor is #1.** The reasoning layer —
+observer, reasoner, planner — is what gets the system unstuck and tells every other part what to
+do, so it leads. It does **not** displace controller v1: the supervisor rides on the live drives
+v1 already owed (M2), which is why the two are one activity and not a queue. Previously reordered
+2026-07-17 (the controller ahead of Phase 1)._
 
-1. **Controller v1 — the teachable `decide()`** (`PLAN_controller_v1.md`; session briefs
+1. **The Supervisor — a per-turn observer that NAMES what went wrong**
+   (`PLAN_supervisor.md`; session briefs `docs/sessions/SESSION_11`–`SESSION_16`). Replaces
+   today's boolean `verified: true|false` with a cited diagnosis from a closed failure taxonomy
+   **mined from our own logs** (8 classes cover every machine-readable stuck moment we have), and
+   makes recovery a *selection* from a small playbook rather than open-ended reasoning. Its three
+   products, in payoff order: **legibility** (a live commentary of why, every turn, without
+   acting), **corpus** (every turn a pre-labeled example; every override a free correction), and
+   **autonomy** (promotion per *failure class*, never globally). Cost is held under the $5/week cap
+   by a cascade, same as everywhere: rung 0 deterministic ($0, every turn, emits a full readable
+   verdict) → rung 1 Haiku only when rung 0 can't name the class → rung 2 teacher. **Vision stays
+   gated** — a screenshot is a diagnostic the reasoner *requests*, never a firehose.
+   **S11 landed 2026-07-20:** `interaction/delta.py` (`StateDelta` — the always-on cheap sense we
+   had assumed existed and did not), the treadmill guard rebuilt on it, 25 new tests.
+   **Next: S12** (the `SupervisorVerdict` contract + rung 0 + taxonomy v1) — offline, buildable
+   today, as are S13–S15. The only operator-present work is S16.
+
+2. **Controller v1 — the teachable `decide()`** (`PLAN_controller_v1.md`; session briefs
    `docs/sessions/SESSION_01`–`SESSION_05`). **Career Search only — prove it in this domain first,
    then expand.** M1 Decision contract + Bundle → M2 rung-0 Indeed replay through the Interaction
    API with zero model calls (doubles as Phase 1's DoD) → M3 Haiku rung + escalation ladder →
@@ -144,19 +167,19 @@ Interaction API Phase 1 — and every controller drive feeds the old #2 (the jou
    teaching surface — `propose()`/`commit()`, teacher decides + Haiku shadows; 6 tests). Reasoning
    roles re-anchored in PRINCIPLES §9 (student = central cog; Haiku = backstop). **Owed = the live
    teaching drive itself** (journal flows, programs compile) + search-phase/tab states in the Bundle.
-2. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
+3. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
    measure. Fed directly by controller drives. The full plan with gates and metrics:
    `PLAN_flywheel_first_revolution.md`.
-3. **Spine convergence** — one corpus spine (the journal), one action surface for teacher and loop
+4. **Spine convergence** — one corpus spine (the journal), one action surface for teacher and loop
    alike. Decision + component dispositions: `DECISION_two-stacks-one-spine.md`. (The loop emitting
    intents is Phase 4 of `PLAN_interaction_api.md` — the controller's `decide()` is exactly the
    piece the loop will adopt; still not current work to rewrite the loop itself.)
-4. **Interaction API Phase 2** — the intent surface (`/api/interact/*`, `{ats, field, value}`),
+5. **Interaction API Phase 2** — the intent surface (`/api/interact/*`, `{ats, field, value}`),
    `/resolve_answer` rungs + alias-table writeback.
-5. **Parked** (do not resume until the wheel turns once, unless one blocks a drive): `main.py`
+6. **Parked** (do not resume until the wheel turns once, unless one blocks a drive): `main.py`
    split resumption (5,061 lines, 170 routes — it's growing again; the route-inventory guardrail
    still holds), movement playground / diffusion input model, OmniParser removal, Account Manager
-   build-out (`PLAN_account_manager_and_l3.md` — its capture/label directive is *absorbed into* #2),
+   build-out (`PLAN_account_manager_and_l3.md` — its capture/label directive is *absorbed into* #3),
    `/scan_form` retirement (gated on a live diff vs `/scan_required`), FB Marketplace expansion.
 
 ## Endgame (recorded 2026-07-16 so every session aims the same direction)

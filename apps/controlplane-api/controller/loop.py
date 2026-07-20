@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
+from interaction import delta as delta_mod
 from interaction.contract import Intent, Outcome
 from interaction.decision import Bundle, Decision, DecisionRecord
 from interaction.decision_journal import log_decision, record_for
@@ -57,11 +58,29 @@ class Actuator(Protocol):
 NO_PROGRESS_LIMIT = 2
 
 
-def progress_signature(bundle: Bundle) -> tuple:
-    """What "the page moved" means, mechanically: where we are, what state that is, and what is
-    still unanswered. Compared between steps to tell PROGRESS from a treadmill."""
-    return (bundle.url, bundle.state,
-            tuple(sorted(str(u.get("field")) for u in (bundle.unanswered or ()))))
+def observation_delta(before: Optional[Bundle], after: Bundle) -> delta_mod.StateDelta:
+    """Diff two consecutive observations — "did the page move, and how?"
+
+    Replaces the old `progress_signature` 3-tuple (`url`, `state`, unanswered field names), which
+    answered only "did it move" and was blind to everything that actually goes wrong: an overlay
+    that opened, an error banner that appeared, a Continue that went disabled. It was also blind
+    in the other direction — real progress through Indeed's questions module changes NEITHER the
+    templated route (`…/questions/{id}`) nor the state (`indeed_apply_questions`), so movement
+    there is visible only in the control set turning over.
+
+    `before=None` (the first observation of a run) yields a delta that counts as moved: there is
+    no prior to have failed to move from.
+    """
+    return delta_mod.compute(
+        before=None if before is None else before.ax_identities,
+        after=after.ax_identities,
+        url_before=None if before is None else before.url,
+        url_after=after.url,
+        state_before=None if before is None else before.state,
+        state_after=after.state,
+        unanswered_before=None if before is None else len(before.unanswered),
+        unanswered_after=len(after.unanswered),
+    )
 
 
 # Loop statuses — every one is a definite verdict, never an ambiguous "ran out".
@@ -120,7 +139,9 @@ def run_controller(
     escalations_in_a_row = 0
     stale_retry_used = False
     no_progress = 0
-    last_progress_sig: Optional[tuple] = None
+    #: The observation the treadmill check compares against. Set ONLY after a VERIFIED action —
+    #: an action that never claimed success has no business being judged for not moving the page.
+    armed_bundle: Optional[Bundle] = None
     last_bundle: Optional[Bundle] = None
     last_decision: Optional[Decision] = None
 
@@ -143,8 +164,8 @@ def run_controller(
         # Live on 2026-07-19 that let a blocked Continue be clicked 8 times and score 100%
         # autonomous / 100% verified while the page never moved — a perfect-looking treadmill.
         # Landing where you expected is NOT the same as getting somewhere.
-        sig = progress_signature(bundle)
-        if last_progress_sig is not None and sig == last_progress_sig:
+        step_delta = observation_delta(armed_bundle, bundle) if armed_bundle is not None else None
+        if step_delta is not None and not step_delta.moved:
             no_progress += 1
             if no_progress >= NO_PROGRESS_LIMIT:
                 if on_escalate and last_decision is not None:
@@ -155,7 +176,7 @@ def run_controller(
                                   bundle, last_decision, records)
         else:
             no_progress = 0
-        last_progress_sig = None      # only a VERIFIED action arms the comparison (set below)
+        armed_bundle = None           # only a VERIFIED action arms the comparison (set below)
 
         if bundle.done:
             return LoopResult(STATUS_DONE, step, "task complete", bundle, last_decision, records)
@@ -248,7 +269,7 @@ def run_controller(
         if response is unexpected.Response.CONTINUE:
             stale_retry_used = False
             escalations_in_a_row = 0        # a verified action breaks any escalation streak
-            last_progress_sig = sig         # arm the treadmill check: this action claimed success
+            armed_bundle = bundle           # arm the treadmill check: this action claimed success
             continue
         if response is unexpected.Response.RE_OBSERVE:
             stale_retry_used = True         # re-observe once; a second miss escalates

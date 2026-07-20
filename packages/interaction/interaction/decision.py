@@ -166,6 +166,15 @@ class Bundle:
     # --- short history: "what just happened"
     recent: tuple[dict, ...] = ()         # last k (intent, field, outcome) rows, k<=5
 
+    # --- the raw material for the state DELTA (PLAN_supervisor §1)
+    #: The screen's `role|normalized-name` identity set, from `delta.identities_from_ax`. Carried
+    #: so the loop can DIFF consecutive observations — the supervisor's always-on cheap sense.
+    #: DELIBERATELY NOT RENDERED by `bundle_to_prompt`: a few hundred identities inline is the
+    #: raw-AX dump this architecture keeps out of prompts (PLAN_reasoner_v2 §4). What a model
+    #: sees is the small, capped `delta_to_prompt(...)` summary instead. Appended last, defaulted,
+    #: and prompt-invisible, so every row journaled before it stays valid (schema note above).
+    ax_identities: tuple[str, ...] = ()
+
 
 # --- the Decision: what the controller EMITS ----------------------------------------
 @dataclass(frozen=True)

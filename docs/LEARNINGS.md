@@ -1601,3 +1601,50 @@ wired-and-tested but not yet firing in anger.
 - “No emoji” required removing emoji from data catalogs and deep utility screens, not just the shell. A single `currentColor` icon resolver makes that rule enforceable.
 - Training and Lab were one learning loop hiding behind two product labels. The explicit Capture → Label → Train → Evaluate → Promote visual makes the teacher/student system understandable, while Advanced keeps engineering tools reachable without making them primary navigation.
 - A theme migration can safely govern legacy components temporarily, but it does not erase their architecture debt. `App.jsx` and `App.css` remain extraction targets; the implementation notes record that debt so the compatibility layer does not become the new foundation.
+
+## 2026-07-20 — We could hash a page state but never DIFF one; and the failure taxonomy was already in the logs
+
+The supervisor plan (`docs/PLAN_supervisor.md`, adopted today as priority #1) rests on an
+"always-on cheap sense" — the AX-tree delta. The audit found we did not have one, and that the
+thing we needed instead of guessing was already sitting in our own corpora.
+
+- **Equality is not a diff, and we only ever built equality.** `fingerprint.compute` hashes a
+  screen, so it can say two states are *different* and never *how*. The one place that needed to
+  know — `controller/loop.py`'s treadmill guard — approximated it with `progress_signature`, a
+  3-tuple of `(url, state, unanswered-field-names)`. That tuple is blind to a modal opening, an
+  error banner appearing, or a Continue going disabled: precisely the events that make a drive
+  stick. Built `interaction/delta.py` (`StateDelta`), a set difference over
+  `fingerprint.ax_summary`'s identities — same normalization on purpose, so the delta and the
+  fingerprint can never disagree about whether "Messages (3)" and "Messages (7)" are one control.
+- **Real progress in Indeed's questions module is invisible to url and state.** All 29 journalled
+  rows from the Lactalis drive across `questions/1|2|3` share one templated route
+  (`…/questions/{id}`) *and* one state (`indeed_apply_questions`). So advancing a step and
+  treadmilling on a step look identical to any signature keyed on url+state — the only evidence
+  that the page moved is **the control set turning over**. This is the whole argument for the
+  delta in one measurement. It is also why `LiveActuator.observe()` now owes an AX scan: it calls
+  `/auth_state` and `/scan_required` only, so **`Bundle.fingerprint` has been `None` on every live
+  row we have ever journalled**, and `ax_identities` is empty until that is wired.
+- **Templated routes are less sensitive than raw urls, deliberately.** `/q/1` -> `/q/2` is NOT a
+  route change. That is the right default (a nonce or id churning in a url is not movement) and it
+  makes the guard fail toward a false *stall* — an unnecessary escalation — rather than a false
+  *progress*, which is the 8×-click disaster of 07-19. Pinned in a test named for the limitation.
+- **The taxonomy did not need inventing — it needed mining.** From `decision_journal.jsonl` (88),
+  `intent_journal.jsonl` (223), `handoffs.jsonl` (34) and ~30 hand-written incidents here:
+  **13 `verified=False` decisions, 23 non-`ok` intents, 34 handoffs**. Eight classes cover *all*
+  of them — `control_not_found` (24, the largest by far), `no_progress` (6 of the 13
+  verified-false rows), `staged_not_committed`, `race_settle`, `stale_tab`, `unrecognized_state`,
+  `auth_wall` (12 handoffs), `missed_required_control`. The power law is real and it is ours.
+- **Two classes from the generic web-agent literature are absent from our data**: unexpected
+  modals/interstitials (plausible but unobserved) and layout drift breaking selectors — which
+  *cannot* happen here, because we address by role + accessible name. Seeding a taxonomy with
+  borrowed classes would have taught the supervisor to look for the wrong things; classes get
+  earned the way `Outcome` members were earned.
+- **Do not build the event bus.** The incoming design asked for one; `decision_journal.jsonl` is
+  already written on every controller step and `intent_journal.jsonl` on every journaled endpoint.
+  A second channel is exactly the 2026-07-16 corpus reckoning again (`event_log.jsonl`, a ring
+  buffer no trainer reads). Supervision journals as added optional columns on `DecisionRecord`,
+  which `decision.py` already declares backwards-compatible.
+
+**The through-line, again:** almost every piece of this was already present and unjoined — the
+normalization, the identities, the journal, the escalation policy, the shadow harness. What was
+missing was the subtraction.

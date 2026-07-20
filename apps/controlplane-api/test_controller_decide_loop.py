@@ -347,15 +347,77 @@ def test_verified_actions_that_never_move_the_page_stall_instead_of_spinning():
     assert "unchanged" in res.reason
 
 
-def test_progress_signature_distinguishes_moving_from_standing_still():
-    from controller.loop import progress_signature
+def test_observation_delta_distinguishes_moving_from_standing_still():
+    """The delta replaces the old `progress_signature` 3-tuple. These are the three cases the
+    signature already handled, kept as a regression: identical page, moved page, field answered."""
+    from controller.loop import observation_delta
+
+    def b(url, unanswered=(), ids=("button|continue",)):
+        return Bundle(task="t", goal_text="g", done=False, url=url, route="r",
+                      state="indeed_apply_questions", is_branch=False, human_required=False,
+                      unanswered=tuple({"field": f} for f in unanswered), ax_identities=ids)
+
+    assert observation_delta(b("/q/1"), b("/q/1")).moved is False
+    assert observation_delta(b("/q/1"), b("/review")).moved is True          # moved pages
+    # same url, but a field got answered -> that IS progress
+    assert observation_delta(b("/q/1", ("a", "b")), b("/q/1", ("a",))).moved is True
+    # and the first observation of a run is never a stall
+    assert observation_delta(None, b("/q/1")).moved is True
+
+
+def test_observation_delta_sees_what_the_old_signature_was_blind_to():
+    """The upgrade, stated as a test. An overlay opening changes no url, no state and no
+    unanswered-field set — `progress_signature` scored it identical, so a run could sit under a
+    modal reporting "unchanged" with no idea why. The delta names the controls that appeared."""
+    from controller.loop import observation_delta
+
+    def b(ids):
+        return Bundle(task="t", goal_text="g", done=False, url="/q/1", route="r",
+                      state="indeed_apply_questions", is_branch=False, human_required=False,
+                      unanswered=({"field": "a"},), ax_identities=ids)
+
+    d = observation_delta(b(("button|continue",)),
+                          b(("button|continue", "dialog|verify your identity", "button|close")))
+    assert d.moved is True
+    assert d.appeared == ("button|close", "dialog|verify your identity")
+
+
+def test_treadmill_guard_needs_no_ax_identities_to_fire():
+    """Back-compat: a Bundle built before `ax_identities` existed (and today's LiveActuator, which
+    does not yet run an AX scan) carries an empty identity set. The delta must still fall back to
+    url/state/unanswered and catch a stall — otherwise this upgrade would silently disarm the
+    guard that commit c3d2904 added."""
+    from controller.loop import observation_delta
 
     def b(url, unanswered=()):
         return Bundle(task="t", goal_text="g", done=False, url=url, route="r",
                       state="indeed_apply_questions", is_branch=False, human_required=False,
                       unanswered=tuple({"field": f} for f in unanswered))
 
-    assert progress_signature(b("/q/1")) == progress_signature(b("/q/1"))
-    assert progress_signature(b("/q/1")) != progress_signature(b("/q/2"))   # moved pages
-    # same url, but a field got answered -> that IS progress
-    assert progress_signature(b("/q/1", ("a", "b"))) != progress_signature(b("/q/1", ("a",)))
+    assert observation_delta(b("/q/1"), b("/q/1")).moved is False
+    assert observation_delta(b("/q/1"), b("/review")).moved is True
+    assert observation_delta(b("/q/1", ("a",)), b("/q/1")).moved is True
+
+
+def test_a_same_route_step_advance_is_INVISIBLE_without_ax_or_a_scan_change():
+    """A limitation recorded on purpose, not an accident (PLAN_supervisor §0a).
+
+    Advancing `…/questions/1` -> `…/questions/2` changes neither the templated route nor the
+    state. If the new step also happens to present the same NUMBER of unanswered fields and no AX
+    scan ran, the delta sees nothing and the guard would call real progress a stall — a false
+    escalation (the safe direction: it hands to the operator rather than spinning). This is the
+    concrete reason `LiveActuator.observe()` owes an AX scan; when `ax_identities` is populated the
+    control set turns over and the case resolves itself — which the second half asserts.
+    """
+    from controller.loop import observation_delta
+
+    base = "https://smartapply.indeed.com/beta/indeedapply/form/questions-module/questions"
+
+    def b(n, ids=()):
+        return Bundle(task="t", goal_text="g", done=False, url=f"{base}/{n}", route="r",
+                      state="indeed_apply_questions", is_branch=False, human_required=False,
+                      unanswered=({"field": "q"},), ax_identities=ids)
+
+    assert observation_delta(b(1), b(2)).moved is False          # blind, today
+    assert observation_delta(b(1, ("radio|work authorization",)),
+                             b(2, ("textbox|why this role",))).moved is True   # sighted, with AX
