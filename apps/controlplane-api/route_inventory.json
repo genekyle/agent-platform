@@ -119,6 +119,7 @@
   "POST /api/controller/decide_model",
   "POST /api/controller/observe",
   "POST /api/controller/programs/compile",
+  "POST /api/controller/run",
   "POST /api/controller/teach/commit",
   "POST /api/controller/teach/observe",
   "POST /api/drive_lock",

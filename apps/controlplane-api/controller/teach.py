@@ -79,6 +79,30 @@ def scripted_reviewer(script: list[Review]) -> Reviewer:
     return _review
 
 
+def auto_reviewer(*, min_confidence: float = 0.85,
+                  on_review=None) -> Reviewer:
+    """A NON-BLOCKING reviewer: approve a confident proposal, escalate anything shakier.
+
+    This is what takes the operator out of the per-step loop. `cli_reviewer` blocks on stdin, so
+    any drive using it is a push-button by construction — one keypress per step, forever. Here the
+    confidence floor does the reviewing, and only what falls below it becomes a human's problem.
+
+    The bar is deliberately ABOVE `decide()`'s own 0.75 escalation floor. Clearing 0.75 means "the
+    model was willing to act"; this asks the stricter "confident enough to act UNWATCHED on a real
+    job application". Rung-0 decisions never arrive here at all — `run_controller` only proposes
+    the rungs in `propose_rungs` — so a compiled program still runs free.
+
+    `on_review` (optional) receives (bundle, decision, review) for the run report.
+    """
+    def _review(bundle: Bundle, decision: Decision) -> Review:
+        verdict = (approve() if decision.confidence >= min_confidence else escalate())
+        if on_review is not None:
+            on_review(bundle, decision, verdict)
+        return verdict
+
+    return _review
+
+
 def cli_reviewer(*, input_fn=input, print_fn=print) -> Reviewer:
     """A terminal propose-approve prompt — the surface that ships this session (a cockpit panel is
     optional polish; the contract is the deliverable). Renders the proposal, reads a verdict:

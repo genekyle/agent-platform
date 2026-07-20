@@ -119,6 +119,100 @@ def decisions(limit: int = 100, session_id: Optional[str] = None) -> dict[str, A
     return {"decisions": rows, "count": len(rows)}
 
 
+class RunBody(BaseModel):
+    browser_url: str
+    tab_id: str
+    task: str = "indeed_apply"
+    goal_text: str = ""
+    mode: str = "rung0_only"          # rung0_only ($0) | assisted (Haiku rung allowed)
+    max_steps: int = 12
+    session_id: str = ""
+    min_confidence: float = 0.85      # assisted: the unwatched-action bar
+
+
+@router.post("/api/controller/run")
+async def run_live(body: RunBody) -> dict[str, Any]:
+    """Drive one task on a live tab through observe → decide → act → verify. THE call site.
+
+    `run_controller` existed, was tested, and had never been pointed at a real tab — every
+    reference to it was a test — which is why the only live surface was the step-wise
+    teach/observe → teach/commit pair, i.e. one operator press per step by construction.
+
+    Modes:
+      * `rung0_only` (default) — no model is wired, so only COMPILED PROGRAMS act. Anything
+        without a program escalates. $0, and the honest measure of how far rung 0 carries a task.
+      * `assisted` — the Haiku rung may also propose, auto-approved only above `min_confidence`
+        (see `teach.auto_reviewer`); below it, a human gets it.
+
+    Gates that stay loud in BOTH modes, because "less push-button" must never mean "fewer
+    safeguards": SUBMIT is held for the operator (CONSEQUENTIAL_INTENTS), human-required states
+    (sign-in / create-account) are structurally undriveable, BLOCKED hands straight over, and two
+    escalations in a row stop the drive. Every escalation raises a real handoff alert.
+    """
+    from controller.live_actuator import LiveActuator
+    from controller.loop import run_controller
+    from controller.teach import auto_reviewer
+    from runtime import handoff as handoff_mod
+
+    if body.mode not in ("rung0_only", "assisted"):
+        return {"ok": False, "detail": f"unknown mode {body.mode!r} (rung0_only | assisted)"}
+
+    actuator = LiveActuator(base_url=settings.capture_server_url, browser_url=body.browser_url,
+                            tab_id=body.tab_id, task=body.task, goal_text=body.goal_text,
+                            driver="humanized")
+    model = HaikuReasoner() if body.mode == "assisted" else None
+
+    trail: list[dict[str, Any]] = []
+    reviews: list[dict[str, Any]] = []
+    held: list[dict[str, Any]] = []
+
+    def _on_step(bundle: Bundle, decision: Decision, result: Any) -> None:
+        trail.append({
+            "state": bundle.state, "url": bundle.url, "rung": decision.rung,
+            "intent": decision.intent, "params": decision.params,
+            "confidence": decision.confidence, "escalate": decision.escalate,
+            "rationale": decision.rationale,
+            "outcome": getattr(result, "outcome", None),
+            "landed_state": getattr(result, "landed_state", None),
+            "expected_next": list(decision.expected_next),
+        })
+
+    def _on_review(bundle: Bundle, decision: Decision, review: Any) -> None:
+        reviews.append({"state": bundle.state, "intent": decision.intent,
+                        "confidence": decision.confidence, "verdict": str(review.action.value)})
+
+    def _on_consequential(bundle: Bundle, decision: Decision) -> None:
+        held.append({"state": bundle.state, "intent": decision.intent,
+                     "detail": "held for the operator — Submit is always yours"})
+
+    result = await run_in_threadpool(
+        run_controller, actuator,
+        programs=programs_mod.ProgramStore(), model=model,
+        session_id=body.session_id or f"run-{body.task}", max_steps=body.max_steps,
+        reviewer=auto_reviewer(min_confidence=body.min_confidence, on_review=_on_review),
+        on_escalate=handoff_mod.escalation_callback(
+            task_goal=body.goal_text or body.task, reason="unexpected_state"),
+        on_consequential=_on_consequential, on_step=_on_step)
+
+    # The number the whole exercise is for: how much ran without a human.
+    acted = [t for t in trail if not t["escalate"]]
+    autonomous = [t for t in acted if t["rung"] == "recipe"]
+    verified = [t for t in acted if t["landed_state"] and t["landed_state"] in t["expected_next"]]
+    return {
+        "ok": True, "status": result.status, "reason": result.reason, "steps": result.steps,
+        "mode": body.mode,
+        "autonomy": {
+            "steps_total": len(trail),
+            "steps_acted": len(acted),
+            "steps_rung0": len(autonomous),
+            "steps_verified": len(verified),
+            "escalations": len([t for t in trail if t["escalate"]]),
+            "rung0_share": round(len(autonomous) / len(trail), 3) if trail else 0.0,
+        },
+        "held_for_operator": held, "reviews": reviews, "trail": trail,
+    }
+
+
 class CompileProgramsBody(BaseModel):
     save: bool = False          # default is a DRY RUN — see the docstring
     limit: int = 1000

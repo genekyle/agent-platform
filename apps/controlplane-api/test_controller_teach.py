@@ -173,3 +173,28 @@ def test_cli_reviewer_approve_and_correct():
     # correction" stub. A golden row without a real why is a lesson thrown away.
     assert "dropdown" in r.correction.rationale
     assert is_real_rationale(r.correction.rationale)
+
+
+# --- auto_reviewer: the thing that removes the per-step keypress -------------------
+def test_auto_reviewer_approves_confident_and_escalates_shaky():
+    from controller.teach import ReviewAction, auto_reviewer
+    review = auto_reviewer(min_confidence=0.85)   # the verdict is confidence-only; bundle unused
+    confident = Decision("click", {"control": "Continue"}, 0.95, "model", "sure")
+    shaky = Decision("click", {"control": "Continue"}, 0.80, "model", "not sure")
+    assert review(None, confident).action is ReviewAction.APPROVE
+    assert review(None, shaky).action is ReviewAction.ESCALATE
+
+
+def test_auto_reviewer_bar_sits_above_the_decide_floor():
+    """decide() escalates below 0.75 ("willing to act"). Acting UNWATCHED on a real application
+    is a stricter question, so the default review bar must be higher — otherwise "autonomous"
+    silently means "anything decide() would have proposed"."""
+    from controller.decide import DECISION_CONFIDENCE_THRESHOLD
+    from controller.teach import ReviewAction, auto_reviewer
+    import inspect
+    default = inspect.signature(auto_reviewer).parameters["min_confidence"].default
+    assert default > DECISION_CONFIDENCE_THRESHOLD
+
+    # A decision decide() would pass along still gets held back here.
+    borderline = Decision("click", {}, DECISION_CONFIDENCE_THRESHOLD, "model", "just over the line")
+    assert auto_reviewer()(None, borderline).action is ReviewAction.ESCALATE
