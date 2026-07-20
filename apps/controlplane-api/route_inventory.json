@@ -75,6 +75,7 @@
   "GET /api/training/goals",
   "GET /api/training/label_queue",
   "GET /api/training/page-states",
+  "GET /api/training/page-states/candidates",
   "GET /api/training/scenarios",
   "GET /api/training/scorecard",
   "GET /api/training/sessions",

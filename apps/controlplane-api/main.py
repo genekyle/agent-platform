@@ -2090,6 +2090,18 @@ def update_page_state(state_id: str, body: PageStateUpdate, db: Session = Depend
     return _page_state_dict(row)
 
 
+@router.get("/api/training/page-states/candidates")
+def list_page_state_candidates(limit: int = 100, db: Session = Depends(get_db)):
+    """The promotion queue: page states the agent OBSERVED but that nobody has blessed yet.
+
+    Deliberately NOT returned by `GET /api/training/page-states` (which filters
+    `status == "active"`) — an unapproved guess must never reach a labeler menu or become a
+    training label. Approve one with `PATCH /api/training/page-states/{state_id}
+    {"status": "active"}`; that single flip is the whole promotion step."""
+    import page_state_candidates
+    return {"candidates": page_state_candidates.list_candidates(db, limit=limit)}
+
+
 @router.delete("/api/training/page-states/{state_id}")
 def archive_page_state(state_id: str, db: Session = Depends(get_db)):
     row = db.get(PageStateRegistry, state_id)
@@ -4802,6 +4814,16 @@ def suggest_page_state(filename: str, write: bool = True, db: Session = Depends(
         db.commit()
         written = "auto"
 
+    # A state the classifier judged NEW is the most valuable thing it can tell us — and it used
+    # to be returned here and dropped, so the registry never grew from what we actually met.
+    # Record it as a CANDIDATE (inert until approved: the menus filter status == "active").
+    candidate = None
+    if write and pred.get("is_new") and pred.get("proposed_name"):
+        import page_state_candidates
+        candidate = page_state_candidates.record_candidate(
+            db, proposed_name=pred["proposed_name"], domain_id=capture.domain_id,
+            goal_id=capture.goal_id, scenario_id=capture.scenario_id, url=url)
+
     return {
         "filename": filename,
         "suggestion": pred,
@@ -4810,6 +4832,7 @@ def suggest_page_state(filename: str, write: bool = True, db: Session = Depends(
         "human_owned": human_owned,
         "auto_threshold": _PAGE_STATE_AUTO_CONFIDENCE,
         "candidate_state_count": len(candidate_states),
+        "candidate_recorded": candidate,
     }
 
 
