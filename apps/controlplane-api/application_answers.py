@@ -13,6 +13,17 @@ from __future__ import annotations
 import re
 from typing import Any
 
+#: Score a question must reach before this store answers it, i.e. essentially one whole pattern
+#: present verbatim (3.0). Raised from 2.0 on 2026-07-19: at 2.0, loose token overlap alone could
+#: carry a match — "How many years of email marketing have you done?" scored 2.5 against the
+#: SMS-consent patterns and would have been answered "No".
+#:
+#: The costs here are deliberately asymmetric. A MISS falls through to Haiku and then to asking
+#: the operator — a few cents and a question. A FALSE POSITIVE writes a wrong answer into a real
+#: job application and, once rung-0 programs replay unattended, does it silently every time. So
+#: the bar is "ask, don't guess", the same rule the rest of the cascade follows.
+MATCH_THRESHOLD = 3.0
+
 _WORD = re.compile(r"[a-z0-9]+")
 # Generic words that shouldn't drive a match (every question has them).
 _STOP = frozenset({
@@ -60,11 +71,49 @@ SEED_ANSWERS: list[dict[str, Any]] = [
     {
         "answer_key": "terms_acknowledgment", "display_name": "Terms acknowledgment",
         "category": "acknowledgment", "value": "Yes", "input_hint": "radio",
+        # NB: a bare "consent" pattern used to live here and was actively dangerous — it matched
+        # "SMS recruiting-text consent" at score 3.0 and answered YES, the opposite of what the
+        # teacher answered live (measured 2026-07-19). Agreeing to terms is REQUIRED to proceed;
+        # opting into marketing contact is not. Keep these patterns about terms, never consent
+        # in general — see `marketing_sms_consent`.
         "question_patterns": ["i have read", "read and understood", "acknowledge",
                               "agree to the terms", "terms and conditions", "privacy notice",
-                              "consent", "i agree", "read the above", "have read and agree"],
+                              "i agree", "read the above", "have read and agree"],
         "options": ["Yes", "I have read and understand", "I agree", "I acknowledge"],
         "notes": "Auto-acknowledge the read-the-terms radio that gates EEO/self-ID pages.",
+    },
+    {
+        "answer_key": "marketing_sms_consent", "display_name": "SMS / marketing contact consent",
+        "category": "acknowledgment", "value": "No", "input_hint": "radio",
+        # Patterns are deliberately multi-word: a bare "marketing" would hijack a skills question
+        # ("Do you have marketing experience?") and answer No to it.
+        "question_patterns": ["sms", "text message", "recruiting-text", "recruiting text",
+                              "by text", "text alerts", "marketing email", "marketing message",
+                              "marketing communication", "promotional"],
+        "options": ["No"],
+        "notes": "DECLINE marketing/SMS contact — the teacher answered No live (2026-07-18). "
+                 "Deliberately separate from terms_acknowledgment so an optional opt-in can "
+                 "never inherit a required agreement's Yes.",
+    },
+    {
+        "answer_key": "work_authorization", "display_name": "Authorized to work in the US",
+        "category": "eligibility", "value": "Yes", "input_hint": "radio",
+        "question_patterns": ["authorized to work", "legally authorized", "eligible to work",
+                              "authorization to work", "right to work", "are you authorized",
+                              "legally eligible"],
+        "options": ["Yes"],
+        "notes": "POLARITY TRAP: this is the mirror of `sponsorship_required` — same subject, "
+                 "opposite answer. One entry must never serve both, or half the applications "
+                 "get the wrong answer.",
+    },
+    {
+        "answer_key": "sponsorship_required", "display_name": "Requires visa sponsorship",
+        "category": "eligibility", "value": "No", "input_hint": "radio",
+        "question_patterns": ["require sponsorship", "need sponsorship", "visa sponsorship",
+                              "require visa", "immigration sponsorship",
+                              "sponsorship now or in the future", "require employer sponsorship"],
+        "options": ["No"],
+        "notes": "Operator needs NO sponsorship. POLARITY TRAP — see `work_authorization`.",
     },
     {
         "answer_key": "gender", "display_name": "Gender",
@@ -114,21 +163,24 @@ def match_question(question: str, answers: list[dict[str, Any]]) -> dict[str, An
     best = None
     best_score = 0.0
     for a in answers:
+        # The BEST single pattern decides — deliberately not the sum. Summing let a common word
+        # repeated across several patterns manufacture a match: "Do you have marketing
+        # experience?" scored 3.0 against the three "marketing …" patterns and came back as an
+        # SMS-consent question (found 2026-07-19). Evidence is how well ONE pattern fits, not how
+        # many patterns happen to share a word.
         score = 0.0
         for pat in a.get("question_patterns") or []:
             patl = pat.lower().strip()
             if patl and patl in q:
-                score += 3.0  # whole pattern present verbatim
+                score = max(score, 3.0)          # whole pattern present verbatim
             else:
-                overlap = len(_tokens(pat) & q_tokens)
-                score += overlap * 1.0
+                score = max(score, len(_tokens(pat) & q_tokens) * 1.0)
         # The answer_key / display_name tokens themselves are weak signals.
         score += 0.5 * len(_tokens(a.get("display_name", "")) & q_tokens)
         if score > best_score:
             best_score, best = score, a
 
-    # Threshold: need at least one solid pattern hit (3) or two token overlaps.
-    matched = best is not None and best_score >= 2.0
+    matched = best is not None and best_score >= MATCH_THRESHOLD
     if not matched:
         return {"matched": False, "score": round(best_score, 2),
                 "reason": "below_threshold", "best_key": best["answer_key"] if best else None}
