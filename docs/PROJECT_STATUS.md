@@ -2,9 +2,11 @@
 
 _Last updated: 2026-07-20 — **the supervisor became priority #1** (`PLAN_supervisor.md`): a
 per-turn observer that names what went wrong from a taxonomy mined from our own logs, instead of a
-boolean `verified`. S11 landed — `interaction/delta.py`, the always-on state delta we had assumed
-existed and did not; the treadmill guard now runs on it. 25 new tests; controlplane-api 427 → 452
-green, interaction 78 → 102, mcp 53. Previously (2026-07-19) **the unexpected-state pass**: the ATS-login stale-tab blocker is fixed,
+boolean `verified`. **S11 + S12 landed** — the state delta we had assumed existed and did not, the
+10-class taxonomy with a deterministic rung 0 that names every replayed real incident, and the
+perception `LiveActuator` never had (an AX scan, page text, and three silent failures made honest).
+99 new tests; controlplane-api 427 → 465, interaction 78 → 138, mcp 53, controller-evals green.
+Previously (2026-07-19) **the unexpected-state pass**: the ATS-login stale-tab blocker is fixed,
 and "we are not where we assumed" is now one shared policy (`controller/unexpected.py`) with an
 operator alert, a candidate-state store, and a blackboard gate. 26 new tests; controlplane-api
 401 → 427 green, mcp 53 green, controller-evals green. Previously (2026-07-17) **Controller v1
@@ -103,7 +105,7 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
 | **decide** | **✅ built (offline) — live drive owed** | `controller/` | the teachable reasoner; M1–M5 landed 2026-07-17 (`PLAN_controller_v1.md`). Cascade + loop + teach + shadow/replay all tested; the operator-present live drives remain |
 | act | ✅ built, **fired live extensively** | `mcp/app/executor/` + tier-2 protocols | via teacher drives; the autonomous loop remains record-only/`run_live`-limited |
 | verify | ✅ built (element-level) | `select_stage/verifier.py` | protocol-level verification now lives in tier-2 outcomes (`ok` = verified at commit) |
-| **supervise** | **🔨 in progress — S11 of 6 done** | `interaction/delta.py`, `controller/loop.py` | the post-act diagnosis (`PLAN_supervisor.md`). The state delta + the treadmill guard on it landed 2026-07-20; the `SupervisorVerdict` contract, rung 0, the taxonomy, the commentary pane and the shadow drives are S12–S16 |
+| **supervise** | **🔨 in progress — S11–S12 of 6 done** | `interaction/delta.py`, `interaction/supervision.py`, `controller/loop.py` | the post-act diagnosis (`PLAN_supervisor.md`). Delta + taxonomy + rung 0 + the journal columns landed 2026-07-20, running in **shadow** (no authority). Owed: rung 1 + gated screenshot (S13), the commentary pane (S14), postconditions (S15), the live shadow drives (S16) |
 
 Guardrails all live: $5/week cap (`anthropic_usage.enforce_budget`), human escalation on
 stop-state / over-budget / low-confidence / no-match / verifier-fail, never auto-solve
@@ -148,10 +150,17 @@ v1 already owed (M2), which is why the two are one activity and not a queue. Pre
    by a cascade, same as everywhere: rung 0 deterministic ($0, every turn, emits a full readable
    verdict) → rung 1 Haiku only when rung 0 can't name the class → rung 2 teacher. **Vision stays
    gated** — a screenshot is a diagnostic the reasoner *requests*, never a firehose.
-   **S11 landed 2026-07-20:** `interaction/delta.py` (`StateDelta` — the always-on cheap sense we
-   had assumed existed and did not), the treadmill guard rebuilt on it, 25 new tests.
-   **Next: S12** (the `SupervisorVerdict` contract + rung 0 + taxonomy v1) — offline, buildable
-   today, as are S13–S15. The only operator-present work is S16.
+   **S11 + S12 landed 2026-07-20** (99 new tests): `interaction/delta.py` (`StateDelta` — the
+   always-on cheap sense we had assumed existed and did not) with the treadmill guard rebuilt on
+   it; `interaction/supervision.py` (the 10-class taxonomy, the 7-play playbook, rung-0 `classify`
+   — which names all 9 replayed real incidents with **zero UNKNOWNs**); `supervisor_*`/`delta_*`
+   columns on `DecisionRecord`; the `on_supervise` seam in `run_controller`. And the perception the
+   controller never had: `LiveActuator.observe()` now runs an AX scan and passes **page text**
+   (without which Workday/Greenhouse states — and the *captcha markers* — were unreadable), and
+   three silent-failure defaults became honest handoffs.
+   **The supervisor has no authority yet — stage 1 is shadow, guarded by a test.**
+   **Next: S13** (rung 1 Haiku + the gated screenshot) and **S14** (the commentary pane); both
+   offline, as is S15. The only operator-present work is S16.
 
 2. **Controller v1 — the teachable `decide()`** (`PLAN_controller_v1.md`; session briefs
    `docs/sessions/SESSION_01`–`SESSION_05`). **Career Search only — prove it in this domain first,

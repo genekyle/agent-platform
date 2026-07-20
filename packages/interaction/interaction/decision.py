@@ -252,6 +252,21 @@ class DecisionRecord:
     # (golden + shadow) so the offline replay suite can re-run decide() on the exact input.
     bundle_snapshot: Optional[dict] = None
 
+    # --- the supervisor's verdict on THIS action (PLAN_supervisor §1). Appended optional
+    # columns, not a second corpus: `decision_journal.jsonl` is already written every controller
+    # step, and a parallel supervision file would repeat the 2026-07-16 corpus reckoning. These
+    # are what a distilled supervisor trains on, joined to the decision that earned them.
+    supervisor_class: Optional[str] = None        # a FailureClass value
+    supervisor_recovery: Optional[str] = None     # a RecoveryPlay value
+    supervisor_stuck: Optional[float] = None      # [0,1]
+    supervisor_rung: Optional[str] = None         # deterministic | model | teacher
+    supervisor_rationale: str = ""                # the "why" — is_real_rationale applies (§10)
+    supervisor_evidence: tuple[str, ...] = ()     # the inputs cited
+    #: What actually changed as a result of this action — the graded label. Kept as the small
+    #: scalars (not the identity lists) so a row stays a corpus row and not an AX dump.
+    delta_moved: Optional[bool] = None
+    delta_churn: Optional[int] = None
+
     # --- cost / provenance
     session_id: Optional[str] = None
     duration_ms: int = 0

@@ -21,22 +21,36 @@ _GREENHOUSE = "https://job-boards.greenhouse.io/acme/jobs/123"
 class FakeTransport:
     """Records (path, payload) and returns canned responses; can be told to raise on a path."""
 
-    def __init__(self, *, url, unanswered=None, logged_in=True, responses=None, raise_on=None):
+    def __init__(self, *, url, unanswered=None, logged_in=True, responses=None, raise_on=None,
+                 page_text="", ax_candidates=None, ax_errors=None):
         self.calls = []
         self._url = url
         self._unanswered = unanswered or []
         self._logged_in = logged_in
         self._responses = responses or {}
         self._raise_on = set(raise_on or ())
+        self._page_text = page_text
+        # A control set that is present but unremarkable, so observe() is not "blind" by default.
+        self._ax = [{"role": "button", "name": "Continue"}] if ax_candidates is None \
+            else ax_candidates
+        self._ax_errors = list(ax_errors or ())
 
     def __call__(self, path, payload):
         self.calls.append((path, dict(payload)))
         if path in self._raise_on:
             raise RuntimeError("transport boom")
+        # An explicit `responses` entry wins over the canned defaults — that is how a test says
+        # "this probe FAILED" for the observe-path probes, not just the act-path endpoints.
+        if path in self._responses:
+            return self._responses[path]
         if path == "/auth_state":
-            return {"ok": True, "logged_in": self._logged_in, "url": self._url}
+            return {"ok": True, "logged_in": self._logged_in, "url": self._url,
+                    "page_text": self._page_text}
         if path == "/scan_required":
             return {"ok": True, "outcome": "ok", "unanswered": self._unanswered}
+        if path == "/ax_scan":
+            return {"ok": True, "count": len(self._ax), "candidates": self._ax,
+                    "errors": self._ax_errors}
         return self._responses.get(path, {"ok": True, "outcome": "ok"})
 
     def paths(self):
@@ -76,6 +90,84 @@ def test_observe_logged_out_escalates_to_human():
     bundle = _actuator(fake).observe()
     assert bundle.human_required is True
     assert "logged in" in bundle.branch_note or "authenticate" in bundle.branch_note
+
+
+# --- observe: perception (added 2026-07-20 — PLAN_supervisor §0a) -----------------------
+def test_observe_scans_ax_and_carries_the_identities_for_the_delta():
+    """The supervisor's sense organ. Without these, `StateDelta` is empty on every live turn and
+    the loop is back to comparing url+state — blind to a modal, a banner, a disabled button."""
+    fake = FakeTransport(url=_INDEED, ax_candidates=[
+        {"role": "button", "name": "Continue"},
+        {"role": "textbox", "name": "Why do you want this role?"},
+        {"role": "generic", "name": "$1,299.00"},        # purely volatile — carries no identity
+    ])
+    bundle = _actuator(fake).observe()
+
+    assert "/ax_scan" in fake.paths()
+    assert bundle.ax_identities == ("button|continue", "textbox|why do you want this role?")
+
+
+def test_observe_passes_page_text_so_workday_state_is_classifiable_at_all():
+    """Workday and Greenhouse are single-origin SPAs whose step lives in the PAGE, not the URL —
+    `map_workday_state` reads markers out of page_text and nothing else. Until 2026-07-20 observe()
+    passed "", so every Workday step collapsed to `workday_job_posting`/`unknown`."""
+    fake = FakeTransport(url="https://acme.wd1.myworkdayjobs.com/External/apply",
+                         page_text="My Information\nLegal Name\nCountry")
+    bundle = _actuator(fake, task="workday_apply").observe()
+    assert bundle.state == "workday_my_information"
+
+    blind = FakeTransport(url="https://acme.wd1.myworkdayjobs.com/External/apply", page_text="")
+    assert _actuator(blind, task="workday_apply").observe().state == "workday_job_posting"
+
+
+def test_observe_can_see_a_captcha_now_that_page_text_flows():
+    """The safety-relevant half. `_CHALLENGE_MARKERS` are page-text-only, so with page_text=""
+    the controller was structurally unable to notice a challenge — the one thing it must always
+    escalate and never auto-solve."""
+    fake = FakeTransport(url="https://acme.wd1.myworkdayjobs.com/External/apply",
+                         page_text="Verify you are human before continuing")
+    bundle = _actuator(fake, task="workday_apply").observe()
+    assert bundle.state == "captcha"
+    assert bundle.human_required is True
+
+
+# --- observe: a failed probe is a handoff, never a benign reading -----------------------
+def test_a_failed_auth_probe_does_not_read_as_signed_in():
+    """`auth.get("logged_in", True)` defaulted a DEAD PROBE to "we're signed in" — the 2026-07-19
+    silence bug, still live in this path until today."""
+    fake = FakeTransport(url=_INDEED, responses={"/auth_state": {"ok": False, "detail": "no target"}})
+    bundle = _actuator(fake).observe()
+    assert bundle.human_required is True
+    assert "cannot observe" in bundle.branch_note and "auth probe failed" in bundle.branch_note
+
+
+def test_a_failed_required_scan_does_not_read_as_a_completed_form():
+    fake = FakeTransport(url=_INDEED,
+                         responses={"/scan_required": {"ok": False, "detail": "eval failed"}})
+    bundle = _actuator(fake).observe()
+    assert bundle.human_required is True
+    assert "required-field scan failed" in bundle.branch_note
+
+
+def test_an_empty_ax_scan_WITH_errors_is_a_stale_tab_not_an_empty_page():
+    """The exact signature from LEARNINGS 2026-07-19: `propose_ax_candidates` swallows a
+    target-discovery failure into `errors[]` and returns HTTP 200 with candidates=[], so a dead
+    target and a page with no controls are indistinguishable unless you read `errors`."""
+    fake = FakeTransport(url=_INDEED, ax_candidates=[],
+                         ax_errors=["target_discovery: No target with id TAB"])
+    bundle = _actuator(fake).observe()
+    assert bundle.human_required is True
+    assert "stale tab" in bundle.branch_note
+    assert bundle.state is None          # we do not claim to know where we are
+
+
+def test_an_empty_ax_scan_WITHOUT_errors_is_a_real_reading():
+    """A genuinely control-less page is a real observation — the supervisor classifies it, this
+    method must not pre-empt that by crying stale tab on every quiet page."""
+    fake = FakeTransport(url=_INDEED, ax_candidates=[], ax_errors=[])
+    bundle = _actuator(fake).observe()
+    assert bundle.human_required is False
+    assert bundle.ax_identities == ()
 
 
 # --- act: field addressing -------------------------------------------------------------

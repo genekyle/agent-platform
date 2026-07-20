@@ -162,10 +162,44 @@ by rung 1+; the loop then calls the existing MCP `/screenshot` and attaches it t
 call. Rung 0 may never request one. Vision is a diagnostic instrument the reasoner reaches for,
 never a firehose.
 
+### Amendments earned in the build (2026-07-20)
+
+Recorded rather than silently absorbed, per the extend-don't-rename discipline:
+
+- **A tenth class, `CHALLENGE`.** Not in the mined eight, because a captcha escalates at classify
+  and so never produces a `verified=False` row — but `Outcome.BLOCKED` is real and verified live
+  on reCAPTCHA, and forcing the loop's loudest stop into `UNKNOWN` would make the commentary go
+  silent exactly where the operator needs it. Checked FIRST, before any mechanical class, so a
+  challenge page's missing controls are never filed as `control_not_found`.
+- **Four classes come straight off the `Outcome` taxonomy instead of being inferred.**
+  `not_staged` / `not_committed` ARE `STAGED_NOT_COMMITTED` — and the endpoint knows *which half*
+  broke, which no inference does. `no_option` folds into `CONTROL_NOT_FOUND` (the control
+  resolved, its option vocabulary did not — same miss, one level in). `committed_unconfirmed` maps
+  to `UNKNOWN` with its own rationale: it is honest uncertainty, and precisely the case where
+  rung 1 spending a screenshot will earn its keep.
+- **`MISSED_REQUIRED_CONTROL` outranks `NO_PROGRESS`** when the form scans complete. Discovered by
+  a test: the Longroad treadmill has `unanswered == 0`, so the sharper class fires and the play is
+  `RESCAN_REQUIRED` rather than a blind retry. Generic `no_progress` is what remains when no
+  sharper explanation is available.
+
 ## 3. Where it runs
 
 Inside `run_controller`, immediately after `actuator.act()`, at the seam where `_verify()`'s
 boolean currently is. `_verify` **stays** — it is rung 0's cheapest input, not a competitor.
+
+**The timing correction (found in the build).** A verdict needs the delta the action *caused*, and
+the loop's between-observations delta at the top of the iteration describes the PREVIOUS action —
+so a verdict built from it would always arrive one turn late and could never be journaled on the
+row of the action it judges. Fixed by having `Actuator.act()` report the after-picture at the
+moment of acting (`ActOutcome.ax_identities` + `unanswered_after`, from one extra read-only CDP
+eval each); `loop.action_effect` differences that against the Bundle we decided on. Cause and
+effect land on the same record, which is what makes the verdict a training label rather than a
+note. `observation_delta` stays as the independent second net for the treadmill guard.
+
+**`unanswered_after` is not optional.** A react-select that stages *does* change the AX tree, so
+control churn alone reads a staged-but-uncommitted value as success. The form's own answer to "is
+this field filled?" is the only signal that disagrees — and it is the one that is right (the
+Ethnicity select, LEARNINGS 2026-07-18).
 
 ```
 observe → decide → [gate] → act → SUPERVISE → unexpected.respond → journal → next
@@ -205,7 +239,7 @@ decision journal: `indeed_apply_questions` (36 rows), `workday_sign_in` (37), an
 | # | Session | Gated on | Live? |
 |---|---|---|---|
 | S11 | ✅ **done 2026-07-20** — `interaction/delta.py` (`StateDelta`, `identities_from_ax`, `delta_to_prompt`), `Bundle.ax_identities`, the treadmill guard rebuilt on the delta as `loop.observation_delta`. 25 tests. Built inline, so it has no brief; LEARNINGS 2026-07-20 is its record. | — | no |
-| S12 | `SupervisorVerdict` + rung 0 + journal columns + taxonomy v1 from the mined logs | S11 | no |
+| S12 | ✅ **done 2026-07-20** — `interaction/supervision.py` (`FailureClass`, `RecoveryPlay`, `SupervisorVerdict`, rung-0 `classify`), `supervisor_*` + `delta_*` columns on `DecisionRecord`, the `on_supervise` seam in `run_controller`, and `LiveActuator` perception (AX scan, page text, post-action look). 74 tests. | S11 | no |
 | S13 | Rung 1 (Haiku behind the HTTP seam) + the gated screenshot path | S12 | no |
 | S14 | The commentary pane (Activity console — reasoning is already a source there) | S12 | no |
 | S15 | Postconditions on the three states | S12 | no |

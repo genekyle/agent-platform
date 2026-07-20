@@ -24,6 +24,7 @@ import apply_recipe
 import ats_registry
 import task_spec
 from interaction.decision import Bundle, sanitize_unanswered
+from interaction.delta import identities_from_ax
 from interaction.fingerprint import route_template
 
 #: Cap the serialised lessons so a bundle prompt stays cheap. The full LESSONS dicts are
@@ -77,6 +78,7 @@ def build_bundle(
     scan: Optional[list[dict]] = None,
     journal_tail: Optional[list[dict]] = None,
     fingerprint: Optional[str] = None,
+    ax_candidates: Optional[list[dict]] = None,
 ) -> Bundle:
     """Assemble the controller's input for ONE tab. Pure — no IO, no network.
 
@@ -88,6 +90,8 @@ def build_bundle(
         scan: `/scan_required`'s `unanswered` list, verbatim — sanitised here (no selectors/PII).
         journal_tail: the run's last few decision/intent rows — the history half.
         fingerprint: the AX state sha256, when a scan produced one (opportunistic, may be None).
+        ax_candidates: `/ax_scan`'s candidates, reduced here to `role|name` identities — the raw
+            material for the state delta (`interaction/delta.py`). NOT rendered into the prompt.
     """
     ats = ats or ats_registry.classify_ats(url)
     desc = apply_recipe.describe_for_ats(ats, url, page_text)
@@ -115,4 +119,5 @@ def build_bundle(
         lessons=_serialize_lessons(apply_recipe.lessons_for(ats)),
         unanswered=sanitize_unanswered(scan),
         recent=_shape_recent(journal_tail),
+        ax_identities=identities_from_ax(ax_candidates),
     )

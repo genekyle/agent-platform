@@ -421,3 +421,170 @@ def test_a_same_route_step_advance_is_INVISIBLE_without_ax_or_a_scan_change():
     assert observation_delta(b(1), b(2)).moved is False          # blind, today
     assert observation_delta(b(1, ("radio|work authorization",)),
                              b(2, ("textbox|why this role",))).moved is True   # sighted, with AX
+
+
+# --- the supervisor seam (S12, PLAN_supervisor §3) ----------------------------------
+def _supervised_run(actuator, *, store=None, max_steps=6):
+    """Run a drive and collect every verdict the loop emitted."""
+    seen = []
+    res = run_controller(actuator, programs=store, max_steps=max_steps, session_id="t",
+                         on_supervise=lambda b, d, v: seen.append(v))
+    return res, seen
+
+
+class _Advancing:
+    """Each click actually moves the page — the nominal path."""
+    def __init__(self):
+        self.n = 0
+
+    def observe(self):
+        return _bundle(f"s{self.n}", expected=(f"s{self.n + 1}",))
+
+    def act(self, decision):
+        self.n += 1
+        return ActOutcome(outcome="ok", landed_state=f"s{self.n}",
+                          ax_identities=(f"button|step {self.n}",), unanswered_after=0)
+
+
+def test_every_acting_step_gets_a_verdict_journaled_on_its_own_row():
+    """The verdict must land on the row of the action it judges — that is what makes it a
+    training label rather than a note. It is why act() reports the after-picture instead of the
+    loop waiting for the next observe() (which would arrive one turn late)."""
+    store = DictStore({("indeed_apply", f"s{i}"): _prog(
+        "indeed_apply", f"s{i}", [{"intent": "click", "params": {"control": "Continue"}}],
+        guard=[], exit_states=[f"s{i + 1}"]) for i in range(4)})
+
+    res, verdicts = _supervised_run(_Advancing(), store=store, max_steps=3)
+
+    acting = [r for r in res.records if r.outcome is not None]
+    assert acting, "no acting rows"
+    for row in acting:
+        assert row.supervisor_class == "none"          # every one of these advanced
+        assert row.supervisor_rung == "deterministic"  # and cost nothing to say so
+        assert row.supervisor_rationale
+        assert row.delta_moved is True
+    assert len(verdicts) == len(acting)
+
+
+#: The real treadmill's shape: a program whose fields are all satisfied, so rung 0 clicks the
+#: control that should advance — and nothing happens.
+_TREADMILL_STORE = DictStore({("indeed_apply", "indeed_apply_questions"): _prog(
+    "indeed_apply", "indeed_apply_questions",
+    [{"intent": "click", "params": {"control": "Continue"}}],
+    guard=[], exit_states=["indeed_apply_questions"])})
+
+
+def test_the_treadmill_gets_a_SHARPER_name_than_the_guard_could_give_it():
+    """The 2026-07-19 Longroad incident, and the point of the taxonomy in one test.
+
+    The guard already STOPPED this — it could say "2 verified actions left the page unchanged".
+    What it could never say is WHY. Here the form scans as complete (`unanswered=0`) and the
+    advance still no-ops, which is not generic no-progress: it is the lone required control the
+    scanner never saw (the acknowledgment checkbox, LEARNINGS 2026-07-18). So the verdict is
+    `missed_required_control` -> `rescan_required`, an actionable play, rather than "it's stuck".
+    """
+    class Treadmill:
+        def observe(self):
+            return _bundle("indeed_apply_questions", expected=("indeed_apply_questions",))
+
+        def act(self, decision):
+            # 'succeeds', lands where expected, and changes nothing at all
+            return ActOutcome(outcome="ok", landed_state="indeed_apply_questions",
+                              ax_identities=("button|continue",), unanswered_after=0)
+
+    res, verdicts = _supervised_run(Treadmill(), store=_TREADMILL_STORE, max_steps=6)
+
+    assert res.status == loop_mod.STATUS_STALLED       # the guard still stops it
+    assert verdicts[0].failure_class == "missed_required_control"
+    assert verdicts[0].proposed_recovery == "rescan_required"
+    assert verdicts[0].stuck_signal > 0.5
+    assert res.records[0].delta_moved is False
+
+
+def test_control_identities_are_diffed_only_when_BOTH_sides_have_them():
+    """An empty identity set is ambiguous — "no controls" or "nobody looked" — and reading a
+    populated `after` against an empty `before` as "the whole page appeared" makes EVERY action
+    look like progress, silently disarming the treadmill check. (Caught by the test above failing
+    when act() reported identities that observe() never did.)"""
+    from controller.loop import action_effect
+
+    seen = _bundle("s", expected=("s",))                       # no ax_identities
+    with_ids = loop_mod.Bundle(**{**seen.__dict__, "ax_identities": ("button|continue",)})
+    acted = ActOutcome(outcome="ok", landed_state="s",
+                       ax_identities=("button|continue",), unanswered_after=0)
+
+    assert action_effect(seen, acted).moved is False           # one side blind -> fall back
+    assert action_effect(with_ids, acted).moved is False        # both sides, unchanged
+    assert action_effect(with_ids, ActOutcome(
+        outcome="ok", landed_state="s", ax_identities=("button|next",),
+        unanswered_after=0)).moved is True                      # both sides, really changed
+
+
+# NB: the generic `no_progress` class cannot arise from a rung-0 drive — rung 0 only clicks once
+# every guard field is satisfied, and a satisfied form that no-ops is the sharper
+# `missed_required_control` above. It is exercised directly in
+# packages/interaction/tests/test_supervision.py, where the classifier's inputs can be posed
+# freely. Do not contort a loop fixture to reach it.
+
+
+def test_an_actuator_that_cannot_look_still_diagnoses_the_stall():
+    """Back-compat and the anti-footgun: an actuator with no post-act AX scan (every existing
+    fake, and any future one) must degrade to state/unanswered — NOT read as 'first observation',
+    which counts as moved and would silently disarm the whole check."""
+    class Blind:
+        def observe(self):
+            return _bundle("indeed_apply_questions", expected=("indeed_apply_questions",))
+
+        def act(self, decision):
+            return ActOutcome(outcome="ok", landed_state="indeed_apply_questions")
+
+    _res, verdicts = _supervised_run(Blind(), store=_TREADMILL_STORE, max_steps=6)
+    assert verdicts[0].failure_class != "none"
+    assert verdicts[0].failure_class == "missed_required_control"
+
+
+def test_the_supervisor_narrates_the_loudest_stop_rather_than_going_silent():
+    """A BLOCKED outcome ends the drive. The verdict must be emitted BEFORE that return, or the
+    commentary goes quiet at exactly the moment the operator most needs it."""
+    class Blocked:
+        def observe(self):
+            return _bundle("indeed_apply_questions", expected=("indeed_apply_review",))
+
+        def act(self, decision):
+            return ActOutcome(outcome="blocked", landed_state="indeed_apply_questions")
+
+    store = DictStore({("indeed_apply", "indeed_apply_questions"): _prog(
+        "indeed_apply", "indeed_apply_questions",
+        [{"intent": "click", "params": {"control": "Continue"}}],
+        guard=[], exit_states=["indeed_apply_review"])})
+
+    res, verdicts = _supervised_run(Blocked(), store=store)
+    assert res.status == loop_mod.STATUS_BLOCKED
+    assert verdicts and verdicts[0].failure_class == "challenge"
+    assert verdicts[0].proposed_recovery == "escalate"
+
+
+def test_the_verdict_does_not_change_what_the_loop_does_yet():
+    """Stage 1 is SHADOW (PLAN_supervisor §6): the supervisor journals and narrates, and
+    influences nothing. `unexpected.respond` keeps the final say over continue/re-observe/escalate.
+    This test is the guard against the supervisor quietly acquiring authority it has not earned."""
+    class NotFound:
+        def observe(self):
+            return _bundle("indeed_apply_questions", fields=("Q1",), expected=("indeed_apply_review",))
+
+        def act(self, decision):
+            return ActOutcome(outcome="not_found", landed_state="indeed_apply_questions")
+
+    store = DictStore({("indeed_apply", "indeed_apply_questions"): _prog(
+        "indeed_apply", "indeed_apply_questions",
+        [{"intent": "set_text", "params": {"field": "Q1"}}],
+        guard=["Q1"], exit_states=["indeed_apply_review"])})
+
+    res, verdicts = _supervised_run(NotFound(), store=store, max_steps=6)
+
+    # the supervisor says RE_OBSERVE...
+    assert verdicts[0].failure_class == "control_not_found"
+    assert verdicts[0].proposed_recovery == "re_observe"
+    # ...and the loop's own policy is what actually produced the outcome, unchanged: one
+    # re-observe, then escalate (STATUS_ESCALATED), exactly as before the supervisor existed.
+    assert res.status == loop_mod.STATUS_ESCALATED

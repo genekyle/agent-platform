@@ -2037,6 +2037,13 @@ _INDEED_AUTH_JS = r"""
     logged_in: !on_auth && has_account && !has_sign_in,
     on_auth, has_sign_in, has_account,
     url, title,
+    // The probe already reads the body text to decide `has_sign_in`; RETURNING it costs nothing
+    // and is the controller's only source of page text. Workday/Greenhouse states and the
+    // anti-bot CHALLENGE markers are classified from this string alone (apply_recipe
+    // _WORKDAY_STATE_MARKERS / _CHALLENGE_MARKERS), so a caller that passes page_text="" is
+    // structurally blind to a captcha. Transient by contract: no caller may persist it
+    // (PRINCIPLES §4 — the Bundle carries the derived STATE, never the text).
+    page_text: txt,
   };
 })()
 """

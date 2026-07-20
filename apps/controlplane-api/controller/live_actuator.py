@@ -41,6 +41,7 @@ from controller.loop import ActOutcome
 from interaction import decision_journal
 from interaction.contract import Intent, Outcome
 from interaction.decision import Bundle, Decision
+from interaction.delta import identities_from_ax
 
 logger = logging.getLogger("controller.live_actuator")
 
@@ -134,6 +135,7 @@ class LiveActuator:
         # dynamic fields), the current url, the current ats + state.
         self._last_scan: list[dict] = []
         self._last_url: str = ""
+        self._last_page_text: str = ""
         self._ats: str = ""
         self._last_state: Optional[str] = None
 
@@ -155,27 +157,78 @@ class LiveActuator:
     def observe(self) -> Bundle:
         """Read the live tab into a Bundle. Keeps the RAW scan for act(); the Bundle carries the
         sanitized copy decide() reads. A logged-out tab returns an escalating (human_required)
-        Bundle — the agent never re-authenticates on its own."""
-        auth = self._post("/auth_state", self._addr())
-        url = auth.get("url") or self._last_url or ""
-        logged_in = auth.get("logged_in", True)
+        Bundle — the agent never re-authenticates on its own.
 
+        THREE probes, each read for its failure as well as its value (LEARNINGS 2026-07-19 — "a
+        stale tab was SILENCE, not an error"; this path had the same bug three times over and it
+        is why `page_text` was empty and `ax_identities` did not exist):
+
+          /auth_state    -> url, logged_in, AND page_text. Workday/Greenhouse states and the
+                            anti-bot CHALLENGE markers are classified from page text alone
+                            (`apply_recipe._CHALLENGE_MARKERS`), so passing "" here — which this
+                            method did until 2026-07-20 — made the controller structurally unable
+                            to see a captcha. Transient: the Bundle keeps the derived state, never
+                            the text (PRINCIPLES §4).
+          /scan_required -> the unanswered required fields.
+          /ax_scan       -> the control set, reduced to `role|name` identities. This is the
+                            supervisor's sense organ (PLAN_supervisor §0a): a delta over it is the
+                            only thing that can tell real progress from a treadmill on Indeed's
+                            questions module, where route and state are both invariant.
+        """
+        auth = self._post("/auth_state", self._addr())
         scan = self._post("/scan_required", self._addr())
+        ax = self._post("/ax_scan", self._addr())
+
+        url = auth.get("url") or self._last_url or ""
+        page_text = str(auth.get("page_text") or "")
         raw = scan.get("unanswered") or []
         self._last_scan = raw
         self._last_url = url
 
         tail = decision_journal.read_rows(limit=5)
-        bundle = build_bundle(self._task, url, "", goal_text=self._goal,
-                              scan=raw, journal_tail=tail)
+        bundle = build_bundle(self._task, url, page_text, goal_text=self._goal,
+                              scan=raw, journal_tail=tail,
+                              ax_candidates=ax.get("candidates") or [])
         self._ats = bundle.ats or ats_registry.classify_ats(url)
         self._last_state = bundle.state
 
-        if not logged_in:
+        # --- a failed probe is NOT a benign reading. Each of these defaults used to launder a
+        # dead tab into a confident, wrong observation:
+        #   auth ok:false  -> `logged_in` absent -> defaulted True  -> "we're signed in"
+        #   scan ok:false  -> `unanswered` absent -> []             -> "the form is complete"
+        #   ax   errors[]  -> candidates []                         -> "there are no controls"
+        # Any of them means we cannot see the page, which is a HANDOFF, never an inference.
+        blind = self._blind_reason(auth, scan, ax)
+        if blind:
+            return replace(bundle, human_required=True, state=None,
+                           branch_note=f"cannot observe the tab — {blind}")
+
+        if not auth.get("logged_in", False):
             return replace(bundle, human_required=True,
                            branch_note="not logged in — operator must re-authenticate (the agent "
                                        "never types a password / creates an account)")
         return bundle
+
+    @staticmethod
+    def _blind_reason(auth: dict, scan: dict, ax: dict) -> str:
+        """Why this observation cannot be trusted, or "" when it can.
+
+        An `/ax_scan` that returns candidates=[] WITH `errors` is the stale-tab signature: the
+        proposer swallows a target-discovery failure into `errors` and replies HTTP 200, so a dead
+        target and an empty page are indistinguishable unless you read `errors` (ax_proposer.py
+        :304-309). A genuinely empty page with no errors is left alone — that is a real reading,
+        and the supervisor classifies it, not this method.
+        """
+        if auth.get("ok") is False:
+            return f"auth probe failed ({auth.get('detail') or 'no detail'})"
+        if scan.get("ok") is False:
+            return f"required-field scan failed ({scan.get('detail') or 'no detail'})"
+        if ax.get("ok") is False:
+            return f"AX scan failed ({ax.get('detail') or 'no detail'})"
+        errors = ax.get("errors") or ()
+        if not (ax.get("candidates") or ()) and errors:
+            return f"AX scan returned no controls with errors — likely a stale tab: {errors[0]}"
+        return ""
 
     # --- ACT -------------------------------------------------------------------------
     def act(self, decision: Decision) -> ActOutcome:
@@ -201,10 +254,14 @@ class LiveActuator:
             res = self._post("/execute", {**self._addr(), "action_id": "click", "target_bbox": {},
                                           "target_role": p.get("role", "button"),
                                           "target_name": control, "driver": self._driver})
-            # A click usually navigates — re-classify the current url into the landed state.
-            return ActOutcome(outcome=_outcome_of(res),
-                              landed_state=self._current_state(changed_from=before),
-                              detail=res.get("detail", ""))
+            # A click usually navigates — re-classify the current url into the landed state, THEN
+            # take the after-picture (order matters: looking before the settle would photograph
+            # the page we were leaving).
+            landed = self._current_state(changed_from=before)
+            identities, unanswered = self._after_look()
+            return ActOutcome(outcome=_outcome_of(res), landed_state=landed,
+                              detail=res.get("detail", ""),
+                              ax_identities=identities, unanswered_after=unanswered)
 
         # Field intents need addressing (selector, or role+name).
         field = p.get("field")
@@ -338,12 +395,39 @@ class LiveActuator:
     def _field_result(self, res: dict) -> ActOutcome:
         """A field-fill stays on the same page — its landed state is where we were; the endpoint's
         verified outcome (it re-reads the DOM) says whether the value took."""
+        identities, unanswered = self._after_look()
         return ActOutcome(outcome=_outcome_of(res), landed_state=self._last_state,
-                          cost_usd=float(res.get("cost_usd") or 0.0), detail=res.get("detail", ""))
+                          cost_usd=float(res.get("cost_usd") or 0.0), detail=res.get("detail", ""),
+                          ax_identities=identities, unanswered_after=unanswered)
 
     def _read_url(self) -> str:
         auth = self._post("/auth_state", self._addr())
+        # Keep the page text the probe already returned: `_current_state` classifies from it, and
+        # for Workday/Greenhouse it is the ONLY state signal there is (the URL never changes).
+        self._last_page_text = str(auth.get("page_text") or "")
         return auth.get("url") or ""
+
+    def _after_look(self) -> tuple[tuple[str, ...], Optional[int]]:
+        """The after-picture of ONE action: the control identities and the unanswered count.
+
+        This is what makes the supervisor's verdict about the action that just ran rather than one
+        turn late (`controller/loop.action_effect`). It costs two extra read-only CDP evals per
+        action — a local socket, free on a metered connection, and cheap next to being unable to
+        tell a staged widget from a committed one.
+
+        `unanswered_after` is the half that catches STAGED_NOT_COMMITTED: a react-select that
+        stages DOES change the AX tree, so control churn alone reads it as success. The form's own
+        answer to "is this field filled?" is the only thing that disagrees — and it is right
+        (the Ethnicity select, LEARNINGS 2026-07-18).
+        """
+        ax = self._post("/ax_scan", self._addr())
+        identities = identities_from_ax(ax.get("candidates") or [])
+        scan = self._post("/scan_required", self._addr())
+        if scan.get("ok") is False:
+            return identities, None          # unknown, not zero — zero would read as "complete"
+        rows = scan.get("unanswered") or []
+        self._last_scan = rows               # act() addresses off the freshest scan
+        return identities, len(rows)
 
     def _current_state(self, *, changed_from: Optional[str] = None) -> Optional[str]:
         """Re-classify the CURRENT url into a state (used after a click that may have navigated).
@@ -376,7 +460,10 @@ class LiveActuator:
         url = url or self._last_url or ""
         self._last_url = url
         ats = ats_registry.classify_ats(url)
-        desc = apply_recipe.describe_for_ats(ats, url, "")
+        # `_read_url` kept the page text from the same probe. Passing it is what lets a Workday /
+        # Greenhouse step — whose URL is invariant — be classified at all after a click, and what
+        # lets a challenge page be recognised here rather than driven into.
+        desc = apply_recipe.describe_for_ats(ats, url, self._last_page_text)
         st = desc.get("state")
         self._last_state = st if st and st != "unknown" else None
         return self._last_state

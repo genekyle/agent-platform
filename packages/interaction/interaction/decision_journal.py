@@ -22,9 +22,13 @@ import threading
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from interaction.contract import redact
+
+if TYPE_CHECKING:      # type-only: the journal must not depend on the supervisor at runtime
+    from interaction.delta import StateDelta
+    from interaction.supervision import SupervisorVerdict
 from interaction.decision import (
     DECISION_SCHEMA_VERSION,
     Bundle,
@@ -92,6 +96,8 @@ def record_for(
     session_id: Optional[str] = None,
     duration_ms: int = 0,
     cost_usd: float = 0.0,
+    verdict: Optional["SupervisorVerdict"] = None,
+    delta: Optional["StateDelta"] = None,
 ) -> DecisionRecord:
     """Build a DecisionRecord from a Decision + the Bundle it decided on. PURE — no IO, no
     time; `log_decision` stamps `ts`. Keeps construction replayable from journaled inputs."""
@@ -127,6 +133,16 @@ def record_for(
         # Replay cases (golden corrections + shadow comparisons) carry a self-contained,
         # PII-free snapshot so the offline eval suite can re-run decide() on the exact input.
         bundle_snapshot=replay_snapshot(bundle) if (golden or shadow) else None,
+        # The supervisor's verdict on this action, and the graded label it rests on. Optional so
+        # every existing caller (and every row already journaled) stays valid.
+        supervisor_class=verdict.failure_class if verdict else None,
+        supervisor_recovery=verdict.proposed_recovery if verdict else None,
+        supervisor_stuck=verdict.stuck_signal if verdict else None,
+        supervisor_rung=verdict.rung if verdict else None,
+        supervisor_rationale=verdict.rationale if verdict else "",
+        supervisor_evidence=tuple(verdict.evidence) if verdict else (),
+        delta_moved=delta.moved if delta is not None else None,
+        delta_churn=delta.churn if delta is not None else None,
         session_id=session_id,
         duration_ms=duration_ms,
         cost_usd=cost_usd,

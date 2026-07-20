@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
 from interaction import delta as delta_mod
+from interaction import supervision
 from interaction.contract import Intent, Outcome
 from interaction.decision import Bundle, Decision, DecisionRecord
 from interaction.decision_journal import log_decision, record_for
@@ -42,6 +43,12 @@ class ActOutcome:
     landed_state: Optional[str] = None    # the state observed AFTER acting (for verify)
     cost_usd: float = 0.0
     detail: str = ""
+    #: The control-set identities read AFTER the action. The supervisor's verdict is about what
+    #: THIS action did, so it needs the after-picture at the moment of acting — not the one the
+    #: next observe() happens to find. Empty means the actuator could not (or did not) look, and
+    #: the delta degrades to url/state/unanswered rather than lying about churn.
+    ax_identities: tuple[str, ...] = ()
+    unanswered_after: Optional[int] = None
 
 
 class Actuator(Protocol):
@@ -80,6 +87,37 @@ def observation_delta(before: Optional[Bundle], after: Bundle) -> delta_mod.Stat
         state_after=after.state,
         unanswered_before=None if before is None else len(before.unanswered),
         unanswered_after=len(after.unanswered),
+    )
+
+
+def action_effect(before: Bundle, result: ActOutcome) -> delta_mod.StateDelta:
+    """What ONE action did — the supervisor's input.
+
+    Distinct from `observation_delta`, and the distinction is the whole reason the supervisor can
+    be synchronous. A between-observations delta at the top of the loop describes the PREVIOUS
+    action, so a verdict built from it would always arrive one turn late (and could never be
+    journaled on the row of the action it judges). `Actuator.act()` reports the after-picture at
+    the moment of acting instead, so cause and effect sit on the same record.
+
+    Control identities are diffed only when BOTH sides have them. An empty set is ambiguous — it
+    means either "a page with no controls" or "nobody looked" — and guessing wrong is expensive in
+    both directions: `before=()` against a populated `after` reports the entire page as newly
+    appeared (every action looks like progress, disarming the treadmill check), while a populated
+    `before` against `after=()` reports the whole page vanishing. When either side is empty the
+    delta falls back to state + unanswered, which is what we had before S11 — under-reporting
+    movement, so it fails toward a false STALL and an escalation rather than false progress.
+
+    Note also what is NOT passed: `before=None`. That means "first observation" and counts as
+    moved, which would silently disarm the check on exactly the actuators that cannot look.
+    """
+    looked = bool(result.ax_identities) and bool(before.ax_identities)
+    return delta_mod.compute(
+        before=before.ax_identities if looked else (),
+        after=result.ax_identities if looked else (),
+        state_before=before.state,
+        state_after=result.landed_state,
+        unanswered_before=len(before.unanswered),
+        unanswered_after=result.unanswered_after,
     )
 
 
@@ -127,6 +165,7 @@ def run_controller(
     on_escalate: Optional[Callable[[Bundle, Decision], None]] = None,
     on_consequential: Optional[Callable[[Bundle, Decision], None]] = None,
     on_step: Optional[Callable[[Bundle, Decision, Optional[ActOutcome]], None]] = None,
+    on_supervise: Optional[Callable[[Bundle, Decision, "supervision.SupervisorVerdict"], None]] = None,
 ) -> LoopResult:
     """Drive one task to a definite stop. Every step journals a DecisionRecord.
 
@@ -148,9 +187,10 @@ def run_controller(
     def journal(dec: Decision, bundle: Bundle, *, outcome: Optional[str] = None,
                 landed: Optional[str] = None, verified: Optional[bool] = None,
                 cost: float = 0.0, proposed: Optional[Decision] = None,
-                golden: bool = False) -> None:
+                golden: bool = False, verdict=None, delta=None) -> None:
         rec = record_for(dec, bundle, outcome=outcome, landed_state=landed, verified=verified,
-                         session_id=session_id, cost_usd=cost, proposed=proposed, golden=golden)
+                         session_id=session_id, cost_usd=cost, proposed=proposed, golden=golden,
+                         verdict=verdict, delta=delta)
         saved = log_decision(rec)
         records.append(saved or rec)
 
@@ -246,13 +286,29 @@ def run_controller(
                               f"{acting.intent} held for the operator (consequential gate)",
                               bundle, acting, records)
 
-        # --- act through the Interaction API, then verify
+        # --- act through the Interaction API, then verify, then SUPERVISE
         result = actuator.act(acting)
         verified = _verify(acting, result)
+
+        # The supervisor turns `verified: true|false` into a NAMED diagnosis (PLAN_supervisor §3).
+        # Rung 0 is pure and free, so it runs on every acting step including the nominal ones —
+        # that is what makes the operator commentary cost nothing. It runs BEFORE the BLOCKED
+        # check on purpose: a challenge is the loudest thing that can happen, and the narration
+        # would be worthless if it went silent exactly there.
+        action_delta = action_effect(bundle, result)
+        verdict = supervision.classify(
+            outcome=result.outcome, verified=verified, delta=action_delta,
+            intent=acting.intent, field_name=(acting.params or {}).get("field"),
+            state=bundle.state, human_required=bundle.human_required,
+            expected_next=tuple(acting.expected_next), landed_state=result.landed_state,
+            unanswered_count=len(bundle.unanswered),
+        )
         journal(acting, bundle, outcome=result.outcome, landed=result.landed_state,
                 verified=verified, cost=result.cost_usd, proposed=proposed_for_golden,
-                golden=bool(proposed_for_golden))
+                golden=bool(proposed_for_golden), verdict=verdict, delta=action_delta)
         decision = acting          # downstream stale/escalation logic acts on what actually ran
+        if on_supervise:
+            on_supervise(bundle, decision, verdict)
         if on_step:
             on_step(bundle, decision, result)
 

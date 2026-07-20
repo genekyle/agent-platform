@@ -1648,3 +1648,53 @@ thing we needed instead of guessing was already sitting in our own corpora.
 **The through-line, again:** almost every piece of this was already present and unjoined — the
 normalization, the identities, the journal, the escalation policy, the shadow harness. What was
 missing was the subtraction.
+
+## 2026-07-20 (2) — The controller had been driving nearly blind, and the taxonomy fits
+
+S12 built the supervisor's vocabulary (`interaction/supervision.py`: `FailureClass`,
+`RecoveryPlay`, `SupervisorVerdict`, rung-0 `classify`). Getting it fed meant auditing
+`LiveActuator.observe()`, and the audit was worse than the missing AX scan.
+
+- **`observe()` passed `page_text=""`, and page text is the ONLY state signal Workday and
+  Greenhouse have.** They are single-origin SPAs whose step lives in the page, not the URL
+  (`apply_recipe._WORKDAY_STATE_MARKERS`). So every Workday step collapsed to
+  `workday_job_posting` or `unknown` for the controller. Worse: **`_CHALLENGE_MARKERS` are page-text
+  only**, which made the controller *structurally unable to notice a captcha* — the one thing it
+  must always escalate and never auto-solve. `/auth_state` was already reading
+  `document.body.innerText` to decide `has_sign_in` and simply not returning it. One field added to
+  the probe's JS closed both. `_current_state()` had the same `""` and the same fix.
+- **Three silent-failure defaults in one method, all of the 07-19 family.** `auth.get("logged_in",
+  True)` turned a DEAD PROBE into "we're signed in"; `scan.get("unanswered") or []` turned a failed
+  scan into "the form is complete"; and an `/ax_scan` returning `candidates=[]` **with** `errors`
+  is the stale-tab signature, not an empty page. All three now produce an honest handoff
+  (`_blind_reason`) instead of a confident wrong observation. An empty scan with NO errors is left
+  alone — that is a real reading, and the supervisor classifies it.
+- **A verdict must be journaled on the row of the action it judges.** The plan said "supervise
+  after act()", but the delta available at that moment (the between-observations one) describes the
+  PREVIOUS action — so the verdict would arrive a turn late and land on the wrong row. Fixed by
+  having `act()` take the after-picture itself (`ActOutcome.ax_identities` + `unanswered_after`).
+  Two extra read-only CDP evals per action; free on a metered link, and the difference between a
+  training label and a note.
+- **`unanswered_after` is load-bearing, not a nicety.** A react-select that STAGES changes the AX
+  tree, so control churn alone reads an uncommitted value as success. Only the form's own "is this
+  field filled?" disagrees, and it is right (the Ethnicity select, 07-18).
+- **An empty identity set is ambiguous and must never be differenced.** Caught by a failing test:
+  diffing a populated `after` against an empty `before` reports the entire page as newly appeared,
+  so *every* action looks like progress and the treadmill guard silently disarms. Identities are
+  now diffed only when both sides have them; otherwise the delta falls back to state + unanswered,
+  under-reporting movement — which fails toward a false STALL (an escalation) rather than false
+  progress. Same safe direction as the templated-route choice earlier today.
+- **The mined taxonomy survived contact with the code, and got sharper.** Rung 0 names all 9
+  replayed real incidents with zero UNKNOWNs. Two refinements it earned: `not_staged` /
+  `not_committed` / `no_option` / `committed_unconfirmed` come straight off the existing `Outcome`
+  taxonomy rather than being re-inferred (the endpoint knows *which half* of a widget protocol
+  broke; no inference does), and `MISSED_REQUIRED_CONTROL` outranks `NO_PROGRESS` when the form
+  scans complete — which is exactly the Longroad treadmill, so the real incident gets
+  `rescan_required` instead of a blind retry. A tenth class, `CHALLENGE`, was added for
+  `Outcome.BLOCKED`: forcing the loop's loudest stop into UNKNOWN would make the commentary go
+  silent precisely where the operator needs it.
+- **The supervisor has no authority yet, and there is a test that says so.** Stage 1 is shadow: it
+  journals and narrates, `unexpected.respond` still decides continue/re-observe/escalate. The guard
+  against it quietly acquiring authority is a test, not a comment.
+
+465 controlplane-api / 138 interaction / 53 mcp green; controller-evals green.
