@@ -361,3 +361,42 @@ def test_persistence_load_or_create(tmp_path, monkeypatch):
     # a fresh session id has no file yet -> brand new plan, nothing done
     fresh = store.load_or_create(100)
     assert all(s.status == "pending" for s in fresh.plan)
+
+
+# --- unexpected states: an unrecognised page halts exactly like a captcha -----------
+def test_unrecognised_page_blocks_and_needs_a_human():
+    """`map_url_to_state` returns the literal "unknown" when no recipe pattern matched. Acting on
+    a page we cannot name is the "making it up as I go" failure this store exists to kill, so it
+    must stop and ask — the same halt a captcha gets."""
+    bb = store.new_blackboard(session_id=11)
+    bb = store.reconcile(bb, tabs=[_apply_tab(store.UNKNOWN_STATE)])
+    assert bb.to_dict()["needs_human"] is True
+    assert any(b.kind == "unexpected_state" and b.human_required for b in bb.blockers)
+    decision = store.proceed_decision(bb)
+    assert decision["ok"] is False and decision["reason"] == "human_required"
+
+
+def test_no_observed_tab_is_not_an_unexpected_state():
+    """None means "nothing observed at all" and must NOT gate — only a page we looked at and
+    failed to recognise does. Conflating the two would block every unprobed cycle."""
+    bb = store.new_blackboard(session_id=12)
+    bb = store.reconcile(bb, tabs=[])
+    assert not any(b.kind == "unexpected_state" for b in bb.blockers)
+    assert bb.world["page_state"] is None
+
+
+def test_a_recognised_page_still_proceeds():
+    """The gate must not fire on known states — otherwise it halts everything."""
+    bb = store.new_blackboard(session_id=14)
+    bb = store.reconcile(bb, tabs=[_apply_tab("indeed_apply_review")])
+    assert not any(b.kind == "unexpected_state" for b in bb.blockers)
+
+
+def test_unexpected_state_is_logged_once_per_occurrence():
+    """Edge-triggered on the transition, so a mystery page that persists across many reconciles
+    leaves one row, not a flood."""
+    bb = store.new_blackboard(session_id=13)
+    store.reconcile(bb, tabs=[_apply_tab("indeed_apply_questions")])
+    store.reconcile(bb, tabs=[_apply_tab(store.UNKNOWN_STATE)])
+    store.reconcile(bb, tabs=[_apply_tab(store.UNKNOWN_STATE)])
+    assert [e.kind for e in bb.events].count("unexpected_state") == 1

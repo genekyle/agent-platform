@@ -53,6 +53,10 @@ import apply_recipe
 SCHEMA_VERSION = 1
 _MAX_EVENTS = 200  # keep the log bounded; it's a rolling window, not an archive
 
+#: What `apply_recipe.map_url_to_state` returns when no recipe pattern matched — i.e. "we looked
+#: and did not recognise this page". Distinct from None ("nothing observed"), which must not gate.
+UNKNOWN_STATE = "unknown"
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -371,6 +375,17 @@ def blockers_for(world: dict[str, Any], gate: GateResult,
             blockers.append(Blocker(
                 kind="human_branch", note=tab.get("branch_note") or tab.get("state", ""),
                 human_required=True, source=tab.get("state", "unknown")))
+    # An UNRECOGNISED page halts exactly like a captcha does. `map_url_to_state` returns the
+    # literal "unknown" when nothing matched — meaning we looked and did not recognise it, which
+    # is different from `None` (nothing observed at all, e.g. no tabs) and must not gate.
+    # Acting on a page we can't name is the "making it up as I go" failure this store exists to
+    # kill, so it stops and asks instead of guessing.
+    if world.get("page_state") == UNKNOWN_STATE:
+        blockers.append(Blocker(
+            kind="unexpected_state",
+            note="the active tab is on a page the recipe doesn't recognise — stopping rather than "
+                 "acting blind. If it's a legitimate new page, approve it as a state to teach it.",
+            human_required=True, source=UNKNOWN_STATE))
     for u in gate.unsatisfied:
         blockers.append(Blocker(
             kind="required_field", note=f"{u['label']} ({u['reason']})",
@@ -463,6 +478,11 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
                    "search data gathered logged-out; invalid after login — re-gather authenticated")
     if active and active.get("state") != prev_state:
         bb.log("state_change", f"{prev_state} -> {active.get('state')}")
+        # Edge-triggered (on the transition, not every reconcile) so the record is one row per
+        # occurrence rather than a flood.
+        if active.get("state") == UNKNOWN_STATE:
+            bb.log("unexpected_state",
+                   f"unrecognised page: {str(active.get('url') or '')[:120]}")
 
     # Re-derive the phase off the active tab; swap the plan spine when the family changes
     # (search/triage share the search spine; apply has its own). Statuses are recomputed from
