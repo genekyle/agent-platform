@@ -3,9 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 const API = import.meta.env.VITE_API_BASE_URL;
 
 const REASON_META = {
-  escalated: { dot: "🟠", hint: "the teacher itself punted — never a positive label" },
-  verify_failed: { dot: "🔴", hint: "the action did not advance the page" },
-  low_confidence: { dot: "🟡", hint: "borderline teacher pick — needs a human look" },
+  escalated: { tone: "warning", hint: "the teacher itself punted — never a positive label" },
+  verify_failed: { tone: "danger", hint: "the action did not advance the page" },
+  low_confidence: { tone: "warning", hint: "borderline teacher pick — needs a human look" },
 };
 
 /**
@@ -55,7 +55,7 @@ export function ScorecardSection() {
             only quarantined
           </label>
           <button className="ghost-btn small-btn" onClick={load} disabled={loading}>
-            {loading ? "…" : "↻ Refresh"}
+            {loading ? "…" : "Refresh"}
           </button>
         </div>
       </div>
@@ -79,7 +79,7 @@ export function ScorecardSection() {
           {data.agreement && data.agreement.scored > 0 ? (
             <div className="chrome-label muted" style={{ marginBottom: 12 }}>
               teacher-vs-human over {data.agreement.scored} golden-labeled states:
-              {" "}🟢 {data.agreement.golden} exact · 🔵 {data.agreement.acceptable} acceptable · 🔴 {data.agreement.miss} miss
+              {" "}{data.agreement.golden} exact · {data.agreement.acceptable} acceptable · {data.agreement.miss} miss
               {data.agreement.no_model_pick ? ` · ${data.agreement.no_model_pick} not-yet-seen by model` : ""}
               {" "}— this is real accuracy (golden OR acceptable counts), not the teacher's self-confidence.
             </div>
@@ -95,27 +95,27 @@ export function ScorecardSection() {
             <div style={{ width: `${100 - eligiblePct}%`, background: "#d97706" }} title={`${t.quarantined} quarantined`} />
           </div>
           <div className="chrome-label muted" style={{ marginBottom: 14 }}>
-            🟠 escalated {q?.escalated ?? 0} · 🔴 verify-failed {q?.verify_failed ?? 0} · 🟡 low-confidence {q?.low_confidence ?? 0}
-            {t.human_confirmed_label === 0 ? "  —  ⚠ no golden labels stored yet: Review/Label confirm isn't persisting positive_candidate_id" : null}
+            escalated {q?.escalated ?? 0} · verify-failed {q?.verify_failed ?? 0} · low-confidence {q?.low_confidence ?? 0}
+            {t.human_confirmed_label === 0 ? "  —  no golden labels stored yet: Review/Label confirm isn't persisting positive_candidate_id" : null}
           </div>
         </>
       ) : null}
 
       <div className="coverage-rows" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {states.map((s, i) => {
-          const meta = s.train_eligible ? { dot: "🟢", hint: "passes the gate — train on it" } : (REASON_META[s.quarantine_reason] ?? { dot: "⚪", hint: "" });
+          const meta = s.train_eligible ? { tone: "success", hint: "passes the gate — train on it" } : (REASON_META[s.quarantine_reason] ?? { tone: "neutral", hint: "" });
           return (
             <div key={`${s.fingerprint}-${i}`} title={meta.hint}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px",
                 borderRadius: 8, background: "rgba(127,127,127,0.06)" }}>
-              <span style={{ width: 20 }}>{meta.dot}</span>
+              <span className={`coverage-status coverage-status--${meta.tone}`} />
               <span style={{ flex: 1, fontFamily: "monospace", fontSize: 13 }}>{s.route}</span>
               <span className="chip">{s.action_id}</span>
               <span className="chrome-label muted" style={{ minWidth: 70, textAlign: "right" }}>
                 conf {s.confidence ?? "—"}
               </span>
               <span className="chrome-label muted" style={{ minWidth: 76, textAlign: "right" }}>
-                verify {s.verify_ok === true ? "✅" : s.verify_ok === false ? "❌" : "—"}
+                verify {s.verify_ok === true ? "yes" : s.verify_ok === false ? "no" : "—"}
               </span>
               <span className="chip" style={{ minWidth: 96, textAlign: "right" }}>
                 {s.train_eligible ? "eligible" : s.quarantine_reason}
@@ -133,7 +133,7 @@ export function ScorecardSection() {
 }
 
 function Stat({ label, value, accent, good }) {
-  const color = good ? "#16a34a" : accent ? "#d97706" : "inherit";
+  const color = good ? "var(--success)" : accent ? "var(--warning)" : "inherit";
   return (
     <div style={{ display: "flex", flexDirection: "column" }}>
       <span className="chrome-label muted">{label}</span>

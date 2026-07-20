@@ -42,7 +42,7 @@ function pct(v) {
 }
 
 // Dependency-free horizontal bar chart (no chart lib installed).
-function BarChart({ rows, labelKey, valueKey, format = (v) => v, color = "#2f6feb" }) {
+function BarChart({ rows, labelKey, valueKey, format = (v) => v, color = "#a8b889" }) {
   const max = Math.max(1, ...rows.map((r) => Number(r[valueKey] || 0)));
   if (!rows.length) return <div className="empty-state">No data yet.</div>;
   return (
@@ -143,7 +143,7 @@ export function LabSection({ section }) {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div><h3 style={{ marginBottom: 8 }}>Cost by day</h3><BarChart rows={d.by_day} labelKey="day" valueKey="cost_usd" format={usd} color="#16a34a" /></div>
-            <div><h3 style={{ marginBottom: 8 }}>Selections by day</h3><BarChart rows={d.by_day} labelKey="day" valueKey="selections" color="#2f6feb" /></div>
+            <div><h3 style={{ marginBottom: 8 }}>Selections by day</h3><BarChart rows={d.by_day} labelKey="day" valueKey="selections" color="#a8b889" /></div>
             <div><h3 style={{ marginBottom: 8 }}>Layer mix (which tier answered)</h3><BarChart rows={d.by_layer} labelKey="layer" valueKey="count" color="#f59e0b" /></div>
             <div><h3 style={{ marginBottom: 8 }}>Reason codes</h3><BarChart rows={d.by_reason} labelKey="reason_code" valueKey="count" color="#a855f7" /></div>
           </div>
@@ -286,18 +286,18 @@ function PlaygroundPanel() {
           onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
         >
           {/* target box */}
-          <rect x={target.x} y={target.y} width={target.w} height={target.h} rx={6} fill="#dbeafe" stroke="#2f6feb" strokeWidth={2} />
-          <text x={targetCenter.x} y={targetCenter.y + 4} textAnchor="middle" fontSize="13" fill="#1e3a8a">target</text>
+          <rect x={target.x} y={target.y} width={target.w} height={target.h} rx={6} fill="#293124" stroke="#a8b889" strokeWidth={2} />
+          <text x={targetCenter.x} y={targetCenter.y + 4} textAnchor="middle" fontSize="13" fill="#c0ce9d">target</text>
           {/* recorded path (your motion) */}
           {recorded.length > 1 && <polyline points={polyline(recorded)} fill="none" stroke="#dc2626" strokeWidth={2.5} />}
           {/* generated path (model) */}
-          {generated.length > 1 && <polyline points={polyline(generated)} fill="none" stroke="#2f6feb" strokeWidth={2} strokeDasharray="5 4" />}
+          {generated.length > 1 && <polyline points={polyline(generated)} fill="none" stroke="#a8b889" strokeWidth={2} strokeDasharray="5 4" />}
           {/* start dot */}
           <circle cx={start.x} cy={start.y} r={8} fill="#16a34a" />
           <text x={start.x} y={start.y + 24} textAnchor="middle" fontSize="12" fill="#166534">start</text>
           {/* playheads */}
           {playhead?.rec && <circle cx={playhead.rec.x} cy={playhead.rec.y} r={6} fill="#dc2626" />}
-          {playhead?.gen && <circle cx={playhead.gen.x} cy={playhead.gen.y} r={6} fill="#2f6feb" />}
+          {playhead?.gen && <circle cx={playhead.gen.x} cy={playhead.gen.y} r={6} fill="#a8b889" />}
         </svg>
 
         <div className="system-card-grid" style={{ marginTop: 12 }}>
@@ -308,7 +308,7 @@ function PlaygroundPanel() {
             ) : <p className="system-micro-copy">Drag from start to target to record.</p>}
           </article>
           <article className="system-card">
-            <div className="system-card-header"><h3 style={{ color: "#2f6feb" }}>Model motion (min-jerk)</h3></div>
+            <div className="system-card-header"><h3 style={{ color: "var(--accent-strong)" }}>Model motion (min-jerk)</h3></div>
             {genMetrics ? (
               <p className="system-card-copy">{genMetrics.dur} ms · {genMetrics.len} px · directness {genMetrics.direct}</p>
             ) : <p className="system-micro-copy">Generated after you record.</p>}

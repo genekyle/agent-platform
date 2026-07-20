@@ -6,7 +6,7 @@ const API = import.meta.env.VITE_API_BASE_URL;
 // red (needs a human). One glance tells the operator how much the controller is paying.
 const RUNG_STYLE = {
   recipe: { label: "recipe · $0", color: "#16a34a" },
-  cache: { label: "cache · $0", color: "#0891b2" },
+  cache: { label: "cache · $0", color: "#8fb28a" },
   model: { label: "model · Haiku", color: "#f59e0b" },
   teacher: { label: "teacher · Claude", color: "#a855f7" },
   human: { label: "human", color: "#dc2626" },
@@ -58,7 +58,7 @@ function EvidenceChips({ items }) {
   return (
     <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", verticalAlign: "middle" }}>
       {list.map((e, i) => (
-        <span key={i} className="mono" style={{ fontSize: "0.68rem", background: "#0f172a0a", color: "#475569", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 5px" }}>
+        <span key={i} className="mono" style={{ fontSize: "0.68rem", background: "#1417120a", color: "#475569", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 5px" }}>
           {e}
         </span>
       ))}
@@ -84,8 +84,8 @@ function ReasoningEntry({ d }) {
         ) : null}
         <span className="system-micro-copy" style={{ marginLeft: "auto" }}>{d.state || ""}</span>
       </div>
-      <p style={{ margin: "8px 0 0", fontStyle: "italic", color: real ? "#334155" : "#dc2626" }}>
-        {d.rationale ? d.rationale : "⚠ no reasoning captured (§10)"}
+      <p style={{ margin: "8px 0 0", fontStyle: "italic", color: real ? "#495143" : "#dc2626" }}>
+        {d.rationale ? d.rationale : "No reasoning was captured (§10)"}
       </p>
       {d.evidence?.length ? (
         <div className="system-micro-copy" style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -142,7 +142,7 @@ function DecisionCard({ decision, prompt, bundle, cost }) {
           <summary className="system-micro-copy" style={{ cursor: "pointer" }}>
             the bundle the reasoner read {bundle?.ats ? `· ${bundle.ats} · ${bundle.state || "unknown state"}` : ""}
           </summary>
-          <pre className="mono" style={{ whiteSpace: "pre-wrap", fontSize: "0.75rem", background: "#0f172a0a", padding: 12, borderRadius: 6, marginTop: 6 }}>
+          <pre className="mono" style={{ whiteSpace: "pre-wrap", fontSize: "0.75rem", background: "#1417120a", padding: 12, borderRadius: 6, marginTop: 6 }}>
             {prompt}
           </pre>
         </details>
@@ -243,7 +243,7 @@ export function ControllerSection() {
           <Tile label="Decisions journaled" value={summary?.corpus_size ?? "—"} sub="the controller corpus" />
           <Tile label="Verified rate" value={pct(summary?.verified_rate)} sub="landed where it expected" accent="#16a34a" />
           <Tile label="Escalation rate" value={pct(summary?.escalation_rate)} sub="handed up the ladder" accent="#f59e0b" />
-          <Tile label="Intent programs" value={summary?.program_count ?? "—"} sub="the $0 rung-0 library" accent="#0891b2" />
+          <Tile label="Intent programs" value={summary?.program_count ?? "—"} sub="the $0 rung-0 library" accent="#8fb28a" />
           <Tile
             label="Shadow agreement"
             value={agreement.n ? pct(agreement.agreement) : "—"}
@@ -288,7 +288,7 @@ export function ControllerSection() {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>🧠 Reasoning feed <span className="system-micro-copy">the open brain</span></h2>
+            <h2>Reasoning feed <span className="system-micro-copy">the open brain</span></h2>
             <p>
               Every teacher/model decision's <em>why</em> and the Bundle facts it cites. On a correction
               you see <strong>both</strong> sides — the contrast between the backstop's why and the

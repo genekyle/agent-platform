@@ -43,13 +43,13 @@ export function EventsConsole({ domain = "", limit = 150 }) {
     <div className="section-body">
       <div className="layer">
         <div className="layer__head">
-          <div className="layer__title">🖥️ System events — what the agent did</div>
+          <div className="layer__title">System events — what the agent did</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <select className="input" style={{ padding: "4px 8px", width: "auto" }} value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
               <option value="">all kinds</option>
               {kinds.map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
-            <button className="btn btn-sm" onClick={() => setPaused((p) => !p)}>{paused ? "▶ Resume" : "⏸ Pause"}</button>
+            <button className="btn btn-sm" onClick={() => setPaused((p) => !p)}>{paused ? "Resume" : "Pause"}</button>
             <button className="btn btn-sm" onClick={load}>Refresh</button>
           </div>
         </div>

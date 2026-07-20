@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { AppIcon } from "../../ui/Icon";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
@@ -22,7 +23,7 @@ export function IndeedWorkspaceSection({ section }) {
 }
 
 const STATUS_COLOR = {
-  done: "#3fb950", active: "#58a6ff", blocked: "#f85149", pending: "#8b949e",
+  done: "var(--success)", active: "var(--accent)", blocked: "var(--danger)", pending: "var(--text-subtle)",
 };
 
 /** The live apply blackboard. Polls /api/runtime/apply_state for the selected session and
@@ -231,13 +232,13 @@ function JobsHub() {
 
   // The databases shown as clickable cards (Notion-style). Each renders its own table when opened.
   const DATABASES = [
-    { id: "jobs", icon: "💼", name: "All Jobs", count: data.jobs_seen.length,
+    { id: "jobs", icon: "briefcase", name: "All Jobs", count: data.jobs_seen.length,
       desc: "Every job seen across searches, deduped by identity." },
-    { id: "searches", icon: "🔎", name: "Searches", count: targets.length || (data.by_query || []).length,
+    { id: "searches", icon: "search", name: "Searches", count: targets.length || (data.by_query || []).length,
       desc: "Search targets (query · location · radius) and how each is doing." },
-    { id: "descriptions", icon: "📄", name: "Job Descriptions", count: (data.descriptions || []).length,
+    { id: "descriptions", icon: "file", name: "Job Descriptions", count: (data.descriptions || []).length,
       desc: "Full descriptions captured by clicking into shortlisted listings." },
-    { id: "applied", icon: "✅", name: "Applied", count: data.jobs_applied.length,
+    { id: "applied", icon: "checkCircle", name: "Applied", count: data.jobs_applied.length,
       desc: "Jobs marked applied (incl. cross-platform identity matches)." },
   ];
   const current = DATABASES.find((d) => d.id === open);
@@ -302,7 +303,7 @@ function JobsHub() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <button className="btn btn-sm" onClick={() => setOpen(null)}>← Databases</button>
             <span className="muted">/</span>
-            <strong>{current?.icon} {current?.name}</strong>
+            <AppIcon name={current?.icon} size={16} /><strong>{current?.name}</strong>
             <span className="muted">({current?.count})</span>
           </div>
           {open === "jobs" && <JobTable title="All Jobs" jobs={data.jobs_seen} mark={mark} />}
@@ -329,7 +330,7 @@ function DatabaseCard({ db, onOpen }) {
       style={{ textAlign: "left", cursor: "pointer", padding: "14px 16px", border: "1px solid var(--border, #30363d)",
                background: "transparent", display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 20 }}>{db.icon}</span>
+        <AppIcon name={db.icon} size={20} />
         <span style={{ fontSize: 20, fontWeight: 700 }}>{db.count}</span>
       </div>
       <div style={{ fontWeight: 600 }}>{db.name}</div>

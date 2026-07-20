@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AppIcon } from "../../ui/Icon";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
@@ -19,13 +20,13 @@ const assetUrl = (keyOrUrl) =>
   !keyOrUrl ? "" : /^https?:\/\//.test(keyOrUrl) ? keyOrUrl : `${API}/assets/${keyOrUrl}`;
 
 const ITEM_STATUS_COLOR = {
-  draft: "#8b949e", ready_to_post: "#3b82f6", queued: "#d29922", posting: "#d29922",
-  posted: "#16a34a", active: "#16a34a", needs_attention: "#dc2626", sold: "#7c3aed",
-  error: "#dc2626", archived: "#6e7681",
+  draft: "var(--text-subtle)", ready_to_post: "var(--accent)", queued: "var(--warning)", posting: "var(--warning)",
+  posted: "var(--success)", active: "var(--success)", needs_attention: "var(--danger)", sold: "var(--reasoning)",
+  error: "var(--danger)", archived: "var(--text-subtle)",
 };
 const TASK_STATUS_COLOR = {
-  waiting: "#8b949e", running: "#d29922", posted: "#16a34a", failed: "#dc2626",
-  skipped: "#6e7681", needs_review: "#ea580c",
+  waiting: "var(--text-subtle)", running: "var(--warning)", posted: "var(--success)", failed: "var(--danger)",
+  skipped: "var(--text-subtle)", needs_review: "var(--warning)",
 };
 const ITEM_STATUSES = ["draft", "ready_to_post", "queued", "posting", "posted", "active",
   "needs_attention", "sold", "error", "archived"];
@@ -53,8 +54,8 @@ function Field({ label, children }) {
 function Thumb({ photos, size = 34 }) {
   const src = (photos || [])[0];
   if (src) return <img src={assetUrl(src)} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 6 }} />;
-  return <div style={{ width: size, height: size, borderRadius: 6, background: "#e6e8eb",
-    display: "grid", placeItems: "center", color: "#9aa0a6", fontSize: size * 0.5 }}>🖼</div>;
+  return <div style={{ width: size, height: size, borderRadius: 6, background: "var(--surface-2)",
+    display: "grid", placeItems: "center", color: "var(--text-subtle)" }}><AppIcon name="file" size={Math.max(14, size * 0.45)} /></div>;
 }
 
 function SectionHeading({ title, right }) {
@@ -114,7 +115,7 @@ function StatCard({ label, value, icon, accent }) {
   return (
     <div className="panel" style={{ padding: "12px 16px", borderTop: `3px solid ${accent}` }}>
       <div className="muted" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-        <span>{icon}</span> {label}
+        <AppIcon name={icon} size={14} /> {label}
       </div>
       <div style={{ fontSize: 28, fontWeight: 700, marginTop: 2 }}>{value ?? 0}</div>
     </div>
@@ -130,12 +131,12 @@ function OverviewCards() {
     return () => clearInterval(t);
   }, []);
   const cards = [
-    { label: "Total items", value: ov?.total_items, icon: "📦", accent: "#3b82f6" },
-    { label: "Queued", value: ov?.queued, icon: "⏳", accent: "#d29922" },
-    { label: "Active listings", value: ov?.active_listings, icon: "📡", accent: "#16a34a" },
-    { label: "New responses", value: ov?.items_with_responses, icon: "💬", accent: "#0ea5e9" },
-    { label: "Needs attention", value: ov?.needs_attention, icon: "⚠️", accent: "#dc2626" },
-    { label: "Sold", value: ov?.sold, icon: "✅", accent: "#7c3aed" },
+    { label: "Total items", value: ov?.total_items, icon: "package", accent: "var(--accent)" },
+    { label: "Queued", value: ov?.queued, icon: "paused", accent: "var(--warning)" },
+    { label: "Active listings", value: ov?.active_listings, icon: "activity", accent: "var(--success)" },
+    { label: "New responses", value: ov?.items_with_responses, icon: "message", accent: "var(--human)" },
+    { label: "Needs attention", value: ov?.needs_attention, icon: "alert", accent: "var(--danger)" },
+    { label: "Sold", value: ov?.sold, icon: "checkCircle", accent: "var(--reasoning)" },
   ];
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
@@ -370,8 +371,8 @@ function ItemForm({ item, onClose, onSaved }) {
             {staged.map((s, i) => (
               <div key={i} style={{ position: "relative" }}>
                 <img src={s.url} alt="" width={72} height={72}
-                  style={{ objectFit: "cover", borderRadius: 6, display: "block", border: "2px dashed #2563eb" }} />
-                <span style={{ position: "absolute", bottom: 2, left: 2, background: "#2563eb", color: "#fff",
+                  style={{ objectFit: "cover", borderRadius: 6, display: "block", border: "2px dashed var(--accent)" }} />
+                <span style={{ position: "absolute", bottom: 2, left: 2, background: "var(--accent)", color: "#141712",
                   fontSize: 9, padding: "0 4px", borderRadius: 4 }}>new</span>
                 <button type="button" onClick={() => setStaged((st) => st.filter((_, j) => j !== i))}
                   title="Remove" style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18,
@@ -401,12 +402,12 @@ function ItemForm({ item, onClose, onSaved }) {
                   return (
                     <button key={a.key} type="button" onClick={() => togglePhoto(a.key)} title={a.key}
                       style={{ padding: 0, background: "none", cursor: "pointer", position: "relative",
-                        border: sel ? "2px solid #2563eb" : "2px solid #d1d5db", borderRadius: 8 }}>
+                        border: sel ? "2px solid var(--accent)" : "2px solid var(--line)", borderRadius: 8 }}>
                       <img src={`${API}${a.url}`} alt={a.name} width={64} height={64}
                         style={{ objectFit: "cover", borderRadius: 6, display: "block", opacity: sel ? 1 : 0.6 }} />
-                      {sel && <span style={{ position: "absolute", top: 2, right: 2, background: "#2563eb",
-                        color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 11,
-                        lineHeight: "16px", textAlign: "center" }}>✓</span>}
+                      {sel && <span style={{ position: "absolute", top: 2, right: 2, background: "var(--accent)",
+                        color: "#141712", borderRadius: 8, fontSize: 8,
+                        lineHeight: "14px", padding: "0 4px", textAlign: "center" }}>Selected</span>}
                     </button>
                   );
                 })}
@@ -613,7 +614,7 @@ function ActivityBody({ compact }) {
   useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
   const resolve = async (id) => { await jpost(`/api/runtime/handoffs/${id}/resolve`); load(); };
 
-  const statusDot = { ok: "#16a34a", error: "#dc2626", info: "#0ea5e9" };
+  const statusDot = { ok: "var(--success)", error: "var(--danger)", info: "var(--text-subtle)" };
   return (
     <>
       {!compact && handoffs.length > 0 && (
@@ -736,4 +737,3 @@ function MessagesPanel() {
     </div>
   );
 }
-

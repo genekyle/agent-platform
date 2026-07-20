@@ -150,7 +150,7 @@ export function PageStatePicker({
         <div className="dd-state-folder-body">
           {objEntries.length ? (
             <div className="dd-state-folder-grid">
-              {objEntries.map(([gid, o]) => folder(`objf-${gid}`, `stage-${nav.stage}`, "📁", o.label,
+              {objEntries.map(([gid, o]) => folder(`objf-${gid}`, `stage-${nav.stage}`, "", o.label,
                 [...o.byCat.values()].reduce((n, l) => n + l.length, 0),
                 () => setNav({ level: "objective", domainId: nav.domainId, stage: nav.stage, goalId: gid })))}
             </div>
@@ -171,7 +171,7 @@ export function PageStatePicker({
       return stageEntries.length ? (
         <div className="dd-state-folder-body">
           <div className="dd-state-folder-grid">
-            {stageEntries.map(([stage, st]) => folder(`stagef-${stage}`, `stage-${stage}`, "🗂",
+            {stageEntries.map(([stage, st]) => folder(`stagef-${stage}`, `stage-${stage}`, "",
               STAGE_LABEL[stage] || stage, countStage(st), () => setNav({ level: "stage", domainId: nav.domainId, stage })))}
           </div>
         </div>
@@ -181,7 +181,7 @@ export function PageStatePicker({
     return (
       <div className="dd-state-folder-body">
         <div className="dd-state-folder-grid">
-          {domEntries.map(([did, stages]) => folder(`domf-${did}`, did === captureDomainId ? "is-home" : "", "📂",
+          {domEntries.map(([did, stages]) => folder(`domf-${did}`, did === captureDomainId ? "is-home" : "", "",
             domainLabelOf(did), countDomain(stages), () => setNav({ level: "domain", domainId: did }),
             did === captureDomainId ? "home" : null))}
         </div>

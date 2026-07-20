@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getJSON, postJSON, fmtTime } from "./api";
 import { DOMAIN_CATALOG } from "./domains";
+import { AppIcon, DomainIcon } from "../../../ui/Icon";
 
 // The Attention layer — the operator's "what needs me" queue, built from durable handoffs
 // (why the loop stopped + what it tried). Shared by the Command Center (all domains) and each
@@ -52,21 +53,21 @@ export function AttentionInbox({ host = null, title = "Needs your attention", sh
   return (
     <div className="layer">
       <div className="layer__head">
-        <div className="layer__title">🔔 {title}</div>
+        <div className="layer__title layer__title--with-icon"><AppIcon name="inbox" size={17} /> {title}</div>
         <span className="layer__count">{items.length ? `${items.length} open` : ""}</span>
       </div>
 
       {items.length === 0 ? (
-        <div className="attention-empty">✓ Nothing needs you right now.</div>
+        <div className="attention-empty"><AppIcon name="checkCircle" size={17} /> Nothing needs you right now.</div>
       ) : (
         items.map((h) => {
           const dom = showDomainTag ? attributeDomain(h) : null;
           return (
             <div key={h.id} className="attention-item">
-              <div style={{ fontSize: 18, lineHeight: 1.2 }}>⚠️</div>
+              <span className="attention-item__marker"><AppIcon name="handoff" size={17} /></span>
               <div className="attention-item__body">
                 <div className="attention-item__why">
-                  {dom && <span className="badge badge--muted" style={{ marginRight: 8 }}>{dom.icon} {dom.short}</span>}
+                  {dom && <span className="badge badge--muted attention-domain"><DomainIcon id={dom.id} size={13} /> {dom.short}</span>}
                   {h.why || "The agent stopped and needs a human."}
                 </div>
                 {h.suggestion && <div className="attention-item__hint">{h.suggestion}</div>}

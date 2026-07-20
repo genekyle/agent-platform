@@ -20,7 +20,7 @@ function WorkdayForm({ draft, onChange, onSave, onCancel, busy, error }) {
   const isEdit = !!draft._existing;
   const set = (patch) => onChange({ ...draft, ...patch });
   return (
-    <div className="layer" style={{ borderColor: "#cfe0ff" }}>
+    <div className="layer" style={{ borderColor: "var(--line-strong)" }}>
       <div className="layer__head">
         <div className="layer__title">{isEdit ? `Edit ${draft.account_id}` : "Add Workday account"}</div>
       </div>
@@ -43,8 +43,8 @@ function WorkdayForm({ draft, onChange, onSave, onCancel, busy, error }) {
           </label>
         )}
 
-        <div className="panel" style={{ padding: "10px 12px", background: "#f7fbff" }}>
-          <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8 }}>🔒 Login (encrypted into the vault)</div>
+        <div className="panel" style={{ padding: "10px 12px", background: "#1e231b" }}>
+          <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8 }}>Login (encrypted into the vault)</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label style={{ fontSize: 12 }} className="muted">Username / email
               <input className="input" autoComplete="off" value={draft.username} placeholder="genomags@gmail.com"
@@ -141,7 +141,7 @@ export function WorkdayAccountsPanel() {
     <div className="section-body">
       <div className="layer">
         <div className="layer__head">
-          <div className="layer__title">🗂️ Workday Accounts</div>
+          <div className="layer__title">Workday accounts</div>
           <button className="btn btn-primary btn-sm" onClick={() => setDraft({ ...EMPTY })}>+ Add account</button>
         </div>
         <p className="mode-hint" style={{ marginTop: 0 }}>
@@ -187,7 +187,7 @@ export function WorkdayAccountsPanel() {
                       title={a.has_creds ? "Run the login (you press it; the app does the keystrokes)" : "Add credentials first"}
                       onClick={() => doLogin(a)}
                     >
-                      {loginState[a.account_id]?.status === "logging_in" ? "Signing in…" : "▶ Login"}
+                      {loginState[a.account_id]?.status === "logging_in" ? "Signing in…" : "Login"}
                     </button>{" "}
                     {loginState[a.account_id] && (() => {
                       const [cls, txt] = STATUS_BADGE[loginState[a.account_id].status] || ["badge--muted", loginState[a.account_id].status];

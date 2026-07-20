@@ -1,49 +1,67 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AppIcon } from "../../../ui/Icon";
 import { getJSON } from "./api";
 import { AttentionInbox } from "./AttentionInbox";
 import { ActivityFeed } from "./ActivityFeed";
 import { DomainsHub } from "./DomainsHub";
 
-// The Command Center — the platform's home. A cockpit, not a settings page: it answers "what
-// needs me across everything, are my domains healthy, and what just happened" at a glance, then
-// gets out of the way. The cross-domain Attention inbox is the primary surface; you interact by
-// clearing exceptions, not by hunting for buttons.
-
-const TONE_COLOR = { attention: "#ea580c", ready: "#16a34a", flywheel: "#d97706" };
-
-function Hero({ summary, health, onOpenLabeler }) {
-  const domains = summary?.domains || [];
-  const ready = domains.filter((d) => d.status === "ready").length;
-  const attention = summary?.attention_open_count ?? 0;
-  const fw = summary?.flywheel;
-  const toLabel = fw?.to_label_total ?? 0;
-  const acc = fw?.grounding_accuracy;
-  const accStr = acc == null ? "not trained yet" : `model ${Math.round(acc * 100)}%`;
-  const cards = [
-    { label: "Needs attention", value: attention, tone: attention ? "attention" : "ready", foot: attention ? "Open handoffs across domains" : "You're all caught up" },
-    { label: "Domains ready", value: `${ready}/${domains.length}`, tone: "ready", foot: "Connected and signed in" },
-    // The flywheel's headline number — brought up to KPI altitude and made one-click into the
-    // queue labeler (#1 + #2 training-UI overhaul).
-    { label: "🏷️ To label", value: toLabel, tone: toLabel ? "flywheel" : "ready", foot: toLabel ? "Label now →" : `${accStr} · ${fw?.labeled_total ?? 0} labeled`, onClick: toLabel ? onOpenLabeler : null },
-    { label: "Control plane", value: health?.ok ? "Healthy" : "Issue", tone: health?.ok ? "ready" : "attention", foot: health?.ok ? "API reachable" : "API not reachable" },
-  ];
+function Metric({ label, value, detail, tone = "neutral" }) {
   return (
-    <section className="stats-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-      {cards.map((c) => (
-        <div
-          className="stat-card"
-          key={c.label}
-          onClick={c.onClick || undefined}
-          role={c.onClick ? "button" : undefined}
-          tabIndex={c.onClick ? 0 : undefined}
-          style={{ borderTop: `3px solid ${TONE_COLOR[c.tone] || TONE_COLOR.ready}`, cursor: c.onClick ? "pointer" : "default" }}
-        >
-          <div className="stat-label">{c.label}</div>
-          <div className="stat-value">{c.value}</div>
-          <div className="stat-footnote">{c.foot}</div>
+    <article className={`overview-metric overview-metric--${tone}`}>
+      <span className="overview-metric__label">{label}</span>
+      <strong>{value}</strong>
+      <span>{detail}</span>
+    </article>
+  );
+}
+
+function OverviewHero({ summary, health, onOpenLabeler }) {
+  const domains = summary?.domains || [];
+  const ready = domains.filter((domain) => domain.status === "ready").length;
+  const attention = summary?.attention_open_count ?? 0;
+  const toLabel = summary?.flywheel?.to_label_total ?? 0;
+  const active = domains.filter((domain) => domain.status && domain.status !== "idle").length;
+
+  const message = attention
+    ? `${attention} handoff${attention === 1 ? "" : "s"} need your judgment. Everything else can keep moving.`
+    : active
+      ? "Your agents are moving. Nothing needs your judgment right now."
+      : "Your workspace is quiet. Start with a domain when you are ready.";
+
+  return (
+    <>
+      <section className="overview-hero">
+        <div className="overview-hero__copy">
+          <span className="ops-eyebrow">Today</span>
+          <h2>{attention ? "A few things need you" : "Your day is in good hands"}</h2>
+          <p>{message}</p>
+          <div className="overview-hero__actions">
+            {attention ? <a className="primary-btn" href="#attention">Review handoffs</a> : null}
+            {toLabel ? (
+              <button className="secondary-btn" type="button" onClick={onOpenLabeler}>
+                Review {toLabel} learning example{toLabel === 1 ? "" : "s"}
+              </button>
+            ) : null}
+          </div>
         </div>
-      ))}
-    </section>
+        <div className="overview-presence" aria-label="Agent status summary">
+          <span className={`overview-presence__pulse ${health?.ok ? "is-live" : "is-offline"}`}>
+            <AppIcon name="waypoints" size={24} />
+          </span>
+          <div>
+            <strong>{health?.ok ? `${active} domain${active === 1 ? "" : "s"} in motion` : "System connection interrupted"}</strong>
+            <span>{health?.ok ? "Coordination continues in the background" : "Actions are paused until the connection returns"}</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="overview-metrics" aria-label="Workspace summary">
+        <Metric label="Needs you" value={attention} detail={attention ? "open handoffs" : "all clear"} tone={attention ? "warning" : "success"} />
+        <Metric label="Ready" value={`${ready}/${domains.length || 0}`} detail="connected domains" tone="success" />
+        <Metric label="Learning queue" value={toLabel} detail={toLabel ? "waiting for review" : "nothing waiting"} />
+        <Metric label="System" value={health?.ok ? "Online" : "Offline"} detail={health?.ok ? "services reachable" : "check connection"} tone={health?.ok ? "success" : "danger"} />
+      </section>
+    </>
   );
 }
 
@@ -53,22 +71,37 @@ export function CommandCenter({ health, onOpenDomain, onOpenLabeler }) {
   const load = useCallback(() => {
     getJSON("/api/command-center/summary").then(setSummary).catch(() => {});
   }, []);
-  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
 
-  const tilesById = summary ? Object.fromEntries(summary.domains.map((t) => [t.id, t])) : undefined;
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 10000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const tilesById = useMemo(
+    () => summary ? Object.fromEntries((summary.domains || []).map((tile) => [tile.id, tile])) : undefined,
+    [summary],
+  );
 
   return (
-    <div className="section-body">
-      <Hero summary={summary} health={health} onOpenLabeler={onOpenLabeler} />
+    <div className="section-body overview-dashboard">
+      <OverviewHero summary={summary} health={health} onOpenLabeler={onOpenLabeler} />
 
-      <AttentionInbox title="Needs your attention — across all domains" showDomainTag />
-
-      <div>
-        <div className="layer__title" style={{ margin: "4px 2px 12px" }}>🗂️ Domains</div>
-        <DomainsHub onOpenDomain={onOpenDomain} tilesById={tilesById} />
+      <div className="overview-focus-grid">
+        <div id="attention"><AttentionInbox title="Needs your attention" showDomainTag /></div>
+        <ActivityFeed items={summary?.activity || []} title="Latest outcomes" showDomain limit={8} />
       </div>
 
-      <ActivityFeed items={summary?.activity || []} title="Recent activity — across all domains" showDomain />
+      <section className="overview-domains">
+        <div className="section-heading-row">
+          <div>
+            <span className="ops-eyebrow">Daily life</span>
+            <h2>Domains</h2>
+            <p>Each space holds the goals, context, and history for one part of your life.</p>
+          </div>
+        </div>
+        <DomainsHub onOpenDomain={onOpenDomain} tilesById={tilesById} compact />
+      </section>
     </div>
   );
 }

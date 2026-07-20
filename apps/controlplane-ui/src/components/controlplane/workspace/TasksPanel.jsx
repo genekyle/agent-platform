@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getJSON, postJSON, needsApproval } from "./api";
+import { AppIcon } from "../../../ui/Icon";
 
 // The Task layer — the actual runnable work, with grouped controls (Run now / Retry). This is
 // where the old scattered "manual buttons" live now: as task controls, not the main interface.
@@ -81,7 +82,7 @@ export function TasksPanel({ domain, mode }) {
   return (
     <div className="layer">
       <div className="layer__head">
-        <div className="layer__title">🛠️ Tasks</div>
+        <div className="layer__title layer__title--with-icon"><AppIcon name="workflow" size={17} /> Tasks</div>
         {domain.kind === "selling" && queueCount != null && (
           <span className="layer__count">{queueCount} in queue</span>
         )}

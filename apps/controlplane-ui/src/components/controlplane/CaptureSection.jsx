@@ -256,7 +256,7 @@ export function CaptureSection({
                       title={`Delete session ${session.id} and all its captures`}
                       onClick={() => deleteTrainingSession(session.id)}
                     >
-                      🗑
+                      Delete
                     </button>
                   ) : null}
                 </div>

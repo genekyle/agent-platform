@@ -1,3 +1,5 @@
+import { AppIcon } from "../../ui/Icon";
+
 const STATUS_COPY = {
   healthy: "Healthy",
   degraded: "Degraded",
@@ -8,48 +10,46 @@ const STATUS_COPY = {
 const TOPOLOGY_NODES = [
   {
     name: "Controlplane UI",
+    icon: "monitor",
     target: "localhost:5173",
     detail: "React/Vite operator surface using a single backend summary endpoint.",
   },
   {
     name: "Control Plane API",
+    icon: "terminal",
     target: "VITE_API_BASE_URL",
     detail: "Primary FastAPI service for runs, workers, training prep, and capture orchestration.",
   },
   {
     name: "Capture Server",
+    icon: "inspect",
     target: "localhost:8082",
     detail: "Secondary FastAPI service that wraps browser capture and writes artifacts.",
   },
   {
     name: "Chrome CDP",
+    icon: "monitor",
     target: "localhost:9222",
     detail: "Remote-debug Chrome target used to enumerate tabs and drive observation capture.",
   },
   {
     name: "Postgres",
+    icon: "database",
     target: "settings.database_url",
     detail: "Primary persisted state for runs, steps, and worker metadata.",
   },
   {
     name: "Artifacts",
+    icon: "archive",
     target: "settings.observer_artifacts_dir",
     detail: "Observer traces, screenshots, and training prep outputs.",
   },
   {
     name: "Redis",
+    icon: "boxes",
     target: "settings.redis_url",
     detail: "Available infra dependency for fast coordination and queue-style workflows.",
   },
-];
-
-const TOPOLOGY_LINKS = [
-  "Controlplane UI -> Control Plane API",
-  "Control Plane API -> Capture Server",
-  "Control Plane API -> Chrome CDP",
-  "Control Plane API -> Postgres",
-  "Control Plane API -> Artifacts",
-  "Control Plane API -> Redis",
 ];
 
 function badgeClass(status) {
@@ -89,10 +89,27 @@ export function SystemSection({
             </div>
           </div>
 
-          <div className="topology-flow">
-            {TOPOLOGY_LINKS.map((link) => (
-              <div key={link} className="topology-link">{link}</div>
-            ))}
+          <div className="system-topology" aria-label="System topology">
+            <div className="topology-node topology-node--origin">
+              <span><AppIcon name="monitor" size={18} /></span>
+              <strong>AI Ops UI</strong>
+              <small>Operator workspace</small>
+            </div>
+            <div className="topology-connector"><span /></div>
+            <div className="topology-node topology-node--hub">
+              <span><AppIcon name="terminal" size={18} /></span>
+              <strong>Control Plane API</strong>
+              <small>Coordination hub</small>
+            </div>
+            <div className="topology-branches">
+              {TOPOLOGY_NODES.slice(2).map((node) => (
+                <div className="topology-node topology-node--leaf" key={node.name}>
+                  <span><AppIcon name={node.icon} size={16} /></span>
+                  <strong>{node.name}</strong>
+                  <small>{node.target}</small>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -101,6 +118,7 @@ export function SystemSection({
             <article key={node.name} className="system-card topology-card">
               <div className="system-card-header">
                 <h3>{node.name}</h3>
+                <AppIcon name={node.icon} size={16} />
                 <span className="system-card-target mono">{node.target}</span>
               </div>
               <p className="system-card-copy">{node.detail}</p>

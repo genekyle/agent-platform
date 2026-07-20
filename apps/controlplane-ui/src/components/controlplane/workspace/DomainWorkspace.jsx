@@ -13,6 +13,7 @@ import { IndeedWorkspaceSection } from "../IndeedWorkspaceSection";
 import { AccountsSection } from "../AccountsSection";
 import { EventsConsole } from "../EventsConsole";
 import { DOMAINS_BY_ID } from "./domains";
+import { AppIcon, DomainIcon } from "../../../ui/Icon";
 
 // The shared five-layer workspace shell. Every domain gets the SAME operating pattern — a
 // computed Status + one action, an Automation mode, and an Overview cockpit (Attention · Goals ·
@@ -43,7 +44,7 @@ function DataTab({ domain, tab, onOpenTraining }) {
 function ComingSoon({ domain }) {
   return (
     <div className="layer">
-      <div className="layer__head"><div className="layer__title">{domain.icon} {domain.label}</div></div>
+      <div className="layer__head"><div className="layer__title layer__title--with-icon"><DomainIcon id={domain.id} size={17} /> {domain.label}</div></div>
       <p className="status-card__reason" style={{ maxWidth: "70ch" }}>{domain.responsibility}</p>
       <p className="mode-hint" style={{ marginTop: 10 }}>
         This domain is scaffolded in the cockpit so the operating pattern is consistent, but it isn't wired
@@ -93,10 +94,6 @@ function GroupWorkspace({ domain, activeTab, onChangeTab, onOpenDomain }) {
   const children = (domain.children || []).map((id) => DOMAINS_BY_ID[id]).filter(Boolean);
   return (
     <div className="section-body">
-      <div className="layer">
-        <div className="layer__head"><div className="layer__title">{domain.icon} {domain.label}</div></div>
-        <p className="mode-hint" style={{ marginTop: 0 }}>{domain.responsibility}</p>
-      </div>
       {tabs.length > 1 && (
         <div className="workspace-tabs">
           {tabs.map((t) => (
@@ -114,7 +111,7 @@ function GroupWorkspace({ domain, activeTab, onChangeTab, onOpenDomain }) {
               <button key={c.id} className={`domain-tile ${soon ? "domain-tile--soon" : ""}`}
                 disabled={soon} onClick={() => !soon && onOpenDomain?.(c.id)}>
                 <div className="domain-tile__head">
-                  <span className="domain-tile__icon">{c.icon}</span>
+                  <span className="domain-tile__icon"><DomainIcon id={c.id} size={20} /></span>
                   <div style={{ minWidth: 0 }}>
                     <div className="domain-tile__title">{c.label}</div>
                     <div className="domain-tile__blurb">{c.blurb}</div>
@@ -169,7 +166,7 @@ export function DomainWorkspace({ domain, activeTab, onChangeTab, onOpenTraining
         {domain.kind !== "coming_soon" && (
           <div className="layer" style={{ padding: "14px 18px" }}>
             <div className="layer__head" style={{ marginBottom: 8 }}>
-              <div className="layer__title">⚙️ Automation mode</div>
+              <div className="layer__title layer__title--with-icon"><AppIcon name="sliders" size={17} /> Automation mode</div>
               <span className="layer__sub">How autonomous this domain is</span>
             </div>
             <AutomationMode mode={settings.automation_mode} onChange={onChangeMode} saving={saving} />

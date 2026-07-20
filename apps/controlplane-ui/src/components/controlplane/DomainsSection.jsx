@@ -840,7 +840,7 @@ function ScenariosTab({
             </button>
             <button className="secondary-btn" onClick={cancelScenario}>Cancel</button>
             {!scenarioForm.element_query && (
-              <span className="scenario-query-warning">⚠ Add an element query to enable vision training data collection</span>
+              <span className="scenario-query-warning">Add an element query to enable vision training data collection</span>
             )}
           </div>
         </div>
@@ -888,7 +888,7 @@ function ScenariosTab({
                           {scenario.element_query ? (
                             <span className="scenario-query-preview">"{scenario.element_query}"</span>
                           ) : (
-                            <span className="scenario-query-missing">⚠ No element query — not usable for vision training</span>
+                            <span className="scenario-query-missing">No element query — not usable for vision training</span>
                           )}
                         </div>
                         <div className="scenario-item-tags">

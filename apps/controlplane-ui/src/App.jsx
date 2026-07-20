@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import "./App.css";
+import "./styles/tokens.css";
+import "./styles/ai-ops.css";
 import { ApiUsageSection } from "./components/controlplane/ApiUsageSection";
 import { ChatSection } from "./components/controlplane/ChatSection";
-import { CONTROL_PLANE_NAV, DEFAULT_SECTION_VIEW } from "./components/controlplane/navigation";
+import {
+  CONTROL_PLANE_NAV,
+  LEARNING_ADVANCED_IDS,
+  LEARNING_PRIMARY_TABS,
+  SYSTEM_TABS,
+} from "./components/controlplane/navigation";
 import { LabSection } from "./components/controlplane/LabSection";
 import { DomainsSection } from "./components/controlplane/DomainsSection";
 import { ModelsSection } from "./components/controlplane/ModelsSection";
@@ -17,11 +25,16 @@ import { StateGraphSection } from "./components/controlplane/StateGraphSection";
 import { CommandCenter } from "./components/controlplane/workspace/CommandCenter";
 import { DomainsHub } from "./components/controlplane/workspace/DomainsHub";
 import { DomainWorkspace } from "./components/controlplane/workspace/DomainWorkspace";
-import { DOMAIN_CATALOG, DOMAINS_BY_ID } from "./components/controlplane/workspace/domains";
+import { DOMAINS_BY_ID } from "./components/controlplane/workspace/domains";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
 import { ControllerSection } from "./components/controlplane/ControllerSection";
 import { SessionActivitySection } from "./components/controlplane/SessionActivitySection";
+import { LearningOverview } from "./components/controlplane/LearningOverview";
+import { LearningAdvancedHub } from "./components/controlplane/LearningAdvancedHub";
+import { AppShell } from "./app/AppShell";
+import { parseAppPath, pathForView } from "./app/routes";
+import { SectionTabs } from "./ui/SectionTabs";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
@@ -49,16 +62,12 @@ const mockWorkers = [
 ];
 
 export default function App() {
-  const [sidebarLevel, setSidebarLevel] = useState("primary");
-  const [activePrimaryView, setActivePrimaryView] = useState("command");
-  const [activeSecondaryViewByPrimary, setActiveSecondaryViewByPrimary] = useState(DEFAULT_SECTION_VIEW);
-  // Which domain workspace is open (null = the Domains hub), and the active tab per domain.
-  const [activeDomainId, setActiveDomainId] = useState(null);
-  // Which folder (a group domain like Career Search) the domains rail is drilled INTO. null = the
-  // top "All Domains" level. Drilling in replaces the rail with just that folder's contents, so the
-  // unrelated domains (Marketplace, …) are out of sight while you work inside it.
-  const [openFolderId, setOpenFolderId] = useState(null);
-  const [activeDomainTabByDomain, setActiveDomainTabByDomain] = useState({});
+  const location = useLocation();
+  const navigate = useNavigate();
+  const routeState = useMemo(() => parseAppPath(location.pathname), [location.pathname]);
+  const activePrimaryView = routeState.view;
+  const activeDomainId = routeState.domainId || null;
+  const activeDomainTab = routeState.tabId || "overview";
 
   const [health, setHealth] = useState({ loading: true, ok: false, error: null });
   // The drive lock — "CDP is driving; keyboard owned" (see apps/controlplane-api/drive_lock.py).
@@ -139,20 +148,10 @@ export default function App() {
   const [captureSuccess, setCaptureSuccess] = useState(null);
   const [justCapturedFilename, setJustCapturedFilename] = useState(null);
 
-  const apiLabel = useMemo(() => API ?? "(missing VITE_API_BASE_URL)", []);
   const currentNav = CONTROL_PLANE_NAV[activePrimaryView];
-  const activeSectionId = activeSecondaryViewByPrimary[activePrimaryView] ?? currentNav.sections[0]?.id;
+  const activeSectionId = routeState.sectionId ?? currentNav.sections[0]?.id;
   const activeSection = currentNav.sections.find((section) => section.id === activeSectionId) ?? currentNav.sections[0];
-  const canEnterSecondary = ["domains", "training", "system", "lab"].includes(activePrimaryView);
   const activeDomain = activeDomainId ? DOMAINS_BY_ID[activeDomainId] : null;
-  // A folder is any top-level domain that groups others (Career Search). The catalog already says
-  // so via `children` — don't hardcode ids here.
-  const isFolder = (d) => !d.parent && (d.children || []).length > 0;
-  const openFolder = openFolderId ? DOMAINS_BY_ID[openFolderId] : null;
-  const openFolderChildren = openFolder
-    ? (openFolder.children || []).map((id) => DOMAINS_BY_ID[id]).filter(Boolean)
-    : [];
-  const activeDomainTab = activeDomainId ? (activeDomainTabByDomain[activeDomainId] ?? "overview") : "overview";
   // The topbar shows the domain header only while actually inside the Domains view.
   const domainHeader = activePrimaryView === "domains" ? activeDomain : null;
   const selectedTrainingSession = useMemo(
@@ -205,90 +204,27 @@ export default function App() {
   useEffect(() => { loadPageStateOptions(); }, [loadPageStateOptions]);
 
   const setActiveSection = useCallback((sectionId) => {
-    setActiveSecondaryViewByPrimary((current) => ({ ...current, [activePrimaryView]: sectionId }));
-  }, [activePrimaryView]);
+    navigate(pathForView(activePrimaryView, { sectionId }));
+  }, [activePrimaryView, navigate]);
 
-  const openPrimaryView = useCallback((view) => {
-    setActivePrimaryView(view);
-    if (view === "domains") {
-      setActiveDomainId(null);           // land on the hub; the rail lets you pick a workspace
-      setOpenFolderId(null);             // …at the top level, not inside whichever folder was last open
-      setSidebarLevel("secondary");
-      return;
-    }
-    if (view === "training" || view === "system" || view === "lab") {
-      setSidebarLevel("secondary");
-      return;
-    }
-    setSidebarLevel("primary");
-  }, []);
-
-  // Open a specific domain workspace (from a hub tile, a Command Center tile, or the rail).
-  // Entering a domain that lives in a folder drills the rail into that folder, so arriving from
-  // anywhere (not just the rail) leaves you at the same breadcrumb you'd have clicked your way to.
   const openDomain = useCallback((domainId) => {
-    const domain = DOMAINS_BY_ID[domainId];
-    setActivePrimaryView("domains");
-    setActiveDomainId(domainId);
-    setOpenFolderId(domain?.parent ?? ((domain?.children || []).length ? domainId : null));
-    setSidebarLevel("secondary");
-  }, []);
-
-  // Drill into a folder (Career Search) and land on its own workspace — the folder IS a domain, so
-  // clicking it both opens it and scopes the rail to its contents.
-  const enterFolder = useCallback((folderId) => {
-    setActivePrimaryView("domains");
-    setOpenFolderId(folderId);
-    setActiveDomainId(folderId);
-    setSidebarLevel("secondary");
-  }, []);
-
-  // Back out to the top level. Clears the active domain so the hub (All Domains) is what you see.
-  const exitFolder = useCallback(() => {
-    setOpenFolderId(null);
-    setActiveDomainId(null);
-  }, []);
+    navigate(pathForView("domains", { domainId }));
+  }, [navigate]);
 
   const setDomainTab = useCallback((tabId) => {
-    setActiveDomainTabByDomain((current) => ({ ...current, [activeDomainId]: tabId }));
-  }, [activeDomainId]);
+    if (activeDomainId) navigate(pathForView("domains", { domainId: activeDomainId, tabId }));
+  }, [activeDomainId, navigate]);
 
-  // Open a domain AND land on a specific tab in one go (used by the nested rail's "Accounts" item).
-  // Sets the tab for THAT domain id directly — can't reuse setDomainTab, which closes over the
-  // pre-update activeDomainId.
-  const openDomainTab = useCallback((domainId, tabId) => {
-    const domain = DOMAINS_BY_ID[domainId];
-    setActivePrimaryView("domains");
-    setActiveDomainId(domainId);
-    setOpenFolderId(domain?.parent ?? ((domain?.children || []).length ? domainId : null));
-    setSidebarLevel("secondary");
-    setActiveDomainTabByDomain((current) => ({ ...current, [domainId]: tabId }));
-  }, []);
-
-  // From a domain's Training tab, jump straight to Training → Coverage to run a capture sprint.
   const openTrainingCoverage = useCallback(() => {
-    setActivePrimaryView("training");
-    setSidebarLevel("secondary");
-    setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "coverage" }));
-  }, []);
+    navigate(pathForView("learning", { sectionId: "coverage" }));
+  }, [navigate]);
 
   // One-click into the QUEUE labeler (the crank) from anywhere. The good labeler already
   // exists — it just lives under Lab → training-space; surface it instead of the nested
   // Dataset Browser dig. (#2 training-UI overhaul.)
   const openLabeler = useCallback(() => {
-    setActivePrimaryView("training");
-    setSidebarLevel("secondary");
-    setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "label" }));
-  }, []);
-
-  const goHome = useCallback(() => {
-    setActivePrimaryView("command");
-    setSidebarLevel("primary");
-  }, []);
-
-  const returnToPrimaryRail = useCallback(() => {
-    setSidebarLevel("primary");
-  }, []);
+    navigate(pathForView("learning", { sectionId: "label" }));
+  }, [navigate]);
 
   const refresh = useCallback(async () => {
     setHealth((current) => ({ ...current, loading: true, error: null }));
@@ -826,15 +762,13 @@ export default function App() {
       }
       await loadTrainingSessions();
       setSelectedTrainingSessionId(payload.id);
-      setActivePrimaryView("training");
-      setSidebarLevel("secondary");
-      setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "session-capture" }));
+      navigate(pathForView("learning", { sectionId: "session-capture" }));
     } catch (error) {
       setSessionFormError(error.message || String(error));
     } finally {
       setCreatingSession(false);
     }
-  }, [loadTrainingSessions, sessionForm]);
+  }, [loadTrainingSessions, navigate, sessionForm]);
 
   const startTrainingSession = useCallback(async () => {
     if (!selectedTrainingSessionId) return;
@@ -933,18 +867,14 @@ export default function App() {
   }, [clearSelectedObservation, loadObservations, loadTrainingSessions]);
 
   const openTrainingObservation = useCallback(async (filename) => {
-    setActivePrimaryView("training");
-    setSidebarLevel("secondary");
-    setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "review-label" }));
+    navigate(pathForView("learning", { sectionId: "review-label" }));
     await loadObservation(filename);
-  }, [loadObservation]);
+  }, [loadObservation, navigate]);
 
   const openWorkerObservation = useCallback(async (filename) => {
-    setActivePrimaryView("workers");
-    setSidebarLevel("secondary");
-    setActiveSecondaryViewByPrimary((current) => ({ ...current, workers: "worker-observations" }));
+    navigate(pathForView("learning", { sectionId: "review-label" }));
     await loadObservation(filename);
-  }, [loadObservation]);
+  }, [loadObservation, navigate]);
 
   const triggerCapture = useCallback(async () => {
     if (!selectedTrainingSessionId || !selectedTabId || !selectedTrainingSession) return null;
@@ -975,9 +905,7 @@ export default function App() {
         await loadObservation(payload.filename);
         setCaptureSuccess({ filename: payload.filename, candidate_count: payload.candidate_count });
         setJustCapturedFilename(payload.filename);
-        setActivePrimaryView("training");
-        setSidebarLevel("secondary");
-        setActiveSecondaryViewByPrimary((current) => ({ ...current, training: "review-label" }));
+        navigate(pathForView("learning", { sectionId: "review-label" }));
         setTimeout(() => setCaptureSuccess(null), 6000);
         setTimeout(() => setJustCapturedFilename(null), 8000);
       }
@@ -992,7 +920,7 @@ export default function App() {
       setCapturePhase(0);
       setCaptureElapsed(0);
     }
-  }, [loadObservation, loadObservations, selectedTabId, selectedTrainingSession, selectedTrainingSessionId, tabs]);
+  }, [loadObservation, loadObservations, navigate, selectedTabId, selectedTrainingSession, selectedTrainingSessionId, tabs]);
 
   useEffect(() => {
     refresh();
@@ -1012,10 +940,10 @@ export default function App() {
   }, [activePrimaryView, activeSectionId, loadSystemStatus, loadUsage]);
 
   useEffect(() => {
-    if (activePrimaryView === "training") {
+    if (activePrimaryView === "learning") {
       loadTrainingRegistry();
     }
-    if (activePrimaryView === "training") {
+    if (activePrimaryView === "learning") {
       loadTrainingSessions();
       loadObservations();
       loadTrainingTargetComparison();
@@ -1028,7 +956,7 @@ export default function App() {
   }, [activePrimaryView, loadObservations, loadTrainingRegistry, loadTrainingSessions, loadTrainingTargetComparison, loadStateMeta, loadActions]);
 
   useEffect(() => {
-    if (activePrimaryView === "training" && activeSectionId === "session-capture" && selectedTrainingSession?.status === "active") {
+    if (activePrimaryView === "learning" && activeSectionId === "session-capture" && selectedTrainingSession?.status === "active") {
       loadTabs();
     }
   }, [activePrimaryView, activeSectionId, loadTabs, selectedTrainingSession]);
@@ -1089,14 +1017,16 @@ export default function App() {
     sectionContent = <WorkdayAccountsPanel />;
   } else if (activePrimaryView === "system") {
     sectionContent = <SystemSection section={activeSectionId} systemStatus={systemStatus} loadSystemStatus={loadSystemStatus} />;
-  } else if (activePrimaryView === "training" && activeSectionId === "label") {
-    // The queue labeler (the crank), promoted out of Lab to be Training's primary surface.
+  } else if (activePrimaryView === "learning" && activeSectionId === "overview") {
+    sectionContent = <LearningOverview onOpenSection={setActiveSection} />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "label") {
+    // The queue labeler (the crank), promoted as Learning's primary correction surface.
     sectionContent = <TrainingSpaceSection />;
-  } else if (activePrimaryView === "training" && activeSectionId === "coverage") {
+  } else if (activePrimaryView === "learning" && activeSectionId === "coverage") {
     sectionContent = <CoverageSection session={selectedTrainingSession} />;
-  } else if (activePrimaryView === "training" && activeSectionId === "page-states") {
+  } else if (activePrimaryView === "learning" && activeSectionId === "page-states") {
     sectionContent = <PageStatesSection registry={trainingRegistry} />;
-  } else if (activePrimaryView === "training" && activeSectionId === "domains") {
+  } else if (activePrimaryView === "learning" && activeSectionId === "domains") {
     sectionContent = (
       <DomainsSection
         registry={trainingRegistry}
@@ -1105,7 +1035,21 @@ export default function App() {
         archiveRegistryItem={archiveRegistryItem}
       />
     );
-  } else if (activePrimaryView === "training") {
+  } else if (activePrimaryView === "learning" && activeSectionId === "advanced") {
+    sectionContent = <LearningAdvancedHub onOpen={setActiveSection} />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "controller") {
+    sectionContent = <ControllerSection />;
+  } else if (activePrimaryView === "learning" && ["models", "eval-runs", "run-detail"].includes(activeSectionId)) {
+    sectionContent = <ModelsSection section={activeSectionId === "models" ? "registry" : activeSectionId} />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "scorecard") {
+    sectionContent = <ScorecardSection />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "training-space") {
+    sectionContent = <TrainingSpaceSection />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "state-graph") {
+    sectionContent = <StateGraphSection />;
+  } else if (activePrimaryView === "learning" && ["playground", "test", "eval", "visualization"].includes(activeSectionId)) {
+    sectionContent = <LabSection section={activeSectionId} />;
+  } else if (activePrimaryView === "learning") {
     sectionContent = (
       <TrainingSection
         section={activeSectionId}
@@ -1203,22 +1147,6 @@ export default function App() {
     );
   } else if (activePrimaryView === "chat") {
     sectionContent = <ChatSection />;
-  } else if (activePrimaryView === "lab") {
-    // Lab merges the grounding-model pipeline (Models/Eval Runs/Run Detail) with
-    // the SELECT-stage flywheel + Movement Playground.
-    if (activeSectionId === "controller") {
-      sectionContent = <ControllerSection />;
-    } else if (["models", "eval-runs", "run-detail"].includes(activeSectionId)) {
-      sectionContent = <ModelsSection section={activeSectionId === "models" ? "registry" : activeSectionId} />;
-    } else if (activeSectionId === "scorecard") {
-      sectionContent = <ScorecardSection />;
-    } else if (activeSectionId === "training-space") {
-      sectionContent = <TrainingSpaceSection />;
-    } else if (activeSectionId === "state-graph") {
-      sectionContent = <StateGraphSection />;
-    } else {
-      sectionContent = <LabSection section={activeSectionId} />;
-    }
   } else if (activePrimaryView === "models") {
     sectionContent = <ModelsSection section={activeSectionId} />;
   } else {
@@ -1232,153 +1160,37 @@ export default function App() {
     );
   }
 
+  const learningTabId = activeSectionId === "advanced" || LEARNING_ADVANCED_IDS.has(activeSectionId)
+    ? "advanced"
+    : activeSectionId;
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">◆</div>
-          <div>
-            <div className="brand-title">Ops Pilot</div>
-            <div className="brand-subtitle">Control Plane</div>
-          </div>
-        </div>
-
-        <nav className="nav-section">
-          <div className="nav-label">{sidebarLevel === "primary" ? "Navigation" : "Section Menu"}</div>
-          <div className={`sidebar-menu-stage ${sidebarLevel === "secondary" ? "is-secondary" : ""}`}>
-            <div className="sidebar-menu-track">
-              <div className="sidebar-menu-panel">
-                <button className={`nav-item nav-home ${activePrimaryView === "command" ? "active" : ""}`} onClick={goHome}>
-                  Command Center
-                </button>
-                {Object.entries(CONTROL_PLANE_NAV)
-                  .filter(([key]) => key !== "command")
-                  .map(([key, entry]) => (
-                    <button key={key} className={`nav-item ${activePrimaryView === key ? "active" : ""}`} onClick={() => openPrimaryView(key)}>
-                      {entry.label}
-                    </button>
-                  ))}
-              </div>
-
-              <div className="sidebar-menu-panel">
-                <button className={`nav-item nav-home ${activePrimaryView === "command" ? "active" : ""}`} onClick={goHome}>
-                  Command Center
-                </button>
-                <button className="nav-item nav-back" onClick={returnToPrimaryRail}>
-                  ← All Sections
-                </button>
-                {/* Inside a folder the breadcrumb states where you are, so the plain heading would
-                    just say "Domains" twice over. */}
-                {openFolder && activePrimaryView === "domains" ? null : (
-                  <div className="nav-section-heading">{currentNav.label}</div>
-                )}
-                {activePrimaryView === "domains" ? (
-                  openFolder ? (
-                    // INSIDE a folder: breadcrumb + only this folder's contents. The sibling
-                    // domains (Marketplace, …) are deliberately out of sight until you back out.
-                    <>
-                      <div className="nav-breadcrumb">
-                        <button className="nav-crumb" onClick={exitFolder}>All Domains</button>
-                        <span className="nav-crumb-sep">›</span>
-                        <span className="nav-crumb-current">{openFolder.label}</span>
-                      </div>
-                      <button
-                        className={`nav-item nav-subitem ${activeDomainId === openFolder.id && activeDomainTab === "overview" ? "active" : ""}`}
-                        onClick={() => openDomainTab(openFolder.id, "overview")}
-                      >
-                        <span className="nav-subitem-label">{openFolder.icon} Overview</span>
-                        <span className="nav-subitem-copy">{openFolder.blurb}</span>
-                      </button>
-                      {openFolderChildren.map((c) => (
-                        <button
-                          key={c.id}
-                          className={`nav-item nav-subitem ${activeDomainId === c.id ? "active" : ""}`}
-                          onClick={() => openDomain(c.id)}
-                        >
-                          <span className="nav-subitem-label">{c.icon} {c.label}</span>
-                          <span className="nav-subitem-copy">{c.kind === "coming_soon" ? "Coming soon." : c.blurb}</span>
-                        </button>
-                      ))}
-                      <button
-                        className={`nav-item nav-subitem ${activeDomainId === openFolder.id && activeDomainTab === "accounts" ? "active" : ""}`}
-                        onClick={() => openDomainTab(openFolder.id, "accounts")}
-                      >
-                        <span className="nav-subitem-label">🔐 Accounts</span>
-                        <span className="nav-subitem-copy">All application logins for this domain.</span>
-                      </button>
-                    </>
-                  ) : (
-                    // TOP level: the hub + top-level domains. A folder opens INTO itself rather than
-                    // expanding its children inline.
-                    <>
-                      <button
-                        className={`nav-item nav-subitem ${!activeDomainId ? "active" : ""}`}
-                        onClick={() => setActiveDomainId(null)}
-                      >
-                        <span className="nav-subitem-label">All Domains</span>
-                        <span className="nav-subitem-copy">Health at a glance across every domain.</span>
-                      </button>
-                      {DOMAIN_CATALOG.filter((d) => !d.parent).map((d) => (
-                        <button
-                          key={d.id}
-                          className={`nav-item nav-subitem ${isFolder(d) ? "nav-folder" : ""} ${activeDomainId === d.id ? "active" : ""}`}
-                          onClick={() => (isFolder(d) ? enterFolder(d.id) : openDomain(d.id))}
-                        >
-                          <span className="nav-subitem-label">
-                            {d.icon} {d.label}
-                            {isFolder(d) ? <span className="nav-folder-chevron">›</span> : null}
-                          </span>
-                          <span className="nav-subitem-copy">{d.kind === "coming_soon" ? "Coming soon." : d.blurb}</span>
-                        </button>
-                      ))}
-                    </>
-                  )
-                ) : canEnterSecondary ? currentNav.sections.map((section) => (
-                  <button key={section.id} className={`nav-item nav-subitem ${activeSectionId === section.id ? "active" : ""}`} onClick={() => setActiveSection(section.id)}>
-                    <span className="nav-subitem-label">{section.label}</span>
-                    <span className="nav-subitem-copy">{section.subtitle}</span>
-                  </button>
-                )) : null}
-              </div>
-            </div>
-          </div>
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="sidebar-footer-text">API</div>
-          <div className="sidebar-footer-value">{apiLabel}</div>
-        </div>
-      </aside>
-
-      <main className="main-panel">
-        <header className="topbar">
-          <div>
-            <h1 className="page-title">{domainHeader ? `${domainHeader.icon} ${domainHeader.label}` : currentNav.title}</h1>
-            <p className="page-subtitle">{domainHeader ? domainHeader.responsibility : (activeSection?.subtitle || currentNav.subtitle)}</p>
-          </div>
-
-          <div className="topbar-actions">
-            <button className="ghost-btn" onClick={refresh}>Refresh</button>
-            <div className={`health-badge ${health.ok ? "ok" : "bad"}`}>
-              {health.loading ? "Checking..." : health.ok ? "API Connected" : "API Down"}
-            </div>
-          </div>
-        </header>
-
-        {driveLock.locked ? (
-          <div className="drive-lock-banner" role="status" aria-live="polite">
-            <span className="drive-lock-banner__msg">
-              <span className="drive-lock-banner__lock">🔒 CDP DRIVING — keyboard owned by the agent</span>
-              {driveLock.holder ? <span className="drive-lock-banner__holder"> · {driveLock.holder}</span> : null}
-              {driveLock.reason ? <span className="drive-lock-banner__reason"> · {driveLock.reason}</span> : null}
-              <span className="drive-lock-banner__hint"> — type in the cockpit, not the browser</span>
-            </span>
-            <button className="drive-lock-banner__release" onClick={releaseDriveLock}>Release lock</button>
-          </div>
-        ) : null}
-
-        <div className="workspace-content">{sectionContent}</div>
-      </main>
-    </div>
+    <AppShell
+      title={domainHeader?.label || currentNav.title}
+      subtitle={domainHeader?.responsibility || activeSection?.subtitle || currentNav.subtitle}
+      domain={domainHeader}
+      health={health}
+      driveLock={driveLock}
+      onRefresh={refresh}
+      onReleaseDriveLock={releaseDriveLock}
+    >
+      {activePrimaryView === "learning" ? (
+        <SectionTabs
+          label="Learning sections"
+          items={LEARNING_PRIMARY_TABS}
+          activeId={learningTabId}
+          onChange={setActiveSection}
+        />
+      ) : null}
+      {activePrimaryView === "system" ? (
+        <SectionTabs
+          label="System sections"
+          items={SYSTEM_TABS}
+          activeId={activeSectionId}
+          onChange={setActiveSection}
+        />
+      ) : null}
+      {sectionContent}
+    </AppShell>
   );
 }

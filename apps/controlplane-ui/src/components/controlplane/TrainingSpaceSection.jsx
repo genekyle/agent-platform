@@ -5,15 +5,15 @@ const API = import.meta.env.VITE_API_BASE_URL;
 const VERBS = ["click", "type", "select"];
 
 const C = {
-  blue: "#2f6feb", blueSoft: "#eef4fc", ink: "#24344d", indigo: "#1e3a8a",
-  muted: "#6b7280", faint: "#9ca3af", line: "#e5edf6", surface: "#f1f5f9",
-  amber: "#b45309", amberBg: "#fef6e7", amberLine: "#f5d9a8",
-  teal: "#0d9488", green: "#15803d", red: "#dc2626",
+  accent: "#a8b889", accentSoft: "#293124", ink: "#f0efe7", reasoning: "#b49ac7",
+  muted: "#a8ad9f", faint: "#737a6d", line: "#343b30", surface: "#1e231b",
+  amber: "#d2a45e", amberBg: "#352b1d", amberLine: "#725b34",
+  green: "#8fb28a", red: "#d47c6e",
 };
 const MARK = {
-  golden: { color: C.blue, glyph: "★", fill: "rgba(47,111,235,0.16)", label: "golden" },
-  acceptable: { color: C.teal, glyph: "✓", fill: "rgba(13,148,136,0.14)", label: "acceptable" },
-  rejected: { color: C.red, glyph: "✕", fill: "rgba(220,38,38,0.10)", label: "rejected" },
+  golden: { color: C.accent, glyph: "G", fill: "rgba(168,184,137,0.16)", label: "golden" },
+  acceptable: { color: C.reasoning, glyph: "A", fill: "rgba(180,154,199,0.14)", label: "acceptable" },
+  rejected: { color: C.red, glyph: "R", fill: "rgba(212,124,110,0.10)", label: "rejected" },
 };
 
 const boxArea = (b) => (b ? (b.width || 0) * (b.height || 0) : 0);
@@ -216,7 +216,7 @@ export function TrainingSpaceSection() {
         body: JSON.stringify({ observed_page_state: fromState || "task_complete", label: "terminal", status: "reviewed" }),
       });
       setStats((s) => ({ ...s, done: s.done + 1 }));
-      showFlash("Terminal", C.indigo);
+      showFlash("Terminal", C.reasoning);
       advance();
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }, [item, busy, advance, fromState]);
@@ -279,15 +279,15 @@ export function TrainingSpaceSection() {
         <div>
           <h2 style={{ margin: 0, fontSize: 20, color: C.ink }}>Training Space</h2>
           <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 580 }}>
-            Mark the <b style={{ color: C.blue }}>golden</b> pick (+ any <b style={{ color: C.teal }}>acceptable</b> alternates), then Save. <b>Everything you don't mark is a negative automatically</b> — only use <b style={{ color: C.red }}>✕</b> for a tempting wrong element. Each candidate is labeled on its own; tagging a container never labels what's inside it.
+            Mark the <b style={{ color: C.accent }}>golden</b> pick (+ any <b style={{ color: C.reasoning }}>acceptable</b> alternates), then Save. <b>Everything you don't mark is a negative automatically</b> — only use <b style={{ color: C.red }}>✕</b> for a tempting wrong element. Each candidate is labeled on its own; tagging a container never labels what's inside it.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <Stat value={stats.confirmed} label="confirmed" color={C.green} />
           <Stat value={stats.corrected} label="corrected" color={C.amber} />
           <Stat value={stats.none} label="needs vision" color={C.red} />
-          <Stat value={stats.done} label="terminal" color={C.indigo} />
-          {agreePct !== null ? <Stat value={`${agreePct}%`} label="agreement" color={C.blue} /> : null}
+          <Stat value={stats.done} label="terminal" color={C.reasoning} />
+          {agreePct !== null ? <Stat value={`${agreePct}%`} label="agreement" color={C.accent} /> : null}
           <button className="ghost-btn small-btn" onClick={loadQueue} disabled={loading} title="Reload queue">↻</button>
         </div>
       </div>
@@ -300,7 +300,7 @@ export function TrainingSpaceSection() {
             key={d.id || "all"}
             className="ghost-btn small-btn"
             onClick={() => setDomainFilter(d.id)}
-            style={domainFilter === d.id ? { background: C.blue, color: "#fff", borderColor: C.blue } : undefined}
+            style={domainFilter === d.id ? { background: C.accent, color: "#141712", borderColor: C.accent } : undefined}
           >{d.label}</button>
         ))}
       </div>
@@ -317,7 +317,7 @@ export function TrainingSpaceSection() {
           ) : null}
         </div>
         <div style={{ height: 6, borderRadius: 999, background: C.surface, overflow: "hidden" }}>
-          <div style={{ width: `${progressPct}%`, height: "100%", background: C.blue, transition: "width 220ms" }} />
+          <div style={{ width: `${progressPct}%`, height: "100%", background: C.accent, transition: "width 220ms" }} />
         </div>
       </div>
 
@@ -325,7 +325,7 @@ export function TrainingSpaceSection() {
 
       {done ? (
         <div style={{ textAlign: "center", padding: "56px 20px", background: C.surface, borderRadius: 14 }}>
-          <div style={{ fontSize: 34, marginBottom: 8 }}>🎉</div>
+          <div className="training-complete-mark" aria-hidden="true" />
           <div style={{ fontSize: 16, fontWeight: 600, color: C.ink }}>Queue cleared</div>
           <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>
             {labeled} labeled — {stats.confirmed} confirmed · {stats.corrected} corrected · {stats.none} needs-vision
@@ -339,8 +339,8 @@ export function TrainingSpaceSection() {
         {/* mission + trajectory (compact, gives the image room) */}
         <div style={{ display: "flex", gap: 10, alignItems: "stretch", marginBottom: 12, flexWrap: "wrap" }}>
           {item.context ? (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "8px 12px", background: C.blueSoft, borderRadius: 12, flex: 1, minWidth: 280 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: C.indigo, textTransform: "uppercase", letterSpacing: 0.5 }}>Mission</span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "8px 12px", background: C.accentSoft, borderRadius: 12, flex: 1, minWidth: 280 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.reasoning, textTransform: "uppercase", letterSpacing: 0.5 }}>Mission</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{prettify(item.context.goal_id) || item.goal || "—"}</span>
               <span className="chip">{item.context.domain_id}</span>
               {item.context.scenario_id ? <span className="chip muted">{item.context.scenario_id}</span> : null}
@@ -372,7 +372,7 @@ export function TrainingSpaceSection() {
                 const isCursor = id === cursorId, isHover = id === hoveredId;
                 const isSug = !m && id === sug?.candidate_id;
                 const active = !!m || isCursor || isHover;
-                const color = m ? m.color : isCursor ? C.blue : isHover ? C.indigo : isSug ? C.amber : "rgba(99,102,241,0.5)";
+                const color = m ? m.color : isCursor ? C.accent : isHover ? C.reasoning : isSug ? C.amber : "rgba(99,102,241,0.5)";
                 return (
                   <div key={id} title={`${c.role}: ${c.name}`}
                     onMouseEnter={() => setHoveredId(id)} onMouseLeave={() => setHoveredId((h) => (h === id ? null : h))}
@@ -397,18 +397,18 @@ export function TrainingSpaceSection() {
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
           {sug?.candidate_id ? (
             <span style={{ fontSize: 12, color: C.amber, background: C.amberBg, border: `1px solid ${C.amberLine}`, borderRadius: 999, padding: "4px 10px" }}>
-              ★ suggests <b>{candName(item, sug.candidate_id)}</b> · {sug.confidence}
+              Model suggests <b>{candName(item, sug.candidate_id)}</b> · {sug.confidence}
             </span>
           ) : <span style={{ fontSize: 12, color: C.muted }}>cold state — no suggestion</span>}
           <div style={{ display: "inline-flex", background: C.surface, borderRadius: 10, padding: 3, gap: 2 }}>
             {VERBS.map((v) => (
               <button key={v} onClick={() => setVerb(v)} style={{ border: "none", cursor: "pointer", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600,
-                background: v === verb ? "#fff" : "transparent", color: v === verb ? C.blue : C.muted, boxShadow: v === verb ? "0 1px 3px rgba(15,23,42,0.12)" : "none" }}>{v}</button>
+                background: v === verb ? "#fff" : "transparent", color: v === verb ? C.accent : C.muted, boxShadow: v === verb ? "0 1px 3px rgba(15,23,42,0.12)" : "none" }}>{v}</button>
             ))}
           </div>
           <span style={{ fontSize: 12, marginLeft: "auto", display: "inline-flex", gap: 8 }}>
-            <span style={{ color: C.blue, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
-            <span style={{ color: C.teal, fontWeight: 600 }}>{acceptCount} acc</span>
+            <span style={{ color: C.accent, fontWeight: 600 }}>{goldenId ? 1 : 0} golden</span>
+            <span style={{ color: C.reasoning, fontWeight: 600 }}>{acceptCount} acc</span>
             <span style={{ color: C.red, fontWeight: 600 }}>{rejectCount} rej</span>
             <span style={{ color: C.faint }}>· rest neg</span>
           </span>
@@ -418,7 +418,7 @@ export function TrainingSpaceSection() {
           <button className="ghost-btn" onClick={markDone} disabled={busy} title="Task already complete here (e.g. logged-in home) — record as a terminal state, no pick needed">Done <Kbd>D</Kbd></button>
           <button className="ghost-btn" onClick={markNone} disabled={busy} title="No candidate is correct / AX-blind → flag for the vision layer">None <Kbd>N</Kbd></button>
           <button className="ghost-btn" onClick={advance} disabled={busy}>Skip <Kbd>→</Kbd></button>
-          <button className="ghost-btn" onClick={deleteCapture} disabled={busy} title="Delete a BAD capture (e.g. a coarse jump that skipped actions) so it never trains anything — permanent" style={{ color: C.red, borderColor: C.red }}>🗑 Delete</button>
+          <button className="ghost-btn" onClick={deleteCapture} disabled={busy} title="Delete a BAD capture (e.g. a coarse jump that skipped actions) so it never trains anything — permanent" style={{ color: C.red, borderColor: C.red }}>Delete</button>
         </div>
 
         {/* stepped state picker — Current state → Expected next, organized folder/search
@@ -433,7 +433,7 @@ export function TrainingSpaceSection() {
                 {i > 0 ? <span style={{ color: C.faint }}>→</span> : null}
                 <button onClick={() => setActiveStateField(s.f)}
                   style={{ flex: 1, textAlign: "left", cursor: "pointer", borderRadius: 10, padding: "6px 10px",
-                    border: `1px solid ${activeStateField === s.f ? C.blue : C.line}`,
+                    border: `1px solid ${activeStateField === s.f ? C.accent : C.line}`,
                     background: activeStateField === s.f ? "rgba(47,111,235,0.08)" : "#fff" }}>
                   <div style={{ fontSize: 10, color: C.muted }}>{s.n}. {s.label}</div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: s.val ? C.ink : C.faint }}>
@@ -469,7 +469,7 @@ export function TrainingSpaceSection() {
         {/* candidate list — bottom, scrollable, indented by nesting */}
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: C.surface, fontSize: 11, color: C.muted }}>
-            <span>{ordered.length} reachable · indented by nesting · hover to locate · mark <b style={{ color: C.blue }}>G</b>(olden){" "}<b style={{ color: C.teal }}>A</b>(ccept) · unmarked = negative</span>
+            <span>{ordered.length} reachable · indented by nesting · hover to locate · mark <b style={{ color: C.accent }}>G</b>(olden){" "}<b style={{ color: C.reasoning }}>A</b>(ccept) · unmarked = negative</span>
             <span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
               {item.hidden_count ? (
                 <button className="ghost-btn" style={{ minHeight: 0, padding: "2px 8px", fontSize: 11 }} onClick={() => setShowAll((s) => !s)}>
@@ -488,7 +488,7 @@ export function TrainingSpaceSection() {
                 <div key={id} onClick={() => setCursorId(id)} onMouseEnter={() => setHoveredId(id)} onMouseLeave={() => setHoveredId((h) => (h === id ? null : h))}
                   style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", cursor: "pointer",
                     background: m ? m.fill : isHover ? "rgba(47,111,235,0.06)" : "#fff",
-                    borderLeft: `3px solid ${m ? m.color : isCursor ? C.blue : "transparent"}`,
+                    borderLeft: `3px solid ${m ? m.color : isCursor ? C.accent : "transparent"}`,
                     borderBottom: `1px solid ${C.line}` }}>
                   <span style={{ width: 16, color: C.faint, fontSize: 10, fontWeight: 700, textAlign: "right", flexShrink: 0 }}>{i < 9 ? i + 1 : ""}</span>
                   <span style={{ width: (geom.depth[id] || 0) * 16, flexShrink: 0 }} />
@@ -497,11 +497,11 @@ export function TrainingSpaceSection() {
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: C.ink,
                     textDecoration: mk === "rejected" ? "line-through" : "none", opacity: mk === "rejected" ? 0.6 : 1 }}>
                     {c.name || <span style={{ color: C.faint }}>—</span>}
-                    {isSug ? <span title="model suggestion" style={{ color: C.amber, fontSize: 10, marginLeft: 6 }}>★sug</span> : null}
+                    {isSug ? <span title="model suggestion" style={{ color: C.amber, fontSize: 10, marginLeft: 6 }}>suggested</span> : null}
                   </span>
                   <div style={{ display: "inline-flex", gap: 3, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-                    <TierBtn active={mk === "golden"} color={C.blue} title="Golden" onClick={() => { setCursorId(id); setGolden(id); }}>G</TierBtn>
-                    <TierBtn active={mk === "acceptable"} color={C.teal} title="Acceptable" onClick={() => { setCursorId(id); toggleMark(id, "acceptable"); }}>A</TierBtn>
+                    <TierBtn active={mk === "golden"} color={C.accent} title="Golden" onClick={() => { setCursorId(id); setGolden(id); }}>G</TierBtn>
+                    <TierBtn active={mk === "acceptable"} color={C.reasoning} title="Acceptable" onClick={() => { setCursorId(id); toggleMark(id, "acceptable"); }}>A</TierBtn>
                     <TierBtn active={mk === "rejected"} color={C.red} title="Rejected" onClick={() => { setCursorId(id); toggleMark(id, "rejected"); }}>X</TierBtn>
                   </div>
                 </div>
@@ -526,9 +526,9 @@ function prettify(id) {
 // compact trajectory node for the top strip
 function MiniNode({ label, node, current, target, shotUrl }) {
   const thumb = shotUrl(node?.screenshot_filename);
-  const accent = current ? "#2f6feb" : target ? "#b45309" : "#94a3b8";
+  const accent = current ? "#a8b889" : target ? "#d2a45e" : "#737a6d";
   return (
-    <div style={{ width: 96, border: `1px solid ${current ? accent : "#e5edf6"}`, borderRadius: 10, overflow: "hidden", background: "#fff", opacity: node ? 1 : 0.5 }}>
+    <div style={{ width: 96, border: `1px solid ${current ? accent : "#343b30"}`, borderRadius: 10, overflow: "hidden", background: "#fff", opacity: node ? 1 : 0.5 }}>
       <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: accent, padding: "3px 6px 1px" }}>{label}</div>
       <div style={{ height: 34, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
         {thumb ? <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} /> : <span style={{ fontSize: 9, color: "#9ca3af" }}>{target ? "end" : node ? "" : "start"}</span>}
@@ -549,7 +549,7 @@ function TierBtn({ active, color, title, onClick, children }) {
   return (
     <button title={title} onClick={onClick}
       style={{ width: 22, height: 22, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", padding: 0, lineHeight: 1,
-        border: `1px solid ${active ? color : "#d4deeb"}`, background: active ? color : "#fff", color: active ? "#fff" : "#94a3b8" }}>
+        border: `1px solid ${active ? color : "#495143"}`, background: active ? color : "#fff", color: active ? "#fff" : "#94a3b8" }}>
       {children}
     </button>
   );
@@ -579,6 +579,6 @@ function Kbd({ children, dark }) {
   return (
     <kbd style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 18, height: 18, padding: "0 4px", borderRadius: 5,
       fontSize: 11, fontWeight: 600, fontFamily: "inherit", background: dark ? "rgba(255,255,255,0.22)" : "#fff",
-      color: dark ? "#fff" : "#475569", border: dark ? "1px solid rgba(255,255,255,0.35)" : "1px solid #d4deeb", boxShadow: dark ? "none" : "0 1px 0 #d4deeb" }}>{children}</kbd>
+      color: dark ? "#fff" : "#475569", border: dark ? "1px solid rgba(255,255,255,0.35)" : "1px solid #495143", boxShadow: dark ? "none" : "0 1px 0 #495143" }}>{children}</kbd>
   );
 }

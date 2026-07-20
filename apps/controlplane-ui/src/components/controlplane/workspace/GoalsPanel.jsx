@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getJSON } from "./api";
+import { AppIcon } from "../../../ui/Icon";
 
 // The Goal layer — the most important UX shift. Instead of clicking "post item" / "check
 // responses" as the interface, the operator enables GOALS (standing objectives). Each goal
@@ -25,7 +26,7 @@ export function GoalsPanel({ domain, mode, goalState, onToggleGoal }) {
   return (
     <div className="layer">
       <div className="layer__head">
-        <div className="layer__title">🎯 Goals</div>
+        <div className="layer__title layer__title--with-icon"><AppIcon name="circleDot" size={17} /> Goals</div>
         <span className="layer__sub">What this domain is set up to do</span>
       </div>
 

@@ -227,7 +227,7 @@ function AboutPanel({ title, children }) {
       className="panel"
       style={{
         marginBottom: 20,
-        borderLeft: "3px solid var(--accent, #5b8cff)",
+        borderLeft: "3px solid var(--accent, #a8b889)",
         background: "rgba(91, 140, 255, 0.06)",
       }}
     >
@@ -609,7 +609,7 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDel
           center land inside the real element? For UI automation that's often what matters.
         </div>
         <div style={{ marginTop: 8 }}>
-          Accidentally ran it twice? Use the 🗑 button to remove a run — it deletes the DB row and the on-disk artifacts.
+          Accidentally ran it twice? Use Delete to remove a run — it deletes the database row and the on-disk artifacts.
         </div>
       </AboutPanel>
 
@@ -681,7 +681,7 @@ function EvalRunsView({ runs, models, loading, error, onReload, onOpenRun, onDel
                         title="Delete this run"
                         style={{ marginLeft: 4 }}
                       >
-                        {deletingRunId === r.id ? "Deleting..." : "🗑"}
+                        {deletingRunId === r.id ? "Deleting..." : "Delete"}
                       </button>
                     </td>
                   </tr>
@@ -833,7 +833,7 @@ function LiveProgressPanel({ detail, onCancel, cancellingRunId }) {
                 style={{
                   width: `${pct}%`,
                   height: "100%",
-                  background: status === "failed" ? "#ff5252" : status === "cancelled" ? "#ffa726" : "#5b8cff",
+                  background: status === "failed" ? "#ff5252" : status === "cancelled" ? "#ffa726" : "#a8b889",
                   transition: "width 0.3s ease",
                 }}
               />

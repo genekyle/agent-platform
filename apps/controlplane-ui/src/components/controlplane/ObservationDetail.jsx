@@ -152,7 +152,7 @@ export function ObservationDetail({
   const candidates = selectedObs?.ranked_candidates ?? [];
   // CDP-AX candidates — the PRIMARY proposer (captured live, role + accessible
   // name + bbox already in screenshot pixels). Empty on captures taken before AX
-  // was wired in. Rendered amber, solid (primary), vs vision's dashed cyan.
+  // was wired in. Rendered amber and solid, versus vision's dashed plum.
   const axCandidates = selectedObs?.ax_candidates ?? [];
   const axMeta = selectedObs?.ax_candidates_meta ?? null;
   // Vision-proposed candidates from OmniParser sidecar. Empty until the async
@@ -414,7 +414,7 @@ export function ObservationDetail({
             {objEntries.length ? (
               <div className="dd-state-folder-grid">
                 {objEntries.map(([gid, o]) =>
-                  folder(`${field}-objf-${gid}`, `stage-${nav.stage}`, "📁", o.label,
+                  folder(`${field}-objf-${gid}`, `stage-${nav.stage}`, "", o.label,
                     [...o.byCat.values()].reduce((n, l) => n + l.length, 0),
                     () => setNav({ level: "objective", domainId: nav.domainId, stage: nav.stage, goalId: gid })))}
               </div>
@@ -441,7 +441,7 @@ export function ObservationDetail({
           <div className="dd-state-folder-body">
             <div className="dd-state-folder-grid">
               {stageEntries.map(([stage, st]) =>
-                folder(`${field}-stagef-${stage}`, `stage-${stage}`, "🗂",
+                folder(`${field}-stagef-${stage}`, `stage-${stage}`, "",
                   STAGE_LABEL[stage] || stage, countStage(st),
                   () => setNav({ level: "stage", domainId: nav.domainId, stage })))}
             </div>
@@ -454,7 +454,7 @@ export function ObservationDetail({
         <div className="dd-state-folder-body">
           <div className="dd-state-folder-grid">
             {domEntries.map(([did, stages]) =>
-              folder(`${field}-domf-${did}`, did === captureDomainId ? "is-home" : "", "📂",
+              folder(`${field}-domf-${did}`, did === captureDomainId ? "is-home" : "", "",
                 domainLabelOf(did), countDomain(stages),
                 () => setNav({ level: "domain", domainId: did }),
                 did === captureDomainId ? "home" : null))}
@@ -906,7 +906,7 @@ export function ObservationDetail({
                   type="button"
                   className={`dd-source-pill source-observer${visibleSources.observer ? " active" : ""}`}
                   onClick={() => setVisibleSources((current) => ({ ...current, observer: !current.observer }))}
-                  title="Observer / DOM heuristic candidates (blue)"
+                  title="Observer / DOM heuristic candidates (sage)"
                 >
                   Observer ({candidates.length})
                 </button>
@@ -914,7 +914,7 @@ export function ObservationDetail({
                   type="button"
                   className={`dd-source-pill source-vision${visibleSources.vision ? " active" : ""}`}
                   onClick={() => setVisibleSources((current) => ({ ...current, vision: !current.vision }))}
-                  title="Vision-proposed candidates (cyan, OmniParser)"
+                  title="Vision-proposed candidates (plum, OmniParser)"
                 >
                   Vision ({visionCandidates.length})
                 </button>
@@ -944,7 +944,7 @@ export function ObservationDetail({
                     disabled={captionsLoading}
                     title="Run Florence-2 to add human-readable captions to these boxes (slow; on-demand)"
                   >
-                    {captionsLoading ? "🅰 Captioning…" : (visionMeta?.timing?.captioned ? "🅰 Recaption" : "🅰 Generate captions")}
+                    {captionsLoading ? "Captioning…" : (visionMeta?.timing?.captioned ? "Recaption" : "Generate captions")}
                   </button>
                 ) : null}
                 {visionCandidates.length === 0 ? (
@@ -955,7 +955,7 @@ export function ObservationDetail({
                     className="dd-vision-timing mono"
                     title={`device ${visionMeta.timing.device} · load ${visionMeta.timing.load_ms}ms · detect ${visionMeta.timing.detect_ms}ms · caption ${visionMeta.timing.caption_ms}ms · raw ${visionMeta.timing.raw_detections} → kept ${visionMeta.timing.kept}, captioned ${visionMeta.timing.captioned}`}
                   >
-                    ⏱ {(visionMeta.timing.total_ms / 1000).toFixed(1)}s
+                    Time {(visionMeta.timing.total_ms / 1000).toFixed(1)}s
                     {" "}(detect {(visionMeta.timing.detect_ms / 1000).toFixed(1)}s · caption {(visionMeta.timing.caption_ms / 1000).toFixed(1)}s)
                   </span>
                 ) : null}
@@ -1012,7 +1012,7 @@ export function ObservationDetail({
                     onPointerUp={handleDrawPointerUp}
                     onPointerCancel={handleDrawPointerUp}
                   >
-                    {/* CDP-AX candidates — the PRIMARY proposer. Amber, solid (vs vision's dashed cyan). */}
+                    {/* CDP-AX candidates — the primary proposer. Amber and solid versus vision's dashed plum. */}
                     {visibleSources.ax && axCandidates.map((ax) => {
                       if (!ax?.bbox) return null;
                       const isApproved = labels[ax.candidate_id] === "approve";
@@ -1047,7 +1047,7 @@ export function ObservationDetail({
                           ? "#dc2626"
                           : isSelected
                             ? "#f59e0b"
-                            : "#2f6feb";
+                            : "#a8b889";
 
                       return (
                         <rect
@@ -1068,12 +1068,12 @@ export function ObservationDetail({
                       );
                     })}
 
-                    {/* Vision-proposed candidates (OmniParser) — cyan dashed to distinguish from observer-blue */}
+                    {/* Vision-proposed candidates (OmniParser) — plum dashed to distinguish from observer sage. */}
                     {visibleSources.vision && visionCandidates.map((vision) => {
                       if (!vision?.bbox) return null;
                       const isApproved = labels[vision.candidate_id] === "approve";
                       const isSelected = selectedCandidateId === vision.candidate_id;
-                      const stroke = isApproved ? "#16a34a" : "#06b6d4";
+                      const stroke = isApproved ? "#8fb28a" : "#b49ac7";
                       return (
                         <rect
                           key={vision.candidate_id}
@@ -1866,7 +1866,7 @@ export function ObservationDetail({
                               });
                             }}
                           >
-                            🗑
+                            Delete
                           </button>
                         </div>
                       </div>

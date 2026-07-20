@@ -3,16 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 const API = import.meta.env.VITE_API_BASE_URL;
 
 const STATUS_META = {
-  gap: { dot: "🔴", label: "gap", hint: "no captures yet — capture this next" },
-  thin: { dot: "🟡", label: "thin", hint: "below target — a few more help" },
-  covered: { dot: "🟢", label: "covered", hint: "at target" },
-  over: { dot: "🔵", label: "over", hint: "over-collected — spend diversity on a new state/domain" },
+  gap: { tone: "danger", label: "gap", hint: "no captures yet — capture this next" },
+  thin: { tone: "warning", label: "thin", hint: "below target — a few more help" },
+  covered: { tone: "success", label: "covered", hint: "at target" },
+  over: { tone: "neutral", label: "over", hint: "over-collected — spend diversity on a new state/domain" },
 };
 
 /**
  * Coverage tracker — the data-collection navigation aid. For the active session's
  * domain/goal/scenario it shows every relevant page-state and how many captures are
- * tagged with it, so "what should I capture next?" becomes "drive to the 🔴 rows."
+ * tagged with it, so "what should I capture next?" becomes visible at a glance.
  * Reads GET /api/training/coverage (counts come from tagged captures only).
  */
 export function CoverageSection({ session }) {
@@ -65,7 +65,7 @@ export function CoverageSection({ session }) {
       <div className="panel-header">
         <div>
           <h2>Coverage</h2>
-          <p>session-{session.id} · {session.domain_id} / {session.scenario_id} — drive to the 🔴 gaps, stop a class once it's 🟢.</p>
+          <p>session-{session.id} · {session.domain_id} / {session.scenario_id} — prioritize gaps and stop once a class is covered.</p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <label className="chrome-label" style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -75,7 +75,7 @@ export function CoverageSection({ session }) {
               className="form-select" style={{ width: 64 }} />
           </label>
           <button className="ghost-btn small-btn" onClick={load} disabled={loading}>
-            {loading ? "…" : "↻ Refresh"}
+            {loading ? "…" : "Refresh"}
           </button>
         </div>
       </div>
@@ -102,7 +102,7 @@ export function CoverageSection({ session }) {
                 <div key={s.state_id} title={meta.hint}
                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px",
                     borderRadius: 8, background: "rgba(127,127,127,0.06)" }}>
-                  <span style={{ width: 20 }}>{meta.dot}</span>
+                  <span className={`coverage-status coverage-status--${meta.tone}`} aria-label={meta.label} />
                   <span style={{ flex: 1 }}>{s.display_name}</span>
                   <span className="chrome-label muted">{s.state_id}</span>
                   <span className="chip" style={{ minWidth: 52, textAlign: "right" }}>
@@ -126,7 +126,7 @@ function Stat({ label, value, accent }) {
   return (
     <div style={{ display: "flex", flexDirection: "column" }}>
       <span className="chrome-label muted">{label}</span>
-      <span style={{ fontSize: 22, fontWeight: 600, color: accent ? "#d97706" : "inherit" }}>{value}</span>
+      <span style={{ fontSize: 22, fontWeight: 600, color: accent ? "var(--warning)" : "inherit" }}>{value}</span>
     </div>
   );
 }

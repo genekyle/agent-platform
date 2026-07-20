@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getJSON, postJSON, sendJSON } from "./workspace/api";
 
-// Accounts — application logins organized COMPANY-FIRST, then ATS. Each company↔ATS pair gets one
+// Accounts — application logins organized COMPANY-FIRST, then ATS. Each company-to-ATS pair gets one
 // reusable login for cross-site applications. Username is a single shared address; the password is
 // GENERATED (company initials + a shared suffix kept in the gitignored .env). The generated password
 // is shown here so YOU can create the account on the ATS site — the agent never types it into a site
@@ -85,17 +85,17 @@ export function AccountsSection({ atsFilter = "" }) {
   return (
     <div className="section-body">
       <div className="layer">
-        <div className="layer__head"><div className="layer__title">🔐 Accounts — by company → ATS</div></div>
+        <div className="layer__head"><div className="layer__title">Accounts — by company and ATS</div></div>
         <p className="mode-hint" style={{ marginTop: 0 }}>
-          One reusable login per <strong>company ↔ ATS</strong>. Username is <code>{data.username || "genomags@gmail.com"}</code>;
+          One reusable login per <strong>company and ATS</strong>. Username is <code>{data.username || "genomags@gmail.com"}</code>;
           the password is <strong>generated</strong> (company initials + your suffix
-          {data.suffix_configured ? "" : " — ⚠️ set ATS_ACCOUNT_PW_SUFFIX in .env"}). Reveal it, create the
+          {data.suffix_configured ? "" : " — set ATS_ACCOUNT_PW_SUFFIX in .env"}). Reveal it, create the
           account on the ATS site yourself, then save the login here (encrypted into the local vault).
           The agent never types credentials into a site or creates the account — that step is yours.
         </p>
       </div>
 
-      <div className="layer" style={{ borderColor: "#cfe0ff" }}>
+      <div className="layer" style={{ borderColor: "var(--line-strong)" }}>
         <div className="layer__title" style={{ marginBottom: 8 }}>Add company account</div>
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1.2fr 2fr auto", gap: 8, alignItems: "end" }}>
           <label style={{ fontSize: 12 }} className="muted">Company
@@ -118,8 +118,8 @@ export function AccountsSection({ atsFilter = "" }) {
       </div>
 
       {credForm && (
-        <div className="layer" style={{ borderColor: "#cfe0ff" }}>
-          <div className="layer__title" style={{ marginBottom: 8 }}>🔒 Save login for {credForm.account_id} (encrypted into vault)</div>
+        <div className="layer" style={{ borderColor: "var(--line-strong)" }}>
+          <div className="layer__title" style={{ marginBottom: 8 }}>Save login for {credForm.account_id} (encrypted into vault)</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 8, alignItems: "end" }}>
             <label style={{ fontSize: 12 }} className="muted">Username
               <input className="input" autoComplete="off" value={credForm.username}
@@ -185,7 +185,7 @@ export function AccountsSection({ atsFilter = "" }) {
                           ) : (
                             <button className="btn btn-sm btn-primary" disabled={!a.has_creds}
                                     title={a.has_creds ? "Operator-triggered autofill" : "Save a login first"}
-                                    onClick={() => doLogin(a)}>▶ Login</button>
+                                    onClick={() => doLogin(a)}>Login</button>
                           )}
                         </div>
                         <div className="acct-actions__row">

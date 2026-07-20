@@ -3,13 +3,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 const API = import.meta.env.VITE_API_BASE_URL;
 const STAGES = ["unauthenticated", "authenticated", "neutral"];
 const STAGE_LABEL = { unauthenticated: "Unauthenticated", authenticated: "Authenticated", neutral: "Neutral / Terminal" };
-const C = { blue: "#2f6feb", ink: "#24344d", muted: "#6b7280", faint: "#9ca3af", line: "#e5edf6", green: "#15803d", amber: "#b45309", surface: "#f1f5f9" };
+const C = { accent: "#a8b889", ink: "#f0efe7", muted: "#a8ad9f", faint: "#737a6d", line: "#343b30", green: "#8fb28a", amber: "#d2a45e", surface: "#1e231b" };
 
 const NODE_W = 188, NODE_H = 46, COL_GAP = 150, ROW_GAP = 20, PAD = 24, COL_W = NODE_W + COL_GAP;
 
 /**
  * State Graph — the agent's map of the world. Nodes = page-states, edges = transitions
- * (solid blue = human-labeled intended "this action → that state"; dashed grey = observed
+ * (solid sage = human-labeled intended "this action → that state"; dashed grey = observed
  * in a real session). Laid out left→right by lifecycle stage. Thin/ghost nodes show where
  * the L3 classifier still needs examples.  GET /api/training/state_graph
  */
@@ -63,7 +63,7 @@ export function StateGraphSection() {
         <div>
           <h2 style={{ margin: 0, fontSize: 20, color: C.ink }}>State Graph</h2>
           <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 13, maxWidth: 620 }}>
-            The agent's map of the world. <b style={{ color: C.blue }}>Solid</b> = human-labeled intended transition · <span style={{ color: C.faint }}>dashed</span> = observed in a real session. Laid out by lifecycle stage; thin/ghost nodes need more examples.
+            The agent's map of the world. <b style={{ color: C.accent }}>Solid</b> = human-labeled intended transition · <span style={{ color: C.faint }}>dashed</span> = observed in a real session. Laid out by lifecycle stage; thin/ghost nodes need more examples.
           </p>
         </div>
         <button className="ghost-btn small-btn" onClick={load} disabled={loading}>↻</button>
@@ -75,7 +75,7 @@ export function StateGraphSection() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           {graph.domains.map((d) => (
             <button key={d} onClick={() => setDomain(d)} className="chip"
-              style={{ cursor: "pointer", background: d === domain ? C.blue : undefined, color: d === domain ? "#fff" : undefined }}>
+              style={{ cursor: "pointer", background: d === domain ? C.accent : undefined, color: d === domain ? "#fff" : undefined }}>
               {d} ({graph.nodes.filter((n) => n.domain === d).length})
             </button>
           ))}
@@ -89,7 +89,7 @@ export function StateGraphSection() {
         <div style={{ overflow: "auto", border: `1px solid ${C.line}`, borderRadius: 12, background: "#fff" }}>
           <svg viewBox={`0 0 ${view.width} ${view.height}`} width={view.width} height={view.height} style={{ display: "block", minWidth: "100%" }}>
             <defs>
-              <marker id="ah-blue" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill={C.blue} /></marker>
+              <marker id="ah-accent" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill={C.accent} /></marker>
               <marker id="ah-grey" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill={C.faint} /></marker>
             </defs>
             {/* stage column headers */}
@@ -105,10 +105,10 @@ export function StateGraphSection() {
               return (
                 <g key={i} opacity={dim ? 0.12 : 1}>
                   <path d={`M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`} fill="none"
-                    stroke={intended ? C.blue : C.faint} strokeWidth={intended ? 1.8 : 1.2}
-                    strokeDasharray={intended ? "0" : "5 4"} markerEnd={`url(#${intended ? "ah-blue" : "ah-grey"})`} />
+                    stroke={intended ? C.accent : C.faint} strokeWidth={intended ? 1.8 : 1.2}
+                    strokeDasharray={intended ? "0" : "5 4"} markerEnd={`url(#${intended ? "ah-accent" : "ah-grey"})`} />
                   {e.actions.length && intended ? (
-                    <text x={mx} y={my} textAnchor="middle" fontSize="9" fill={C.blue} style={{ pointerEvents: "none" }}>{e.actions.join("/")}</text>
+                    <text x={mx} y={my} textAnchor="middle" fontSize="9" fill={C.accent} style={{ pointerEvents: "none" }}>{e.actions.join("/")}</text>
                   ) : null}
                 </g>
               );
@@ -117,7 +117,7 @@ export function StateGraphSection() {
             {view.nodes.map((n) => {
               const p = view.pos[n.state_id]; if (!p) return null;
               const ghost = n.count === 0, thin = n.count > 0 && n.count < 3 && !n.terminal;
-              const stroke = n.terminal ? C.green : ghost ? C.faint : thin ? C.amber : C.blue;
+              const stroke = n.terminal ? C.green : ghost ? C.faint : thin ? C.amber : C.accent;
               const bg = n.terminal ? "rgba(21,128,61,0.06)" : thin ? "rgba(180,83,9,0.06)" : "#fff";
               return (
                 <g key={n.state_id} transform={`translate(${p.x},${p.y})`} opacity={hover && hover !== n.state_id ? 0.35 : 1}
@@ -125,8 +125,8 @@ export function StateGraphSection() {
                   <rect width={NODE_W} height={NODE_H} rx="9" fill={bg} stroke={stroke} strokeWidth="1.6" strokeDasharray={ghost ? "5 4" : "0"} />
                   <text x="10" y="19" fontSize="12" fontWeight="600" fill={C.ink}>{(n.display_name || n.state_id).slice(0, 24)}</text>
                   <text x="10" y="35" fontSize="9.5" fill={C.muted}>{ghost ? "expected · 0 captures" : `${n.count} capture${n.count === 1 ? "" : "s"}`}</text>
-                  {n.has_golden ? <circle cx={NODE_W - 12} cy="13" r="3.5" fill={C.blue} /> : null}
-                  {n.terminal ? <text x={NODE_W - 12} y="38" fontSize="11" textAnchor="end">🏁</text> : null}
+                  {n.has_golden ? <circle cx={NODE_W - 12} cy="13" r="3.5" fill={C.accent} /> : null}
+                  {n.terminal ? <text x={NODE_W - 12} y="38" fontSize="8" textAnchor="end">END</text> : null}
                 </g>
               );
             })}
@@ -136,12 +136,12 @@ export function StateGraphSection() {
 
       {graph ? (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 10, fontSize: 11, color: C.muted }}>
-          <span><span style={{ color: C.blue }}>━</span> intended (labeled)</span>
+          <span><span style={{ color: C.accent }}>━</span> intended (labeled)</span>
           <span><span style={{ color: C.faint }}>┄</span> observed (session)</span>
           <span><span style={{ color: C.amber }}>▢</span> thin (&lt;3 — needs L3 examples)</span>
           <span style={{ color: C.faint }}>▢ ghost (expected, never captured)</span>
-          <span><span style={{ color: C.green }}>▢</span> 🏁 terminal</span>
-          <span><span style={{ color: C.blue }}>●</span> has golden pick</span>
+          <span><span style={{ color: C.green }}>▢</span> terminal state</span>
+          <span><span style={{ color: C.accent }}>●</span> has golden pick</span>
         </div>
       ) : null}
       {!loading && graph && view.nodes.length === 0 ? <div className="empty-state">No states for this domain yet.</div> : null}

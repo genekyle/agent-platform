@@ -300,7 +300,7 @@ export function ObservationsTable({
               value={obs.status || "new"} onChange={(e) => updateObsMeta(obs.filename, { status: e.target.value })}>
               {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
-            <button className="ghost-btn ds-mini-action" title="Rename" onClick={() => startRename(obs, fallback)}>✎</button>
+            <button className="ghost-btn ds-mini-action" title="Rename" onClick={() => startRename(obs, fallback)}>Rename</button>
             <button className="table-delete-btn ds-mini-action" title="Delete"
               onClick={() => { if (confirm("Delete this artifact?")) deleteObservation(obs.filename); }}>✕</button>
           </div>

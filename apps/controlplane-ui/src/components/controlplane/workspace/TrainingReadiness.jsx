@@ -62,7 +62,7 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
     <div className="cockpit">
       <div className="layer">
         <div className="layer__head">
-          <div className="layer__title">🎓 Teaching the cheap models</div>
+          <div className="layer__title">Teaching the local models</div>
           <span className="layer__sub">Claude is the teacher — the students distill from every rep</span>
         </div>
         <p className="mode-hint" style={{ marginTop: 0 }}>
@@ -77,7 +77,7 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
         <div className="stats-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginTop: 4 }}>
           <Metric label="Haiku share ↓" value={PCT(l4.haiku_share)} tone="#ea580c" sub="drive this down" />
           <Metric label="Cache hits ↑" value={PCT(l4.cache_hit_rate)} tone="#16a34a" sub="free, practiced picks" />
-          <Metric label="Escalations" value={PCT(l4.escalation_rate)} tone="#3b82f6" sub="handed to a human" />
+          <Metric label="Escalations" value={PCT(l4.escalation_rate)} tone="#b49ac7" sub="handed to a human" />
           <Metric label="Avg cost / pick" value={`$${(l4.avg_cost_usd || 0).toFixed(4)}`} tone="#7c3aed" sub={`${l4.corpus_size} picks logged`} />
         </div>
         <div className="status-card__meta" style={{ marginTop: 8 }}>
@@ -89,7 +89,7 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
       <div className="cockpit-grid">
         <div className="layer">
           <div className="layer__head">
-            <div className="layer__title">🧭 L3 · Page-state classifier</div>
+            <div className="layer__title">L3 · Page-state classifier</div>
             <span className={`badge ${l3.enough_to_train ? "badge--ok" : "badge--muted"}`}>
               {l3.enough_to_train ? "Ready to train" : "Needs data"}
             </span>
@@ -115,7 +115,7 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
 
         <div className="layer">
           <div className="layer__head">
-            <div className="layer__title">🎯 L4 · Element selector</div>
+            <div className="layer__title">L4 · Element selector</div>
             <span className="badge badge--accent">Distilling</span>
           </div>
           <p className="layer__sub" style={{ marginBottom: 12 }}>“Which element do I act on, given the screen + goal?” — the pick that replaces Haiku.</p>
@@ -140,10 +140,10 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
 
       {/* Next gap + capture CTA */}
       {gap && (
-        <div className="attention-item" style={{ borderColor: "#cfe0ff", background: "#f4f8ff" }}>
-          <div style={{ fontSize: 18 }}>📸</div>
+        <div className="attention-item" style={{ borderColor: "var(--line-strong)", background: "var(--surface-2)" }}>
+          <div className="training-capture-mark" aria-hidden="true" />
           <div className="attention-item__body">
-            <div className="attention-item__why" style={{ color: "#1e3a8a" }}>
+            <div className="attention-item__why" style={{ color: "var(--text)" }}>
               Next to capture: {gap.display_name} <span className="muted">({gap.count}/{gap.target})</span>
             </div>
             <div className="attention-item__hint" style={{ color: "#3b5bdb" }}>
@@ -157,7 +157,7 @@ export function TrainingReadiness({ domain, onOpenTraining }) {
       {/* Per-state coverage — the "drive to the gaps" table */}
       <div className="layer">
         <div className="layer__head">
-          <div className="layer__title">🗺️ Capture coverage</div>
+          <div className="layer__title">Capture coverage</div>
           <span className="layer__count">
             {cov.covered_states}/{cov.relevant_states} covered · {cov.gap_states} gaps · {cov.tagged_captures} tagged
           </span>

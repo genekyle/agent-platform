@@ -1,133 +1,97 @@
-// Top-level nav: Command Center · Domains · Training · Lab · System.
-// Domains is a HUB — its secondary rail lists the domain workspaces (Facebook Marketplace,
-// Indeed, …) instead of static sections, so "Selling" and "Indeed" no longer sit loose in the
-// nav. Folded in: registry Domains → Training; Models → Lab. Hidden (components kept in code,
-// off the menu): Workers, Chat.
+// AI Ops navigation is split into a stable global rail and local section tabs.
+// Product navigation is intentionally short; advanced implementation tools remain reachable
+// inside Learning without competing with the daily operator workflow.
 export const CONTROL_PLANE_NAV = {
   command: {
-    label: "Command Center",
-    title: "Command Center",
-    subtitle: "What needs you across every domain, health at a glance, and what just happened.",
-    sections: [],
-  },
-  activity: {
-    label: "🩺 Activity",
-    title: "Session Activity",
-    subtitle: "One live timeline of what the system is doing and WHY — reasoning, actions, escalations, errors, API touches.",
+    label: "Overview",
+    title: "Overview",
+    subtitle: "What needs you, what is working, and what your agents finished.",
     sections: [],
   },
   domains: {
     label: "Domains",
     title: "Domains",
-    subtitle: "Every domain the agents work — pick one to open its workspace.",
-    // sections are the domain workspaces themselves, rendered from the domain catalog.
+    subtitle: "The parts of daily life your agents coordinate.",
     sections: [],
   },
-  training: {
-    label: "Training",
-    title: "Training",
-    subtitle: "The flywheel: collect → label → train. Label is the crank.",
-    sections: [
-      // Organized around the loop, most-used first. Label (the queue crank) leads — it used to be
-      // buried in Lab while the Dataset Browser dig masqueraded as the labeler.
-      {
-        id: "label",
-        label: "🏷️ Label",
-        subtitle: "The queue crank: confirm/correct the model's pick, Save, auto-advance to the next.",
-      },
-      {
-        id: "coverage",
-        label: "Coverage",
-        subtitle: "Per-page-state capture coverage — drive to the gaps.",
-      },
-      {
-        id: "session-setup",
-        label: "Session Setup",
-        subtitle: "Create a structured training session with controlled domain, goal, and task context.",
-      },
-      {
-        id: "session-capture",
-        label: "Session Capture",
-        subtitle: "Capture only from the active training session Chrome instance.",
-      },
-      {
-        id: "dataset-browser",
-        label: "Dataset Browser",
-        subtitle: "Browse + curate captured artifacts (metadata, status). For labeling, use Label.",
-      },
-      {
-        id: "review-label",
-        label: "Inspect capture",
-        subtitle: "Deep-dive one selected artifact: screenshot, proposals, and candidate set.",
-      },
-      {
-        id: "page-states",
-        label: "Page States",
-        subtitle: "Organize the state taxonomy: global, per-domain, and per-scenario states by category.",
-      },
-      {
-        id: "export-model-prep",
-        label: "Export / Model Prep",
-        subtitle: "Export reviewed labels from the current artifact and stage model-prep work.",
-      },
-      {
-        id: "domains",
-        label: "Domains",
-        subtitle: "Registry: domains, allowed goals, scoped tasks, and scenarios used by sessions.",
-      },
-    ],
+  activity: {
+    label: "Activity",
+    title: "Activity",
+    subtitle: "A live, inspectable record of actions, reasoning, handoffs, and failures.",
+    sections: [],
   },
-  lab: {
-    label: "Lab",
-    title: "Lab",
-    subtitle: "The decide-stage reasoner, input-model playground, the SELECT-stage flywheel, and grounding models.",
+  learning: {
+    label: "Learning",
+    title: "Learning",
+    subtitle: "Capture, label, evaluate, and graduate repeatable work into cheaper local intelligence.",
     sections: [
-      { id: "controller", label: "🧠 Controller", subtitle: "The teachable decide(): observe → decide → act. Watch it reason on a tab, the rung mix, the intent programs, and the decision corpus." },
-      { id: "playground", label: "Movement Playground", subtitle: "Record real cursor paths, compare against generated motion, and grow the input-model corpus." },
-      { id: "test", label: "Model Test", subtitle: "Run the live SELECT cascade against a capture + goal." },
-      { id: "eval", label: "Select Metrics", subtitle: "Flywheel metrics: cache-hit rate, escalation rate, cost-per-task." },
-      { id: "training-space", label: "Training Space", subtitle: "Keyboard-driven AX confirm/correct — turn the model's picks into golden labels." },
-      { id: "scorecard", label: "Corpus Scorecard", subtitle: "The quality gate: train-eligible vs quarantined states, by confidence/verify/human-review." },
-      { id: "state-graph", label: "State Graph", subtitle: "The agent's map of the world: page-states as nodes, transitions as edges (intended vs observed)." },
-      { id: "visualization", label: "Visualization", subtitle: "Cost/day, selections/day, layer mix, and reason codes over the corpus." },
-      { id: "models", label: "Models", subtitle: "Grounding models registered against each training target, with last-eval summary." },
-      { id: "eval-runs", label: "Eval Runs", subtitle: "Recent eval runs across all models, ordered by recency." },
-      { id: "run-detail", label: "Run Detail", subtitle: "Per-scenario metrics and a sample of predictions for one eval run." },
+      { id: "overview", label: "Overview", subtitle: "Learning health, flow, coverage, and graduation readiness." },
+      { id: "label", label: "Label", subtitle: "Confirm or correct the next queued training example." },
+      { id: "coverage", label: "Coverage", subtitle: "See which page states need more examples." },
+      { id: "session-setup", label: "Sessions", subtitle: "Create and manage structured capture sessions." },
+      { id: "session-capture", label: "Capture", subtitle: "Capture from the active session browser." },
+      { id: "dataset-browser", label: "Dataset", subtitle: "Browse and curate captured artifacts." },
+      { id: "review-label", label: "Inspect", subtitle: "Inspect one capture, its proposals, and candidate set." },
+      { id: "page-states", label: "Page States", subtitle: "Manage the page-state taxonomy." },
+      { id: "controller", label: "Controller", subtitle: "Inspect the teachable decision layer and reasoning feed." },
+      { id: "models", label: "Models", subtitle: "View registered models and their latest evaluation." },
+      { id: "scorecard", label: "Corpus", subtitle: "Review train-eligible and quarantined examples." },
+      { id: "advanced", label: "Advanced", subtitle: "Engineering, model, and corpus utilities." },
+      { id: "state-graph", label: "State Graph", subtitle: "Explore learned states and transitions." },
+      { id: "playground", label: "Movement", subtitle: "Compare recorded and generated pointer motion." },
+      { id: "test", label: "Model Test", subtitle: "Run the SELECT cascade against a capture and goal." },
+      { id: "eval", label: "Select Metrics", subtitle: "Inspect cache, escalation, and cost metrics." },
+      { id: "visualization", label: "Visualization", subtitle: "Explore cost, layer mix, and reason codes." },
+      { id: "eval-runs", label: "Eval Runs", subtitle: "Browse recent evaluation runs." },
+      { id: "run-detail", label: "Run Detail", subtitle: "Inspect one evaluation run in detail." },
+      { id: "training-space", label: "Legacy Labeler", subtitle: "Open the older AX correction surface." },
+      { id: "export-model-prep", label: "Export", subtitle: "Export reviewed labels and prepare model data." },
+      { id: "domains", label: "Registry", subtitle: "Manage training domains, goals, tasks, and scenarios." },
     ],
   },
   system: {
     label: "System",
     title: "System",
-    subtitle: "Operational readiness, service topology, and training prerequisites.",
+    subtitle: "Service health, connections, usage, and operational readiness.",
     sections: [
-      {
-        id: "status",
-        label: "Status",
-        subtitle: "Live health checks for APIs, browser connectivity, storage, and infrastructure.",
-      },
-      {
-        id: "topology",
-        label: "Topology",
-        subtitle: "How the control plane, capture flow, browser, and storage fit together.",
-      },
-      {
-        id: "training-readiness",
-        label: "Training Readiness",
-        subtitle: "Gate model-training work on the dependencies that must be online first.",
-      },
-      {
-        id: "api-usage",
-        label: "API Usage",
-        subtitle: "Claude API spend and token usage, tagged by purpose, with links to the Anthropic Console.",
-      },
-      {
-        id: "workday-accounts",
-        label: "Workday Accounts",
-        subtitle: "Per-employer Workday/ATS logins for cross-site applications — encrypted into the local vault.",
-      },
+      { id: "status", label: "Services", subtitle: "Live health checks and their human impact." },
+      { id: "topology", label: "Topology", subtitle: "How the control API, capture flow, browser, and storage connect." },
+      { id: "training-readiness", label: "Readiness", subtitle: "Dependencies required for capture and learning." },
+      { id: "api-usage", label: "Usage", subtitle: "Model spend and token usage by purpose." },
+      { id: "workday-accounts", label: "Connections", subtitle: "Encrypted accounts used by cross-site applications." },
     ],
   },
 };
+
+export const LEARNING_PRIMARY_TABS = [
+  { id: "overview", label: "Overview" },
+  { id: "label", label: "Label" },
+  { id: "coverage", label: "Coverage" },
+  { id: "session-setup", label: "Sessions" },
+  { id: "controller", label: "Controller" },
+  { id: "models", label: "Models" },
+  { id: "scorecard", label: "Corpus" },
+  { id: "advanced", label: "Advanced" },
+];
+
+export const LEARNING_ADVANCED_IDS = new Set([
+  "session-capture",
+  "dataset-browser",
+  "review-label",
+  "page-states",
+  "state-graph",
+  "playground",
+  "test",
+  "eval",
+  "visualization",
+  "eval-runs",
+  "run-detail",
+  "training-space",
+  "export-model-prep",
+  "domains",
+]);
+
+export const SYSTEM_TABS = CONTROL_PLANE_NAV.system.sections.map(({ id, label }) => ({ id, label }));
 
 export const DEFAULT_SECTION_VIEW = Object.fromEntries(
   Object.entries(CONTROL_PLANE_NAV).map(([key, value]) => [key, value.sections[0]?.id]),

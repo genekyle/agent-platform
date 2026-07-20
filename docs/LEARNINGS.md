@@ -1510,3 +1510,94 @@ a synthetic group key in `SCAN_REQUIRED_JS` so an acknowledgment is no longer sk
 offline tests). Still OPEN: finding 4 (the Ethnicity react-single-select stage-vs-commit — needs the
 tier-2 select protocol to handle it) and finding 5 (the location combobox race — worked around with a
 settle gap in the drive; not yet a driver-level fix).
+
+## 2026-07-19 — The UI problem is hierarchy before theme; AI Ops redesign documented by concern
+
+**What we saw.** The live cockpit has useful operational truth, but one animated sidebar currently
+acts as global navigation, Training/Lab/System section menu, hierarchical domain browser, and account
+shortcut list. Titles and descriptions repeat across the rail, page header, hero, tabs, and cards.
+At the existing 900px breakpoint the rail disappears with no replacement navigation. Styling those
+screens in a new palette would preserve the disorientation.
+
+**What is true.** The redesign must stabilize the product model first: AI Ops has one persistent
+global rail (Overview, Domains, Activity, Learning, System); domain and page navigation live in the
+content hierarchy; sites such as Indeed/Workday/Greenhouse are Career Search channels rather than
+global destinations. The visual direction follows from that structure: a warm graphite console,
+monochrome SVG icons, no emoji, no blue, restrained semantic color, and dashboards organized around
+human attention, active work, outcomes, flow, and recent wins.
+
+**Where it is encoded.** `docs/ui/` separates the current-state audit, product/design direction,
+information architecture, design system, dashboard grammar, frontend ownership boundaries, and the
+phased migration plan. The implementation rule is vertical slices with legacy deletion—not a theme
+layer added to the 4,412-line global stylesheet.
+
+## 2026-07-19 — A stale tab was SILENCE, not an error (and the unexpected-state policy that fixes it)
+
+The reasoning-driven ATS login (`login_reasoner.py`) was dying on real accounts with an opaque
+`no_login_form` / `max_steps`. The reasoning was fine; the **tab addressing** was the bug, and the
+shape of the bug is the lesson.
+
+- **A stale CDP target does not raise and does not return an error.** `run_login` pinned one
+  `tab_id` from `tab_finder.resolve_target` and drove all 5 steps against it. When that target dies
+  (SSO redirect spawning a new target, an OOPIF iframe form replaced after submit, the operator
+  reloading the Sign-In screen), `_discover_target` raises — but `propose_ax_candidates` **swallows
+  it into `errors[]` and returns `[]`** (ax_proposer.py:304-309). So `/ax_scan` replies HTTP 200
+  `{"ok": true, "candidates": [], "errors": ["target_discovery: No target with id …"]}`. Reading
+  only `candidates` — which is what `run_login` did — makes a **dead tab indistinguishable from
+  "the form isn't open."** `/probe`, `/auth_state` and `/execute` DO return `ok:false` /
+  `outcome:"error"` with the reason in `detail`; `run_login` discarded those too (`_exec` ignored
+  its response entirely). **The failure mode was silence, not an error** — so the fix is to read the
+  reply body, never to infer from an empty result.
+- **The wrong-tab refusal is correct and stays.** `_discover_target` refuses to fall back to another
+  tab when an explicit id misses — that guard is why an Indeed capture stopped being written into
+  the corpus labelled as a Workday state. The fix is to **re-DISCOVER the right tab**, not to loosen
+  the guard. `tab_finder.resolve_target` is read-only and idempotent, so it is safe to call again
+  mid-drive; it is injected into `run_login` as a `re_resolve` callable (like `reasoner=`/`journal=`)
+  so the reasoning module stays free of the DB and unit-testable with a fake.
+- **A stale tab mid-fill must not become "bad password."** The credentials never landed, so setting
+  `attempted_creds` there would make the next pass escalate `bad_credentials` and tell the operator
+  their stored password is wrong when the tab simply vanished. Detect the stale execute FIRST, then
+  decide. This is the same family as the 07-15 lesson — *verify at the layer that COMMITS* — one
+  altitude up: **don't diagnose from a symptom you never confirmed reached the page.**
+- **"Re-observe once, then escalate" existed in exactly one place.** `controller/loop.py:214-228`
+  had it inline (`STALE_STATE_OUTCOMES` + a `stale_retry_used` latch); `runtime/loop.py` had a
+  different retry notion; login had **none**. Now one pure policy — `controller/unexpected.py` —
+  answers RE_OBSERVE | ESCALATE | CONTINUE for both levels of "we are not where we assumed":
+  **protocol** (`not_found`/`not_opened`/`ambiguous`) and **tab** (`STALE_TAB`, deliberately not an
+  `Outcome` member because it is a whole target, not one control). A shared *policy*, not a shared
+  loop — each caller keeps its own mechanics.
+- **The alert existed and was never wired.** `runtime/handoff.py` persists a record AND fires a
+  macOS banner, with plain-language guidance per reason — but it was only ever called from
+  `runtime/loop.py` via `main.py`. Neither the controller nor login produced a `LoopResult`, so
+  neither had any operator alert at all. Added `emit_escalation(...)` (plain fields, no LoopResult)
+  + an `escalation_callback` factory for `run_controller`'s `on_escalate` seam. Handoffs are already
+  a `session_activity` source (`kind:"escalation"`), so this lights up the live timeline **with no
+  frontend change** — which mattered because another agent owns the UI this session.
+- **Unregistered pages are now COLLECTED, not forgotten.** `haiku_page_state.classify` already
+  returned `is_new` + `proposed_name` and `suggest_page_state` **dropped it**; `map_url_to_state`
+  returns `"unknown"` and recorded nothing. Both now feed `page_state_candidates.record_candidate`,
+  writing a `status="candidate"` row into the SAME `page_state_registry`. It is inert by
+  construction (every labeler/classifier query filters `status == "active"`), promotion is a
+  one-field flip through the existing PATCH, and it inherits the whole scoping model — no new table,
+  no new UI. The blackboard gained a matching `unexpected_state` blocker so a page we cannot name
+  halts `proceed_decision` exactly like a captcha.
+
+**The through-line:** every one of these was a component that *already knew something* and threw it
+away — the discovery error, the `ok:false` bodies, the `proposed_name`, the `"unknown"` state, the
+handoff channel. The work was almost entirely **connecting existing parts**, not building new ones.
+When a flow fails opaquely, first ask *what did some layer already know that nobody read?*
+
+**Still owed:** `reconcile` records + halts on an unexpected state but does not itself alert (the
+blackboard's event list is not a `session_activity` source, and keeping disk/notification I/O out of
+it is deliberate) — the timeline alert needs a caller at the seam that surfaces a blocked proceed
+decision. And `run_controller` still has no production call site, so its `escalation_callback` is
+wired-and-tested but not yet firing in anger.
+
+## 2026-07-19 — AI Ops UI: navigation structure was the visual redesign
+
+- The most important visual change was deleting the transforming sidebar. One stable rail plus URL-backed local tabs reduced both clutter and repeated headings before any color work mattered.
+- Overview works best as a calm briefing, not a wall of equally weighted cards. Human attention and agent presence lead; metrics, outcomes, and domains follow.
+- Activity needed console density and an inspector, not bigger cards. Keeping reasoning, actions, handoffs, and errors compact makes transparency usable instead of merely available.
+- “No emoji” required removing emoji from data catalogs and deep utility screens, not just the shell. A single `currentColor` icon resolver makes that rule enforceable.
+- Training and Lab were one learning loop hiding behind two product labels. The explicit Capture → Label → Train → Evaluate → Promote visual makes the teacher/student system understandable, while Advanced keeps engineering tools reachable without making them primary navigation.
+- A theme migration can safely govern legacy components temporarily, but it does not erase their architecture debt. `App.jsx` and `App.css` remain extraction targets; the implementation notes record that debt so the compatibility layer does not become the new foundation.

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, postJSON } from "./api";
+import { DomainIcon } from "../../../ui/Icon";
 
 // The Status layer. Replaces the old "Connect / Sign in / Check sign-in" three-button mess with
 // ONE honest, computed status and ONE primary action. Login is a supervised TASK, not a button:
@@ -163,7 +164,7 @@ export function StatusCard({ domain }) {
       <div style={{ minWidth: 0 }}>
         <div className="status-card__head">
           <span className={`dot ${DOT_CLASS[level]}`} />
-          {domain.icon} {head}
+          <DomainIcon id={domain.id} size={17} /> {head}
         </div>
         <div className="status-card__reason">{reason}</div>
         <div className="status-card__meta">

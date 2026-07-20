@@ -11,7 +11,7 @@ const EMPTY = { account_id: "", label: "", profile: "", notes: "", status: "acti
 function AccountForm({ draft, onChange, onSave, onCancel, busy, error }) {
   const isEdit = !!draft._existing;
   return (
-    <div className="layer" style={{ borderColor: "#cfe0ff" }}>
+    <div className="layer" style={{ borderColor: "var(--line-strong)" }}>
       <div className="layer__head"><div className="layer__title">{isEdit ? `Edit ${draft.account_id}` : "Add account"}</div></div>
       <div style={{ display: "grid", gap: 10 }}>
         {!isEdit && (
@@ -34,8 +34,8 @@ function AccountForm({ draft, onChange, onSave, onCancel, busy, error }) {
           </label>
         </div>
 
-        <div className="panel" style={{ padding: "10px 12px", background: "#f7fbff" }}>
-          <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8 }}>🔒 Login (encrypted into the vault)</div>
+        <div className="panel" style={{ padding: "10px 12px", background: "#1e231b" }}>
+          <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8 }}>Login (encrypted into the vault)</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label style={{ fontSize: 12 }} className="muted">Username / email
               <input className="input" autoComplete="off" value={draft.username} onChange={(e) => onChange({ ...draft, username: e.target.value })} placeholder="seller@gmail.com" />
@@ -111,7 +111,7 @@ export function AccountsPanel({ domain }) {
     <div className="section-body">
       <div className="layer">
         <div className="layer__head">
-          <div className="layer__title">👤 Accounts</div>
+          <div className="layer__title">Accounts</div>
           <button className="btn btn-primary btn-sm" onClick={() => setDraft({ ...EMPTY })}>+ Add account</button>
         </div>
         <p className="mode-hint" style={{ marginTop: 0 }}>
