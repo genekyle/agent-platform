@@ -165,6 +165,14 @@ def _recipe_entry(state: str) -> Optional[dict]:
     return next((s for s in INDEED_APPLY_RECIPE if s["state"] == state), None)
 
 
+def expected_next_for(state: str) -> tuple[str, ...]:
+    """The states the recipe says a step in `state` should land on — the ground-truth edges used
+    wherever an expectation is missing. Empty when the recipe has no entry (nothing to inherit;
+    an absent expectation must never be fabricated)."""
+    entry = _recipe_entry(state)
+    return tuple(entry.get("expect") or ()) if entry else ()
+
+
 def describe_tab(url: str, page_text: str = "") -> dict[str, Any]:
     """Map ONE live tab onto the recipe: its role, current state, recipe step, expected next,
     and whether it's a human-required branch. This is the per-tab 'where are we' readout."""

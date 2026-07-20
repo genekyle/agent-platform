@@ -137,6 +137,14 @@ def parse_decision(payload: Any, bundle: Bundle) -> Decision:
     if not isinstance(conf, (int, float)) or isinstance(conf, bool) or not (0.0 <= conf <= 1.0):
         return _reject(f"confidence {conf!r} missing or out of range [0,1]", bundle)
 
+    # An unspecified expectation INHERITS the recipe's edges — it is never left empty. A model
+    # that omits `expected_next` would otherwise produce an unverifiable decision: loop._verify
+    # falls back to "the endpoint returned ok" and the "landed somewhere we didn't expect"
+    # escalation trigger goes inert. The model may NARROW the expectation, never erase it.
+    # (Measured 2026-07-19: all 48 journal rows carried expected_next=[] for exactly this reason.)
+    expected = tuple(str(s) for s in (payload.get("expected_next") or ())) \
+        or tuple(bundle.expected_next)
+
     return Decision(
         intent=str(intent),
         params={str(k): v for k, v in params.items()},
@@ -144,7 +152,7 @@ def parse_decision(payload: Any, bundle: Bundle) -> Decision:
         rung="model",
         rationale=str(payload.get("rationale", "") or ""),
         evidence=tuple(str(s) for s in (payload.get("evidence") or ())),
-        expected_next=tuple(str(s) for s in (payload.get("expected_next") or ())),
+        expected_next=expected,
         escalate=bool(payload.get("escalate", False)),
     )
 

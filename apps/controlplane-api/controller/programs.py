@@ -177,6 +177,44 @@ def _field_of(step: dict[str, Any]) -> Optional[str]:
     return p.get("field")
 
 
+#: Intents that change nothing on the page. A "program" made only of these replays to no effect,
+#: so it is not a program — it is a rung-0 no-op that would mask a state needing a real decision.
+_NO_OP_INTENTS = frozenset({"observe", "describe", "scan_required", "resolve_answer"})
+
+#: States whose action is chosen by the TASK TARGET, not by the page — which job to open comes
+#: from the approved job on the blackboard, not from a fixed control. Compiling these produces a
+#: program that clicks one specific job title ("full details of Analyst - Actuarial Financial
+#: Reporting") and fails on every future drive. Site truth belongs in the data layer, so the
+#: exclusion is a named list here rather than a heuristic guess at compile time.
+NON_COMPILABLE_STATES = frozenset({
+    "indeed_job_posting", "indeed_search_results", "indeed_home",
+})
+
+
+def rejection_reason(rows: list[dict[str, Any]]) -> Optional[str]:
+    """Why this (task, state) must NOT become a rung-0 program — or None if it may.
+
+    Guarding at compile time matters more than guarding at replay: a bad program is worse than no
+    program, because rung 0 is the rung that runs WITHOUT asking anyone.
+    """
+    good = _compilable_rows(rows)
+    if not good:
+        return "no verified-ok rows"
+    state = good[0].get("state")
+    if state in NON_COMPILABLE_STATES:
+        return (f"{state!r} is target-parameterised — the action depends on which item is being "
+                f"pursued, not on a stable control")
+    if not [r for r in good if r.get("intent") not in _NO_OP_INTENTS]:
+        return "every step is a no-op (observe/describe) — nothing to replay"
+    return None
+
+
+def _compilable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [r for r in rows
+            if r and not r.get("escalate") and r.get("outcome") == "ok"
+            and (r.get("verified") in (True, None))]
+
+
 def compile_from_journal(rows: list[dict[str, Any]], *,
                          expected_exit: tuple[str, ...] = ()) -> Optional[IntentProgram]:
     """Turn a verified-OK decision sequence for ONE (task, state) into an IntentProgram.
@@ -185,10 +223,13 @@ def compile_from_journal(rows: list[dict[str, Any]], *,
     non-escalated; only VERIFIED-OK rows are compiled (an unverified step is not a proven step).
     guard_fields = the fields the steps targeted; expected_exit defaults to the last row's
     expected_next (the advance step's expectation) unless the caller pins it.
+
+    Returns None when `rejection_reason` objects — a bad program is worse than no program, because
+    rung 0 replays without asking anyone.
     """
-    good = [r for r in rows
-            if r and not r.get("escalate") and r.get("outcome") == "ok"
-            and (r.get("verified") in (True, None))]
+    if rejection_reason(rows) is not None:
+        return None
+    good = [r for r in _compilable_rows(rows) if r.get("intent") not in _NO_OP_INTENTS]
     if not good:
         return None
     task = good[0].get("task")
@@ -208,3 +249,48 @@ def compile_from_journal(rows: list[dict[str, Any]], *,
         task=task, state=state, guard_fields=guard, steps=steps,
         expected_exit=exit_states, compiled_from=digests,
         verified_at=datetime.now(timezone.utc).isoformat(), stale=False)
+
+
+def compile_all_from_journal(rows: list[dict[str, Any]], *, save: bool = False,
+                             expected_exit_for: Optional[Any] = None) -> dict[str, Any]:
+    """Group journal rows by (task, state) and compile each into a rung-0 program.
+
+    This is the crank that turns the teacher's expensive verified work into the $0 path, and it
+    had simply never been run: 12 verified steps sat in the journal while `programs/` was empty
+    (measured 2026-07-19), so every drive paid full price for steps already proven.
+
+    Rejections are REPORTED, not skipped silently — "nothing compiled" and "everything was
+    rejected for a reason" look identical otherwise, and the reason is the interesting part.
+    """
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in rows:
+        task, state = r.get("task"), r.get("state")
+        if task and state:
+            groups.setdefault((task, state), []).append(r)
+
+    compiled: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for (task, state), rs in groups.items():
+        reason = rejection_reason(rs)
+        if reason is None:
+            program = compile_from_journal(rs)
+            if program is None:
+                reason = "no compilable steps after filtering"
+            else:
+                # A program with no expected_exit can't be verified on replay — rung 0 would run
+                # blind. Rows journaled before expected_next was carried through (every row of
+                # the first corpus) inherit the recipe's edges here, the same rule the model and
+                # teacher rungs follow. Never fabricated: an absent recipe entry stays empty.
+                if not program.expected_exit and expected_exit_for is not None:
+                    inherited = tuple(expected_exit_for(state) or ())
+                    if inherited:
+                        program = replace(program, expected_exit=inherited)
+                if save:
+                    save_program(program)
+                compiled.append({"task": task, "state": state, "steps": len(program.steps),
+                                 "guard_fields": list(program.guard_fields),
+                                 "expected_exit": list(program.expected_exit),
+                                 "intents": [s.get("intent") for s in program.steps]})
+                continue
+        rejected.append({"task": task, "state": state, "reason": reason})
+    return {"compiled": compiled, "rejected": rejected, "saved": bool(save)}

@@ -119,6 +119,27 @@ def decisions(limit: int = 100, session_id: Optional[str] = None) -> dict[str, A
     return {"decisions": rows, "count": len(rows)}
 
 
+class CompileProgramsBody(BaseModel):
+    save: bool = False          # default is a DRY RUN — see the docstring
+    limit: int = 1000
+
+
+@router.post("/api/controller/programs/compile")
+def compile_programs(body: CompileProgramsBody) -> dict[str, Any]:
+    """Turn verified journal rows into rung-0 intent programs — the crank that converts the
+    teacher's expensive proven work into the $0 path. Run it after a teaching drive.
+
+    Defaults to a DRY RUN (`save=false`): it reports exactly what would compile and what was
+    rejected *and why*. That matters because rung 0 is the rung that replays WITHOUT asking
+    anyone, so a bad program is worse than no program — it must be inspectable before it fires.
+    Missing exits inherit the recipe's edges so a compiled program is verifiable on replay.
+    """
+    import apply_recipe
+    rows = decision_journal.read_rows(limit=body.limit)
+    return programs_mod.compile_all_from_journal(
+        rows, save=body.save, expected_exit_for=apply_recipe.expected_next_for)
+
+
 @router.get("/api/controller/programs")
 def programs() -> dict[str, Any]:
     """The compiled intent programs — the $0 rung-0 library, growing as the teacher drives."""
@@ -268,6 +289,16 @@ def teach_commit(body: TeachCommitBody) -> dict[str, Any]:
 
     actuator = _live_actuator(body)
     bundle = actuator.observe()   # fresh: the row records the bundle actually acted on
+
+    # A teacher who didn't spell out where this should land INHERITS the recipe's edges. Without
+    # this, `expected_next` is empty, so `verified` below stays None and the loop's "landed
+    # somewhere we didn't expect" trigger is inert — which is exactly what the first 48 journal
+    # rows show (measured 2026-07-19: expected_next=[] on every one, verified=None on 37).
+    if bundle.expected_next:
+        if not decision.expected_next:
+            decision = dataclasses.replace(decision, expected_next=tuple(bundle.expected_next))
+        if proposed is not None and not proposed.expected_next:
+            proposed = dataclasses.replace(proposed, expected_next=tuple(bundle.expected_next))
 
     # HUMAN GATE — never act a consequential intent (Submit). Journal it held, hand to the operator.
     if decision.intent in CONSEQUENTIAL_INTENTS:

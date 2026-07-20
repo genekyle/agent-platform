@@ -149,3 +149,32 @@ def test_observe_endpoint_manual_mode(monkeypatch, tmp_path):
     # no program yet -> escalate to teacher, no spend
     assert resp["decision"]["rung"] == "teacher" and resp["decision"]["escalate"] is True
     assert resp["model_cost_usd"] == 0.0
+
+
+# --- expected_next is never left empty (measured gap, 2026-07-19) ------------------
+def test_omitted_expected_next_inherits_the_recipe_edges():
+    """All 48 rows of the first real corpus carried expected_next=[], so `verified` stayed None
+    and the loop's "landed somewhere we didn't expect" trigger was inert. A model that omits the
+    field must inherit the recipe's edges rather than produce an unverifiable decision."""
+    d = parse_decision({"intent": "click", "params": {"control": "Continue"},
+                        "confidence": 0.9, "rationale": "advance"}, _bundle())
+    assert d.expected_next == ("indeed_apply_review",)      # from the bundle, not empty
+
+
+def test_the_model_may_narrow_the_expectation_but_not_erase_it():
+    bundle = _bundle(expected=("a", "b", "c"))
+    narrowed = parse_decision({"intent": "click", "params": {"control": "Continue"},
+                               "confidence": 0.9, "expected_next": ["b"]}, bundle)
+    assert narrowed.expected_next == ("b",)                 # an explicit narrower set wins
+
+    erased = parse_decision({"intent": "click", "params": {"control": "Continue"},
+                             "confidence": 0.9, "expected_next": []}, bundle)
+    assert erased.expected_next == ("a", "b", "c")          # an empty list is not an erasure
+
+
+def test_inheritance_cannot_invent_an_expectation():
+    """If the recipe itself has no edges for this state there is nothing to inherit — stay empty
+    rather than fabricate a landing state."""
+    d = parse_decision({"intent": "click", "params": {"control": "Continue"},
+                        "confidence": 0.9}, _bundle(expected=()))
+    assert d.expected_next == ()

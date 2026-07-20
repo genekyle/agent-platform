@@ -1,0 +1,39 @@
+{
+  "task": "indeed_apply",
+  "state": "indeed_apply_demographics",
+  "guard_fields": [
+    "Are you authorized to work in the United States?"
+  ],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Are you authorized to work in the United States?"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Review your application"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_review",
+    "indeed_apply_demographics"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "4cbaf7d667b5bd00d4986698af0c725f1c79db0586c0682a72491bb129312f06",
+    "d9465186df040fc0826c79841f960ec91d9989b23a2b051f4e45da52950f6f70",
+    "47bdc9d8e7dabef8aa9a4a974f5a8dbc5ac1b264f607b9677709ce3ac55dc3e6"
+  ],
+  "verified_at": "2026-07-20T00:52:56.553124+00:00",
+  "stale": false
+}

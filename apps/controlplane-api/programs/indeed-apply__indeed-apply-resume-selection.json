@@ -1,0 +1,25 @@
+{
+  "task": "indeed_apply",
+  "state": "indeed_apply_resume_selection",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_questions",
+    "indeed_apply_contact_info",
+    "indeed_apply_demographics",
+    "indeed_apply_review"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "476f34737439059b742d53f8254067b9645f30ffe22b9c9c14fa555dbe2e5c24"
+  ],
+  "verified_at": "2026-07-20T00:52:56.552264+00:00",
+  "stale": false
+}

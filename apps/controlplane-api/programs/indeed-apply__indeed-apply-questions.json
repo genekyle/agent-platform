@@ -1,0 +1,58 @@
+{
+  "task": "indeed_apply",
+  "state": "indeed_apply_questions",
+  "guard_fields": [
+    "SMS recruiting-text consent",
+    "read and accept the above acknowledgement"
+  ],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "SMS recruiting-text consent"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "read and accept the above acknowledgement"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_questions",
+    "indeed_apply_contact_info",
+    "indeed_apply_demographics",
+    "indeed_apply_review"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "8154a3900dffebd12921cdfafaa4b865a9a53eb8d8e6f3e3a150c4444b115426"
+  ],
+  "verified_at": "2026-07-20T00:52:56.552843+00:00",
+  "stale": false
+}
