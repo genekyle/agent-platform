@@ -1,11 +1,14 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-07-17 — **Controller v1 (`PLAN_controller_v1.md`) BUILT end-to-end (M1–M5) and
-surfaced in the cockpit** (Lab → 🧠 Controller); 84 new tests, full suite 442 green. What remains is
-the operator-present live drive (M2 teacher-compile + replay, which also closes Interaction API
-Phase 1's DoD). Priorities were reordered earlier the same day to make the controller #1. Session
-briefs live in `docs/sessions/`. The 2026-07-16 full rewrite below otherwise stands; the previous
-version (2026-06-15, SELECT-cascade era) is in git history._
+_Last updated: 2026-07-19 — **the unexpected-state pass**: the ATS-login stale-tab blocker is fixed,
+and "we are not where we assumed" is now one shared policy (`controller/unexpected.py`) with an
+operator alert, a candidate-state store, and a blackboard gate. 26 new tests; controlplane-api
+401 → 427 green, mcp 53 green, controller-evals green. Previously (2026-07-17) **Controller v1
+(`PLAN_controller_v1.md`) BUILT end-to-end (M1–M5) and surfaced in the cockpit** (Lab → 🧠
+Controller); what still remains there is the operator-present live drive (M2 teacher-compile +
+replay, which also closes Interaction API Phase 1's DoD). Session briefs live in `docs/sessions/`.
+The 2026-07-16 full rewrite below otherwise stands; the previous version (2026-06-15, SELECT-cascade
+era) is in git history._
 
 ## What we're building (one paragraph)
 
@@ -70,6 +73,21 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
    green.** NOT yet done — the operator-present live drives: the M2 teacher-compile + replay on the
    Indeed apply backlog (which double as Interaction API Phase 1's unmet DoD), and the first real
    shadow-agreement numbers. Everything those drives need is wired; only the driving remains.
+
+7. **(07-19) The unexpected-state pass — "act → observe → verify" given teeth.** The reasoning-driven
+   ATS login was dying opaquely because **a stale CDP tab is silence, not an error**: the capture
+   server swallows the discovery failure and returns a *successful* empty scan, so a dead tab read as
+   "no form here" (LEARNINGS 2026-07-19). Fixed by detecting it, re-resolving the live tab once via an
+   injected `re_resolve` seam, and escalating honestly otherwise. Generalized in the same pass:
+   `controller/unexpected.py` is now the single policy for RE_OBSERVE | ESCALATE | CONTINUE across
+   both levels of staleness (protocol `STALE_STATE_OUTCOMES` and tab `STALE_TAB`), replacing the
+   copy that lived inline in `controller/loop.py`; `handoff.emit_escalation` gives the login drive and
+   the controller the operator alert they never had (banner + `handoffs.jsonl` + the Session Activity
+   timeline, no frontend change); `page_state_candidates` writes an unregistered page into the
+   registry as an inert `status="candidate"` row so the state graph **grows from what we actually
+   meet** (promotion = one `PATCH` flip); and the blackboard mints an `unexpected_state` blocker so a
+   page we cannot name halts `proceed_decision` like a captcha. Owed: `reconcile` halts but does not
+   itself alert, and `run_controller` still has no production call site.
 
 ## The per-step loop — status
 
