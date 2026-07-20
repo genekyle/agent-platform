@@ -47,11 +47,16 @@ can never disagree about what "the same control" means. Everything downstream is
 **(c) The taxonomy does not need to be guessed — it is already in the logs, and it is a power
 law.** Mined 2026-07-20 from `decision_journal.jsonl` (88), `intent_journal.jsonl` (223),
 `handoffs.jsonl` (34), and the ~30 hand-written incidents in `LEARNINGS.md`. Machine-readable
-stuck moments: **13 `verified=False` decisions, 23 non-`ok` intent outcomes, 34 handoffs.**
+stuck moments: **9 `verified=False` decisions, 23 non-`ok` intent outcomes, 34 handoffs.**
+
+> _Corrected 2026-07-20 (2): these first read 13 / 88 rows. The test suite had been writing into
+> the live journal — 237 of 282 rows were fixture traffic on fake routes. The real corpus is
+> **45 rows**. Plugged with a `conftest.py`; the classes below are unchanged, because they were
+> drawn mostly from the hand-written LEARNINGS incidents, which no test could forge._
 
 | # | Class | Evidence in our logs |
 |---|---|---|
-| 1 | `no_progress` — the action reported success and the page is byte-identical | 6 of 13 `verified=False` rows are `click → ok` landing back on `indeed_apply_questions`; live 2026-07-19 a blocked Continue was clicked **8×** scoring 100% verified (commit `c3d2904`) |
+| 1 | `no_progress` — the action reported success and the page is byte-identical | 6 of 9 `verified=False` rows are `click → ok` landing back on `indeed_apply_questions`; live 2026-07-19 a blocked Continue was clicked **8×** scoring 100% verified (commit `c3d2904`) |
 | 2 | `control_not_found` — the semantic reference did not resolve here | 7 `not_found` decisions + 9 `not_found` / 8 `not_opened` intents = **24**, the single largest bucket |
 | 3 | `staged_not_committed` — the widget shows the value, `scan_required` still calls it unanswered | Ethnicity react-single-select (LEARNINGS 07-18); the distance pill (07-15); Greenhouse date month (07-15) |
 | 4 | `race_settle` — we acted or classified before the page settled | Indeed location combobox `clear`+`type` → `Manchester, NHu` (07-18); `_current_state()` classified the *old* state after a Continue (07-18) |

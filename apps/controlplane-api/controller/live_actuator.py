@@ -65,6 +65,12 @@ _RADIO_WIDGETS = frozenset({"radio_group", "radio"})
 _AFFIRM_PREFIXES = ("accept", "agree", "yes", "true", "i accept", "i agree", "i acknowledge",
                     "i certify", "i consent", "i have read")
 
+#: AX roles a MISSED required control plausibly wears. `rescan_required` looks for these and only
+#: these: a checkbox or radio the page exposes that `/scan_required` never mentioned is the exact
+#: shape of the miss we have on record (the lone acknowledgment checkbox, 07-18). Widening this to
+#: every role would return the whole page and diagnose nothing.
+_CONSENT_ROLES = frozenset({"checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"})
+
 
 def _question_of(name: Optional[str]) -> str:
     """The question half of a field label, normalised for comparison.
@@ -119,7 +125,8 @@ class LiveActuator:
                  task: str = "indeed_apply", goal_text: str = "",
                  driver: str = "direct", transport: Optional[Transport] = None,
                  settle_tries: int = 3, settle_delay: float = 0.7,
-                 sleep_fn: Optional[Callable[[float], None]] = None) -> None:
+                 sleep_fn: Optional[Callable[[float], None]] = None,
+                 re_resolve: Optional[Callable[[], Optional[dict]]] = None) -> None:
         self._browser_url = browser_url
         self._tab_id = tab_id
         self._task = task
@@ -131,6 +138,9 @@ class LiveActuator:
         self._settle_tries = settle_tries
         self._settle_delay = settle_delay
         self._sleep: Callable[[float], None] = sleep_fn or time.sleep
+        # The RE_RESOLVE_TAB play's one dependency, injected (never imported) so this module stays
+        # DB-free — the same seam `login_reasoner.run_login` takes.
+        self._re_resolve = re_resolve
         # Carried between observe() and act(): the RAW scan (field -> selector, for Indeed's
         # dynamic fields), the current url, the current ats + state.
         self._last_scan: list[dict] = []
@@ -470,6 +480,76 @@ class LiveActuator:
 
     def _out(self, outcome: str, landed: Optional[str], *, detail: str = "") -> ActOutcome:
         return ActOutcome(outcome=outcome, landed_state=landed, detail=detail)
+
+    # --- RecoveryActuator (S12b): the supervisor's plays, filled ---------------------
+    # Each reuses machinery that already existed; none is a new mechanism. Every one is
+    # best-effort and returns rather than raising — a failed recovery is a handoff.
+
+    def settle(self) -> None:
+        """Wait for the page to stop moving, then re-read where we are. The remedy for a race
+        (the location combobox on clear+type; classify-before-navigation-settles — 07-18)."""
+        self._sleep(self._settle_delay)
+        self._last_state = self._current_state()
+
+    def re_resolve_tab(self) -> bool:
+        """Re-discover the live CDP target after the pinned one died. Injected as `re_resolve`
+        exactly like `login_reasoner.run_login` takes it, so this module stays DB-free and
+        unit-testable with a fake (LEARNINGS 2026-07-19 — the wrong-tab refusal is correct, so
+        the fix is to re-DISCOVER the right tab, never to loosen the guard)."""
+        if self._re_resolve is None:
+            return False
+        fresh = self._re_resolve()
+        if not (fresh and fresh.get("tab_id")):
+            return False
+        self._browser_url = fresh.get("browser_url") or self._browser_url
+        self._tab_id = fresh["tab_id"]
+        return True
+
+    def rescan_required(self) -> tuple[dict, ...]:
+        """Find required controls the ordinary scan missed, with a DIFFERENT instrument.
+
+        `/scan_form` (the old second opinion) was deleted 2026-07-16 for labelling every control
+        required. So the second instrument is the AX tree: a checkbox or radio the page exposes
+        that `/scan_required` does not mention is exactly the shape of the miss we know about —
+        the lone required acknowledgment checkbox that scanned as complete while Continue was
+        blocked with "Choose an option to continue" (07-18).
+
+        Returns SEMANTIC rows only (role + name), never selectors — this feeds a verdict that
+        gets journaled.
+        """
+        scan = self._post("/scan_required", self._addr())
+        rows = scan.get("unanswered") or []
+        known = {_question_of(r.get("field") or r.get("name")) for r in rows if isinstance(r, dict)}
+
+        ax = self._post("/ax_scan", self._addr())
+        missed: list[dict] = []
+        for c in (ax.get("candidates") or []):
+            role = str(c.get("role") or "").lower()
+            if role not in _CONSENT_ROLES:
+                continue
+            name = str(c.get("name") or "").strip()
+            if name and _question_of(name) not in known:
+                missed.append({"role": role, "name": name})
+        return tuple(missed)
+
+    def commit_widget(self, field: str, value: str) -> bool:
+        """Run the open->stage->commit protocol on a composite widget that staged without
+        committing. `/select_option` already implements the protocol; what it needs and the
+        plain click never supplied is the widget's `commit` descriptor, so ask
+        `/describe_widget` for it first rather than re-clicking and hoping (widget-protocol
+        §6/§7 — the Ethnicity react-select, 07-18)."""
+        addr = self._address(field)
+        if addr is None:
+            return False
+        described = self._post("/describe_widget", {**self._addr(),
+                                                    "selector": addr.get("selector"),
+                                                    "ats": self._ats, "field": field})
+        res = self._post("/select_option", {
+            **self._addr(), "selector": addr.get("selector"), "value": value,
+            "ats": self._ats, "field": field,
+            "commit": described.get("commit") or addr.get("commit"),
+            "widget_type": described.get("widget_type") or addr.get("widget_type")})
+        return _outcome_of(res) == Outcome.OK.value
 
 
 def run_live_apply(*, browser_url: str, tab_id: str, task: str = "indeed_apply",

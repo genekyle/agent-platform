@@ -275,3 +275,16 @@ def test_summarize_measures_reasoning_coverage_on_teaching_rows(monkeypatch):
         assert s["teach_row_count"] == 2                 # the two teacher/golden rows
         assert s["reasoned_rate"] == 0.5                 # one real why, one blank
         assert s["unreasoned_teach_count"] == 1
+
+
+def test_every_journalled_row_is_replayable_not_just_golden_and_shadow():
+    """A corpus that stores only what was DECIDED, without what it was decided FROM, is half a
+    training row. Measured 2026-07-20: 4 of 45 real rows carried a snapshot, so 41 could never
+    teach `Bundle -> Decision`. `replay_snapshot` is PII/selector-free and ~300 bytes."""
+    from interaction.decision_journal import record_for
+    plain = record_for(Decision("click", {}, 1.0, "recipe", "r"), _bundle())
+    assert plain.bundle_snapshot is not None
+    assert plain.bundle_snapshot["route"] == plain.route
+    # still PII-free: the raw url and the lessons prose never enter the corpus
+    assert "lessons" not in plain.bundle_snapshot
+    assert plain.bundle_snapshot["url"] == _bundle().route     # route, not the query-bearing url

@@ -407,3 +407,64 @@ def test_ambiguous_field_refuses_to_pick_rather_than_answering_the_wrong_questio
 
     act._last_scan = act._last_scan[:1]          # unambiguous again -> addressable
     assert act._address("Are you authorized to work?") is not None
+
+
+# --- S12b: the RecoveryActuator plays, live-side ---------------------------------------
+def test_re_resolve_tab_adopts_the_fresh_target():
+    """The 07-19 discipline: the wrong-tab refusal is CORRECT, so the fix is to re-discover the
+    right tab, never to loosen the guard. `re_resolve` is injected so this module stays DB-free."""
+    fake = FakeTransport(url=_INDEED)
+    act = LiveActuator(base_url="http://x", browser_url="http://localhost:9328", tab_id="OLD",
+                       transport=fake,
+                       re_resolve=lambda: {"tab_id": "NEW", "browser_url": "http://localhost:9999"})
+    assert act.re_resolve_tab() is True
+    act.observe()
+    assert fake.payload_for("/auth_state")["tab_id"] == "NEW"
+
+
+def test_re_resolve_tab_reports_failure_rather_than_pretending():
+    fake = FakeTransport(url=_INDEED)
+    assert _actuator(fake).re_resolve_tab() is False               # no re_resolve wired
+    act = LiveActuator(base_url="http://x", browser_url="b", tab_id="OLD", transport=fake,
+                       re_resolve=lambda: None)
+    assert act.re_resolve_tab() is False                            # nothing found
+
+
+def test_rescan_required_finds_the_consent_checkbox_the_scan_missed():
+    """The Lactalis miss (07-18): `/scan_required` reported 0 unanswered while Continue was
+    blocked by a lone required acknowledgment checkbox. `/scan_form` was deleted in July, so the
+    second instrument is the AX tree."""
+    fake = FakeTransport(url=_INDEED, unanswered=[], ax_candidates=[
+        {"role": "button", "name": "Continue"},                     # not a consent control
+        {"role": "checkbox", "name": "I have read and accept the terms"},
+        {"role": "textbox", "name": "Salary"},                       # wrong role, ignored
+    ])
+    missed = _actuator(fake).rescan_required()
+    assert missed == ({"role": "checkbox", "name": "I have read and accept the terms"},)
+
+
+def test_rescan_required_ignores_controls_the_scan_already_knows_about():
+    """A control the ordinary scan already reports is not a miss — returning it would send the
+    loop chasing a field it is already handling."""
+    fake = FakeTransport(url=_INDEED,
+                         unanswered=[{"field": "Work authorization *  Yes", "kind": "radio"}],
+                         ax_candidates=[{"role": "radio", "name": "Work authorization"}])
+    assert _actuator(fake).rescan_required() == ()
+
+
+def test_rescan_required_returns_semantic_rows_only():
+    """It feeds a verdict that gets journaled — no selectors, no node ids (invariant #10)."""
+    fake = FakeTransport(url=_INDEED, unanswered=[], ax_candidates=[
+        {"role": "checkbox", "name": "I acknowledge", "backend_node_id": 4821,
+         "bbox": {"x": 1, "y": 2}}])
+    assert _actuator(fake).rescan_required() == ({"role": "checkbox", "name": "I acknowledge"},)
+
+
+def test_settle_waits_then_reclassifies():
+    slept = []
+    fake = FakeTransport(url=_INDEED)
+    act = LiveActuator(base_url="http://x", browser_url="b", tab_id="TAB", transport=fake,
+                       sleep_fn=slept.append)
+    act.settle()
+    assert slept                                                    # it actually waited
+    assert "/auth_state" in fake.paths()                            # and looked again

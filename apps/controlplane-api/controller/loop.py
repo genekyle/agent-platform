@@ -24,6 +24,7 @@ from interaction.contract import Intent, Outcome
 from interaction.decision import Bundle, Decision, DecisionRecord
 from interaction.decision_journal import log_decision, record_for
 from controller import programs as programs_mod
+from controller import recovery
 from controller import unexpected
 from controller.decide import DecisionReasoner, ProgramLookup, decide
 from controller.teach import PROPOSE_RUNGS, ReviewAction, Reviewer
@@ -166,6 +167,10 @@ def run_controller(
     on_consequential: Optional[Callable[[Bundle, Decision], None]] = None,
     on_step: Optional[Callable[[Bundle, Decision, Optional[ActOutcome]], None]] = None,
     on_supervise: Optional[Callable[[Bundle, Decision, "supervision.SupervisorVerdict"], None]] = None,
+    recovery_actuator: Optional["recovery.RecoveryActuator"] = None,
+    autonomous_classes: frozenset = recovery.AUTONOMOUS_CLASSES,
+    on_recover: Optional[Callable[[Bundle, "supervision.SupervisorVerdict",
+                                   "recovery.PlayResult"], None]] = None,
 ) -> LoopResult:
     """Drive one task to a definite stop. Every step journals a DecisionRecord.
 
@@ -177,6 +182,11 @@ def run_controller(
     records: list[DecisionRecord] = []
     escalations_in_a_row = 0
     stale_retry_used = False
+    #: One recovery attempt until the drive makes real progress again, latched here. Cleared only
+    #: by a step that verifies AND the supervisor calls nominal — NOT merely by the next iteration,
+    #: or a play that keeps "succeeding" while the page never moves would be a treadmill wearing
+    #: the supervisor's badge (recovery.py's second discipline).
+    recovery_used = False
     no_progress = 0
     #: The observation the treadmill check compares against. Set ONLY after a VERIFIED action —
     #: an action that never claimed success has no business being judged for not moving the page.
@@ -318,12 +328,37 @@ def run_controller(
             return LoopResult(STATUS_BLOCKED, step, "BLOCKED — challenge/session, hand to human",
                               bundle, decision, records)
 
+        # --- the supervisor's prescription, filled ONLY for a graduated class (S12b). In shadow
+        # mode `autonomous_classes` is empty, every play is refused, and this whole block is a
+        # no-op that journals why — which is the behaviour until a class earns its promotion.
+        # Gated on the VERDICT, not on `verified` — the treadmill is the reason. A blocked
+        # Continue verifies (ok + landed in expected_next) while achieving nothing, so
+        # `if not verified` would never fire on precisely the failure that motivated all of this.
+        # The supervisor's judgment is now the thing that decides something went wrong.
+        if not verdict.nominal:
+            play = recovery.apply_play(verdict, decision, recovery_actuator,
+                                       enabled_classes=autonomous_classes,
+                                       already_recovered=recovery_used)
+            if on_recover:
+                on_recover(bundle, verdict, play)
+            if play.retry:
+                recovery_used = True
+                # Re-OBSERVE and re-DECIDE rather than replaying `decision`: the page changed
+                # under us (that is why we recovered), so the old decision is itself stale.
+                continue
+
         # The unexpected-state policy — shared with the login drive so "not where we assumed"
         # is decided identically in both (controller/unexpected.py).
         response = unexpected.respond(result.outcome, verified=verified,
                                       already_retried=stale_retry_used)
         if response is unexpected.Response.CONTINUE:
             stale_retry_used = False
+            # Real progress clears the one-shot recovery latch — and "real progress" is the
+            # SUPERVISOR's nominal, not `verified`. Keying this on `verified` re-opened the latch
+            # on every treadmill turn (the treadmill verifies), which let a play re-fire forever:
+            # the same mistake as the gate above, one level down.
+            if verdict.nominal:
+                recovery_used = False
             escalations_in_a_row = 0        # a verified action breaks any escalation streak
             armed_bundle = bundle           # arm the treadmill check: this action claimed success
             continue

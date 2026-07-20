@@ -588,3 +588,88 @@ def test_the_verdict_does_not_change_what_the_loop_does_yet():
     # ...and the loop's own policy is what actually produced the outcome, unchanged: one
     # re-observe, then escalate (STATUS_ESCALATED), exactly as before the supervisor existed.
     assert res.status == loop_mod.STATUS_ESCALATED
+
+
+# --- S12b: the loop fills the prescription, but only for a graduated class ------------
+class _StuckOnRace:
+    """A step that keeps failing the way a settle would fix."""
+    def __init__(self):
+        self.acts = 0
+
+    def observe(self):
+        return _bundle("indeed_apply_questions", expected=("indeed_apply_review",),
+                       task="indeed_apply")
+
+    def act(self, decision):
+        self.acts += 1
+        return ActOutcome(outcome="ok", landed_state="indeed_apply_questions",
+                          ax_identities=("button|continue",), unanswered_after=0)
+
+
+class _Recorder:
+    def __init__(self, *, tab=True, missed=()):
+        self.calls = []
+        self._tab, self._missed = tab, missed
+
+    def settle(self): self.calls.append("settle")
+    def re_resolve_tab(self): self.calls.append("re_resolve_tab"); return self._tab
+    def rescan_required(self): self.calls.append("rescan_required"); return self._missed
+    def commit_widget(self, f, v): self.calls.append(("commit", f, v)); return True
+
+
+def test_the_loop_runs_no_play_in_shadow_mode():
+    """The default drive must behave EXACTLY as it did before S12b existed."""
+    rec = _Recorder()
+    res = run_controller(_StuckOnRace(), programs=_TREADMILL_STORE, max_steps=6,
+                         session_id="t", recovery_actuator=rec)
+    assert rec.calls == []
+    assert res.status == loop_mod.STATUS_STALLED       # unchanged outcome
+
+
+def test_a_graduated_class_gets_its_play_run_and_the_drive_continues():
+    """`missed_required_control` enabled: the loop rescans, finds the control the ordinary scan
+    hid, and carries on rather than escalating."""
+    rec = _Recorder(missed=({"role": "checkbox", "name": "I acknowledge"},))
+    plays = []
+    run_controller(_StuckOnRace(), programs=_TREADMILL_STORE, max_steps=4, session_id="t",
+                   recovery_actuator=rec,
+                   autonomous_classes=frozenset({"missed_required_control"}),
+                   on_recover=lambda b, v, p: plays.append(p))
+    assert "rescan_required" in rec.calls
+    assert plays[0].attempted and plays[0].retry is True
+
+
+def test_the_recovery_latch_stops_a_second_attempt_on_the_same_step():
+    """One attempt per step. Without the latch a play that keeps 'succeeding' while the page never
+    moves is a treadmill wearing the supervisor's badge."""
+    rec = _Recorder(missed=({"role": "checkbox", "name": "I acknowledge"},))
+    plays = []
+    run_controller(_StuckOnRace(), programs=_TREADMILL_STORE, max_steps=8, session_id="t",
+                   recovery_actuator=rec,
+                   autonomous_classes=frozenset({"missed_required_control"}),
+                   on_recover=lambda b, v, p: plays.append(p))
+    assert rec.calls.count("rescan_required") == 1
+    assert any(p.skipped and "treadmill" in p.detail for p in plays[1:])
+
+
+def test_a_verified_step_clears_the_recovery_latch():
+    """Otherwise one recovery early in a drive would disable recovery for the whole rest of it."""
+    class Alternating:
+        def __init__(self): self.n = 0
+
+        def observe(self):
+            return _bundle(f"s{self.n}", expected=(f"s{self.n + 1}",))
+
+        def act(self, decision):
+            self.n += 1
+            return ActOutcome(outcome="ok", landed_state=f"s{self.n}",
+                              ax_identities=(f"button|step {self.n}",), unanswered_after=0)
+
+    store = DictStore({("indeed_apply", f"s{i}"): _prog(
+        "indeed_apply", f"s{i}", [{"intent": "click", "params": {"control": "Continue"}}],
+        guard=[], exit_states=[f"s{i + 1}"]) for i in range(6)})
+    res = run_controller(Alternating(), programs=store, max_steps=4, session_id="t",
+                         recovery_actuator=_Recorder(),
+                         autonomous_classes=frozenset({"missed_required_control"}))
+    # every step verified, so no play ever needed to run and the latch stayed clear
+    assert res.status in (loop_mod.STATUS_MAX_STEPS, loop_mod.STATUS_DONE)

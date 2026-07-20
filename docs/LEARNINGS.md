@@ -1630,7 +1630,7 @@ thing we needed instead of guessing was already sitting in our own corpora.
   *progress*, which is the 8×-click disaster of 07-19. Pinned in a test named for the limitation.
 - **The taxonomy did not need inventing — it needed mining.** From `decision_journal.jsonl` (88),
   `intent_journal.jsonl` (223), `handoffs.jsonl` (34) and ~30 hand-written incidents here:
-  **13 `verified=False` decisions, 23 non-`ok` intents, 34 handoffs**. Eight classes cover *all*
+  **9 `verified=False` decisions, 23 non-`ok` intents, 34 handoffs** (corrected — see the 2026-07-20 (3) entry: the first count came off a journal the test suite had polluted). Eight classes cover *all*
   of them — `control_not_found` (24, the largest by far), `no_progress` (6 of the 13
   verified-false rows), `staged_not_committed`, `race_settle`, `stale_tab`, `unrecognized_state`,
   `auth_wall` (12 handoffs), `missed_required_control`. The power law is real and it is ours.
@@ -1698,3 +1698,50 @@ S12 built the supervisor's vocabulary (`interaction/supervision.py`: `FailureCla
   against it quietly acquiring authority is a test, not a comment.
 
 465 controlplane-api / 138 interaction / 53 mcp green; controller-evals green.
+
+## 2026-07-20 (3) — The test suite was writing into the live corpus, and we could not have trained on it anyway
+
+S12b (the play executor) landed; the pre-commit audit found two data problems that matter more.
+
+- **84% of the "corpus" was fixture traffic.** `decision_journal.jsonl` read 282 rows; **237 were
+  written by the test suite** (`run_controller` journals by design, `session_id="t"`, route
+  `smartapply.indeed.com/x`). The real corpus is **45 rows**. `INTERACTION_ARTIFACTS_DIR` already
+  existed as the override — there was simply no `conftest.py` setting it, so every `pytest` run
+  since the journal was created had been appending. Now plugged (session-scoped autouse fixture in
+  both test roots); a full 630-test run adds zero rows. The polluted file is backed up as
+  `decision_journal.jsonl.pre-cleanup-2026-07-20.bak` and the fixture routes filtered out.
+  **The mined-taxonomy counts published earlier today were off** (9 `verified=False`, not 13) and
+  have been corrected in place. The CLASSES are unchanged, because they came mostly from the
+  hand-written incidents in this file — which no test can forge. That is an accidental argument
+  for keeping this log: it was the only corpus that could not be corrupted by a test run.
+- **The other corpora were clean** (`intent_journal`, `loop_steps`, `selection_telemetry` — all
+  real hosts). Only the decision journal, because only `run_controller` journals in tests.
+- **Only 4 of 45 rows were replayable.** `bundle_snapshot` was written for `golden or shadow` rows
+  only, so 41 rows recorded what was DECIDED with no way to reconstruct what it was decided FROM.
+  A distilled L4 learns `Bundle -> Decision`; a corpus holding only the right-hand side cannot
+  teach it. Now written on **every** row — it is PII/selector-free by construction and ~300 bytes,
+  so the restriction was never anything but the original narrow framing of "replay cases".
+  Everything journaled before today stays half a row; there is no backfill.
+
+**Audit findings recorded without fixing (they are the next work, not this session's):**
+
+- **A controller drive writes no captures.** `observe()` reads `/auth_state`, `/scan_required`,
+  `/ax_scan` and never calls `/capture`, so every page state a drive meets produces a decision row
+  and **zero L3 training examples**. The flywheel's perception half does not turn on controller
+  drives at all — only on the older capture path.
+- **Planning is 0% built.** No `plan.py`, no `ContextPack`, no `PlanStep`, no `plan_grader.py`;
+  `PLAN_reasoner_v2.md` S06–S09 are entirely unstarted. What DOES exist is its substrate: every
+  decision row carries `state` + `landed_state`, which is transition data, and
+  `state_transition_table_v1` is trained. At 45 rows it is far below the readiness gate
+  (`_TRANSITION_MIN_PAIRS=10` / `_TRANSITION_MIN_REPEATED=5` need repeated pairs, not just pairs).
+- **Nothing loads a trained model for inference, anywhere.** `model_lib/registry.py` is DB
+  metadata, not a loader. `stage_observer_nb_v1` scores **94% held-out** and sits unused on disk
+  while `haiku_page_state.classify` pays for the same judgment live. The seam is ready
+  (`HttpReasoner` already POSTs to `/api/controller/decide_model`, invariant #6) and the `cache`
+  rung of `RUNGS` has been declared since M1 and is still empty. The gap between "we have a local
+  model" and "a local model is in the loop" is a loader and an endpoint — not a training run.
+
+**The through-line for today, all three entries:** every problem was a component that already knew
+something nobody read — the AX identities, the page text, the `ok:false` bodies, the `errors[]`,
+the trained classifier, the artifacts-dir override. The work keeps being connection, not
+construction.

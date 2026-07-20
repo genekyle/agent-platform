@@ -130,9 +130,15 @@ def record_for(
         proposed_rationale=proposed.rationale if proposed else None,
         proposed_evidence=tuple(proposed.evidence) if proposed else (),
         shadow=shadow,
-        # Replay cases (golden corrections + shadow comparisons) carry a self-contained,
-        # PII-free snapshot so the offline eval suite can re-run decide() on the exact input.
-        bundle_snapshot=replay_snapshot(bundle) if (golden or shadow) else None,
+        # EVERY row carries the snapshot, not just golden/shadow ones (changed 2026-07-20).
+        # Restricting it to replay cases meant that of 45 real journalled decisions, **4** could be
+        # re-run — the other 41 recorded what was decided with no way to reconstruct what it was
+        # decided FROM, which is exactly half a training row. A distilled L4 learns the mapping
+        # `Bundle -> Decision`; a corpus that stores only the right-hand side cannot teach it.
+        # `replay_snapshot` is PII-free and selector-free by construction (route, not url; no
+        # lessons; sanitised unanswered) and adds ~300 bytes, so there was never a reason beyond
+        # the original narrow framing of "replay cases".
+        bundle_snapshot=replay_snapshot(bundle),
         # The supervisor's verdict on this action, and the graded label it rests on. Optional so
         # every existing caller (and every row already journaled) stays valid.
         supervisor_class=verdict.failure_class if verdict else None,
