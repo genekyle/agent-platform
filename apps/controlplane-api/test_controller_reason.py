@@ -45,9 +45,12 @@ def test_rejects_selector_key_in_params():
 
 
 def test_rejects_missing_or_out_of_range_confidence():
-    for bad in ({"intent": "click", "params": {}, "rationale": "c"},           # missing
-                {"intent": "click", "params": {}, "confidence": 1.7, "rationale": "c"},
-                {"intent": "click", "params": {}, "confidence": True, "rationale": "c"}):  # bool != number
+    # params must be VALID for the verb, or the shape gate rejects first and this stops testing
+    # confidence at all. `click` addresses a control (contract.INTENT_PARAMS).
+    ok = {"control": "Continue"}
+    for bad in ({"intent": "click", "params": ok, "rationale": "c"},           # missing
+                {"intent": "click", "params": ok, "confidence": 1.7, "rationale": "c"},
+                {"intent": "click", "params": ok, "confidence": True, "rationale": "c"}):  # bool != number
         d = parse_decision(bad, _bundle())
         assert d.escalate and "confidence" in d.rationale
 

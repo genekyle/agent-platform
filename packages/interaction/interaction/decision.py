@@ -56,7 +56,11 @@ DECISION_CONFIDENCE_THRESHOLD = 0.75
 #: The rungs of the decide cascade, cheapest first — the join between a Decision and WHO made
 #: it. Kept as strings (not an enum) so the journal stays a plain corpus, but centralised here
 #: so a typo is catchable and the UI can enumerate them.
-RUNGS = ("recipe", "cache", "model", "teacher", "human")
+#: `student` sits ABOVE `model` in trust order and BELOW it in the tuple's cheapest-first ordering
+#: — it is the local, $0 policy (PRINCIPLES §9: the student is the central cog; Haiku is a cheap
+#: backstop, not a student). Added 2026-07-20 when the seat was first filled. Additive by
+#: construction: every row journaled before today keeps a valid rung, so no version bump.
+RUNGS = ("recipe", "cache", "student", "model", "teacher", "human")
 
 
 # --- the Open Brain: a "why" is training signal only if it's really there (PRINCIPLES §10) ------

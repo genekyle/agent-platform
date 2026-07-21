@@ -21,7 +21,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from interaction.contract import Intent
+from interaction.contract import Intent, check_intent_params
 from interaction.decision import (
     DECISION_CONFIDENCE_THRESHOLD,
     Bundle,
@@ -109,6 +109,12 @@ def _reject(reason: str, bundle: Bundle) -> Decision:
                     expected_next=tuple(bundle.expected_next), escalate=True)
 
 
+#: Public alias for the rejection shape. EVERY reasoner — Haiku, the local student, whatever
+#: replaces them — must reject in the SAME shape, because a rejection is a journaled corpus row:
+#: two reasoners that phrase "malformed output" differently would split one class in the data.
+reject_decision = _reject
+
+
 def parse_decision(payload: Any, bundle: Bundle) -> Decision:
     """Strictly turn a model's JSON dict into a Decision (or a rejection escalation). PURE.
 
@@ -132,6 +138,14 @@ def parse_decision(payload: Any, bundle: Bundle) -> Decision:
         if looks_like_selector(k) or looks_like_selector(v):
             return _reject(f"selector-shaped param ({k!r}: {v!r}) — addressing is not the "
                            f"policy's job (invariant #10)", bundle)
+
+    # The params must fit the VERB, not merely be legal keys. A JSON grammar cannot catch
+    # `click {field: "salary", value: "0"}` — every part of that is well-formed, and it would
+    # have clicked a control named "0" on a live application (found 2026-07-20 with a 1B model
+    # in the student seat; see contract.INTENT_PARAMS).
+    shape_error = check_intent_params(intent, params)
+    if shape_error:
+        return _reject(shape_error, bundle)
 
     conf = payload.get("confidence")
     if not isinstance(conf, (int, float)) or isinstance(conf, bool) or not (0.0 <= conf <= 1.0):

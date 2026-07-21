@@ -23,7 +23,10 @@ from interaction.decision import Bundle, Decision
 
 #: The rungs whose decisions must be reviewed before acting. Rung 0 (recipe) is trusted;
 #: everything non-deterministic is proposed.
-PROPOSE_RUNGS = frozenset({"model", "teacher"})
+#: `student` is here from its first day (2026-07-20). An untrained local policy is the LEAST
+#: trusted thing in the system, not the most — leaving it out would have let a 2B model act
+#: unreviewed on a real job application, which is the exact inversion of PRINCIPLES §9.
+PROPOSE_RUNGS = frozenset({"student", "model", "teacher"})
 
 
 class ReviewAction(str, Enum):

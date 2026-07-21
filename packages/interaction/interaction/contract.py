@@ -109,6 +109,59 @@ READ_ONLY_INTENTS = frozenset({Intent.DESCRIBE, Intent.OBSERVE, Intent.SCAN_REQU
                                Intent.RESOLVE_ANSWER})
 
 
+# --- what params each verb legitimately takes -----------------------------------------
+# The shapes were documented in the Intent docstring above from day one and enforced NOWHERE.
+# Found 2026-07-20 by putting a 1B model in the student seat: it emitted
+# `click {field: "salary", value: "0"}` — a legal SHAPE (click is a real verb, `field` and
+# `value` are real keys, confidence in range) that `parse_decision` happily accepted. It is not
+# a harmless no-op: `LiveActuator` resolves a click as `control or name or VALUE`, so that
+# decision would have clicked a control literally named "0" on a live job application.
+#
+# A JSON grammar constrains shape; only this table constrains SENSE. It is enforced on the
+# MODEL rungs (student/Haiku) — compiled recipe programs don't pass through `parse_decision`,
+# so rung 0 is unaffected.
+#
+# (`required`, `allowed`) — `allowed` is a superset of `required`. An empty `required` means the
+# verb takes no mandatory addressing.
+INTENT_PARAMS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    Intent.SET_TEXT.value:       (frozenset({"field"}),   frozenset({"field", "value"})),
+    Intent.SELECT_OPTION.value:  (frozenset({"field"}),   frozenset({"field", "value"})),
+    Intent.SET_DATE.value:       (frozenset({"field"}),   frozenset({"field", "month", "year", "day"})),
+    Intent.CHECK_GROUP.value:    (frozenset({"field"}),   frozenset({"field", "values", "value"})),
+    Intent.UPLOAD.value:         (frozenset({"field"}),   frozenset({"field", "path"})),
+    # The one that bit us: a click addresses a CONTROL by its visible text. Never a field.
+    Intent.CLICK.value:          (frozenset({"control"}), frozenset({"control"})),
+    Intent.SCROLL.value:         (frozenset(),            frozenset({"direction", "amount"})),
+    Intent.SUBMIT.value:         (frozenset(),            frozenset({"form", "control"})),
+    Intent.DESCRIBE.value:       (frozenset({"field"}),   frozenset({"field"})),
+    Intent.RESOLVE_ANSWER.value: (frozenset({"field"}),   frozenset({"field", "value", "values"})),
+    Intent.OBSERVE.value:        (frozenset(),            frozenset()),
+    Intent.SCAN_REQUIRED.value:  (frozenset(),            frozenset()),
+    Intent.PROBE.value:          (frozenset(),            frozenset({"script", "note"})),
+}
+
+
+def check_intent_params(intent: str, params: dict) -> str:
+    """Why these params are wrong for this verb, or "" when they are fine. PURE.
+
+    Returns a human-readable reason rather than a bool because the caller turns it into a
+    journaled escalation — and "what exactly was wrong" is the training signal.
+    """
+    shape = INTENT_PARAMS.get(intent)
+    if shape is None:
+        return ""                       # unknown verb — the intent check upstream owns that
+    required, allowed = shape
+    keys = {k for k, v in (params or {}).items() if v is not None}
+    missing = required - keys
+    if missing:
+        return (f"{intent} requires {sorted(required)} but got {sorted(keys) or 'nothing'}"
+                f" (missing {sorted(missing)})")
+    foreign = keys - allowed
+    if foreign:
+        return (f"{intent} does not take {sorted(foreign)} — it takes {sorted(allowed)}")
+    return ""
+
+
 class Outcome(str, Enum):
     """The discriminated result of an intent. `ok` is verified, not merely un-thrown."""
 

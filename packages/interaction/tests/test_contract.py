@@ -100,3 +100,54 @@ def test_redact_truncates_long_values_but_keeps_them_readable():
 
 def test_redact_passes_none_through():
     assert redact(None, field="password") is None
+
+
+# --- the intent/param shape gate (2026-07-20) ----------------------------------------
+def test_check_intent_params_accepts_the_documented_shapes():
+    from interaction.contract import check_intent_params
+    assert check_intent_params("click", {"control": "Continue"}) == ""
+    assert check_intent_params("set_text", {"field": "Salary", "value": "65000"}) == ""
+    assert check_intent_params("set_date", {"field": "Start", "month": 3, "year": 2026}) == ""
+    assert check_intent_params("check_group", {"field": "Terms", "values": ["Accept"]}) == ""
+    assert check_intent_params("observe", {}) == ""
+
+
+def test_click_may_not_be_addressed_by_field():
+    """The exact decision a 1B model emitted on 2026-07-20: `click {field, value}`. Every part is
+    well-formed — click is a real verb, both keys are in the closed param set, and a JSON grammar
+    passes it. `LiveActuator` resolves a click as `control or name or VALUE`, so this would have
+    clicked a control named "0" on a live job application."""
+    from interaction.contract import check_intent_params
+    why = check_intent_params("click", {"field": "salary", "value": "0"})
+    assert why and "control" in why          # names the addressing it actually needs
+    # and the foreign-key branch fires too, when `control` IS present alongside junk
+    assert "does not take" in check_intent_params(
+        "click", {"control": "Continue", "value": "0"})
+
+
+def test_a_field_intent_without_a_field_is_rejected():
+    from interaction.contract import check_intent_params
+    why = check_intent_params("set_text", {"value": "65000"})
+    assert "requires" in why and "field" in why
+
+
+def test_none_valued_params_do_not_count_as_present():
+    """A model that emits `{"control": null}` has not addressed anything."""
+    from interaction.contract import check_intent_params
+    assert check_intent_params("click", {"control": None})
+
+
+def test_an_unknown_verb_is_left_to_the_vocabulary_check():
+    """One gate per concern: `parse_decision` already rejects off-vocabulary intents, and this
+    function must not shadow that with a confusing second message."""
+    from interaction.contract import check_intent_params
+    assert check_intent_params("teleport", {"anything": 1}) == ""
+
+
+def test_every_intent_has_a_documented_param_shape():
+    """The guard against the vocabulary growing past the table: a new Intent member with no
+    INTENT_PARAMS entry would silently accept anything."""
+    from interaction.contract import INTENT_PARAMS, Intent
+    assert {i.value for i in Intent} == set(INTENT_PARAMS)
+    for intent, (required, allowed) in INTENT_PARAMS.items():
+        assert required <= allowed, f"{intent}: required keys must be allowed"
