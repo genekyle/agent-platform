@@ -1745,3 +1745,146 @@ S12b (the play executor) landed; the pre-commit audit found two data problems th
 something nobody read — the AX identities, the page text, the `ok:false` bodies, the `errors[]`,
 the trained classifier, the artifacts-dir override. The work keeps being connection, not
 construction.
+
+## 2026-07-20 (4) — "Teacher-driven drive" redefined: the system drives; the teacher runs alongside
+
+Operator-directed. The term had quietly come to mean "Claude drives the browser in front" — and in
+recent sessions that regressed further into Claude scripting interactions directly instead of going
+through the Interaction API (the operator's standing gripe; the §8 violation). Neither is what the
+operator means by teaching. The definition is now pinned in **PRINCIPLES §11**; the short form:
+
+- **The controller/system drives.** The teacher — the **local Claude agent** (Claude Code / the
+  Claude app), explicitly *not* Haiku — runs alongside: watching, keeping its own notes, stepping in
+  only at pauses (escalation, low-confidence decisions, propose-approve gates, supervisor verdicts
+  worth auditing).
+- **The teacher acts exclusively THROUGH the system**: the `Reviewer` seam, Interaction API intents,
+  label/candidate endpoints. It corrects, escalates further, or teaches — never free-hands a script
+  around an existing endpoint. Its interventions ARE the corpus (golden rows with both rationales,
+  labels, candidate states) that pushes the local models in the right direction.
+- **What this changes in code (owed, all small):** a reviewer transport the local agent can service
+  (`cli_reviewer` assumes a human TTY; the `Reviewer` seam is injectable, so an HTTP/file review
+  inbox is a thin adapter), the `run_live_apply` default flipped from teacher-demonstrates to
+  controller-leads/teacher-reviews, escalations that park-and-wait for a teacher response instead of
+  only halting, and `/capture` wired at pause/correction moments so teaching also feeds L3.
+
+This also settles the "reasoner slot" question from the same day's gap review (frontier model as an
+API rung vs. not): **the frontier brain on deviations is the local Claude agent on call, not an API
+rung.** Consequence, accepted by design: an unattended drive with no Claude app listening escalates
+and waits — that is the ladder working, not a failure.
+
+## 2026-07-20 (5) — "Effective parameters" is a compute figure, not a memory one; and a 1B model found a hole in our own parser
+
+The student's seat (PRINCIPLES §9) got wired and two candidate occupants got measured. Both
+failed. The seat is worth keeping; the measurements are worth more.
+
+- **Gemma 4 E2B does not fit, and the spec sheet is why we thought it would.** "2.3B **effective**
+  parameters" describes COMPUTE — per-layer embeddings cut the active math, but all **5.1B total**
+  params must still be resident. The Q4 build is **7.2 GB**, not the ~2 GB implied. (`gemma4:e2b`
+  and `gemma4:e2b-it-q4_K_M` are the same blob — the default tag already IS Q4, so there is no
+  smaller fallback.) E4B is 9.6 GB by the same arithmetic. On this 8 GB M3 it took **50 seconds to
+  emit one word** and grew the swapfile from 8 GB to 14.3 GB, leaving 799 MB free — actively
+  hostile to the live browser it would be sharing the machine with. **Read the footprint, never
+  the parameter count.**
+- **llama3.2:1b fits (1.3 GB, ~1.7 s/decision) and cannot do the job: 0/4** on real bundle shapes.
+  It collapses to `click` for every case and **invents application answers** (`value: "0"` for
+  desired salary, `value: "yes"` for ethnicity) — against a system prompt that says in as many
+  words "Never invent an application answer."
+- **The finding that outlives both models: `parse_decision` had a semantic hole.** Before the fix,
+  llama's four decisions were **all accepted** — `click` is a real verb, `field`/`value` are real
+  keys, confidence was in range, the rationale was non-empty. A JSON grammar constrains SHAPE and
+  the shape was legal. But `LiveActuator` resolves a click as `control or name or **value**`, so
+  `click {field: "salary", value: "0"}` would have **clicked a control named "0"** on a live job
+  application. Not a no-op — a wrong click. The per-verb param shapes had been documented in the
+  `Intent` docstring since day one and enforced nowhere. Now `contract.INTENT_PARAMS` +
+  `check_intent_params`, enforced in `parse_decision` on the model rungs only (compiled recipe
+  programs never pass through it, so rung 0 is untouched). With the gate in, the same four
+  decisions score **0/4 — every one escalates.** That is the design working: a weak student
+  degrades into *hand up*, not *act wrongly*. **Haiku could have made the identical mistake**;
+  this was never really about the small model.
+- **`student` is its own rung** (`RUNGS`, between `cache` and `model`) — otherwise shadow
+  agreement compares `model` against itself — **and it is in `PROPOSE_RUNGS` from day one**.
+  That second one was nearly missed: without it an untrained 2B would act *unreviewed* on a real
+  application, the exact inversion of §9.
+
+**The reassuring half, and it is the important half.** None of this touches getting unstuck. The
+recovery layer built earlier today is **deterministic and model-free**: rung-0 supervision names
+the failure from the 10-class taxonomy at $0, `RecoveryPlay` prescribes the play, the executor
+fills it. The model's only job is *"what intent next"*. So a failed student costs nothing on the
+get-out-of-jail path. What that path actually still needs is (a) live drives to earn per-class
+promotion — `AUTONOMOUS_CLASSES` is still empty, so today it names and prescribes without acting —
+and (b) a rung-1 model to shrink the `UNKNOWN` bucket at the taxonomy's margin. Neither is a
+local-model problem.
+
+**Disposition:** Gemma deleted. llama3.2:1b kept on disk as the baseline artifact (re-running the
+probe is one command). `controller/local_reasoner.py` kept — model-agnostic, 15 offline tests,
+grammar-constrained, reusing Haiku's exact prompt surface so a future occupant's rows train the
+same policy. The seat is wired; nothing can sit in it yet. Falling back to option C: Haiku stays
+on rung 1, and the trained-but-unused 94% L3 classifier is the next thing to wire.
+
+## 2026-07-22 — The north star was a star: it didn't know our restrictions. Perception replaces "a second brain"
+
+Operator-directed re-anchor, and the most consequential doc change since the corpus reckoning. The
+old endgame — *the inner system gets strong enough that learned scenarios run without Claude at
+all; the student becomes its own teacher* — is **retired by measurement, not by taste**:
+
+- No local model that *reasons* fits this machine (2026-07-20 (5): Gemma 4 E2B 7.2 GB resident /
+  50 s per word; llama3.2:1b 0/4 and inventing application answers).
+- **Getting unstuck never needed one.** Rung-0 supervision names the failure from the 10-class
+  taxonomy at $0 and `RecoveryPlay` prescribes the play, with no model in the loop.
+- The domain is not novel. Enumerable states that recombine; the end goals are written down; the
+  failure modes are a power law of eight classes mined from our own logs.
+
+So: **Claude is the novel reasoner permanently and by design** — the teacher rung is a part of the
+finished machine, not scaffolding awaiting removal. The local system perceives, acts on rails,
+verifies, and knows when it doesn't know. The number that has to bend is **teacher calls per
+submitted application**, not teacher calls to zero. PRINCIPLES §9 amended; PROJECT_STATUS Endgame
+rewritten; build plan `PLAN_perception_v1.md`.
+
+### The measurement that shaped the plan (run before writing it)
+
+Apple's Vision framework ships a native image embedder, `VNGenerateImageFeaturePrint` — 768-dim,
+**0.18 s/screenshot, zero download, zero API cost, already an installed dependency**
+(`pyobjc-framework-Vision`, in `requirements.txt` since the OCR layer). Leave-one-out 1-NN over
+every labeled capture whose screenshot still exists (73 captures / 33 states / 18 states with ≥2):
+
+| Asked | Result |
+|---|---|
+| "which exact page-state?" | **55.2%** (32/58) |
+| "which platform/family?" (`indeed_*` / `workday_*` / `fb_*`) | **93.1%** (54/58) |
+| same-vs-different separation (~AUROC) | **0.836** |
+
+The confusions are a specification, not noise: `workday_my_information ↔ workday_questions ↔
+workday_my_experience`, `workday_voluntary_disclosures ↔ workday_self_identify`,
+`fb_create_listing_form ↔ fb_listing_condition_picker`. **Vision cannot separate two Workday form
+phases — same chrome, different fields — and the DOM separates them trivially by reading the field
+labels.** That complementary failure mode is the entire case for two witnesses, confirmed on our own
+data rather than asserted. Consequence: **the visual observer is NOT a state classifier in v1.** Its
+jobs are platform/family witness (93%), **novelty detector** (the thing NB structurally cannot do —
+NB can only be unsure *between known classes*, never unsure of *everything*), and effect witness.
+
+### Two findings that came with it
+
+- **101 of 174 labeled captures point at screenshots that no longer exist on disk** (312 files
+  present; only 73 joinable to a label). The visual corpus is under half what the label count
+  implies, and nobody noticed because nothing read it — the 2026-07-16 corpus reckoning wearing a
+  new hat. Fix the linkage before benching anything.
+- **0.836 AUROC with same-state median cosine 0.897 vs different-state 0.811 is a narrow band.**
+  FeaturePrint is trained on natural photographs, not UI. Free and good enough to build the seam on;
+  first thing to re-bench against CLIP on wifi.
+
+### Naive Bayes cannot take embeddings — and shouldn't be asked to
+
+`state_observer.py` is a multinomial NB: it multiplies **count** likelihoods over sparse discrete
+tokens (`route:`/`role:`/`tok:`). A 768-dim dense float vector has no count semantics; feeding one
+in either degrades to nonsense or requires discretizing away the geometry you wanted. The NB is not
+replaced — it becomes **witness A**, the sparse-token witness, and gets *assisted*. The embedding
+goes in a different head: **nearest-prototype cosine** (~50 lines, no sklearn, no training loop,
+works at n=3/class, updates by averaging so a correction is still instant, and gives distance-based
+OOD for free), with a linear head on frozen embeddings as the next rung if prototypes plateau.
+
+And the shape to avoid: "specify parameters, weight them, concatenate embeddings" is a linear model
+over `[sparse | dense]` — **early concatenation destroys the independence the second witness is
+being bought for.** Use **late fusion**: each witness emits its own distribution *and its own
+novelty score*; disagreement is preserved as a first-class signal instead of being averaged into a
+smooth lie. Averaging two uncalibrated confidences is how you build a system that is confidently
+wrong exactly where it needed to raise its hand.

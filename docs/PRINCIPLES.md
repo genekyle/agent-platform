@@ -135,6 +135,25 @@ models widgets.
 
 ## §9 — The student is the central cog; the teacher bootstraps it; Haiku is a backstop, not a student
 
+> **Amended 2026-07-22 (operator-directed) — the student is a PERCEPTION-and-policy-on-rails cog,
+> not an eventual reasoner and not an eventual teacher.** The sentences below that promise the
+> student "becomes its own teacher" and that Claude is "scaffolding, never the destination" are
+> **retired**, by measurement rather than by taste. On this machine a local model that *reasons* is
+> not on the table (Gemma 4 E2B: 7.2 GB resident, 50 s to emit one word, swapfile to 14.3 GB;
+> llama3.2:1b: fits, 0/4, invents application answers — LEARNINGS 2026-07-20 (5)). And it turned out
+> not to be needed for the part that matters: **getting unstuck is already deterministic** — rung-0
+> supervision names the failure from the 10-class taxonomy at $0 and `RecoveryPlay` prescribes the
+> play, with no model in the loop at all.
+>
+> So the roles re-anchor: **Claude is the novel reasoner, permanently and by design** — the teacher
+> rung is not scaffolding awaiting removal, it is a load-bearing part of the finished machine. The
+> student's job is to **perceive accurately, act on rails, verify honestly, and know precisely when
+> it does not know** — witnesses, prototypes, the intent policy, the deterministic plays. Everything
+> below still holds about *ordering* and about Haiku never occupying the student's seat; what
+> changes is the student's ceiling and, with it, what "does this grow the student?" means: it means
+> *does this sharpen perception or widen the rails*, not *does this teach it to think*.
+> Build plan: `PLAN_perception_v1.md`.
+
 The decision cascade has FOUR sources, and they are **not** interchangeable "models." Naming the
 middle rung "Model (Haiku)" (as `PLAN_controller_v1` §2 and `PLAN_reasoner_v2` §5 originally did) was
 a drift: it let a cheap API backstop squat in the **student's** seat and read as *the reasoner*. It is
@@ -216,3 +235,42 @@ system's load-bearing ideas (operator-directed 2026-07-18), not a nicety.
   literal open brain), and the first teacher-supervised live drive (Workday) that fills these columns
   with real reasoning. Corollary of §8 one altitude up (journaled *reasoning*, not just journaled
   action), and the operational core of §9.
+
+## §11 — A "teacher-driven drive" means the SYSTEM drives and the teacher runs alongside
+
+**Redefined 2026-07-20 (operator-directed).** The term had drifted: sessions where Claude drove the
+browser in front — sometimes free-handing scripts around the Interaction API (the §8 violation, and
+the operator's standing gripe) — were being called "teacher drives." That mode is **bootstrap**, not
+teaching, and it is no longer what the words mean. From here on a teacher-driven drive is exactly
+this shape, and only this shape:
+
+- **The system leads.** `run_controller` (or the cadence above it) drives: rung-0 programs and the
+  rung-1 backstop act; verified steps just run. The teacher is not in front.
+- **The teacher rides alongside, on call.** The teacher is the **local Claude agent** (Claude
+  Code / the Claude app on the operator's machine) — not Haiku, and not an API rung. It watches the
+  drive, keeps its own notes, and is *invoked* at pauses: an escalation, a low-confidence
+  `Decision`, a propose-approve gate, a supervisor verdict worth auditing. Between pauses it waits.
+- **The teacher acts only through the system.** Corrections, further escalation, teaching, and
+  labeling go through the Interaction API, the `Reviewer` seam (`controller/teach.py` /
+  `teach_session.py`), and the label/candidate endpoints — same contract, same journal as every
+  other rung (no private path, `DECISION_two-stacks-one-spine.md` §2.2). Discovery stays
+  `/probe`-journaled per §8. A teacher that free-hands a script around an existing endpoint is off
+  the record — and off this definition.
+- **Every intervention is corpus.** Approve/correct → golden rows carrying both rationales (§10);
+  named states → candidate promotions; labels → the queue. Teaching IS data collection; the student
+  is pushed in exactly the direction of what the teacher does at the pauses.
+
+**Why this is the definition and not a preference:** DAgger (`PLAN_controller_v1` §4) — corrections
+must land on the states the *student* actually reaches, which requires the student in front; and §8
+— an action the system can't see is one it can never learn, so a teacher who drives in front
+produces demonstrations at best and invisible work at worst.
+
+- **Enforced by:** the `Reviewer` seam + golden rows (`controller/teach.py`), teacher-rung rows
+  carrying rationale + evidence (§10), `journaled` endpoints as the only action surface (§8).
+- **Status:** the machinery exists (propose-approve M4, `teach_session`, `handoff.emit_escalation`).
+  Owed: **a reviewer transport the local Claude agent can service** (today's `cli_reviewer` assumes
+  a human at a TTY; the `Reviewer` seam is injectable, so an HTTP/file review inbox is a thin
+  adapter — pending-review queue, poll, respond); the **default mode flip** (`run_live_apply`
+  defaults to teacher-demonstrates — under this definition the default is controller-leads /
+  teacher-reviews); an escalation that **parks and waits** for the teacher instead of only halting;
+  and `/capture` at pause/correction moments so teaching feeds L3, not just L4.

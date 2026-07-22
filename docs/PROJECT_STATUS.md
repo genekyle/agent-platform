@@ -1,6 +1,15 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-07-20 — **the supervisor became priority #1** (`PLAN_supervisor.md`): a
+_Last updated: 2026-07-22 — **the north star was re-anchored** (`PLAN_perception_v1.md`,
+operator-directed). The old endgame ("the inner system gets strong enough to run without Claude;
+the student becomes its own teacher") is **retired by measurement**: no local model that reasons
+fits this machine, and getting unstuck turned out not to need one. Claude is the novel reasoner
+**permanently and by design**; the local system's job is to perceive accurately, act on rails,
+verify honestly, and know precisely when it does not know. What has to get strong is the **inner
+loops — the muscles** (perception, verification, recovery), not a second brain. PRINCIPLES §9 is
+amended accordingly and the Endgame section below is rewritten._
+
+_Previously 2026-07-20 — **the supervisor became priority #1** (`PLAN_supervisor.md`): a
 per-turn observer that names what went wrong from a taxonomy mined from our own logs, instead of a
 boolean `verified`. **S11 + S12 landed** — the state delta we had assumed existed and did not, the
 10-class taxonomy with a deterministic rung 0 that names every replayed real incident, and the
@@ -40,6 +49,11 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
 - **Rungs** — the resolve_answer cascade (exact → normalised → alias → Haiku → ask). The
   **controller** (`PLAN_controller_v1.md`) reuses this shape one altitude up: recipe/program →
   Haiku → teacher → human.
+- **Teacher-driven drive** — redefined 2026-07-20 (operator-directed; **PRINCIPLES §11**): the
+  **controller drives**; the **teacher = the local Claude agent** rides alongside and steps in only
+  at pauses (escalation / low confidence / propose-approve), acting exclusively through the
+  Interaction API + `Reviewer` seam and labeling as it goes. "Claude drives in front" is bootstrap
+  mode, not a teacher drive; free-handed scripts around the API are a §8 violation, period.
 
 ## What changed since the last status (2026-06-15 → 2026-07-16)
 
@@ -133,13 +147,31 @@ every controller step journals, and controller Session 02 starts the crank on th
 
 ## Priorities (ordered — everything else queues behind these)
 
-_Reordered 2026-07-20 (operator-directed): **the supervisor is #1.** The reasoning layer —
+_Reordered 2026-07-22 (operator-directed): **perception is #1**, with the supervisor immediately
+behind it. They are one activity, not a queue: the supervisor NAMES what went wrong; perception
+supplies the evidence it names it from — and today rung-0 supervision is reading a single state
+string produced by one witness that cannot tell it when it is somewhere new. Previously reordered
+2026-07-20: **the supervisor is #1.** The reasoning layer —
 observer, reasoner, planner — is what gets the system unstuck and tells every other part what to
 do, so it leads. It does **not** displace controller v1: the supervisor rides on the live drives
 v1 already owed (M2), which is why the two are one activity and not a queue. Previously reordered
 2026-07-17 (the controller ahead of Phase 1)._
 
-1. **The Supervisor — a per-turn observer that NAMES what went wrong**
+1. **Perception v1 — two witnesses, compositional states, scoped lessons** (`PLAN_perception_v1.md`;
+   sessions S17–S22). The NB layer does not get replaced, it gets **assisted**: a second witness
+   with a different failure mode (a frozen image encoder + prototype bank), a state vocabulary with
+   **facets** (`domain/platform/phase/condition/variant`) so a new Workday tenant inherits instead
+   of cold-starting, a `BeliefState` carrying **five separate uncertainties** (state / element /
+   answer / effect / novelty) instead of one collapsed float, episodic retrieval, and a typed
+   `Lesson` with a `scope` so an escalation is paid for once. Measured before it was planned
+   (2026-07-22, Apple Vision `VNGenerateImageFeaturePrint`, free + local): **93% at platform level,
+   55% at exact state, ~0.836 same/different AUROC** — and the confusions are `workday_my_
+   information ↔ workday_questions ↔ my_experience`, i.e. exactly the phases the DOM separates
+   trivially. That split IS the design: vision witnesses the platform and the novelty, the DOM
+   witnesses the phase. Also found: **101 of 174 labeled captures point at screenshots that no
+   longer exist on disk** — fix the linkage before benching anything.
+
+2. **The Supervisor — a per-turn observer that NAMES what went wrong**
    (`PLAN_supervisor.md`; session briefs `docs/sessions/SESSION_11`–`SESSION_16`). Replaces
    today's boolean `verified: true|false` with a cited diagnosis from a closed failure taxonomy
    **mined from our own logs** (8 classes cover every machine-readable stuck moment we have), and
@@ -162,7 +194,7 @@ v1 already owed (M2), which is why the two are one activity and not a queue. Pre
    **Next: S13** (rung 1 Haiku + the gated screenshot) and **S14** (the commentary pane); both
    offline, as is S15. The only operator-present work is S16.
 
-2. **Controller v1 — the teachable `decide()`** (`PLAN_controller_v1.md`; session briefs
+3. **Controller v1 — the teachable `decide()`** (`PLAN_controller_v1.md`; session briefs
    `docs/sessions/SESSION_01`–`SESSION_05`). **Career Search only — prove it in this domain first,
    then expand.** M1 Decision contract + Bundle → M2 rung-0 Indeed replay through the Interaction
    API with zero model calls (doubles as Phase 1's DoD) → M3 Haiku rung + escalation ladder →
@@ -176,32 +208,38 @@ v1 already owed (M2), which is why the two are one activity and not a queue. Pre
    teaching surface — `propose()`/`commit()`, teacher decides + Haiku shadows; 6 tests). Reasoning
    roles re-anchored in PRINCIPLES §9 (student = central cog; Haiku = backstop). **Owed = the live
    teaching drive itself** (journal flows, programs compile) + search-phase/tab states in the Bundle.
-3. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
+4. **The first flywheel revolution** — drive → journal → label → train L3 v1 → shadow → promote →
    measure. Fed directly by controller drives. The full plan with gates and metrics:
    `PLAN_flywheel_first_revolution.md`.
-4. **Spine convergence** — one corpus spine (the journal), one action surface for teacher and loop
+5. **Spine convergence** — one corpus spine (the journal), one action surface for teacher and loop
    alike. Decision + component dispositions: `DECISION_two-stacks-one-spine.md`. (The loop emitting
    intents is Phase 4 of `PLAN_interaction_api.md` — the controller's `decide()` is exactly the
    piece the loop will adopt; still not current work to rewrite the loop itself.)
-5. **Interaction API Phase 2** — the intent surface (`/api/interact/*`, `{ats, field, value}`),
+6. **Interaction API Phase 2** — the intent surface (`/api/interact/*`, `{ats, field, value}`),
    `/resolve_answer` rungs + alias-table writeback.
-6. **Parked** (do not resume until the wheel turns once, unless one blocks a drive): `main.py`
+7. **Parked** (do not resume until the wheel turns once, unless one blocks a drive): `main.py`
    split resumption (5,061 lines, 170 routes — it's growing again; the route-inventory guardrail
    still holds), movement playground / diffusion input model, OmniParser removal, Account Manager
    build-out (`PLAN_account_manager_and_l3.md` — its capture/label directive is *absorbed into* #3),
    `/scan_form` retirement (gated on a live diff vs `/scan_required`), FB Marketplace expansion.
 
-## Endgame (recorded 2026-07-16 so every session aims the same direction)
+## Endgame (rewritten 2026-07-22 — the re-anchor; the 2026-07-16 version is in git history)
 
-Operator-stated: the inner system (L3/L4, and whatever inner layers come later) becomes strong
-enough that **learned, cached scenarios — the recipes Claude taught — run without Claude at all**,
-and generalize across similar scenarios. Claude remains the **teacher for novel work indefinitely**
-— that door stays open by design. When the inner system gets stuck, or an intent does not land on
-the state it expected (the verifier/outcome taxonomy is the trigger), it escalates up the ladder:
-protocol retry → Haiku (bounded decisions) → Claude (teaching: discovery → endpoint + recipe +
-labels) → human (stop-states, credentials, irreversibles — always). "Claude-free" is a
-**per-scenario graduation**, never a global switch. The ladder is specified in
-`DECISION_two-stacks-one-spine.md`; the controller's cascade is its running implementation.
+Operator-stated: **Claude is the novel reasoner, permanently.** The teacher rung is not scaffolding
+awaiting removal — it is a load-bearing part of the finished machine, and every design choice should
+stop asking "how do we get Claude out of the loop" and start asking "how do we make one Claude call
+buy more." The inner system's job is **perception, rails, verification, and calibrated humility**:
+recognize the state (two witnesses, DOM and pixels, with complementary failure modes), act through
+the closed intent vocabulary, name what went wrong from the taxonomy, run the deterministic play —
+and raise its hand *accurately* when it is somewhere genuinely new. Escalation ladder unchanged:
+deterministic play → Haiku backstop (bounded) → Claude (teaching) → human (stop-states, credentials,
+irreversibles — always). What changes is what an escalation must **return**: a typed, scoped
+`Lesson` (universal / platform / tenant), accepted only after its prediction verifies, so ten
+Workday tenants teach the same page **once**. "Claude-free" stays a per-scenario graduation for
+*routine* scenarios and is no longer the destination; the number that has to bend is **teacher calls
+per submitted application**, not teacher calls to zero. The ladder is specified in
+`DECISION_two-stacks-one-spine.md`; the controller's cascade is its running implementation;
+`PLAN_perception_v1.md` is how the bottom of it gets strong.
 
 ## Short term vs long term
 
