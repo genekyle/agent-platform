@@ -27,10 +27,17 @@ BELIEF_SCHEMA_VERSION = "v1"
 #: The axes, in the order they are rendered. CLOSED — extend the way `Outcome` was extended.
 AXES = ("state", "element", "answer", "effect", "novelty")
 
-#: How two witnesses ended up relative to each other. `split` is the interesting one: measured
-#: 2026-07-22, agreement rows are right 77.9% of the time and split rows 48.2% — a 30-point gap,
-#: which is what earns the second witness its place (PLAN_perception_v1 §8's cleanest falsifier).
-AGREEMENT = ("agree", "split", "one_sided", "no_evidence")
+#: How two witnesses ended up relative to each other — including the case where the second one
+#: was deliberately not asked.
+#:
+#: `not_consulted` is not a degraded `one_sided`; it is the NORMAL case under the cascade
+#: (`EXPERIMENT_perception_config.md`). Measured 2026-07-22: agreement predicts error worse
+#: (AUROC 0.656) than the first witness's own margin already does (0.774) — so a second opinion
+#: bought on every turn is mostly re-derivation. Conditionally it is a different story: where the
+#: first witness is unclear, agreeing rows are right 60% and split rows **20%**. So the second
+#: witness gets consulted where it changes an answer and skipped where it does not, and the
+#: journal records which happened — a row that never asked is not a row where they agreed.
+AGREEMENT = ("agree", "split", "one_sided", "not_consulted", "no_evidence")
 
 #: Uncertainty above this on the `state` axis means the loop must not take a consequential action.
 #: Same floor as `DECISION_CONFIDENCE_THRESHOLD` (0.75 confidence == 0.25 uncertainty), stated as

@@ -15,6 +15,7 @@ def build_acquisition_input(
     capture_status: dict[str, Any],
     task_context: Optional[dict[str, Any]] = None,
     training_metadata: Optional[dict[str, Any]] = None,
+    form_state: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     js_capture = js_capture or {}
     page_identity = js_capture.get("page_identity", {})
@@ -46,6 +47,19 @@ def build_acquisition_input(
     }
     if task_context:
         acquisition["task_context"] = task_context
+    if form_state:
+        # The REQUIRED-FIELD SET, as the driving turn already knows it (`/scan_required`).
+        #
+        # Added 2026-07-22 because its absence made the highest-value perception experiment
+        # un-runnable: every remaining state error is intra-platform phase confusion
+        # (`workday_my_information` vs `questions` vs `voluntary_disclosures`), what separates
+        # those phases is WHICH form controls are required, and that list reached the live Bundle
+        # and stopped there. A surface the agent observes and the corpus never records is a
+        # surface no model can ever learn from — the 2026-07-16 reckoning, one layer up.
+        #
+        # Semantic names only (field / kind / required_via / answered / valid). NEVER values:
+        # PRINCIPLES §4, and this is a form that may hold an address or a salary.
+        acquisition["form_state"] = form_state
     if viewport_state:
         acquisition["viewport_state"] = viewport_state
     if any(value is not None for value in merged_training_metadata.values()) or training_metadata:
