@@ -286,7 +286,7 @@ def authority(*, maturity: str, belief: Any = None,
     Checked in this order, first hit wins. The ORDER is the design:
 
       1. reach   — cannot operate the page             -> RED
-      2. novelty — never been anywhere like this       -> RED
+      2. novelty — never been anywhere like this       -> ORANGE  (was RED until 2026-07-22)
       3. maturity UNSEEN                               -> ORANGE
       4. belief  — unsure about state/element/answer   -> ORANGE
       5. maturity below CERTIFIED                      -> YELLOW
@@ -294,10 +294,12 @@ def authority(*, maturity: str, belief: Any = None,
 
     **Reach outranks belief** because a confident label on a page we cannot touch buys nothing, and
     because reach is precisely what distinguishes "the teacher should tell us what this MEANS"
-    (ORANGE) from "the teacher has to drive" (RED). **Novelty outranks the other axes** for the
-    reason `BeliefState.blocks` already gives: a page we have never seen can still produce a
+    (ORANGE) from "the teacher has to drive" (RED). **RED is therefore branch 1 and nothing else**:
+    it is the CAPABILITY verdict, and every other block is a knowledge gap the teacher can answer
+    with meaning rather than keystrokes. **Novelty still outranks the other belief axes** for the
+    reason `BeliefState.blocks` already gives — a page we have never seen can still produce a
     confident nearest-neighbour label, and acting on that is the failure the second witness exists
-    to prevent.
+    to prevent — it just does not take the wheel away to say so.
 
     `consequential` does NOT get its own branch here. It tightens every belief comparison to
     `CONSEQUENTIAL_CEILING` (0.10) by being threaded into `blocks()`, and the irreversible action
@@ -323,11 +325,30 @@ def authority(*, maturity: str, belief: Any = None,
     axis = _blocking_axis(belief, consequential=consequential)
 
     # 2 — genuine novelty. Not "which of the known states is this", but "is this known at all".
+    #
+    # ORANGE, not RED, and the correction is the plan's own principle applied to its own table.
+    # `reach.BLOCKING_GAP_PREFIXES` draws the ORANGE/RED line at KNOWLEDGE vs CAPABILITY: a page we
+    # cannot name but our tools can work is a knowledge gap, and a bounded teacher instruction
+    # routes around it while the LOCAL actuator performs and verifies the step — which is what
+    # keeps it journaled. Novelty is the purest knowledge gap there is, and branch 1 has already
+    # returned for every page we cannot operate, so anything reaching here is operable by
+    # construction.
+    #
+    # Grading it RED made the drive of 2026-07-22 unrunnable and did so for a reason worth
+    # recording: RED accepts only `takeover_done` or `abort`, because `authority_seam.takeover`
+    # assumes RED means "the executor is what could not reach the page". So a novelty-RED — with
+    # `reach_gaps` EMPTY every single time — had no path back into the loop except the teacher
+    # taking the wheel, and the teaching path §2 specifies was unreachable exactly when reach was
+    # fine. That is `PLAN_progressive_autonomy` falsifier #4 ("RED fires constantly → too strict,
+    # and the teacher is being called for pages the executor could have worked"), observed live.
+    #
+    # Nothing is loosened by this: ORANGE still means the teacher chooses the action, the belief
+    # is still blocked, and the local system still acts on nobody's authority but the teacher's.
     if axis == "novelty":
-        return _v(ControlMode.RED,
+        return _v(ControlMode.ORANGE,
                   "this page is unlike anywhere we have been — a nearest-neighbour label here "
                   "would be a confident guess, which is the failure we bought a second witness "
-                  "to catch",
+                  "to catch; the teacher names the action and the local executor performs it",
                   axis=axis)
 
     # 3 — no track record. Absence of evidence is the strictest mode, never permission.

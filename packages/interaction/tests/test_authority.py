@@ -108,10 +108,33 @@ def test_unreachable_page_is_red_even_when_certified():
     assert "endpoint" in v.reason        # the gap is a work item, not a licence to free-hand
 
 
-def test_novelty_is_red_even_when_certified_and_reachable():
+def test_novelty_on_a_reachable_page_is_orange_not_red():
+    """Corrected 2026-07-22 after the first live drive; this test asserted RED until then.
+
+    RED is the CAPABILITY verdict and belongs to the reach branch alone. Novelty on a page our
+    tools can operate is the purest KNOWLEDGE gap there is — exactly the split
+    `reach.BLOCKING_GAP_PREFIXES` already draws — so the teacher answers it with meaning while the
+    local actuator performs and verifies the step, which is what keeps the step journaled.
+
+    Grading it RED was not merely conservative, it was unrunnable: `authority_seam.takeover`
+    accepts only `takeover_done` or `abort` because it assumes RED means the executor could not
+    reach the page. Live, every novelty-RED carried `reach_gaps == []`, so the teaching path had
+    no way back into the loop and the drive died on turn one. Plan falsifier #4, observed.
+    """
     v = authority(maturity=Maturity.CERTIFIED.value, belief=NOVEL, reach=REACHABLE)
-    assert v.mode == ControlMode.RED.value
+    assert v.mode == ControlMode.ORANGE.value
     assert v.blocking_axis == "novelty"
+    assert v.needs_teacher, "the teacher must still be asked — this loosens who ACTS, not whether"
+
+
+def test_red_is_reserved_for_pages_the_executor_cannot_operate():
+    """The invariant the change above buys: nothing but reach produces RED."""
+    modes = {
+        authority(maturity=m, belief=b, reach=REACHABLE).mode
+        for m in (Maturity.UNSEEN.value, Maturity.CERTIFIED.value)
+        for b in (SURE, NOVEL)
+    }
+    assert ControlMode.RED.value not in modes
 
 
 def test_reach_outranks_novelty():
