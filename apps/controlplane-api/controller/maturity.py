@@ -301,7 +301,7 @@ def derive(rows: Iterable[dict[str, Any]],
                 maturity=(Maturity.REGRESSED.value if program.stale
                           else Maturity.REPLAYABLE.value),
                 reason=("the compiled program covering this step is stale" if program.stale
-                        else "a compiled program covers this step (no journal rows under this key)"),
+                        else "a compiled program covers this step (no rows under this key)"),
             )
     return stats
 

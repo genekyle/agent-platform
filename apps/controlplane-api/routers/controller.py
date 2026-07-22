@@ -16,13 +16,16 @@ from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from controller import inbox as inbox_mod
 from controller import maturity as maturity_mod
+from controller import orientation
 from controller import metrics as controller_metrics
 from controller import programs as programs_mod
 from controller.bundle import build_bundle
 from controller.decide import decide
 from controller.reason import HaikuReasoner
 from interaction import decision_journal
+from interaction import lesson as lesson_mod
 from interaction.contract import Outcome
 from interaction.decision import Bundle, Decision, bundle_to_prompt
 from settings import settings
@@ -129,6 +132,11 @@ class RunBody(BaseModel):
     max_steps: int = 12
     session_id: str = ""
     min_confidence: float = 0.85      # assisted: the unwatched-action bar
+    #: Progressive autonomy. ON by default — authority is graded per transition every turn, and
+    #: ORANGE/RED park for the teacher via `/api/controller/teacher/pending` instead of ending the
+    #: drive. Set false only to reproduce the pre-authority behaviour for a comparison.
+    progressive: bool = True
+    park_seconds: float = 300.0       # how long a parked drive waits before behaving as it used to
 
 
 @router.post("/api/controller/run")
@@ -163,9 +171,23 @@ async def run_live(body: RunBody) -> dict[str, Any]:
                             driver="humanized")
     model = HaikuReasoner() if body.mode == "assisted" else None
 
+    # Progressive autonomy, wired at THE production call site. `run_controller` defaults both to
+    # None so the offline suite can exercise pure control-flow; a live drive always gates.
+    seat = None
+    authority_fn = None
+    parks: list[dict[str, Any]] = []
+    if body.progressive:
+        from controller.authority_seam import InboxSeat, default_authority
+        authority_fn = default_authority()
+        seat = InboxSeat(session_id=body.session_id, timeout=body.park_seconds,
+                         on_park=lambda r: parks.append(
+                             {"id": r.id, "kind": r.kind, "state": r.state, "mode": r.mode,
+                              "why": r.authority_reason, "gaps": r.reach_gaps}))
+
     trail: list[dict[str, Any]] = []
     reviews: list[dict[str, Any]] = []
     held: list[dict[str, Any]] = []
+    modes: list[str] = []
 
     def _on_step(bundle: Bundle, decision: Decision, result: Any) -> None:
         trail.append({
@@ -193,7 +215,9 @@ async def run_live(body: RunBody) -> dict[str, Any]:
         reviewer=auto_reviewer(min_confidence=body.min_confidence, on_review=_on_review),
         on_escalate=handoff_mod.escalation_callback(
             task_goal=body.goal_text or body.task, reason="unexpected_state"),
-        on_consequential=_on_consequential, on_step=_on_step)
+        on_consequential=_on_consequential, on_step=_on_step,
+        authority=authority_fn, seat=seat, orient=orientation.predict,
+        on_authority=lambda b, d, v: modes.append(v.mode))
 
     # The number the whole exercise is for: how much ran without a human.
     acted = [t for t in trail if not t["escalate"]]
@@ -209,9 +233,18 @@ async def run_live(body: RunBody) -> dict[str, Any]:
     # 2026-07-19: 8 verified Continue clicks on one blocked page). Count the steps that actually
     # moved us.
     progressed = sum(1 for a, b in zip(trail, trail[1:]) if a["url"] != b["url"])
+    # The mode mix IS the scoreboard for this design: GREEN share is the muscle, ORANGE+RED is
+    # what the teacher still owns, and the number that has to bend over drives is the second one.
+    mode_mix: dict[str, int] = {}
+    for m in modes:
+        mode_mix[m] = mode_mix.get(m, 0) + 1
     return {
         "ok": True, "status": result.status, "reason": result.reason, "steps": result.steps,
         "mode": body.mode,
+        "progressive": body.progressive,
+        "mode_mix": mode_mix,
+        "teacher_turns": sum(mode_mix.get(m, 0) for m in ("orange", "red")),
+        "parked": parks,
         "autonomy": {
             "steps_total": len(trail),
             "steps_acted": len(acted),
@@ -274,6 +307,94 @@ def coverage(refresh: bool = False) -> dict[str, Any]:
     if refresh:
         reg.refresh(force=True)
     return maturity_mod.coverage()
+
+
+# --- the teacher's seat ------------------------------------------------------------
+@router.get("/api/controller/teacher/pending")
+def teacher_pending(limit: int = 20) -> dict[str, Any]:
+    """Questions a running drive is PARKED on, oldest first.
+
+    This is the seam PRINCIPLES §11 has listed as owed: a reviewer transport the local Claude
+    agent can service. Before it, the only `Reviewer`s were a blocking terminal prompt and a
+    confidence floor that never asks anyone — so an escalation ended the drive and the session
+    fell back to hand-rolled scripts around the API. That was a missing seam, not indiscipline.
+
+    Each row is the FULL escalation package (the frozen prompts, the local prediction, the reach
+    gaps, and for a takeover its stop conditions), so it can be answered without reading the
+    drive's memory.
+    """
+    return {"pending": inbox_mod.pending(limit=limit)}
+
+
+class TeacherDecisionIn(BaseModel):
+    intent: str
+    params: dict = {}
+    confidence: float = 1.0
+    expected_next: list[str] = []
+    evidence: list[str] = []
+
+
+class TeacherLessonIn(BaseModel):
+    """What was learned, and how far it generalises. Required for instruct/takeover_done so an
+    escalation is paid for ONCE (`interaction/lesson.py`)."""
+    kind: str
+    scope: str = "universal"
+    subject: str
+    payload: dict = {}
+    evidence: list[str] = []
+
+
+class TeacherRespondBody(BaseModel):
+    action: str                                   # approve|correct|instruct|escalate|takeover_done|abort
+    decision: Optional[TeacherDecisionIn] = None
+    lesson: Optional[TeacherLessonIn] = None
+    rationale: str = ""                           # the WHY — §10, held to is_real_rationale
+    verified: bool = False                        # did the taught step actually work?
+
+
+@router.post("/api/controller/teacher/{request_id}/respond")
+def teacher_respond(request_id: str, body: TeacherRespondBody) -> dict[str, Any]:
+    """Answer a parked question; the drive resumes on its next poll.
+
+    A lesson is accepted only when `verified` is true — a lesson is a PREDICTION until the step it
+    describes works, and the page is the judge of that, not the teacher's confidence. An
+    unverified lesson is dropped with its reason reported rather than silently stored.
+    """
+    lesson_obj = None
+    lesson_note = ""
+    if body.lesson is not None:
+        candidate = lesson_mod.Lesson(
+            kind=body.lesson.kind, scope=body.lesson.scope, subject=body.lesson.subject,
+            payload=dict(body.lesson.payload), rationale=body.rationale,
+            evidence=tuple(body.lesson.evidence), source=request_id)
+        try:
+            lesson_obj = lesson_mod.accept(candidate, verified=body.verified)
+            lesson_mod.write(lesson_obj)
+        except lesson_mod.LessonRejected as exc:
+            lesson_obj, lesson_note = None, str(exc)
+
+    decision = None
+    if body.decision is not None:
+        decision = Decision(intent=body.decision.intent, params=dict(body.decision.params),
+                            confidence=body.decision.confidence, rung="teacher",
+                            rationale=body.rationale,
+                            expected_next=tuple(body.decision.expected_next),
+                            evidence=tuple(body.decision.evidence))
+    try:
+        payload = inbox_mod.respond(request_id, action=body.action, decision=decision,
+                                    lesson=lesson_obj, rationale=body.rationale)
+    except inbox_mod.InboxError as exc:
+        return {"ok": False, "detail": str(exc)}
+    return {"ok": True, "response": payload,
+            "lesson_stored": lesson_obj is not None, "lesson_note": lesson_note}
+
+
+@router.get("/api/controller/lessons")
+def lessons() -> dict[str, Any]:
+    """The scoped lesson store — and the reuse scoreboard. If lessons accumulate while teacher
+    calls per application stay flat, suspect the `scope` or the cache key, not the models."""
+    rows = lesson_mod.read_all()
+    return {**lesson_mod.summarize(rows), "lessons": [l.as_dict() for l in rows[-100:]]}
 
 
 class ObserveBody(BaseModel):

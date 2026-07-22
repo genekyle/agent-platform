@@ -52,6 +52,40 @@ _NO_TARGET_INTENTS = frozenset({
 #: capability gap rather than a step to attempt blind.
 OPERABLE_WIDGETS = frozenset(w.value for w in WidgetType if w is not WidgetType.UNKNOWN)
 
+#: Gap prefixes that mean the executor genuinely CANNOT ACT — the ones that make a turn RED.
+#:
+#: The distinction this set draws is the ORANGE/RED line itself, and getting it wrong in the
+#: permissive direction sends workable pages to a full takeover. Found by an end-to-end smoke run
+#: (2026-07-22): a Workday page with a visible combobox graded RED purely because the field was
+#: missing from `apply_fields`, which would route every unmapped field on every ATS to
+#: "teacher drives" — the opposite of the point.
+#:
+#:   page:    nothing addressable at all (also the dead-tab signature). No action is possible.
+#:   widget:  a shape no tier-2 protocol drives. Needs a PROBE and then an endpoint (§8).
+#:   intent:  a verb we have no reach rule for. Fail closed on the unknown.
+#:
+#: NOT blocking, and deliberately:
+#:
+#:   field:   the recipe table has no entry for this field. The PAGE is fine — we simply lack one
+#:            addressing entry, and a bounded teacher instruction can route around it (click the
+#:            control by its accessible name; tier-1 click needs no table). The gap still travels
+#:            in the ticket, so the real fix — an `apply_fields` entry, or a `field_alias` Lesson —
+#:            is still specified. Worst case the instruction fails once as `not_found`, the
+#:            supervisor names it, and the next turn asks again. That is far cheaper than
+#:            permanently promoting every unmapped field to a takeover.
+#:   ats:     same argument, one level up.
+BLOCKING_GAP_PREFIXES = ("page:", "widget:", "intent:")
+
+
+def blocks(gaps: tuple[str, ...]) -> tuple[str, ...]:
+    """The subset of `gaps` that makes a turn RED rather than ORANGE."""
+    return tuple(g for g in gaps if g.startswith(BLOCKING_GAP_PREFIXES))
+
+
+def _verdict(gaps: list[str]) -> ActuationReach:
+    """One place decides can_operate, so the ORANGE/RED line cannot drift between call sites."""
+    return ActuationReach(can_operate=not blocks(tuple(gaps)), gaps=tuple(gaps))
+
 
 def _identity_names(identities: tuple[str, ...]) -> set[str]:
     """The normalized accessible NAMES out of `role|name` identities, lowercased for matching."""
@@ -112,8 +146,10 @@ def probe(bundle: Any, decision: Any = None, *,
     if intent in (Intent.CLICK.value, Intent.SUBMIT.value):
         control = str(params.get("control") or "")
         if control and not _control_present(control, identities):
-            gaps.append(f"control:{control}")
-        return ActuationReach(can_operate=not gaps, gaps=tuple(gaps))
+            # A control we cannot see is a `page:`-class problem for THIS action: there is nothing
+            # to click, and no instruction naming the same control would fare better.
+            gaps.append(f"page:control-not-found:{control}")
+        return _verdict(gaps)
 
     # --- a field intent needs the recipe table to know WHERE and WHAT SHAPE -----------
     if intent in _FIELD_INTENTS:
@@ -132,11 +168,11 @@ def probe(bundle: Any, decision: Any = None, *,
                     # Not a failure — a DISCOVERY. `/probe` is the sanctioned next move and its
                     # output is a new WidgetType member plus the protocol that drives it.
                     gaps.append(f"widget:{widget}@{field}")
-        return ActuationReach(can_operate=not gaps, gaps=tuple(gaps))
+        return _verdict(gaps)
 
     # An intent we have no reach rule for. Say so rather than assuming yes: an unknown verb is
     # exactly where a silent "sure, go ahead" would be most expensive.
-    return ActuationReach(can_operate=False, gaps=(f"intent:{intent or 'unnamed'}",))
+    return _verdict([f"intent:{intent or 'unnamed'}"])
 
 
 def survey(bundle: Any, *, resolve: Optional[Callable[[str, str], dict]] = None) -> tuple[str, ...]:

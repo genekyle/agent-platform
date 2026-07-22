@@ -24,6 +24,75 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-22 — The teacher had no seat, so it wrote scripts; and four things the real corpus taught us
+
+**What we believed.** That "the teacher keeps free-handing scripts around the Interaction API" was
+a discipline problem, fixable by restating §8 more firmly. PRINCIPLES §11 has restated it twice.
+
+**What's actually true.** It was a **missing seam**. `Reviewer` had exactly two implementations —
+`cli_reviewer` (blocks on `input()`, i.e. a human at a TTY, on *every* non-recipe step) and
+`auto_reviewer` (a confidence floor that never asks anyone) — plus `teach_session`, which asks on
+*every* turn including ones a compiled program would run for free. So the only settings were *ask
+always* or *never ask*. And an escalation **returned** `STATUS_ESCALATED`: the drive was over.
+There was nowhere for the local Claude agent to answer a question mid-drive, so the only way to
+finish anything was outside the system. §11 had already named the fix as owed ("a reviewer
+transport the local Claude agent can service"); nobody had built it, and the gripe kept being
+filed as a behaviour problem instead.
+
+The same gap had a second half nobody had connected to it: `decide()` escalated as
+`intent="observe", confidence=0.0` with no hypothesis. On the hardest turns — exactly the ones the
+teacher is paid for — the local layers made **no prediction**, so `shadow_agreement` had nothing to
+score. The teacher looked like it was doing everything because, on the record, it was: **the
+student never took the exam.**
+
+**Four things that only showed up when the registry was run over the REAL 45-row journal** (each
+would have been invisible against fixtures):
+
+1. **A drifting free-text label was fragmenting a track record.** One twelve-success
+   `indeed_apply_questions / click / Continue` history was split in two because some rows carry
+   `task="indeed"` and others `task="indeed_quick_apply"`. `TransitionKey` now excludes `task`.
+2. **Keying a transition on where it LANDS shatters it.** Indeed skips prefilled steps — the
+   recipe's `expect` is a *list* by design — so one action legitimately lands in several places.
+   Landings are recorded as reporting, never as identity.
+3. **Target-parameterised states would have grown one "transition" per job title.**
+   `programs.NON_COMPILABLE_STATES` already refused to compile them for exactly this reason; the
+   registry now reuses that same list to cap them below autonomy rather than re-listing it.
+4. **`BeliefState.as_dict()` was lossy in the one way that mattered.** It renders all five axes,
+   filling unassessed ones with `1.0` — right for a human reading a row, wrong for a machine
+   reading one back, because `blocks()` distinguishes "no idea" (1.0, blocks) from "nobody asked"
+   (absent, does not). Nothing had ever read a belief back, so the loss was invisible until
+   `authority()` did; a replayed row escalated where the live drive acted. Fixed with an
+   `assessed` key + `BeliefState.from_dict`, so there is now **one** implementation of `blocks()`
+   rather than a copy in every consumer.
+
+**A fifth, from the end-to-end smoke run — the ORANGE/RED line was drawn in the wrong place.**
+With every unit test green, running the REAL inbox + REAL authority seam + REAL loop together
+graded a Workday page with a visible combobox as **RED** — teacher drives — purely because the
+field was missing from `apply_fields`. That would promote *every unmapped field on every ATS* to a
+full takeover, which is the exact opposite of the point. The fix is a stated distinction rather
+than a tweak: **a missing addressing entry is a knowledge gap (ORANGE)** — the page is fine, and a
+bounded teacher instruction can route around it, since a tier-1 click needs no table — while **an
+undriveable widget or an unaddressable page is a capability gap (RED)**, because no amount of
+teacher meaning makes the local executor able to work it. `reach.BLOCKING_GAP_PREFIXES` is now the
+one place that line is drawn. Worth noting how it was caught: the unit tests all agreed with each
+other because they all encoded the same wrong assumption; only composing the real parts disagreed.
+
+**A sixth, about our own tests.** The first "run it against the real corpus" test passed
+*vacuously*: `conftest.py` redirects `INTERACTION_ARTIFACTS_DIR` at a temp dir for the whole
+session (correctly — the suite once wrote 237 fixture rows into the live corpus), so `read_rows()`
+returned `[]`. A test asserting over "the real journal" has to resolve the path explicitly and
+assert the corpus is non-empty, or it is a test of nothing.
+
+**Where it's encoded now.** `docs/PLAN_progressive_autonomy.md`; **PRINCIPLES §12**;
+`interaction/authority.py` (the four modes, pure + tested truth table),
+`interaction/lesson.py` (scoped, verify-before-accept), `controller/maturity.py` (a *view* over the
+journal, never a second corpus), `controller/reach.py` (can we operate this page at all — the
+operator's "the observer is great until we can't do anything about it", made computable),
+`controller/inbox.py` + `/api/controller/teacher/*` (**the seat**), `controller/orientation.py`
+(the deep end), and the four modes in `controller/loop.py`.
+
+---
+
 ## 2026-07-16 — The authoritative docs were three eras stale; reconciled + the endgame written down
 
 **What we believed.** That the doc set described the system. It described three different past

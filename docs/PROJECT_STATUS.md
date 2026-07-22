@@ -25,6 +25,26 @@ replay, which also closes Interaction API Phase 1's DoD). Session briefs live in
 The 2026-07-16 full rewrite below otherwise stands; the previous version (2026-06-15, SELECT-cascade
 era) is in git history._
 
+## Progressive autonomy — BUILT 2026-07-22 (branch `progressive-autonomy`)
+
+The teacher/student split had a structural hole: **there was no seat for the teacher inside a
+running drive.** `Reviewer` had two implementations — a blocking TTY prompt on *every* non-recipe
+step, and a confidence floor that never asks anyone — and an escalation *returned*, ending the
+drive. So sessions finished work outside the system. That was the standing "ad-hoc scripts" gripe,
+and it was a missing seam rather than indiscipline (PRINCIPLES §11 had listed the fix as owed).
+
+Landed: `interaction/authority.py` (four control modes from maturity × belief × reach),
+`controller/maturity.py` (the per-transition ladder, a **view** over the journal),
+`controller/reach.py` (can the executor operate this page — the operator's "the observer is great
+until we can't do anything about it"), `controller/inbox.py` + `/api/controller/teacher/*` (**the
+seat**), `interaction/lesson.py` (scoped, verify-before-accept), `controller/orientation.py` (the
+Indeed→ATS deep end), prediction-before-escalation in `decide()`, and park-and-resume in the loop.
+**+120 tests; interaction 206 → 237, controlplane-api 465 → 693, mcp 53, controller-evals 3 → 7.**
+
+Details, the honest day-one numbers, and the falsifiers: `docs/PLAN_progressive_autonomy.md`.
+**Owed: the operator-present live drives** (one Indeed, one Workday-from-applystart) and a cockpit
+surface for the coverage map and the pending-questions pane.
+
 ## ⚠️ In flight — a large operator-led change is landing (declared 2026-07-22)
 
 The operator is building **new teacher endpoints + permission-based acting**: letting the inner
@@ -150,6 +170,7 @@ that graduate learned scenarios off the expensive models entirely. Hard constrai
 | **decide** | **✅ built (offline) — live drive owed** | `controller/` | the teachable reasoner; M1–M5 landed 2026-07-17 (`PLAN_controller_v1.md`). Cascade + loop + teach + shadow/replay all tested; the operator-present live drives remain |
 | act | ✅ built, **fired live extensively** | `mcp/app/executor/` + tier-2 protocols | via teacher drives; the autonomous loop remains record-only/`run_live`-limited |
 | verify | ✅ built (element-level) | `select_stage/verifier.py` | protocol-level verification now lives in tier-2 outcomes (`ok` = verified at commit) |
+| **authority** | **✅ built 2026-07-22 — live drives owed** | `interaction/authority.py`, `controller/maturity.py`, `controller/reach.py`, `controller/inbox.py` | who owns each turn (GREEN/YELLOW/ORANGE/RED), per transition (`PLAN_progressive_autonomy.md`, PRINCIPLES §12). Gating on by default at `/api/controller/run`; day-one coverage is **18 transitions, 0 certified** |
 | **supervise** | **🔨 in progress — S11–S12 of 6 done** | `interaction/delta.py`, `interaction/supervision.py`, `controller/loop.py` | the post-act diagnosis (`PLAN_supervisor.md`). Delta + taxonomy + rung 0 + the journal columns landed 2026-07-20, running in **shadow** (no authority). Owed: rung 1 + gated screenshot (S13), the commentary pane (S14), postconditions (S15), the live shadow drives (S16) |
 
 Guardrails all live: $5/week cap (`anthropic_usage.enforce_budget`), human escalation on

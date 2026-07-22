@@ -197,3 +197,17 @@ def test_an_acting_decision_carries_no_escalation_axis():
 
     d = decide(bundle(unanswered=({"field": "phone", "kind": "input"},)), programs=Store())
     assert not d.escalate and d.escalation_axis == ""
+
+
+def test_the_proposed_control_is_the_label_the_page_actually_renders():
+    """"Continue" is a substring of "Save and Continue". Matching on the lexicon and then
+    proposing the LEXICON hands the teacher a control name the page does not have — a proposal
+    nobody can approve as written."""
+    _, params, *_ = local_prediction(bundle(identities=("button|Save and Continue",)))
+    assert params == {"control": "Save and Continue"}
+
+
+def test_the_most_specific_advance_control_wins():
+    _, params, *_ = local_prediction(
+        bundle(identities=("button|Continue", "button|Save and Continue")))
+    assert params == {"control": "Save and Continue"}

@@ -64,10 +64,12 @@ def test_a_click_on_a_present_control_is_in_reach():
 
 
 def test_a_click_on_a_control_that_is_not_there_is_out_of_reach():
+    """Blocking: there is nothing to click, and no instruction naming the same control would
+    fare any better."""
     r = reach_mod.probe(bundle(), decision(Intent.CLICK.value, control="Submit application"),
                         resolve=table())
     assert not r.can_operate
-    assert r.gaps == ("control:Submit application",)
+    assert r.gaps == ("page:control-not-found:Submit application",)
 
 
 @pytest.mark.parametrize("control", ["continue", "Continue to next step", "CONTINUE"])
@@ -93,17 +95,42 @@ def test_a_resolvable_field_with_a_known_widget_is_in_reach():
     assert r.can_operate and r.gaps == ()
 
 
-def test_an_unresolvable_field_is_out_of_reach_and_names_itself():
+def test_an_unresolvable_field_is_reported_but_does_NOT_force_a_takeover():
+    """The ORANGE/RED line, and the one an end-to-end smoke run caught me drawing wrongly.
+
+    A missing `apply_fields` entry means we lack ONE addressing entry — the page itself is fine,
+    and a bounded teacher instruction can route around it (click the control by its accessible
+    name; tier-1 click needs no table). Blocking here would promote every unmapped field on every
+    ATS to "teacher drives", which is the opposite of the point. The gap still travels, so the
+    real fix is still specified."""
     r = reach_mod.probe(bundle(), decision(Intent.SET_TEXT.value, field="veteran_status"),
                         resolve=table())
-    assert not r.can_operate
+    assert r.can_operate, "a knowledge gap is ORANGE, not RED"
     assert r.gaps == ("field:greenhouse/veteran_status",)
+    assert reach_mod.blocks(r.gaps) == ()
 
 
-def test_an_unknown_ats_blocks_a_field_intent():
+def test_an_unknown_ats_is_reported_but_does_not_force_a_takeover():
     r = reach_mod.probe(bundle(ats=""), decision(Intent.SELECT_OPTION.value, field="phone"),
                         resolve=table())
-    assert not r.can_operate and r.gaps == ("ats:unknown",)
+    assert r.can_operate and r.gaps == ("ats:unknown",)
+
+
+def test_an_unknown_widget_DOES_force_a_takeover():
+    """The other side of the line: a shape no tier-2 protocol drives needs a PROBE and then an
+    endpoint. No amount of teacher meaning makes the local executor able to work it."""
+    r = reach_mod.probe(bundle(), decision(Intent.SET_TEXT.value, field="phone"),
+                        resolve=table(widget=WidgetType.UNKNOWN.value))
+    assert not r.can_operate
+    assert reach_mod.blocks(r.gaps) == ("widget:unknown@phone",)
+
+
+def test_the_blocking_set_is_stated_once_and_only_once():
+    """One place decides can_operate, so the ORANGE/RED line cannot drift between call sites."""
+    assert reach_mod.BLOCKING_GAP_PREFIXES == ("page:", "widget:", "intent:")
+    assert reach_mod.blocks(("field:x/y", "ats:unknown")) == ()
+    assert reach_mod.blocks(("page:no-addressable-controls", "field:x/y")) == (
+        "page:no-addressable-controls",)
 
 
 def test_an_unknown_widget_is_a_capability_gap_not_a_failure():

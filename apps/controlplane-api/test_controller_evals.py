@@ -85,3 +85,74 @@ def test_shadow_and_journal_replay(monkeypatch, tmp_path):
     # the snapshot replays deterministically to the same rung-0 decision
     rep = replay_journal(rows, programs=store)
     assert rep["checked"] == 1 and rep["reproduced"] == 1 and rep["reproduce_rate"] == 1.0
+
+
+# --- progressive autonomy: the mode mix and the ladder are part of the regression ------
+def test_authority_truth_table_is_pinned():
+    """The four modes decide who acts on a live application, so a silent change to the ordering
+    is exactly the kind of regression this suite exists to catch."""
+    from interaction.authority import ActuationReach, ControlMode, Maturity, authority
+    from interaction.belief import BeliefState
+
+    reachable = ActuationReach(can_operate=True)
+    sure = BeliefState(state="s", uncertainty={"state": 0.05, "novelty": 0.1})
+    novel = BeliefState(state="s", uncertainty={"state": 0.05, "novelty": 0.97})
+    blocked = ActuationReach(can_operate=False, gaps=("widget:x",))
+
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=sure,
+                     reach=reachable).mode == ControlMode.GREEN.value
+    assert authority(maturity=Maturity.TESTING.value, belief=sure,
+                     reach=reachable).mode == ControlMode.YELLOW.value
+    assert authority(maturity=Maturity.UNSEEN.value, belief=sure,
+                     reach=reachable).mode == ControlMode.ORANGE.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=novel,
+                     reach=reachable).mode == ControlMode.RED.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=sure,
+                     reach=blocked).mode == ControlMode.RED.value
+
+
+def test_an_empty_registry_can_never_produce_green():
+    """The safety property the "gate immediately" decision rests on, pinned in the regression
+    suite as well as the unit tests — with 45 journal rows most transitions are UNSEEN, and UNSEEN
+    acting unwatched on a real job application is what would make this a liability."""
+    import itertools
+
+    from interaction.authority import ActuationReach, ControlMode, Maturity, authority
+    from interaction.belief import BeliefState
+
+    beliefs = [None, BeliefState(state="s", uncertainty={"state": 0.01, "novelty": 0.01})]
+    reaches = [None, ActuationReach(can_operate=True), ActuationReach.unprobed()]
+    for belief, reach, conseq in itertools.product(beliefs, reaches, (False, True)):
+        assert authority(maturity=Maturity.UNSEEN.value, belief=belief, reach=reach,
+                         consequential=conseq).mode != ControlMode.GREEN.value
+
+
+def test_the_real_corpus_still_certifies_nothing():
+    """The honest day-one baseline. When this starts failing it is GOOD NEWS — a transition has
+    earned certification off real supervised, reviewed drives — but it must be a deliberate,
+    noticed change rather than a threshold quietly drifting."""
+    import json as _json
+
+    from controller import maturity as maturity_mod
+
+    path = (Path(__file__).resolve().parents[1] / "mcp" / "output" / "cache"
+            / "decision_journal.jsonl")
+    if not path.exists():
+        return
+    rows = [_json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    stats = maturity_mod.derive(rows, programs_mod.list_programs())
+    certified = [s.key.as_str() for s in stats.values() if s.maturity == "certified"]
+    assert not certified, f"newly certified transitions — confirm they earned it: {certified}"
+
+
+def test_escalations_carry_a_scoreable_prediction():
+    """`shadow_agreement` can only measure the local layers on the turns the teacher is paid for
+    if those turns carry a proposal. An escalation that reverts to `observe`/0.0 silently stops
+    the measurement, which is how the student stopped taking the exam in the first place."""
+    from controller.decide import decide
+
+    scoreable = decide(_bundle("indeed_apply_questions", ["Work authorization"]),
+                       programs=DictStore({}))
+    assert scoreable.escalate
+    assert scoreable.intent != "observe" and scoreable.params
+    assert scoreable.escalation_axis == "no_program"

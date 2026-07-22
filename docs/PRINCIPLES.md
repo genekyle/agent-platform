@@ -274,3 +274,54 @@ produces demonstrations at best and invisible work at worst.
   defaults to teacher-demonstrates — under this definition the default is controller-leads /
   teacher-reviews); an escalation that **parks and waits** for the teacher instead of only halting;
   and `/capture` at pause/correction moments so teaching feeds L3, not just L4.
+
+## §12 — Local owns the mission; the teacher owns the uncertainty; control returns after every teacher action
+
+**Operator-directed 2026-07-22.** §11 defined what a teacher-driven drive *is*. This defines how
+authority **moves during one**, because §11 was unimplementable without it: an escalation ended the
+drive, so there was no "during".
+
+Authority is decided **per turn, per transition** — never per site, never globally. An ATS is never
+uniformly built: a Workday application routinely contains ten proven sections and one questionnaire
+nobody has ever seen, and grading the whole vendor forces a choice between driving the unknown part
+blind and hand-holding the known nine. Four modes, from three inputs that all already existed and
+had never been combined (`maturity` × `belief` × `reach`):
+
+- **GREEN** — inner reasoner decides, local executes. Certified transition, witnesses content,
+  tools reach the page. Runs unwatched.
+- **YELLOW** — local proposes, teacher approves or corrects, local executes.
+- **ORANGE** — teacher supplies **one bounded semantic action**; the **local executor performs and
+  verifies it**. The teacher contributes *meaning*, not keystrokes.
+- **RED** — teacher drives, bounded, **through the journaled endpoints and `/probe`**. If the API
+  genuinely cannot work the page, the ticket closes as a **capability gap** and the deliverable is
+  an endpoint (§8) — never a bespoke script that worked once.
+
+**Three rules that are the whole principle:**
+
+1. **The teacher never acts before the inner layers make a prediction.** Every hand-up carries a
+   real proposal at an honest confidence and a typed escalation axis, so one escalation answers
+   four separate questions — did we name the state, pick the right field, pick the right verb, or
+   only fail to ground it? Without this the student is never scored on the turns that matter, and
+   the teacher's apparent omnipotence is an artifact of the corpus rather than a fact about the
+   system.
+2. **A teacher handoff has an explicit exit condition.** A ticket without one means "finish the
+   application", which is the teacher replacing the driver rather than borrowing the wheel.
+3. **Re-evaluate local control after every teacher action** — not at the end of the application.
+   This is the line that keeps a takeover a *construction detour*.
+
+**Reach outranks belief**, and the ordering matters: knowing exactly where you are buys nothing if
+the executor cannot touch the page. It is also what separates ORANGE from RED — *teacher
+instruction* from *teacher control*.
+
+**Nothing about the rails moves with mode.** Submit is held for the operator, `human_required`
+states are structurally undriveable, BLOCKED hands straight over, a challenge is never auto-solved
+— not even on a teacher instruction. Mode decides who **chooses**, never what is **allowed**.
+
+- **Enforced by:** `packages/interaction/interaction/authority.py` (the pure truth table, with
+  "an UNSEEN transition can never be GREEN" as an exhaustive test), `controller/maturity.py` (the
+  ladder, derived from the journal — a view, never a second corpus), `controller/reach.py`,
+  `controller/inbox.py` + `/api/controller/teacher/*` (the seat §11 listed as owed), and the four
+  modes in `controller/loop.py`. Plan: `docs/PLAN_progressive_autonomy.md`.
+- **Falsifier:** if the mode mix never shifts across drives, the ladder is not climbing — suspect
+  the certification requirements before the thresholds. If `park_expired` dominates, that is an
+  operator-availability problem, not a capability one, which is why it is a separate status.

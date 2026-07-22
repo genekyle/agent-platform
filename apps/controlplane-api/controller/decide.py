@@ -91,11 +91,20 @@ def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, 
         return (intent, {"field": field}, PREDICTION_CONFIDENCE_FIELD, why,
                 ("state", "unanswered[0].field", "unanswered[0].kind"))
 
-    names = {ident.partition("|")[2].strip().lower() for ident in bundle.ax_identities}
+    # Propose the label AS THE PAGE RENDERS IT, not the lexicon entry that matched it. "Continue"
+    # is a substring of "Save and Continue", so matching on the lexicon and then proposing the
+    # lexicon would hand the teacher a control name the page does not actually have — a proposal
+    # nobody can approve as written, and a needless `not_found` if they did.
+    names = [ident.partition("|")[2].strip() for ident in bundle.ax_identities]
+    names = [n for n in names if n]
     for control in _ADVANCE_CONTROLS:
-        if any(control.lower() in n for n in names):
-            return (Intent.CLICK.value, {"control": control}, PREDICTION_CONFIDENCE_ADVANCE,
-                    f"no required field is unanswered and {control!r} is on the page — the step "
+        matches = [n for n in names if control.lower() in n.lower()]
+        if matches:
+            # Longest match wins: on a page carrying both "Continue" and "Save and Continue"
+            # the specific one is the real advance control and the bare one is a substring of it.
+            actual = max(matches, key=len)
+            return (Intent.CLICK.value, {"control": actual}, PREDICTION_CONFIDENCE_ADVANCE,
+                    f"no required field is unanswered and {actual!r} is on the page — the step "
                     f"looks complete and this is the control that advances it",
                     ("state", "unanswered", "ax_identities"))
 
@@ -104,7 +113,15 @@ def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, 
             ("state", "unanswered"))
 
 
-def _handup(rung: str, axis: str, rationale: str, bundle: Bundle) -> Decision:
+class Orienter(Protocol):
+    """`(bundle) -> Decision | None` — a richer local prediction for a landing page than form
+    shape can give. `controller/orientation.py` is the live one; injected so this module keeps its
+    no-IO, no-registry purity and a test can pass a lambda."""
+    def __call__(self, bundle: Bundle) -> Optional[Decision]: ...
+
+
+def _handup(rung: str, axis: str, rationale: str, bundle: Bundle,
+            orient: Optional[Orienter] = None) -> Decision:
     """Hand up the ladder — carrying the local system's best PREDICTION, not a blank.
 
     `escalate=True` still means nothing is acted. What changes is that the row is now scoreable:
@@ -119,7 +136,18 @@ def _handup(rung: str, axis: str, rationale: str, bundle: Bundle) -> Decision:
         return Decision(intent=Intent.OBSERVE.value, params={}, confidence=0.0, rung=rung,
                         rationale=rationale, expected_next=tuple(bundle.expected_next),
                         escalate=True, escalation_axis=axis,
-                        evidence=("state", "human_required" if axis == "human_required" else "state"))
+                        evidence=("state",))
+    # A landing page is the one case where something better than form shape is available: which
+    # SITE is this, and where is Apply. Tried first because on the deep end there is usually no
+    # form to read shape from yet, so the shape guess would return `observe` and teach nothing.
+    if orient is not None:
+        oriented = orient(bundle)
+        if oriented is not None:
+            return Decision(intent=oriented.intent, params=oriented.params,
+                            confidence=oriented.confidence, rung=rung,
+                            rationale=f"{rationale}; local guess: {oriented.rationale}",
+                            expected_next=tuple(bundle.expected_next), escalate=True,
+                            escalation_axis=axis, evidence=oriented.evidence)
     intent, params, confidence, why, evidence = local_prediction(bundle)
     return Decision(intent=intent, params=params, confidence=confidence, rung=rung,
                     rationale=f"{rationale}; local guess: {why}",
@@ -164,7 +192,8 @@ def _rung0(bundle: Bundle, program: IntentProgram) -> Optional[Decision]:
 
 
 def decide(bundle: Bundle, *, programs: ProgramLookup,
-           model: Optional[DecisionReasoner] = None) -> Decision:
+           model: Optional[DecisionReasoner] = None,
+           orient: Optional[Orienter] = None) -> Decision:
     """One Decision for one Bundle. Cheapest confident rung wins; below confidence, ask."""
     # Short-circuits — these are not decisions, they are stops/hand-ups.
     if bundle.done:
@@ -177,7 +206,7 @@ def decide(bundle: Bundle, *, programs: ProgramLookup,
                        f"branch state ({bundle.branch_note or 'off-spine'})", bundle)
     if not bundle.state:
         return _handup("teacher", "unknown_state",
-                       "unknown state — no recipe to map, teach it", bundle)
+                       "unknown state — no recipe to map, teach it", bundle, orient)
 
     # Rung 0 — a compiled program for this state.
     program = programs.get(bundle.task, bundle.state)
@@ -192,15 +221,15 @@ def decide(bundle: Bundle, *, programs: ProgramLookup,
         proposed = model(bundle)
         if proposed is None:
             return _handup("model", "model_declined",
-                           "reasoner returned no confident decision", bundle)
+                           "reasoner returned no confident decision", bundle, orient)
         if proposed.confidence < DECISION_CONFIDENCE_THRESHOLD:
             # Keep the proposal visible AND acting-shaped, but escalate — ask, don't guess. The
             # model's own guess beats a shape-based one, so it is what the teacher gets to score.
             return Decision(intent=proposed.intent, params=proposed.params,
                             confidence=proposed.confidence, rung="model",
                             rationale=f"{proposed.rationale} (confidence "
-                                      f"{proposed.confidence:.2f} < {DECISION_CONFIDENCE_THRESHOLD} "
-                                      f"— ask, don't guess)",
+                                      f"{proposed.confidence:.2f} < "
+                                      f"{DECISION_CONFIDENCE_THRESHOLD} — ask, don't guess)",
                             expected_next=proposed.expected_next, escalate=True,
                             escalation_axis="low_confidence", evidence=proposed.evidence)
         return proposed
@@ -210,4 +239,4 @@ def decide(bundle: Bundle, *, programs: ProgramLookup,
     return _handup("teacher", "stale_program" if stale else "no_program",
                    "no compiled program for this state"
                    + (" (program stale — recompile)" if stale else " and no model wired"),
-                   bundle)
+                   bundle, orient)
