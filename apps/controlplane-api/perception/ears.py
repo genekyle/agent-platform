@@ -237,6 +237,7 @@ def run() -> dict[str, Any]:
         "census": census,
         "e1_recipe_baseline": recipe_baseline(rows),
         "e2_feature_ablation": feature_ablation(rows),
+        "e5_feature_variants": feature_variants(rows),
         "e4_two_stage": two_stage(rows),
     }
 
@@ -259,6 +260,13 @@ def _print(report: dict[str, Any]) -> None:
         delta = val["state"] - base["state"]
         print(f"   {key:26} state {val['state']:.1%} ({delta:+.1%}) · "
               f"platform {val['platform']:.1%} · phase {val['phase']:.1%}")
+
+    print("\nE5 — aiming the ears at what separates the phases")
+    for name, val in (report.get("e5_feature_variants") or {}).items():
+        if not val.get("state"):
+            continue
+        print(f"   {name:38} state {val['state']:.1%} · platform {val['platform']:.1%} "
+              f"· phase {val['phase']:.1%}  (median {val['median_tokens']} tokens)")
 
     t = report["e4_two_stage"]
     print(f"\nE4 — two-stage: platform {t['stage1_platform']:.1%} then state-within-platform "
