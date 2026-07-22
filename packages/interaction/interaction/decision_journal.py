@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from interaction.contract import redact
 
 if TYPE_CHECKING:      # type-only: the journal must not depend on the supervisor at runtime
+    from interaction.authority import AuthorityVerdict
     from interaction.delta import StateDelta
     from interaction.supervision import SupervisorVerdict
 from interaction.decision import (
@@ -108,6 +109,7 @@ def record_for(
     cost_usd: float = 0.0,
     verdict: Optional["SupervisorVerdict"] = None,
     delta: Optional["StateDelta"] = None,
+    authority: Optional["AuthorityVerdict"] = None,
 ) -> DecisionRecord:
     """Build a DecisionRecord from a Decision + the Bundle it decided on. PURE — no IO, no
     time; `log_decision` stamps `ts`. Keeps construction replayable from journaled inputs."""
@@ -166,6 +168,16 @@ def record_for(
         belief_agreement=(bundle.belief or {}).get("agreement") if bundle.belief else None,
         belief_novelty=_belief_axis(bundle.belief, "novelty"),
         belief_state_uncertainty=_belief_axis(bundle.belief, "state"),
+        # Authority, flattened at the SAME single choke point every other cross-cutting field is
+        # copied at — so no seam can journal a decision without recording who was allowed to make
+        # it. `control_mode` in particular feeds promotion back into `maturity.derive`, which is
+        # what makes the ladder self-reinforcing instead of hand-maintained.
+        control_mode=authority.mode if authority else None,
+        authority_reason=authority.reason if authority else "",
+        transition_maturity=authority.maturity if authority else None,
+        authority_axis=authority.blocking_axis if authority else "",
+        reach_gaps=tuple(authority.gaps) if authority else (),
+        escalation_axis=decision.escalation_axis,
         session_id=session_id,
         duration_ms=duration_ms,
         cost_usd=cost_usd,

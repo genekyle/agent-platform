@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from controller import maturity as maturity_mod
 from controller import metrics as controller_metrics
 from controller import programs as programs_mod
 from controller.bundle import build_bundle
@@ -254,6 +255,25 @@ def programs() -> dict[str, Any]:
                           "expected_exit": list(p.expected_exit), "stale": p.stale,
                           "compiled_from": list(p.compiled_from), "verified_at": p.verified_at}
                          for p in progs], "count": len(progs)}
+
+
+@router.get("/api/controller/coverage")
+def coverage(refresh: bool = False) -> dict[str, Any]:
+    """The transition coverage map — every `(state, action)` we have evidence about, graded.
+
+    This is the artifact that lets the system be USED while construction continues: instead of
+    "our Workday recipe is incomplete", it says which sections are certified, which are still
+    being watched, and which have never been attempted. `docs/CONTROLLER_PROMOTION.md` described
+    this gate from M5 onward and nothing enforced it — now `authority()` reads it every turn, and
+    this is the same view the operator sees.
+
+    Derived from the journal on every call (behind an mtime cache), never stored — a registry that
+    can disagree with the corpus eventually does.
+    """
+    reg = maturity_mod.registry()
+    if refresh:
+        reg.refresh(force=True)
+    return maturity_mod.coverage()
 
 
 class ObserveBody(BaseModel):

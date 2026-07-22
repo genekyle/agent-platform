@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Protocol
 
+from interaction.contract import Intent
 from interaction.decision import (
     DECISION_CONFIDENCE_THRESHOLD,
     Bundle,
@@ -37,12 +38,93 @@ class DecisionReasoner(Protocol):
     def __call__(self, bundle: Bundle) -> Optional[Decision]: ...
 
 
-def _escalate(rung: str, rationale: str, bundle: Bundle) -> Decision:
-    """A hand-up-the-ladder decision — no action, carries the current state's expectation so a
-    downstream verify still has something to check against."""
-    return Decision(intent="observe", params={}, confidence=0.0, rung=rung,
-                    rationale=rationale, expected_next=tuple(bundle.expected_next),
-                    escalate=True)
+#: What `/scan_required` actually puts in a row's `kind` — a react-select, a lowercased tagName,
+#: or a synthesised group. Taken from the scanner's own JS (`protocols.SCAN_REQUIRED_JS`) rather
+#: than from imagination, so a guess made here is a guess about a shape that really occurs.
+_KIND_TO_INTENT: dict[str, str] = {
+    "react_select": Intent.SELECT_OPTION.value,
+    "select": Intent.SELECT_OPTION.value,
+    "checkbox_group": Intent.CHECK_GROUP.value,
+    "radio_group": Intent.CHECK_GROUP.value,
+    "textarea": Intent.SET_TEXT.value,
+    "input": Intent.SET_TEXT.value,
+}
+
+#: Control names that ADVANCE a form, cheapest-first. Used only to form a guess on a state with
+#: nothing left unanswered. `Submit` is deliberately absent: the guess must never propose the one
+#: irreversible action, even marked escalate — a proposal is a thing a teacher can approve.
+_ADVANCE_CONTROLS = ("Continue", "Save and Continue", "Next", "Review your application", "Save")
+
+#: How much a guess made from form shape alone is worth. Below `DECISION_CONFIDENCE_THRESHOLD` by
+#: construction — this is a PREDICTION TO BE SCORED, never a bid to act. Calibration is the whole
+#: point: a hand-up that claimed 0.9 would be a liar, and one that claims 0.0 (the old behaviour)
+#: is unscoreable. These say "here is my guess, and here is how little I'd stake on it".
+PREDICTION_CONFIDENCE_FIELD = 0.35
+PREDICTION_CONFIDENCE_ADVANCE = 0.30
+PREDICTION_CONFIDENCE_NONE = 0.0
+
+
+def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, ...]]:
+    """The best guess the LOCAL layers can make with no program and no model — `(intent, params,
+    confidence, why, evidence)`.
+
+    This exists so that no escalation is information-free. Before it, `decide()` handed up
+    `observe`/0.0 with no hypothesis, which meant the inner system was never scored on the turns
+    the teacher was paid for: `shadow_agreement` had nothing to compare. Now every hand-up carries
+    a real proposal, so an escalation answers four separate questions — did we name the state? did
+    we pick the right field? the right verb? or did we only fail to ground it? — and the answers
+    are exactly the DAgger signal.
+
+    It guesses from FORM SHAPE only, never from meaning. It will not invent an answer value: the
+    `answer` axis belongs to `resolve_answer` and, past that, to the human.
+    """
+    unanswered = [u for u in bundle.unanswered if u.get("field")]
+    if unanswered:
+        first = unanswered[0]
+        field = first.get("field")
+        kind = str(first.get("kind") or "").lower()
+        intent = _KIND_TO_INTENT.get(kind, Intent.DESCRIBE.value)
+        why = (f"{field!r} is the first unanswered required field and scans as {kind or 'unknown'}"
+               f" — so {intent} is the shape of the next step"
+               + ("" if intent != Intent.DESCRIBE.value
+                  else "; the shape is unfamiliar, so describe it before touching it"))
+        return (intent, {"field": field}, PREDICTION_CONFIDENCE_FIELD, why,
+                ("state", "unanswered[0].field", "unanswered[0].kind"))
+
+    names = {ident.partition("|")[2].strip().lower() for ident in bundle.ax_identities}
+    for control in _ADVANCE_CONTROLS:
+        if any(control.lower() in n for n in names):
+            return (Intent.CLICK.value, {"control": control}, PREDICTION_CONFIDENCE_ADVANCE,
+                    f"no required field is unanswered and {control!r} is on the page — the step "
+                    f"looks complete and this is the control that advances it",
+                    ("state", "unanswered", "ax_identities"))
+
+    return (Intent.OBSERVE.value, {}, PREDICTION_CONFIDENCE_NONE,
+            "nothing unanswered and no advance control found — no local guess is available",
+            ("state", "unanswered"))
+
+
+def _handup(rung: str, axis: str, rationale: str, bundle: Bundle) -> Decision:
+    """Hand up the ladder — carrying the local system's best PREDICTION, not a blank.
+
+    `escalate=True` still means nothing is acted. What changes is that the row is now scoreable:
+    the teacher's answer lands beside a real proposal, so a correction teaches a boundary instead
+    of filling a vacuum (§10 — the contrast on a correction is the densest signal we have).
+
+    `human_required` and `branch` are the exception and deliberately so: on a sign-in wall or an
+    off-spine page a "best guess at the next action" is not a prediction, it is a suggestion to do
+    something the agent must never do. Those hand up empty, and that emptiness is correct.
+    """
+    if axis in ("human_required", "branch", "task_complete"):
+        return Decision(intent=Intent.OBSERVE.value, params={}, confidence=0.0, rung=rung,
+                        rationale=rationale, expected_next=tuple(bundle.expected_next),
+                        escalate=True, escalation_axis=axis,
+                        evidence=("state", "human_required" if axis == "human_required" else "state"))
+    intent, params, confidence, why, evidence = local_prediction(bundle)
+    return Decision(intent=intent, params=params, confidence=confidence, rung=rung,
+                    rationale=f"{rationale}; local guess: {why}",
+                    expected_next=tuple(bundle.expected_next), escalate=True,
+                    escalation_axis=axis, evidence=evidence)
 
 
 def _field_of(step: dict[str, Any]) -> Optional[str]:
@@ -86,13 +168,16 @@ def decide(bundle: Bundle, *, programs: ProgramLookup,
     """One Decision for one Bundle. Cheapest confident rung wins; below confidence, ask."""
     # Short-circuits — these are not decisions, they are stops/hand-ups.
     if bundle.done:
-        return _escalate("recipe", "task is complete — nothing to decide", bundle)
+        return _handup("recipe", "task_complete", "task is complete — nothing to decide", bundle)
     if bundle.human_required:
-        return _escalate("human", bundle.branch_note or "human-required state", bundle)
+        return _handup("human", "human_required",
+                       bundle.branch_note or "human-required state", bundle)
     if bundle.is_branch:
-        return _escalate("human", f"branch state ({bundle.branch_note or 'off-spine'})", bundle)
+        return _handup("human", "branch",
+                       f"branch state ({bundle.branch_note or 'off-spine'})", bundle)
     if not bundle.state:
-        return _escalate("teacher", "unknown state — no recipe to map, teach it", bundle)
+        return _handup("teacher", "unknown_state",
+                       "unknown state — no recipe to map, teach it", bundle)
 
     # Rung 0 — a compiled program for this state.
     program = programs.get(bundle.task, bundle.state)
@@ -106,19 +191,23 @@ def decide(bundle: Bundle, *, programs: ProgramLookup,
     if model is not None:
         proposed = model(bundle)
         if proposed is None:
-            return _escalate("model", "reasoner returned no confident decision", bundle)
+            return _handup("model", "model_declined",
+                           "reasoner returned no confident decision", bundle)
         if proposed.confidence < DECISION_CONFIDENCE_THRESHOLD:
-            # Keep the proposal visible in the rationale, but escalate — ask, don't guess.
+            # Keep the proposal visible AND acting-shaped, but escalate — ask, don't guess. The
+            # model's own guess beats a shape-based one, so it is what the teacher gets to score.
             return Decision(intent=proposed.intent, params=proposed.params,
                             confidence=proposed.confidence, rung="model",
                             rationale=f"{proposed.rationale} (confidence "
                                       f"{proposed.confidence:.2f} < {DECISION_CONFIDENCE_THRESHOLD} "
                                       f"— ask, don't guess)",
-                            expected_next=proposed.expected_next, escalate=True)
+                            expected_next=proposed.expected_next, escalate=True,
+                            escalation_axis="low_confidence", evidence=proposed.evidence)
         return proposed
 
     # No program, no model — a novel state the teacher must resolve (which produces a program).
-    reason = "no compiled program for this state" + (
-        " (program stale — recompile)" if (program is not None and program.stale)
-        else " and no model wired")
-    return _escalate("teacher", reason, bundle)
+    stale = program is not None and program.stale
+    return _handup("teacher", "stale_program" if stale else "no_program",
+                   "no compiled program for this state"
+                   + (" (program stale — recompile)" if stale else " and no model wired"),
+                   bundle)

@@ -122,9 +122,49 @@ class BeliefState:
             "prior_agrees": self.prior_agrees,
             "agreement": self.agreement,
             "uncertainty": {a: round(self.unsure_about(a), 4) for a in AXES},
+            #: WHICH axes anybody actually spoke to. `uncertainty` above renders all five for
+            #: legibility, filling the silent ones with 1.0 — which is right for a human reading a
+            #: row and WRONG for a machine reading it back, because `blocks()` draws its central
+            #: distinction between "no idea" (1.0, blocks) and "nobody asked" (absent, does not).
+            #: Without this key the two are indistinguishable after a round-trip, and a replayed
+            #: row blocks on `element`/`answer` that no subsystem ever assessed. Found by
+            #: `test_dict_belief_matches_object_belief` the first time anything read a belief back.
+            "assessed": [a for a in AXES if a in self.uncertainty],
             "witnesses": [w.as_dict() for w in self.witnesses],
             "rationale": self.rationale,
         }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "BeliefState":
+        """Rebuild a belief from its journaled form — the inverse of `as_dict`.
+
+        Exists so that everything reading a belief back (authority, replay, the evals) runs the
+        SAME `blocks()` as the live drive instead of re-deriving the ceilings locally. Two
+        implementations of a policy is two policies.
+
+        `assessed` is honoured when present; a row written before it existed falls back to the
+        keys the dict actually carries, which is the literal reading of that older format.
+        """
+        unc_raw = dict(d.get("uncertainty") or {})
+        assessed = d.get("assessed")
+        keys = list(assessed) if assessed is not None else list(unc_raw)
+        return cls(
+            state=d.get("state"),
+            facets=dict(d.get("facets") or {}),
+            prior=tuple(d.get("prior") or ()),
+            prior_agrees=bool(d.get("prior_agrees", False)),
+            witnesses=tuple(
+                WitnessView(name=w.get("name", ""), label=w.get("label"),
+                            similarity=float(w.get("similarity", 0.0)),
+                            margin=float(w.get("margin", 0.0)),
+                            novelty=float(w.get("novelty", 0.0)),
+                            top_evidence=tuple(w.get("top_evidence") or ()))
+                for w in (d.get("witnesses") or ()) if isinstance(w, dict)
+            ),
+            agreement=d.get("agreement", "no_evidence"),
+            uncertainty={a: float(unc_raw[a]) for a in keys if a in unc_raw},
+            rationale=d.get("rationale", ""),
+        )
 
 
 def belief_to_prompt(belief: BeliefState) -> str:

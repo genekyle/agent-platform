@@ -26,6 +26,7 @@
   "GET /api/career_search/ats",
   "GET /api/channels/{channel}/status",
   "GET /api/command-center/summary",
+  "GET /api/controller/coverage",
   "GET /api/controller/decisions",
   "GET /api/controller/programs",
   "GET /api/controller/summary",

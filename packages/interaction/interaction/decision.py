@@ -62,6 +62,22 @@ DECISION_CONFIDENCE_THRESHOLD = 0.75
 #: construction: every row journaled before today keeps a valid rung, so no version bump.
 RUNGS = ("recipe", "cache", "student", "model", "teacher", "human")
 
+#: Why a Decision handed up, CLOSED like every other taxonomy here. Each names a different
+#: problem with a different remedy, which is the point: "no program for a page I can name" is a
+#: compile job, "I cannot name this page" is a labelling job, and "the model wasn't sure" is a
+#: teaching job. Collapsing them into one `escalate=True` threw that away.
+ESCALATION_AXES = (
+    "none",             # not escalating
+    "unknown_state",    # the page is not in the registry — label it
+    "no_program",       # a known state with no compiled program — teach it, then it compiles
+    "stale_program",    # there was a program and the site moved under it — recompile
+    "branch",           # off-spine by the recipe's own account — the operator decides
+    "human_required",   # sign-in / credentials / a stop-state. Never ours, ever.
+    "model_declined",   # the reasoner honestly returned nothing rather than guessing
+    "low_confidence",   # it had an answer and the answer was not good enough to act on
+    "task_complete",    # nothing left to decide
+)
+
 
 # --- the Open Brain: a "why" is training signal only if it's really there (PRINCIPLES §10) ------
 #: What the `rationale` column fills with when a rung emits a template or a teaching seam forgot
@@ -213,6 +229,18 @@ class Decision:
     # every existing journalled row stay valid (schema note above: adding an optional field is safe).
     evidence: tuple[str, ...] = ()
 
+    #: WHY this decision is handing up, from a closed vocabulary (`ESCALATION_AXES`). Empty on a
+    #: decision that acts.
+    #:
+    #: It exists because an escalation used to be information-free: `intent="observe"`,
+    #: `confidence=0.0`, no hypothesis. So the hardest turns — precisely the ones the teacher gets
+    #: paid for — produced no scoreable local prediction, and `shadow_agreement` could never
+    #: measure the system on them. Naming the axis makes an escalation a DIAGNOSIS ("I know where
+    #: I am, I have no program for it" is a different problem from "I cannot name this page"), and
+    #: pairing it with a real proposed intent makes the local layers measurable even on the turns
+    #: they lose. Appended last and defaulted, so every journaled row stays valid.
+    escalation_axis: str = ""
+
     @property
     def acts(self) -> bool:
         """Whether this decision results in an action (vs. an escalation/hand-up)."""
@@ -295,6 +323,21 @@ class DecisionRecord:
     belief_agreement: Optional[str] = None        # agree | split | one_sided | no_evidence
     belief_novelty: Optional[float] = None        # [0,1] — percentile, 0.90 = the flag ceiling
     belief_state_uncertainty: Optional[float] = None
+
+    #: --- authority: WHO owned this turn, and why (interaction/authority.py).
+    #: `control_mode` is load-bearing rather than descriptive: `controller/maturity.py` reads it
+    #: back to count clean propose-approve runs, which is one of the two things certification
+    #: requires. A row with no mode contributes nothing to promotion — which is exactly right for
+    #: every row journaled before authority existed.
+    control_mode: Optional[str] = None            # green | yellow | orange | red
+    authority_reason: str = ""                    # one line: why this mode, for the operator
+    transition_maturity: Optional[str] = None     # the ladder rung this transition sat on
+    authority_axis: str = ""                      # the belief axis that blocked, if one did
+    reach_gaps: tuple[str, ...] = ()              # what the executor could not operate
+
+    #: Why a Decision handed up (`ESCALATION_AXES`). Kept beside the proposal it handed up WITH,
+    #: so an escalated row is a scoreable prediction rather than a blank — see `Decision`.
+    escalation_axis: str = ""
 
     # --- cost / provenance
     session_id: Optional[str] = None
