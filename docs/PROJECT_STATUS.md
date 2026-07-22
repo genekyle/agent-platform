@@ -25,6 +25,37 @@ replay, which also closes Interaction API Phase 1's DoD). Session briefs live in
 The 2026-07-16 full rewrite below otherwise stands; the previous version (2026-06-15, SELECT-cascade
 era) is in git history._
 
+## ⚠️ In flight — a large operator-led change is landing (declared 2026-07-22)
+
+The operator is building **new teacher endpoints + permission-based acting**: letting the inner
+models attempt more, fail earlier, and have those failures caught and kept, so that no teacher
+token is wasted and the ad-hoc scripts-around-the-system stop (PRINCIPLES §8/§11 — the standing
+gripe, now being fixed structurally rather than by discipline).
+
+**Collision surface.** Perception v1 landed the same day and touches three of the same files.
+What it added is **additive-only**, so a rewrite above it should not need to unpick anything:
+
+| File | What perception added | If you are rewriting this |
+|---|---|---|
+| `interaction/decision.py` | `Bundle.belief` (appended, defaulted, **not** in `bundle_to_prompt`); `DecisionRecord.belief_*` (4 scalars) | keep the fields; they are optional and prompt-invisible |
+| `interaction/decision_journal.py` | `record_for` flattens belief at the one choke point | keep the copy — it is what stops a seam journaling a decision without who observed it |
+| `controller/live_actuator.py` | `observe()` captures then senses; `collect=True` ctor flag | keep the capture — "always be collecting" is the point |
+| `controller/bundle.py` | `build_bundle(belief=…)` passthrough | pure passthrough, no logic |
+| **`controller/teach.py`** | **untouched, deliberately** | yours |
+
+**The connective tissue worth knowing about**, because it is the primitive the permission system
+wants and it already exists: `BeliefState.blocks(consequential=…)` answers *"which axis should
+stop me?"* over five separate uncertainties (state / element / answer / effect / novelty), not one
+collapsed float. "Let the inner model try" is not one permission — it is *may act while unsure
+about `state` on a reversible intent* (yes), *may act while unsure about `answer`* (never — that
+invents an application answer), *may act while `novelty` is high* (no, retrieve first). One
+confidence number cannot express any of those.
+
+**And the rule that makes early failure valuable rather than merely cheap:** an action is worth
+permitting to a weak rung iff it is **(a) reversible and (b) journaled with a real rationale and
+cited evidence** (§8 + §10). A failure the system cannot see is not a lesson — it is the event-log
+mistake again. Gate the permission on the journal contract, not on the risk level alone.
+
 ## What we're building (one paragraph)
 
 A **supervised browser agent** that runs a per-step loop — classify → propose → select → act →
