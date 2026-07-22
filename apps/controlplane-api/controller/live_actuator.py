@@ -37,6 +37,7 @@ import apply_recipe
 import ats_registry
 import apply_fields
 from controller.bundle import build_bundle
+from perception import live as perception_live
 from controller.loop import ActOutcome
 from interaction import decision_journal
 from interaction.contract import Intent, Outcome
@@ -126,7 +127,8 @@ class LiveActuator:
                  driver: str = "direct", transport: Optional[Transport] = None,
                  settle_tries: int = 3, settle_delay: float = 0.7,
                  sleep_fn: Optional[Callable[[float], None]] = None,
-                 re_resolve: Optional[Callable[[], Optional[dict]]] = None) -> None:
+                 re_resolve: Optional[Callable[[], Optional[dict]]] = None,
+                 collect: bool = True) -> None:
         self._browser_url = browser_url
         self._tab_id = tab_id
         self._task = task
@@ -141,6 +143,10 @@ class LiveActuator:
         # The RE_RESOLVE_TAB play's one dependency, injected (never imported) so this module stays
         # DB-free — the same seam `login_reasoner.run_login` takes.
         self._re_resolve = re_resolve
+        # Capture every observation into the corpus. Defaults ON (operator-directed 2026-07-22:
+        # a drive should always be collecting); turn it off only for a probe you do not want in
+        # the training data, never to "save time" — the collecting IS the work.
+        self._collect = collect
         # Carried between observe() and act(): the RAW scan (field -> selector, for Indeed's
         # dynamic fields), the current url, the current ats + state.
         self._last_scan: list[dict] = []
@@ -196,9 +202,26 @@ class LiveActuator:
         self._last_url = url
 
         tail = decision_journal.read_rows(limit=5)
+        candidates = ax.get("candidates") or []
+
+        # --- collect, then perceive. Operator-directed 2026-07-22: a drive should ALWAYS be
+        # building the corpus. Every turn is a free, recipe-labeled example for every model in
+        # the stack, and three months of drives produced none of them (the 2026-07-16 reckoning).
+        # The capture also yields the screenshot the visual witness needs, so collecting and
+        # perceiving are one round trip rather than two. Both are best-effort: perception is an
+        # aid, never a dependency, and a drive must run exactly as before without it.
+        shot = None
+        if self._collect:
+            shot = perception_live.capture_now(
+                self._post, self._addr(), task=self._task,
+                state=None, domain_id=ats_registry.classify_ats(url))
+        belief = perception_live.sense(
+            url=url, page_text=page_text, ax_candidates=candidates, screenshot_path=shot,
+            domain_id=ats_registry.classify_ats(url))
+
         bundle = build_bundle(self._task, url, page_text, goal_text=self._goal,
                               scan=raw, journal_tail=tail,
-                              ax_candidates=ax.get("candidates") or [])
+                              ax_candidates=candidates, belief=belief)
         self._ats = bundle.ats or ats_registry.classify_ats(url)
         self._last_state = bundle.state
 

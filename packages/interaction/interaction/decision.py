@@ -179,6 +179,21 @@ class Bundle:
     #: and prompt-invisible, so every row journaled before it stays valid (schema note above).
     ax_identities: tuple[str, ...] = ()
 
+    #: --- perception: WHO says we are here, and how unsure they are about what
+    #: `BeliefState.as_dict()` from the two-witness observer (PLAN_perception_v1 §3.3), or None
+    #: when nothing is promoted — which is a real answer and must stay one: an unfitted
+    #: perception stack means the controller runs exactly as it did before, not that it runs
+    #: blind on a half-built witness.
+    #:
+    #: Carried as a plain dict rather than the dataclass so a journaled row round-trips through
+    #: JSON without importing the perception package (the trainer reads rows on machines that
+    #: never fitted a witness). Appended last, defaulted, and — like `ax_identities` —
+    #: DELIBERATELY NOT RENDERED by `bundle_to_prompt` while the observer is in shadow: putting
+    #: it in the prompt changes the feature contract, and a mid-corpus drift there makes every
+    #: row before it untrainable. It goes into the prompt in one deliberate, version-bumped
+    #: change once shadow agreement says it earns its tokens, not as a side effect of wiring.
+    belief: Optional[dict] = None
+
 
 # --- the Decision: what the controller EMITS ----------------------------------------
 @dataclass(frozen=True)
@@ -270,6 +285,16 @@ class DecisionRecord:
     #: scalars (not the identity lists) so a row stays a corpus row and not an AX dump.
     delta_moved: Optional[bool] = None
     delta_churn: Optional[int] = None
+
+    #: --- perception (PLAN_perception_v1 §3.3). The scalars only, same rule as `delta_*`: a row
+    #: is a corpus row, not a dump. `belief_state` is what the WITNESSES concluded, which may
+    #: differ from `state` (what the recipe's URL/text matcher concluded) — and the rows where
+    #: they differ are the ones worth reading. `belief_agreement` is the measured signal: rows
+    #: where the two witnesses agree are right 77.9% of the time versus 48.2% when they split.
+    belief_state: Optional[str] = None
+    belief_agreement: Optional[str] = None        # agree | split | one_sided | no_evidence
+    belief_novelty: Optional[float] = None        # [0,1] — percentile, 0.90 = the flag ceiling
+    belief_state_uncertainty: Optional[float] = None
 
     # --- cost / provenance
     session_id: Optional[str] = None
@@ -369,6 +394,11 @@ def replay_snapshot(bundle: Bundle) -> dict:
         "recipe_step": bundle.recipe_step,
         "expected_next": list(bundle.expected_next),
         "unanswered": [dict(u) for u in bundle.unanswered],   # already sanitised
+        # Perception travels with the replay case: a decision made while the witnesses disagreed
+        # is a DIFFERENT decision point from the same page with them agreeing, and a replay that
+        # dropped that would silently re-run the easy version of the case. Already PII-free by
+        # construction (state ids, floats, witness names — `BeliefState.as_dict`).
+        "belief": dict(bundle.belief) if bundle.belief else None,
     }
 
 

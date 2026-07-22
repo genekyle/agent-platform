@@ -83,6 +83,16 @@ def _redact_params(params: Optional[dict]) -> dict:
     return out
 
 
+def _belief_axis(belief: Optional[dict], axis: str) -> Optional[float]:
+    """One uncertainty axis off a serialized BeliefState, or None. Defensive because `belief` is
+    a plain dict crossing a JSON boundary: an axis nobody assessed is absent, not zero, and
+    reading a missing axis as 0.0 would journal 'certain' where we meant 'never asked'."""
+    if not isinstance(belief, dict):
+        return None
+    value = (belief.get("uncertainty") or {}).get(axis)
+    return float(value) if isinstance(value, (int, float)) else None
+
+
 def record_for(
     decision: Decision,
     bundle: Bundle,
@@ -149,6 +159,13 @@ def record_for(
         supervisor_evidence=tuple(verdict.evidence) if verdict else (),
         delta_moved=delta.moved if delta is not None else None,
         delta_churn=delta.churn if delta is not None else None,
+        # Perception, flattened off the Bundle at the same single choke point every other
+        # cross-cutting field is copied at — so no seam can journal a decision and forget who
+        # said where it was made (PLAN_perception_v1 §3.3).
+        belief_state=(bundle.belief or {}).get("state") if bundle.belief else None,
+        belief_agreement=(bundle.belief or {}).get("agreement") if bundle.belief else None,
+        belief_novelty=_belief_axis(bundle.belief, "novelty"),
+        belief_state_uncertainty=_belief_axis(bundle.belief, "state"),
         session_id=session_id,
         duration_ms=duration_ms,
         cost_usd=cost_usd,

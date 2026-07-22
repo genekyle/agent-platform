@@ -79,6 +79,7 @@ def build_bundle(
     journal_tail: Optional[list[dict]] = None,
     fingerprint: Optional[str] = None,
     ax_candidates: Optional[list[dict]] = None,
+    belief: Optional[dict] = None,
 ) -> Bundle:
     """Assemble the controller's input for ONE tab. Pure — no IO, no network.
 
@@ -92,6 +93,10 @@ def build_bundle(
         fingerprint: the AX state sha256, when a scan produced one (opportunistic, may be None).
         ax_candidates: `/ax_scan`'s candidates, reduced here to `role|name` identities — the raw
             material for the state delta (`interaction/delta.py`). NOT rendered into the prompt.
+        belief: a serialized `BeliefState` from the two-witness observer, when one is promoted.
+            Passed IN rather than computed here on purpose: this function is pure, and the
+            observer needs a screenshot off the wire. None is the normal case until a witness is
+            fitted, and it must stay a real answer (PLAN_perception_v1 §3.3).
     """
     ats = ats or ats_registry.classify_ats(url)
     desc = apply_recipe.describe_for_ats(ats, url, page_text)
@@ -120,4 +125,5 @@ def build_bundle(
         unanswered=sanitize_unanswered(scan),
         recent=_shape_recent(journal_tail),
         ax_identities=identities_from_ax(ax_candidates),
+        belief=belief,
     )
