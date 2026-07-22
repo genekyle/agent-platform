@@ -42,7 +42,13 @@ from perception.prototypes import Prediction, _median
 #: Everything else the ablation touched (`route:`, `title:`, `role:`, `ph:`, `flag:`) moved
 #: accuracy by 0.0% and is kept only because it is free; the signal is `tok:`, the accessible
 #: names, which is the same layer PRINCIPLES §6 says to ACT through.
-FEATURE_SET_VERSION = "v3"
+#:
+#: v4 (2026-07-22) — added `field:` / `fieldkind:` from the captured required-field set. INERT on
+#: every capture written before today (they carry no `form_state`), so no existing row changes
+#: meaning; it starts paying on the first drive after the capture change. This is the one
+#: modelling change with evidence behind it rather than intuition: 49 of 50 remaining errors are
+#: intra-platform phase confusions, and the required-field set is what distinguishes those phases.
+FEATURE_SET_VERSION = "v4"
 
 _WORD = re.compile(r"[a-z0-9]{2,}")
 _MAX_ELEMENTS = 60        # cap elements read per capture — keeps the vector sparse and cheap
@@ -112,6 +118,26 @@ def extract_tokens(artifact: dict[str, Any], *, page_text: str = "") -> list[str
                 seen += 1
         if seen > _MAX_TOTAL_TOKENS:
             break
+
+    # The REQUIRED-FIELD SET — its own namespace, on purpose (v4).
+    #
+    # Everything the ablation left standing says this is where the remaining error lives: 49 of 50
+    # state errors are intra-platform phase confusions, and what tells `workday_my_information`
+    # from `questions` from `voluntary_disclosures` is which controls the form REQUIRES. Those
+    # names are technically inside `tok:` already — diluted among ~300 nav, footer and chrome
+    # tokens, which is why isolating them is the whole point rather than a duplication.
+    #
+    # Emitted three times each so a handful of required fields can outweigh the page furniture
+    # without a weighting scheme the TF-IDF centroid would have to learn. Empty for every capture
+    # written before 2026-07-22, which is exactly why F7 could not be tested.
+    for row in ((artifact.get("acquisition") or {}).get("form_state") or {}).get("unanswered") or ():
+        if not isinstance(row, dict):
+            continue
+        for tok in _tokens(str(row.get("field") or ""), 10):
+            feats.extend([f"field:{tok}"] * 3)
+        kind = str(row.get("kind") or "").strip().lower()
+        if kind:
+            feats.append(f"fieldkind:{kind}")
 
     # `page_text` is accepted and deliberately NOT featurized (v3 — see FEATURE_SET_VERSION).
     # It stays in the signature because it is part of an observation and other consumers read it

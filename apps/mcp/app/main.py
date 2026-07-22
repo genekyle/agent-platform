@@ -220,6 +220,7 @@ async def observe_live_capture(
     browser_url: str = "http://127.0.0.1:9222",
     task_context: Optional[dict[str, Any]] = None,
     training_metadata: Optional[dict[str, Any]] = None,
+    form_state: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     async with stdio_client(build_server_params(browser_url)) as (read, write):
         async with ClientSession(read, write) as session:
@@ -233,6 +234,7 @@ async def observe_live_capture(
                 screenshot_output_dir=screenshot_output_dir,
                 task_context=task_context,
                 training_metadata=training_metadata,
+                form_state=form_state,
             )
 
 
@@ -349,6 +351,7 @@ async def capture_observation(
     screenshot_output_dir=None,
     task_context: Optional[dict[str, Any]] = None,
     training_metadata: Optional[dict[str, Any]] = None,
+    form_state: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     capture_status: dict[str, Any] = {}
 
@@ -382,6 +385,7 @@ async def capture_observation(
         capture_status=capture_status,
         task_context=task_context,
         training_metadata=training_metadata,
+        form_state=form_state,
     )
 
     # Pre-compute a stable timestamp for both the artifact filename and region_scorer derived outputs

@@ -214,7 +214,8 @@ class LiveActuator:
         if self._collect:
             shot = perception_live.capture_now(
                 self._post, self._addr(), task=self._task,
-                state=None, domain_id=ats_registry.classify_ats(url))
+                state=None, domain_id=ats_registry.classify_ats(url),
+                form_state={"unanswered": raw})
         belief = perception_live.sense(
             url=url, page_text=page_text, ax_candidates=candidates, screenshot_path=shot,
             domain_id=ats_registry.classify_ats(url))

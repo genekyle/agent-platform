@@ -150,7 +150,8 @@ def screenshot_for_artifact(artifact_filename: str) -> Optional[Path]:
 
 def capture_now(post: Any, addr: dict[str, Any], *, scenario: str = "controller_turn",
                 task: str = "", state: Optional[str] = None,
-                domain_id: str = "") -> Optional[Path]:
+                domain_id: str = "",
+                form_state: Optional[dict[str, Any]] = None) -> Optional[Path]:
     """Trigger a `/capture` for this turn and return the screenshot path, or None.
 
     `post` is the caller's own HTTP helper (the actuator's `_post`), so this adds no second
@@ -163,6 +164,12 @@ def capture_now(post: Any, addr: dict[str, Any], *, scenario: str = "controller_
         body["scenario"] = scenario
         body["task_context"] = {"task": task, "state": state}
         body["training_metadata"] = {"domain_id": domain_id, "source": "controller"}
+        # The required-field set this turn already scanned. Passing it is what makes the corpus
+        # able to answer the question that is now the ENTIRE remaining error budget: which form
+        # phase of this ATS are we on? The capture cannot re-derive it, so if the caller does not
+        # hand it over it is lost — and it was, for every capture before today.
+        if form_state:
+            body["form_state"] = form_state
         result = post("/capture", body) or {}
         filename = result.get("filename") or ""
         if not filename:

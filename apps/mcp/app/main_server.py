@@ -131,6 +131,11 @@ class CaptureRequest(BaseModel):
     task_context: Optional[dict] = None
     training_metadata: Optional[dict] = None
     browser_url: str = "http://127.0.0.1:9222"
+    #: What the CALLER already observed this turn and the capture cannot re-derive on its own.
+    #: Today: `{"unanswered": [...]}` from /scan_required — the required-field set, which is the
+    #: only signal that separates two form phases of the same ATS. Semantic names only, never
+    #: values (PRINCIPLES §4). Optional, so every existing caller is unaffected.
+    form_state: Optional[dict] = None
 
 
 class ProposerPredictRequest(BaseModel):
@@ -2074,6 +2079,27 @@ def health():
     return {"ok": True, "service": "mcp-capture-server"}
 
 
+#: The semantic keys a captured required-field row may carry. Mirrors
+#: `interaction.decision.sanitize_unanswered` deliberately: the corpus and the Bundle must agree
+#: on what a form fact IS, and the fields it drops (`selector`, `value_read_at`, `value_preview`)
+#: are dropped for the same two reasons — selectors are addressing the model must never learn,
+#: and a value preview is PII on a page that holds addresses and salaries.
+_FORM_FIELD_KEYS = ("field", "kind", "required_via", "answered", "valid")
+
+
+def _sanitize_form_state(form_state: Optional[dict]) -> Optional[dict]:
+    """Keep the field SET, drop selectors and values. Applied at the boundary, not by the caller,
+    so a caller cannot forget — the same discipline as the `journaled` decorator."""
+    if not isinstance(form_state, dict):
+        return None
+    rows = form_state.get("unanswered")
+    if not isinstance(rows, list):
+        return None
+    cleaned = [{k: r[k] for k in _FORM_FIELD_KEYS if k in r}
+               for r in rows if isinstance(r, dict)]
+    return {"unanswered": cleaned} if cleaned else None
+
+
 @app.post("/capture")
 async def trigger_capture(body: CaptureRequest, background_tasks: BackgroundTasks):
     artifact = await observe_live_capture(
@@ -2083,6 +2109,7 @@ async def trigger_capture(body: CaptureRequest, background_tasks: BackgroundTask
         browser_url=body.browser_url,
         task_context=body.task_context,
         training_metadata=body.training_metadata,
+        form_state=_sanitize_form_state(body.form_state),
     )
     path = write_observation_artifact(artifact)
     candidate_count = len(artifact.get("ranked_candidates", []))

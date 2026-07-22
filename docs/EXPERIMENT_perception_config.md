@@ -241,3 +241,97 @@ the ablation predicting a change we then implemented differently:
 - **"Two witnesses, always both"** as the default shape (F1) — the value is conditional, so the
   configuration should be too.
 - **The visual witness's confidence** as an input to anything (F1) — 0.503 is chance.
+
+---
+
+# Part II — is DATA the bridge? (2026-07-22, `perception/curve.py`)
+
+**The operator's question:** the witness sits at ~69% and a system that acts needs better. Does
+collecting more close the gap, or are we about to spend months of drives on a curve that has
+already flattened?
+
+## C1 — the learning curve flattens fast, over a FIXED set of 8 states
+
+| examples per class | DOM | visual |
+|---|---|---|
+| 2 | 81.2% | 62.5% |
+| 3 | 83.3% | 66.7% |
+| 4 | 84.4% | 65.6% |
+| 5 | 85.0% | 70.0% |
+| **6** | **85.4%** | **70.8%** |
+
+DOM gains **+2.1** points going 2→3 and **+0.4** going 5→6 — a log curve already in its tail.
+Extrapolated, doubling depth again buys a point or two. **Depth is not the bridge.**
+
+The visual witness climbs more steadily (+8.3 over the same range vs DOM's +4.2) and is still
+well below. That is the one honest argument that vision could matter more later than it does now,
+and it is the thing to re-test rather than assume.
+
+## C2 — "69%" is two populations wearing one average
+
+| how well-observed the state is | n | DOM | visual |
+|---|---|---|---|
+| **2 examples** (13 states) | 26 | **34.6%** | 38.5% |
+| 3–4 examples (13 states) | 44 | 70.5% | 56.8% |
+| **5+ examples** (10 states) | 81 | **79.0%** | 65.4% |
+
+This is the finding that redirects the collection strategy. A state we have met five times is
+recognised at ~79–85%; a state we have met twice, at ~35%. **The bridge is BREADTH, not depth** —
+getting every state to five examples moves the aggregate to roughly 79% with no modelling change
+at all, while a sixth example for a state that already has five is nearly worthless.
+
+(Note the one place the visual witness *wins*: the 2-example bucket, 38.5% vs 34.6%. Prototype
+distance degrades more gracefully than a TF-IDF centroid when a class is nearly unobserved —
+which is precisely the regime a brand-new tenant arrives in.)
+
+## C3 — we do not need a better model to act. We need to know which turns to act on
+
+Precision on the turns the witness is most sure about, ordered by its own clarity:
+
+| coverage | acted | precision |
+|---|---|---|
+| 20% | 30 | **93.3%** |
+| 50% | 75 | **89.3%** |
+| 60% | 90 | 86.7% |
+| 70% | 105 | 80.0% |
+| 100% | 151 | 68.9% |
+
+**This is the answer to "70% is not enough to perform a task".** It does not have to be. The
+witness already runs at ~89% precision across half its turns and ~93% across the most confident
+fifth; the rest escalate, which is what the ladder is for. Raising the *aggregate* was never the
+requirement — knowing *which* turns are the confident ones is, and the clarity signal does that
+(AUROC 0.774).
+
+Caveat, stated because the table flatters us: clarity saturates at 1.00 for ~55% of rows, so the
+ordering *within* the top half is arbitrary and the 20%/30%/40% differences are noise. The honest
+reading is one step coarser — **the ~55% of turns at maximal clarity run at ~87–89%; below that it
+degrades quickly.**
+
+## What this means for the system
+
+1. **Collect for BREADTH.** Every state to five examples beats any state to twenty. The drive
+   should prefer pages it has seen once or twice over pages it has seen ten times — which is a
+   coverage-directed capture policy, not more driving.
+2. **Act on clarity, escalate the rest.** ~55% of turns at ~88% precision is a deployable
+   position today. The gap between 88% and what an irreversible action needs is what the
+   consequential gate and the human rail are for, and they already exist.
+3. **The cascade does not corrupt its own training** — and this is the property that makes the
+   whole design safe: we **capture unconditionally and infer conditionally**. The screenshot is
+   written on every turn (`collect=True`) whether or not the eyes were consulted, so the visual
+   corpus stays an unbiased sample of everything we met, even though inference only looks at ~37%
+   of turns. If capture followed inference, the eyes would only ever train on the hard turns and
+   every number would drift.
+4. **Vision's role is unchanged by this** but its future is now testable: it loses everywhere on
+   average, wins in the 2-example bucket, and climbs faster with data. Re-run C1 at 400 captures.
+
+## The capture change (this branch)
+
+Everything above says the corpus is the bottleneck, so the corpus should be able to hold
+everything a turn already knows. `/capture` now accepts `form_state` — the `/scan_required`
+required-field set — sanitized at the boundary to semantic names only (`field`, `kind`,
+`required_via`, `answered`, `valid`; never selectors, never values, PRINCIPLES §4). `LiveActuator`
+hands over the scan it already holds, and the featurizer reads it as a weighted `field:` namespace
+(**v4**), inert on every capture written before today.
+
+That makes F7 — the experiment that attacks 100% of the remaining error budget — runnable for the
+first time, on the first drive after this lands.

@@ -133,3 +133,56 @@ def test_a_stale_absolute_path_falls_back_to_the_filename(tmp_path, monkeypatch)
 def test_a_missing_artifact_is_none(tmp_path, monkeypatch):
     monkeypatch.setattr("perception.dataset.artifacts_root", lambda: tmp_path)
     assert perception_live.screenshot_for_artifact("nope.json") is None
+
+
+# --- the field set: reachable now, and inert until the corpus has it -------------------
+def test_the_scan_reaches_the_capture_so_the_corpus_can_learn_the_phase():
+    """The signal that separates two form phases of the same ATS is which controls the form
+    REQUIRES — and it reached the live Bundle and stopped there, which is why every remaining
+    state error is intra-platform confusion the corpus cannot be taught out of."""
+    sent = {}
+
+    def _post(path, payload):
+        sent[path] = payload
+        return {"filename": ""}
+
+    perception_live.capture_now(_post, {"tab_id": "t"},
+                                form_state={"unanswered": [{"field": "Sponsorship"}]})
+    assert sent["/capture"]["form_state"] == {"unanswered": [{"field": "Sponsorship"}]}
+
+
+def test_no_scan_means_no_key_rather_than_an_empty_one():
+    sent = {}
+    perception_live.capture_now(lambda p, b: sent.setdefault(p, b) or {"filename": ""},
+                                {"tab_id": "t"})
+    assert "form_state" not in sent["/capture"]
+
+
+def test_the_field_set_becomes_its_own_namespace_and_outweighs_page_furniture():
+    from perception.dom_witness import extract_tokens
+    artifact = {
+        "acquisition": {
+            "page_identity": {"url": "https://acme.wd5.myworkdayjobs.com/x", "title": "Workday"},
+            "actionable_elements": [{"role": "link", "name": "Careers"}] * 5,
+            "form_state": {"unanswered": [
+                {"field": "Are you legally authorized to work?", "kind": "radio_group"},
+                {"field": "Desired salary", "kind": "text"},
+            ]},
+        },
+        "ranked_candidates": [],
+    }
+    toks = extract_tokens(artifact)
+    assert toks.count("field:salary") == 3          # weighted, so a few fields beat the chrome
+    assert "fieldkind:radio_group" in toks
+    assert "field:authorized" in toks
+
+
+def test_a_capture_without_a_field_set_is_byte_identical_to_before():
+    """v4 must be inert on the 174 captures written before it, or every existing row silently
+    changes meaning — the mid-corpus feature drift the version marker exists to prevent."""
+    from perception.dom_witness import extract_tokens
+    artifact = {"acquisition": {"page_identity": {"url": "https://x.test/", "title": "T"},
+                                "actionable_elements": [{"role": "button", "name": "Continue"}]},
+                "ranked_candidates": []}
+    toks = extract_tokens(artifact)
+    assert not any(t.startswith("field:") or t.startswith("fieldkind:") for t in toks)
