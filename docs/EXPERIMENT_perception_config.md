@@ -194,6 +194,20 @@ it exactly where it changes an answer. Which is the honest reply to "is vision s
 the corpus doubles and F1's low band stops separating, vision drops to a requested diagnostic
 (the same status a screenshot has in `PLAN_supervisor` §2) and nothing else in the design moves.
 
+## Confirmation run (v3 featurizer, 2026-07-22)
+
+Re-run after the deletion landed, as a check that the change reproduces the ablation rather than
+the ablation predicting a change we then implemented differently:
+
+- baseline is now **68.9%** — exactly the predicted number, and `without_txt` reads **+0.0%**
+  because there is nothing left to drop. That second reading is the real check.
+- `without_title` moved from 0.0% to **−0.7%**: `title:` was inert only while `txt:` masked it.
+  Small, real, and a reminder that ablations measure a feature *given the others*, never in the
+  abstract.
+- two-stage under v3: **60.3% vs 68.9% flat** — still 8.6 points worse. F6 stands.
+- Live check on the promoted model: the cascade consults the eyes on **65 of 174 turns (37%)**;
+  the remaining 63% run ears-only at $0.
+
 ## Built on this branch
 
 1. ✅ **`txt:` deleted from the featurizer** (`FEATURE_SET_VERSION = v3`). +2.0 points, and it
