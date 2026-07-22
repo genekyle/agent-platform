@@ -179,6 +179,7 @@
   "POST /api/training/suggest_page_state",
   "POST /api/training/tasks",
   "POST /api/training/train",
+  "POST /api/training/train_perception",
   "POST /api/training/train_stage_observer",
   "POST /api/training/train_state_transition",
   "POST /api/workers/{worker_id}/heartbeat",

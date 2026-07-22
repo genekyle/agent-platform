@@ -83,16 +83,19 @@ Its three real jobs:
 - **Effect witness** — "did the screen change the way the action said it would?" — a second net
   under the treadmill guard, on the same `StateDelta` seam.
 
-**Two data findings that come with it, both owed a fix:**
+**Two data findings that come with it:**
 
-- **101 of 174 labeled captures point at screenshots that no longer exist on disk** (312 files
-  present, 73 joinable to a label). The visual corpus is less than half what the label count
-  implies. Retention/linkage is lossy and nobody noticed because nothing read it — the 2026-07-16
-  corpus reckoning wearing a new hat.
+- **The screenshots were never missing — the pointers rotted.** A first pass read
+  `screenshot_refs[].path`, found 101 of 174 absent, and concluded the June screenshots had been
+  pruned. They had not: those rows carry an absolute path under `apps/mcp-mock/output/…`, the
+  directory later renamed to `apps/mcp`. Resolving by filename under the current artifacts root
+  finds **all 174**. Corrected 2026-07-22, before it cost us anything; the loader now resolves
+  path-then-filename and the census counts how many rows needed the fallback, because a pointer
+  that only resolves by fallback is provenance drift worth seeing. Same family as the 2026-07-16
+  reckoning: nothing read this data, so nothing noticed it had gone stale.
 - **0.836 AUROC with a same-state median cosine of 0.897 against a different-state median of 0.811
-  is a narrow band.** FeaturePrint is trained on natural photographs, not UI. It is good enough to
-  build the seam on for free, and it is the first thing to re-bench against CLIP ViT-B/32 (~350 MB,
-  a wifi-only download — `LOW_DATA_MODE.md`) once the harness exists.
+  is a narrow band.** FeaturePrint is trained on natural photographs, not UI. Good enough to build
+  the seam on for free — and the first thing to re-bench against CLIP once the harness exists.
 
 ---
 
@@ -238,9 +241,9 @@ worth more.
 
 | # | Session | Cost | Live? |
 |---|---|---|---|
-| **S17** | **Compositional state identity.** Facet columns on `page_state_registry` + a parser deriving facets for all 59 existing ids (hand-verified, not trusted); `page_state_candidates` mints facets for new states; recipes/programs resolve by (platform, phase) with tenant overrides. | $0, offline | no |
-| **S18** | **The perception bench.** A harness that scores any encoder over the labeled corpus: LOO 1-NN at state *and* facet level, OOD AUROC, and the DOM witness (NB vs TF-IDF centroid) on the same split. Adoption gate written **before** the numbers. Fix the screenshot-linkage loss first — 101 missing files is the bench's real ceiling. | $0, offline (CLIP download wifi-only) | no |
-| **S19** | **The observer + `BeliefState`.** `perception/` package, two witnesses, the combination policy, five uncertainty axes on the `Bundle`, journaled. **Shadow only — influences nothing.** | $0, offline | no |
+| **S17** | **Compositional state identity.** ✅ **derivation built 2026-07-22** — `perception/facets.py`: the closed vocabulary (domain / platform / phase / condition / variant), derived not stored, with `platform` taken from the live host before the state-id prefix and `variant` (tenant) only ever from the host. **Owed:** the registry columns + backfill, and recipes/programs resolving by `(platform, phase)` with tenant overrides. | $0, offline | no |
+| **S18** | **The perception bench.** ✅ **done 2026-07-22** — `perception/bench.py` + `make perception-bench`: leave-one-out at state level with facet **projection**, leave-one-CLASS-out novelty AUROC, and the agreement/disagreement split, over any encoder and either DOM model family. Results and the encoder decision in §1b. | $0, offline (CLIP download wifi-only) | no |
+| **S19** | **The observer + `BeliefState`.** 🔨 **core built 2026-07-22** — `interaction/belief.py` (five axes, the novelty ceiling, `belief_to_prompt`), `perception/observer.py` (the combination policy), `perception/train.py` (fit → artifact → `load_observer()`). **Owed:** the `Bundle` field, the journal columns, and running it in shadow inside `run_controller`. | $0, offline | no |
 | **S20** | **Episodic retrieval + the `Lesson` contract.** Retrieval into Bundle and escalation packages; typed lessons with scope; the teach-once cache. | ~$0 | no |
 | **S21** | **The scoreboard** (§6) into `make controller-evals` + the cockpit. | $0 | no |
 | **S22** | **Reps.** Operator-present drives on the apply backlog under PRINCIPLES §11 — controller leads, teacher rides. Capture + label every state (that IS the work), observer in shadow, per-class promotion gates start filling. | live | **yes** |

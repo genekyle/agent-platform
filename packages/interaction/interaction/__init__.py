@@ -12,6 +12,7 @@ What belongs here: things both the actor and the trainer must agree on.
   - `journal`      — the append-only intent corpus (the actor writes, the trainer reads)
   - `fingerprint`  — the page-state join key (was select_stage/fingerprint.py)
   - `decision`     — the controller's frozen I/O (Bundle in, Decision out) + serialization
+  - `belief`       — what we believe about where we are, and the five uncertainties, kept apart
   - `decision_journal` — the append-only decision corpus (the reasoner writes)
 
 What does NOT belong here: recipes (per-ATS data, control-plane-owned), CDP mechanism
@@ -23,6 +24,13 @@ you the function, not the module). It also matches the siblings it sits beside:
 `telemetry.log_selection`, `event_log.log_event`.
 """
 
+from interaction.belief import (
+    BELIEF_SCHEMA_VERSION,
+    AXES,
+    BeliefState,
+    WitnessView,
+    belief_to_prompt,
+)
 from interaction.contract import (
     INTENT_SCHEMA_VERSION,
     Intent,
@@ -48,6 +56,12 @@ from interaction.decision_journal import log_decision, record_for
 from interaction.journal import IntentRecord, log_intent, read_rows
 
 __all__ = [
+    # perception contract
+    "BELIEF_SCHEMA_VERSION",
+    "AXES",
+    "BeliefState",
+    "WitnessView",
+    "belief_to_prompt",
     "INTENT_SCHEMA_VERSION",
     "Intent",
     "IntentRecord",

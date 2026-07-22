@@ -4716,6 +4716,22 @@ def train_stage_observer_endpoint(db: Session = Depends(get_db)):
     return result
 
 
+@router.post("/api/training/train_perception")
+def train_perception_endpoint(promote: bool = True):
+    """Fit the two perception witnesses and persist them (PLAN_perception_v1 §3.2).
+
+    Witness A (DOM/AX TF-IDF centroid) trains on every labeled capture; witness B (a frozen image
+    encoder + prototype bank) on those with a screenshot. Minutes of CPU, no GPU, no download with
+    the default encoder — cheap enough to re-run after a drive rather than as a ceremony.
+    `promote` points the runtime at this build; leave it off to fit and inspect without swapping
+    what `load_observer()` returns."""
+    from perception import train as perception_train
+
+    fitted = perception_train.fit()
+    model_dir = perception_train.save(fitted, promote=promote)
+    return {"ok": True, "model_dir": str(model_dir), "promoted": promote, **fitted["metrics"]}
+
+
 @router.post("/api/training/train_state_transition")
 def train_state_transition_endpoint(db: Session = Depends(get_db)):
     """Train the state-transition model (the planner's look-ahead edge-model): given

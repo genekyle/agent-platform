@@ -1888,3 +1888,54 @@ being bought for.** Use **late fusion**: each witness emits its own distribution
 novelty score*; disagreement is preserved as a first-class signal instead of being averaged into a
 smooth lie. Averaging two uncalibrated confidences is how you build a system that is confidently
 wrong exactly where it needed to raise its hand.
+
+## 2026-07-22 (2) — Perception v1 built; three calibration bugs that only real captures could find
+
+The pivot above got its first code: `perception/` (facets, encoders, prototype bank, DOM witness,
+observer, bench, train) plus `interaction/belief.py`. What is worth recording is not the code —
+it is the three things that were **correct in unit tests and wrong on our own data**, each found
+by fitting the observer and printing a `BeliefState` for a real capture. All three are now pinned
+by `test_perception_calibration.py`.
+
+**Correction first: the screenshots were never missing.** Yesterday's entry (and the commit
+message) said 101 of 174 labeled captures point at screenshots that no longer exist. They exist.
+Those rows carry an **absolute path** under `apps/mcp-mock/output/observer-screenshots/` — the
+directory later renamed to `apps/mcp`. Resolving by filename under the current artifacts root
+finds all 174. The visual corpus is **174 rows over 59 states**, not 73. The loader now resolves
+path-then-filename and counts the fallbacks, because a pointer that only resolves by fallback is
+provenance drift worth seeing. Lesson unchanged in kind, only in blame: **absolute paths in a
+corpus are a time bomb, and nothing noticed because nothing read the data.**
+
+**1. Singleton classes poisoned the novelty calibration.** A genuine `workday_questions` capture —
+in its own training set — scored novelty **0.93**, i.e. "less familiar than 93% of everything I
+know." Two causes: an example sits *inside* its own centroid, so measuring familiarity against it
+measures nothing; and with 59 states over 174 rows most classes have exactly one example, whose
+centroid IS that example and therefore scores a perfect 1.0, shoving the whole percentile curve up
+until every well-observed state reads as an outlier. Fixed by calibrating **leave-one-out** and
+**excluding singletons**.
+
+**2. Novelty was measuring class TIGHTNESS, not novelty.** Against one global pool, a 20-example
+state scores *more* novel than a 2-example state — a centroid over twenty varied screenshots sits
+further from each of them than a centroid over two. Fixed by calibrating **per predicted class**:
+"given we think this is `workday_questions`, how typical is it *for* `workday_questions`?" That is
+one class-conditional step short of conformal prediction, which is as far as 2–6 examples per class
+will carry. In-distribution novelty is now median **0.09**, and **3.4%** of known pages trip the
+0.90 novelty ceiling — a sane false-flag rate where before it would have been most of them.
+
+**3. The two witnesses' margins differ by 10x, so a shared threshold is meaningless.** A correct
+DOM call sits near a **0.37** margin; a correct visual call near **0.04** — every screenshot of a
+white form is cosine-similar to every other. A single `CLEAR_MARGIN` read the visual witness as
+permanently unsure and the DOM witness as permanently certain. Each witness now fits its own
+`margin_scale` (the median margin of its correct leave-one-out calls) and `Prediction.clarity`
+reports the margin against it.
+
+**And a facet bug of the same family:** `ats_registry.classify_ats` answers `company_site` for any
+host it does not recognise, and `company_site` is a real platform in the facet vocabulary — so
+every `facebook.com` page was filed as a company site. Non-ATS hosts are now checked first. **A
+confident wrong answer beats no answer only when it is actually right.**
+
+**The novelty ceiling is not 0.5 and the reason is structural.** Novelty is a percentile, so
+in-distribution observations spread roughly uniformly over [0,1] by construction — a 0.5 cut-off
+would flag half of every page we know. `NOVELTY_CEILING = 0.90` means "less familiar than 90% of
+what we have seen", and **the cut-off IS the false-flag rate**. That property is why the percentile
+was worth the trouble: it needs no per-corpus tuning and it is comparable across encoders.
