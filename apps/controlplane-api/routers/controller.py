@@ -137,6 +137,12 @@ class RunBody(BaseModel):
     #: drive. Set false only to reproduce the pre-authority behaviour for a comparison.
     progressive: bool = True
     park_seconds: float = 300.0       # how long a parked drive waits before behaving as it used to
+    #: Let the SYSTEM press Submit on this run. OFF by default and per-request on purpose — an
+    #: operator authorising one measured drive must not turn into a system that always submits.
+    #: It releases the consequential HOLD only; the authority ceiling still grades a submit as
+    #: consequential, the control must be named rather than inferred, and human_required states,
+    #: BLOCKED and the never-auto-solve-a-challenge rule are untouched.
+    allow_submit: bool = False
 
 
 @router.post("/api/controller/run")
@@ -159,7 +165,7 @@ async def run_live(body: RunBody) -> dict[str, Any]:
     escalations in a row stop the drive. Every escalation raises a real handoff alert.
     """
     from controller.live_actuator import LiveActuator
-    from controller.loop import run_controller
+    from controller.loop import CONSEQUENTIAL_INTENTS, run_controller
     from controller.teach import auto_reviewer
     from runtime import handoff as handoff_mod
 
@@ -168,7 +174,7 @@ async def run_live(body: RunBody) -> dict[str, Any]:
 
     actuator = LiveActuator(base_url=settings.capture_server_url, browser_url=body.browser_url,
                             tab_id=body.tab_id, task=body.task, goal_text=body.goal_text,
-                            driver="humanized")
+                            driver="humanized", allow_submit=body.allow_submit)
     model = HaikuReasoner() if body.mode == "assisted" else None
 
     # Progressive autonomy, wired at THE production call site. `run_controller` defaults both to
@@ -217,7 +223,8 @@ async def run_live(body: RunBody) -> dict[str, Any]:
             task_goal=body.goal_text or body.task, reason="unexpected_state"),
         on_consequential=_on_consequential, on_step=_on_step,
         authority=authority_fn, seat=seat, orient=orientation.predict,
-        on_authority=lambda b, d, v: modes.append(v.mode))
+        on_authority=lambda b, d, v: modes.append(v.mode),
+        held_intents=frozenset() if body.allow_submit else CONSEQUENTIAL_INTENTS)
 
     # The number the whole exercise is for: how much ran without a human.
     acted = [t for t in trail if not t["escalate"]]

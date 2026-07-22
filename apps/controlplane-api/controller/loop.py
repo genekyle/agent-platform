@@ -234,6 +234,7 @@ def run_controller(
     orient: Optional[Orienter] = None,
     max_takeovers: int = MAX_TAKEOVERS,
     on_authority: Optional[Callable[[Bundle, Decision, AuthorityVerdict], None]] = None,
+    held_intents: frozenset = CONSEQUENTIAL_INTENTS,
 ) -> LoopResult:
     """Drive one task to a definite stop. Every step journals a DecisionRecord.
 
@@ -259,6 +260,12 @@ def run_controller(
     Nothing about the safety rails moves with mode: SUBMIT is still held for the operator,
     `human_required` states are still structurally undriveable, BLOCKED still hands straight over,
     and a challenge is still never auto-solved. Mode decides who CHOOSES, never what is allowed.
+
+    The one rail with a documented release is `held_intents`, and releasing it is an OPERATOR act,
+    never a mode's: passing `frozenset()` lets the loop press Submit itself, per run, because the
+    operator asked to measure whether the system can finish an application unaided. It stays a
+    parameter rather than a setting so the authorisation lives at one call site and expires with
+    the drive, and it does not touch `human_required`, BLOCKED, or the challenge rule at all.
     """
     store = programs or programs_mod.ProgramStore()
     records: list[DecisionRecord] = []
@@ -443,8 +450,10 @@ def run_controller(
             last_decision = acting
 
         # --- a consequential intent: hold it for the operator, never auto-act (gate the ACTING
-        # decision — a correction could itself be a Submit).
-        if acting.intent in CONSEQUENTIAL_INTENTS:
+        # decision — a correction could itself be a Submit). `held_intents` is the ONE way to
+        # narrow this, it is per-run, and it defaults to the full set — an operator authorising a
+        # submit for one measured drive must not quietly become a system that always submits.
+        if acting.intent in held_intents:
             journal(acting, bundle, outcome=None, proposed=proposed_for_golden,
                     golden=bool(proposed_for_golden))
             if on_consequential:

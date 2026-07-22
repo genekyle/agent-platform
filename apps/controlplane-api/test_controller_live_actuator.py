@@ -468,3 +468,51 @@ def test_settle_waits_then_reclassifies():
     act.settle()
     assert slept                                                    # it actually waited
     assert "/auth_state" in fake.paths()                            # and looked again
+
+
+# --- the submit release, at the actuator (operator-authorised 2026-07-22) --------------
+def _submit_actuator(calls, *, allow_submit):
+    from controller.live_actuator import LiveActuator
+
+    def _transport(path, payload):
+        calls.append((path, payload))
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True, "url": "https://smartapply.indeed.com/x",
+                    "title": "Review"}
+        if path in ("/scan_required", "/ax_scan"):
+            return {"ok": True, "unanswered": [], "candidates": [{"role": "button", "name": "b"}]}
+        return {"ok": True, "outcome": "ok"}
+
+    return LiveActuator(base_url="http://x", browser_url="http://b", tab_id="t",
+                        transport=_transport, collect=False, allow_submit=allow_submit)
+
+
+def test_the_actuator_refuses_submit_unless_the_run_was_authorised():
+    from interaction.decision import Decision
+    calls = []
+    out = _submit_actuator(calls, allow_submit=False).act(
+        Decision(intent="submit", params={"control": "Submit your application"},
+                 confidence=1.0, rung="teacher", rationale="operator-authorised submit"))
+    assert out.outcome == "blocked"
+    assert not [p for p, _ in calls if p == "/execute"], "a held submit still reached the page"
+
+
+def test_an_authorised_submit_clicks_the_named_control():
+    from interaction.decision import Decision
+    calls = []
+    out = _submit_actuator(calls, allow_submit=True).act(
+        Decision(intent="submit", params={"control": "Submit your application"},
+                 confidence=1.0, rung="teacher", rationale="operator-authorised submit"))
+    assert out.outcome == "ok"
+    execs = [p for path, p in calls if path == "/execute"]
+    assert execs and execs[0]["target_name"] == "Submit your application"
+
+
+def test_an_authorised_submit_still_refuses_to_guess_which_button_ends_the_application():
+    """Every other intent may fall back to a lookup. The irreversible one does not."""
+    from interaction.decision import Decision
+    calls = []
+    out = _submit_actuator(calls, allow_submit=True).act(Decision(intent="submit", params={}, confidence=1.0, rung="teacher",
+                                   rationale="operator-authorised submit"))
+    assert out.outcome == "not_found"
+    assert not [p for p, _ in calls if p == "/execute"]

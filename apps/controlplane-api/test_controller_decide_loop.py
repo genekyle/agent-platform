@@ -673,3 +673,27 @@ def test_a_verified_step_clears_the_recovery_latch():
                          autonomous_classes=frozenset({"missed_required_control"}))
     # every step verified, so no play ever needed to run and the latch stayed clear
     assert res.status in (loop_mod.STATUS_MAX_STEPS, loop_mod.STATUS_DONE)
+
+
+# --- the one rail with a documented release (operator-authorised 2026-07-22) -----------
+def test_submit_is_held_by_default_even_when_a_program_asks_for_it(monkeypatch, tmp_path):
+    """The default must not drift. Everything else here is opt-in; this is the regression guard."""
+    monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", str(tmp_path))
+    sim = ApplySim()
+    res = run_controller(sim, programs=_apply_programs(), session_id="held")
+    assert res.status == loop_mod.STATUS_CONSEQUENTIAL
+    assert "submit" not in [d.intent for d in sim.acted]
+
+
+def test_releasing_held_intents_lets_the_system_press_submit_itself(monkeypatch, tmp_path):
+    """`held_intents=frozenset()` is how an operator authorises ONE measured drive to finish.
+
+    Per-run and explicit on purpose: an operator authorising a single submit must never become a
+    system that always submits, so this lives in the call signature rather than in a setting.
+    """
+    monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", str(tmp_path))
+    sim = ApplySim()
+    res = run_controller(sim, programs=_apply_programs(), session_id="released",
+                         held_intents=frozenset())
+    assert res.status != loop_mod.STATUS_CONSEQUENTIAL
+    assert "submit" in [d.intent for d in sim.acted], "the release did not reach the actuator"

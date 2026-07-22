@@ -128,7 +128,7 @@ class LiveActuator:
                  settle_tries: int = 3, settle_delay: float = 0.7,
                  sleep_fn: Optional[Callable[[float], None]] = None,
                  re_resolve: Optional[Callable[[], Optional[dict]]] = None,
-                 collect: bool = True) -> None:
+                 collect: bool = True, allow_submit: bool = False) -> None:
         self._browser_url = browser_url
         self._tab_id = tab_id
         self._task = task
@@ -147,6 +147,13 @@ class LiveActuator:
         # a drive should always be collecting); turn it off only for a probe you do not want in
         # the training data, never to "save time" — the collecting IS the work.
         self._collect = collect
+        # May this actuator press the one irreversible button in the vocabulary? OFF by default,
+        # and per-run rather than global (operator-authorised 2026-07-22, to measure whether the
+        # system can finish an application unaided). Two properties are deliberate: the control
+        # must be NAMED, never inferred, and this flag does NOT relax the authority ceiling —
+        # `default_authority` still grades a submit against `loop.CONSEQUENTIAL_INTENTS`, so the
+        # bar for how SURE we must be is untouched. It changes who may press, not how sure.
+        self._allow_submit = allow_submit
         # Carried between observe() and act(): the RAW scan (field -> selector, for Indeed's
         # dynamic fields), the current url, the current ats + state.
         self._last_scan: list[dict] = []
@@ -276,10 +283,28 @@ class LiveActuator:
         intent = decision.intent
         p = dict(decision.params or {})
 
-        if intent == Intent.SUBMIT.value:
+        if intent == Intent.SUBMIT.value and not self._allow_submit:
             # Defensive: loop.CONSEQUENTIAL_INTENTS should have held this before act().
             return self._out(Outcome.BLOCKED.value, self._last_state,
                              detail="SUBMIT held for the operator — must not reach act()")
+        if intent == Intent.SUBMIT.value:
+            # Operator-authorised for THIS run only (see the ctor). The control must be NAMED:
+            # every other intent may fall back to a lookup, but the one irreversible action in
+            # the vocabulary does not get to guess which button it is pressing.
+            control = p.get("control") or p.get("name")
+            if not control:
+                return self._out(Outcome.NOT_FOUND.value, self._last_state,
+                                 detail="submit with no control name — refusing to guess which "
+                                        "button ends the application")
+            before = self._read_url()
+            res = self._post("/execute", {**self._addr(), "action_id": "click", "target_bbox": {},
+                                          "target_role": p.get("role", "button"),
+                                          "target_name": control, "driver": self._driver})
+            landed = self._current_state(changed_from=before)
+            identities, unanswered = self._after_look()
+            return ActOutcome(outcome=_outcome_of(res), landed_state=landed,
+                              detail=res.get("detail", ""),
+                              ax_identities=identities, unanswered_after=unanswered)
         if intent in _READ_INTENTS:
             return self._out(Outcome.OK.value, self._current_state(), detail="re-observed")
 
