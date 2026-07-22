@@ -99,6 +99,55 @@ Its three real jobs:
 
 ---
 
+## 1b. S18 results — the bench, run (2026-07-22)
+
+Leave-one-out over all 174 labeled captures / 59 states. Facets scored by **projection**: predict
+the state, read the facet off the answer. `make perception-bench`; full JSON in
+`<artifacts>/derived/perception_bench.json`.
+
+| witness | state | platform | phase | novelty AUROC | cost |
+|---|---|---|---|---|---|
+| **dom:tfidf** | **66.9%** | **98.0%** | **75.5%** | **0.700** | free |
+| dom:nb *(incumbent)* | 62.9% | 96.7% | 73.5% | 0.500 | free |
+| **visual:apple** | 58.3% | 94.0% | 66.9% | 0.693 | free, native, no download |
+| visual:clip | 63.6% | 91.4% | 70.9% | 0.685 | ~600 MB, wifi only |
+| visual:pixel32 *(baseline)* | 49.0% | 86.8% | 57.0% | 0.683 | free |
+
+**Adopted: `dom:tfidf` + `visual:apple`.** Four things the numbers settled:
+
+1. **Predict the state, then project — never train on a facet.** Training directly on `phase`
+   averages `workday_sign_in`, `indeed_login_email` and `login_wall` into one "sign_in" centroid,
+   four vendors' chrome smeared together, and scored **62.8%**; projecting off the state scores
+   **75.5%**. Facets are a lens on the answer, not a second model.
+2. **The incumbent NB is beaten by a TF-IDF centroid on its own features** (66.9% vs 62.9%) — and
+   the gap it cannot close is novelty: **0.500 vs 0.700**, i.e. chance. A posterior over known
+   classes cannot represent "I have never been here", which is the entire reason for a second
+   witness and the reason NB alone could never have been the observer.
+3. **CLIP does not earn its download.** It is better at exact state (63.6% vs 58.3%) — which is
+   *witness A's* job — and worse at platform (91.4% vs 94.0%) and novelty, which are witness B's.
+   It stays in the registry as a one-flag comparison, not as the default.
+4. **The falsifier did not fire.** Rows where the witnesses agree are right **77.9%**; rows where
+   they split, **48.2%** — a 30-point gap, so disagreement genuinely predicts failure. On a split
+   the DOM is right **48%** against vision's **25%**, so witness A leads and the belief is marked
+   unsure rather than tie-broken. That is the whole combination policy, and it is measured.
+
+**The one result that argues against this plan's own premise, recorded rather than buried:**
+witness B's novelty AUROC (**0.693**) is *not better* than witness A's (**0.700**). The claim in §0
+that vision is "the only cheap way to detect that we are somewhere genuinely new" is, on this
+corpus, **not supported** — a TF-IDF centroid with class-conditional calibration detects an unseen
+state just as well. What witness B has demonstrably earned is the **cross-check** (finding 4), not
+novelty supremacy. Two consequences: the escalation trigger should read novelty from *both*
+witnesses (it does — the observer takes the max), and §8's "visual novelty doesn't lead the DOM
+witness" moves from a falsifier-to-watch to a **finding to re-test as the corpus grows**. If it
+still holds at 400 captures, witness B's job shrinks to platform + cross-check and the plan should
+say so.
+
+**Novelty is honest at the operating point.** After the calibration fixes (LEARNINGS 2026-07-22 (2)),
+in-distribution novelty is median **0.09**, and **3.4%** of known pages trip the 0.90 ceiling —
+against a design target of ~10%. Cheap insurance rather than a nuisance alarm.
+
+---
+
 ## 2. The embeddings question, answered directly
 
 **Can the Naive Bayes take embeddings? No — and it should not be asked to.** `state_observer.py` is

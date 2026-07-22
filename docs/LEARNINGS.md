@@ -1939,3 +1939,37 @@ in-distribution observations spread roughly uniformly over [0,1] by construction
 would flag half of every page we know. `NOVELTY_CEILING = 0.90` means "less familiar than 90% of
 what we have seen", and **the cut-off IS the false-flag rate**. That property is why the percentile
 was worth the trouble: it needs no per-corpus tuning and it is comparable across encoders.
+
+## 2026-07-22 (3) — The bench, run: the encoder decision, and the result that argues against our own premise
+
+Leave-one-out over all 174 labeled captures / 59 states (`make perception-bench`). Facets scored
+by **projection** — predict the state, read the facet off the answer.
+
+| witness | state | platform | phase | novelty AUROC |
+|---|---|---|---|---|
+| **dom:tfidf** | **66.9%** | **98.0%** | **75.5%** | **0.700** |
+| dom:nb (incumbent) | 62.9% | 96.7% | 73.5% | 0.500 |
+| **visual:apple** | 58.3% | 94.0% | 66.9% | 0.693 |
+| visual:clip | 63.6% | 91.4% | 70.9% | 0.685 |
+| visual:pixel32 (baseline) | 49.0% | 86.8% | 57.0% | 0.683 |
+
+**Adopted: `dom:tfidf` + `visual:apple`.**
+
+- **Never train on a facet — project onto it.** Training directly on `phase` averages
+  `workday_sign_in`, `indeed_login_email` and `login_wall` into one centroid (four vendors' chrome
+  smeared together) and scores **62.8%**; projecting off the predicted state scores **75.5%**.
+  Facets are a lens on the answer, not a second model to fit.
+- **CLIP does not earn its 600 MB.** Better at exact state (63.6% vs 58.3%) — *witness A's* job —
+  and worse at platform and novelty, which are witness B's. Kept as a one-flag comparison.
+- **The fusion falsifier did not fire.** Agree -> right **77.9%**; split -> **48.2%**. A 30-point
+  gap, so disagreement genuinely predicts failure. On a split the DOM is right 48% vs vision's 25%,
+  which is why witness A leads and the belief is marked unsure instead of tie-broken.
+
+**And the finding that argues against the plan's own premise, recorded rather than buried:**
+witness B's novelty AUROC (0.693) is **not better** than witness A's (0.700). The claim that vision
+is "the only cheap way to detect that we are somewhere new" is, on this corpus, **not supported** —
+a TF-IDF centroid with class-conditional calibration spots an unseen state just as well. What
+vision has demonstrably earned is the **cross-check**, not novelty supremacy. Re-test at ~400
+captures; if it still holds, witness B's job shrinks to platform + cross-check and the plan should
+say so. (What NB could never do stands: 0.500 AUROC, exactly chance — a posterior over known
+classes cannot represent "I have never been here.")
