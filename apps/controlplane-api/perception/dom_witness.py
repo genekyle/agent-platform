@@ -31,7 +31,18 @@ from perception.prototypes import Prediction, _median
 
 #: Bump when `extract_tokens` changes what it emits — a mid-corpus feature drift silently
 #: invalidates every row trained before it (the `bundle_to_prompt` discipline, one floor down).
-FEATURE_SET_VERSION = "v2"
+#:
+#: v3 (2026-07-22) — **the `txt:` namespace was deleted**, on two independent grounds that happen
+#: to be the same deletion (`EXPERIMENT_perception_config.md` F5/E3):
+#:   * it HURT. Leave-one-out state accuracy 66.9% -> **68.9%** without it, the only feature
+#:     change of the five tried that helped at all.
+#:   * it was the one namespace where the corpus and the runtime meant different things by the
+#:     same prefix — element text to the trainer, page text to the live observer. A witness whose
+#:     features change meaning between fit and serve is not measuring what its metrics say.
+#: Everything else the ablation touched (`route:`, `title:`, `role:`, `ph:`, `flag:`) moved
+#: accuracy by 0.0% and is kept only because it is free; the signal is `tok:`, the accessible
+#: names, which is the same layer PRINCIPLES §6 says to ACT through.
+FEATURE_SET_VERSION = "v3"
 
 _WORD = re.compile(r"[a-z0-9]{2,}")
 _MAX_ELEMENTS = 60        # cap elements read per capture — keeps the vector sparse and cheap
@@ -95,17 +106,18 @@ def extract_tokens(artifact: dict[str, Any], *, page_text: str = "") -> list[str
         tag = (el.get("role") or el.get("tag") or "").strip().lower()
         if tag:
             feats.append(f"role:{tag}")
-        for source, prefix in (("name", "tok"), ("label", "tok"), ("text", "txt"),
-                               ("placeholder", "ph")):
+        for source, prefix in (("name", "tok"), ("label", "tok"), ("placeholder", "ph")):
             for tok in _tokens(el.get(source) or ""):
                 feats.append(f"{prefix}:{tok}")
                 seen += 1
         if seen > _MAX_TOTAL_TOKENS:
             break
 
-    for tok in _tokens(page_text, 120):
-        feats.append(f"txt:{tok}")
-
+    # `page_text` is accepted and deliberately NOT featurized (v3 — see FEATURE_SET_VERSION).
+    # It stays in the signature because it is part of an observation and other consumers read it
+    # (the recipe's state markers, the challenge detector); it just stopped being evidence here,
+    # because measuring said it was noise on one side of the seam and different noise on the other.
+    _ = page_text
     return feats
 
 

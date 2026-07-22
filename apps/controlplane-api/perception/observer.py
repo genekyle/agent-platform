@@ -29,6 +29,26 @@ from perception.dom_witness import TfidfCentroidWitness, extract_tokens
 from perception.facets import facets_for
 from perception.prototypes import Prediction, PrototypeBank
 
+#: Below this DOM clarity, ask the eyes. Not chosen — measured (2026-07-22, 151 leave-one-out
+#: rows): above the cut the DOM witness is right **80.2%** of the time; at or below it, **40.0%**.
+#: One number splits the corpus into a half we can act on and a third we cannot, which makes it
+#: the natural trigger. In that low band a split with the visual witness drops accuracy to **20%**
+#: — the strongest single "do not act" signal in the system.
+VISION_CLARITY_FLOOR = 0.6
+
+#: …and ask the eyes when the ears think this is somewhere new, because OR-fusion is the only
+#: novelty configuration that beats one witness alone (recall at a 10% false-flag budget: dom
+#: 48.3%, visual 44.4%, AND 39.7%, **OR 50.3%**). Slightly below the acting ceiling so the eyes
+#: get a say BEFORE the belief is declared novel, not after.
+VISION_NOVELTY_FLOOR = 0.80
+
+#: What a lone visual witness is worth as evidence of state. Deliberately a constant and not its
+#: margin: the visual margin separates its right answers from its wrong ones at **AUROC 0.503** —
+#: chance. Its LABEL carries information; its confidence carries none, and reading the latter as
+#: certainty is precisely the "confidently wrong where it should have raised its hand" failure.
+VISUAL_ONLY_UNCERTAINTY = 0.75
+
+
 def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, x))
 
@@ -92,11 +112,34 @@ class Observer:
         return WitnessView(name=self.visual_name, label=pred.label, similarity=pred.similarity,
                            margin=pred.margin, novelty=pred.novelty), pred
 
+    # --- the cascade ------------------------------------------------------------------
+    def should_consult_eyes(self, dom: Optional[Prediction], *,
+                            consequential: bool = False) -> tuple[bool, str]:
+        """Is this a turn where a second opinion can change the answer? Returns (yes, why).
+
+        A committee asks both witnesses every turn and averages. A cascade asks the cheap one and
+        escalates — the same rule as every other layer here. Which is right was measured, not
+        assumed: agreement predicts error WORSE than the DOM's own margin on average (0.656 vs
+        0.774), and better than anything in the band where the DOM is unclear (agree 60% / split
+        20%). So: ask the eyes where they pay, skip them where they only re-derive.
+        """
+        if dom is None or dom.label is None:
+            return True, "the ears could not read the page"
+        if consequential:
+            return True, "the action is consequential — the strict bar applies"
+        if dom.clarity <= VISION_CLARITY_FLOOR:
+            return True, f"the ears are unclear (clarity {dom.clarity:.2f})"
+        if dom.novelty >= VISION_NOVELTY_FLOOR:
+            return True, f"the ears think this may be new (novelty {dom.novelty:.2f})"
+        return False, ""
+
     # --- fusion ----------------------------------------------------------------------
     def observe(self, obs: Observation, *, prior: tuple[str, ...] = (),
+                consequential: bool = False,
                 extra_uncertainty: Optional[dict[str, float]] = None) -> BeliefState:
         dom_view, dom_pred = self._ask_dom(obs)
-        vis_view, vis_pred = self._ask_visual(obs)
+        consult, why_consult = self.should_consult_eyes(dom_pred, consequential=consequential)
+        vis_view, vis_pred = self._ask_visual(obs) if consult else (None, None)
         views = tuple(v for v in (dom_view, vis_view) if v)
 
         if not views:
@@ -109,6 +152,8 @@ class Observer:
             agreement = "agree"
         elif both:
             agreement = "split"
+        elif dom_view is not None and not consult:
+            agreement = "not_consulted"
         else:
             agreement = "one_sided"
 
@@ -122,10 +167,20 @@ class Observer:
             state_uncertainty = base * 0.5
             rationale = f"both witnesses say {state}"
         elif agreement == "split":
-            # A split can never read as confident, however wide the leader's margin looked.
+            # A split can never read as confident, however wide the leader's margin looked — and
+            # in the low-clarity band where the eyes get consulted, a split means the leader is
+            # right one time in five.
             state_uncertainty = _clamp(0.5 + base * 0.5, lo=0.5)
             rationale = (f"witnesses disagree — {dom_view.name} says {dom_view.label}, "
                          f"{vis_view.name} says {vis_view.label}; following {dom_view.name}")
+        elif agreement == "not_consulted":
+            state_uncertainty = base
+            rationale = f"{dom_view.name} is clear ({state}); the eyes were not needed"
+        elif dom_view is None:
+            # Vision alone. Its label is worth having; its CONFIDENCE is chance (AUROC 0.503), so
+            # a lone visual witness is never allowed to read as sure however wide its margin.
+            state_uncertainty = max(base, VISUAL_ONLY_UNCERTAINTY)
+            rationale = f"only {leader_view.name} could read this page, and its confidence is not informative"
         else:
             state_uncertainty = base
             rationale = f"only {leader_view.name} could read this page"

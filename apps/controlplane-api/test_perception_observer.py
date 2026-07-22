@@ -95,8 +95,10 @@ def test_agreement_halves_uncertainty_and_names_both_witnesses():
                                       ("workday_questions", [0.02, 0.98])])
     obs_engine = Observer(dom=dom, visual=bank, encoder=_StubEncoder({"a.png": [0.99, 0.01]}),
                           visual_name="visual:stub")
+    # consequential=True forces the eyes open — on a clear page the cascade would skip them.
     belief = obs_engine.observe(Observation(artifact=_artifact("Sign In", ["Email", "Password"]),
-                                            screenshot_path=Path("a.png")))
+                                            screenshot_path=Path("a.png")),
+                                consequential=True)
     assert belief.state == "workday_sign_in"
     assert belief.agreement == "agree"
     assert len(belief.witnesses) == 2
@@ -112,7 +114,8 @@ def test_a_split_can_never_read_as_confident_and_the_dom_leads():
     obs_engine = Observer(dom=dom, visual=bank, encoder=_StubEncoder({"a.png": [0.0, 1.0]}),
                           visual_name="visual:stub")
     belief = obs_engine.observe(Observation(artifact=_artifact("Sign In", ["Email", "Password"]),
-                                            screenshot_path=Path("a.png")))
+                                            screenshot_path=Path("a.png")),
+                                consequential=True)
     assert belief.agreement == "split"
     assert belief.state == "workday_sign_in"          # witness A leads
     assert belief.unsure_about("state") >= 0.5        # and the split is visible in the number
@@ -120,12 +123,19 @@ def test_a_split_can_never_read_as_confident_and_the_dom_leads():
     assert "disagree" in belief.rationale
 
 
-def test_one_sided_evidence_buys_no_free_confidence():
+def test_one_sided_means_asked_and_unavailable_not_never_asked():
+    """`not_consulted` and `one_sided` are different facts and the journal must not conflate them:
+    a row where the cascade skipped the eyes is not a row where the eyes had nothing to say."""
     dom = _dom_witness()
-    engine = Observer(dom=dom)   # no visual witness at all
-    belief = engine.observe(Observation(artifact=_artifact("Sign In", ["Email", "Password"])))
-    assert belief.agreement == "one_sided"
-    assert len(belief.witnesses) == 1
+    engine = Observer(dom=dom)   # no visual witness configured at all
+    page = Observation(artifact=_artifact("Sign In", ["Email", "Password"]))
+
+    asked = engine.observe(page, consequential=True)   # eyes wanted, none available
+    assert asked.agreement == "one_sided"
+    assert len(asked.witnesses) == 1
+
+    skipped = engine.observe(page)                     # ears clear, eyes not needed
+    assert skipped.agreement == "not_consulted"
 
 
 def test_a_matching_recipe_prior_narrows_but_a_missing_one_never_widens():
@@ -163,3 +173,89 @@ def test_caller_supplied_axes_land_on_the_belief():
         extra_uncertainty={"answer": 0.9})
     assert belief.unsure_about("answer") == 0.9
     assert belief.blocks() == "answer"
+
+
+# --- the cascade: ask the eyes where they pay, skip them where they only re-derive ----
+def _clear_page():
+    return Observation(artifact=_artifact("Sign In", ["Email", "Password"]))
+
+
+def test_the_eyes_are_skipped_when_the_ears_are_clear():
+    """The measured reason (EXPERIMENT_perception_config F1): agreement predicts error WORSE
+    (AUROC 0.656) than the DOM's own margin (0.774), so a second opinion on every turn is mostly
+    re-derivation. Above the clarity cut the DOM is right 80.2% of the time."""
+    from perception.observer import Observer as O
+    consulted = []
+
+    class _CountingEncoder(_StubEncoder):
+        def embed(self, path):
+            consulted.append(path)
+            return super().embed(path)
+
+    bank = PrototypeBank("stub").fit([("workday_sign_in", [1.0, 0.0]),
+                                      ("workday_sign_in", [0.98, 0.02]),
+                                      ("workday_questions", [0.0, 1.0]),
+                                      ("workday_questions", [0.02, 0.98])])
+    engine = O(dom=_dom_witness(), visual=bank,
+               encoder=_CountingEncoder({"a.png": [0.99, 0.01]}), visual_name="visual:stub")
+    belief = engine.observe(Observation(artifact=_artifact("Sign In", ["Email", "Password"]),
+                                        screenshot_path=Path("a.png")))
+    assert belief.agreement == "not_consulted"
+    assert consulted == []                      # the screenshot was never even embedded
+    assert "not needed" in belief.rationale
+
+
+def test_an_unclear_reading_opens_the_eyes():
+    """Below the cut the DOM is right 40% of the time, and a split there drops it to 20% — which
+    is the strongest do-not-act signal in the system, and worth a screenshot every time."""
+    from perception.observer import VISION_CLARITY_FLOOR
+    from perception.prototypes import Prediction
+
+    engine = Observer(dom=_dom_witness())
+    unclear = Prediction(label="x", similarity=0.5, margin=0.01, novelty=0.1,
+                         margin_scale=1.0)
+    consult, why = engine.should_consult_eyes(unclear)
+    assert consult and "unclear" in why
+    assert unclear.clarity <= VISION_CLARITY_FLOOR
+
+
+def test_suspected_novelty_opens_the_eyes_because_OR_fusion_is_the_only_one_that_helps():
+    """Recall at a 10% false-flag budget: dom 48.3%, visual 44.4%, AND 39.7% (worse than either),
+    OR 50.3%. So the eyes get a say BEFORE the belief is declared novel."""
+    from perception.prototypes import Prediction
+    engine = Observer(dom=_dom_witness())
+    suspicious = Prediction(label="x", similarity=0.9, margin=1.0, novelty=0.85, margin_scale=1.0)
+    consult, why = engine.should_consult_eyes(suspicious)
+    assert consult and "new" in why
+
+
+def test_a_consequential_action_always_opens_the_eyes():
+    from perception.prototypes import Prediction
+    engine = Observer(dom=_dom_witness())
+    clear = Prediction(label="x", similarity=0.9, margin=1.0, novelty=0.0, margin_scale=1.0)
+    assert engine.should_consult_eyes(clear) == (False, "")
+    consult, why = engine.should_consult_eyes(clear, consequential=True)
+    assert consult and "consequential" in why
+
+
+def test_unreadable_ears_open_the_eyes():
+    engine = Observer(dom=_dom_witness())
+    consult, why = engine.should_consult_eyes(None)
+    assert consult and "could not read" in why
+
+
+def test_a_lone_visual_witness_is_never_allowed_to_read_as_sure():
+    """Its margin separates its right answers from its wrong ones at AUROC 0.503 — chance. The
+    label is evidence; the confidence is not, and treating it as confidence is exactly the
+    failure mode the second witness was supposed to prevent."""
+    from perception.observer import VISUAL_ONLY_UNCERTAINTY
+    bank = PrototypeBank("stub").fit([("workday_sign_in", [1.0, 0.0]),
+                                      ("workday_sign_in", [0.99, 0.01]),
+                                      ("workday_questions", [0.0, 1.0]),
+                                      ("workday_questions", [0.01, 0.99])])
+    engine = Observer(visual=bank, encoder=_StubEncoder({"a.png": [1.0, 0.0]}),
+                      visual_name="visual:stub")           # no DOM witness at all
+    belief = engine.observe(Observation(screenshot_path=Path("a.png")))
+    assert belief.state == "workday_sign_in"
+    assert belief.unsure_about("state") >= VISUAL_ONLY_UNCERTAINTY
+    assert "not informative" in belief.rationale

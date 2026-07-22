@@ -135,8 +135,8 @@ def _artifact(title: str, labels: list[str], *, dialog: bool = False) -> dict:
 
 
 def test_the_featurizer_reads_the_surfaces_the_incumbent_ignored():
-    """Title, placeholders, element text and the dialog flag are all already in the artifact and
-    were never read — that omission is why Workday's form phases looked alike to witness A."""
+    """Title, placeholders and the dialog flag are all already in the artifact and were never
+    read. (Element text was too, and the ablation showed it HURT — see v3.)"""
     toks = extract_tokens(_artifact("My Information", ["First Name"], dialog=True))
     assert "title:information" in toks
     assert "flag:dialog" in toks
@@ -144,11 +144,13 @@ def test_the_featurizer_reads_the_surfaces_the_incumbent_ignored():
     assert any(t.startswith("route:") for t in toks)
 
 
-def test_page_text_reaches_the_same_featurizer_as_the_trainer():
-    """The live path has page text but no artifact; the trainer has an artifact and no page text.
-    One featurizer or the corpus and the runtime silently disagree about the features."""
+def test_page_text_is_deliberately_not_featurized():
+    """v3: the `txt:` namespace was deleted. It cost 2 points of accuracy AND it was the one
+    prefix that meant different things on the two sides of the seam — element text to the
+    trainer, page text to the live observer. `page_text` is still accepted (other consumers read
+    it) and is simply no longer evidence."""
     toks = extract_tokens({}, page_text="Voluntary Disclosures")
-    assert "txt:voluntary" in toks
+    assert not any(t.startswith("txt:") for t in toks)
 
 
 @pytest.mark.parametrize("witness_cls", [TfidfCentroidWitness, NaiveBayesWitness])

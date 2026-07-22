@@ -139,6 +139,37 @@ the one problem that is left.
 
 ---
 
+## F7 — Aiming the ears at the field set: the hypothesis was not refuted, it was never tested
+
+The obvious follow-up to F6 (all remaining error is intra-platform phase confusion) is that what
+distinguishes `workday_my_information` from `questions` from `voluntary_disclosures` is **which
+form controls are present**, currently diluted among hundreds of nav/footer tokens. Four feature
+sets, leave-one-out:
+
+| feature set | state | median tokens |
+|---|---|---|
+| baseline (all, cap 400) | 66.9% | 382 |
+| **drop `txt:`** | **68.9%** | 292 |
+| form controls only | **39.9%** | **7** |
+| form controls weighted 3× | 68.2% | 199 |
+| all, cap 1200 | 67.5% | 196 |
+
+**Read the median-token column before the accuracy column.** "Form controls only" produced *seven
+tokens per page*. The filter matched almost nothing — these artifacts store `role: ""` with a
+separate `tag`, so form controls are **not identifiable in the corpus at all**. That is not a
+refutation of the hypothesis; it is a measurement that never happened.
+
+The real field set does exist — `/scan_required`'s `unanswered` list, which names exactly the
+required controls on the page — but it has never been written into a capture artifact. It reaches
+the live `Bundle` and stops there. **So the highest-value experiment in this whole document is
+currently un-runnable, and the fix is a capture change, not a model change**: record the scan
+beside the artifact so the corpus carries the one signal that separates the states we actually
+confuse. The always-collect change (`LiveActuator(collect=True)`) is the vehicle; it needs the
+scan attached.
+
+Also settled here: raising the token cap does not help (67.5%), so F3's "rich bucket" weakness is
+a property of dense pages, not of truncation.
+
 ## The configuration this argues for: a cascade, not a committee
 
 Perception should obey the same rule as every other layer here — *cheapest tool that is confident*
@@ -163,16 +194,30 @@ it exactly where it changes an answer. Which is the honest reply to "is vision s
 the corpus doubles and F1's low band stops separating, vision drops to a requested diagnostic
 (the same status a screenshot has in `PLAN_supervisor` §2) and nothing else in the design moves.
 
+## Built on this branch
+
+1. ✅ **`txt:` deleted from the featurizer** (`FEATURE_SET_VERSION = v3`). +2.0 points, and it
+   removes the train/serve skew in the same stroke.
+2. ✅ **The eyes made conditional** — `Observer.should_consult_eyes()`, thresholds taken from the
+   data rather than chosen: `VISION_CLARITY_FLOOR = 0.6` (above the cut the ears are right 80.2%,
+   at or below it 40.0%), `VISION_NOVELTY_FLOOR = 0.80` (so the eyes get a say before a belief is
+   declared novel, since OR is the only fusion that beats one witness), plus consequential
+   actions and unreadable ears. Fires on ~42% of turns on this corpus.
+3. ✅ **`not_consulted` is its own agreement value.** A row where the cascade skipped the eyes is
+   not a row where they agreed, and the corpus must not conflate the two.
+4. ✅ **A lone visual witness can never read as sure** (`VISUAL_ONLY_UNCERTAINTY`), because its
+   confidence is chance.
+
 ## What to build next, in order
 
-1. **Drop `txt:` from the featurizer.** +2 points and it removes the train/serve skew. One line.
-2. **Aim the ears at the field set** (E5, running): 49 of 50 errors are intra-platform phase
-   confusions, and what distinguishes those phases is *which form controls are present*, currently
-   diluted among hundreds of nav/chrome tokens. Test form-controls-only and form-controls-weighted
-   feature sets, and raising the 400-token cap (F3's confound).
-3. **Make the eyes conditional** — the cascade above, replacing the always-both observer.
-4. **Then, and only then, more data.** F2's ceiling (~50% of unseen states caught) is a
-   sample-size problem, not a modelling one.
+1. **Capture `/scan_required` beside the artifact.** F7: the one signal that separates the states
+   we actually confuse is live-only and has never been written to the corpus, which makes the
+   highest-value experiment here un-runnable. This is a capture change, not a model change.
+2. **Re-run F7 once the corpus has field sets.** If the field-set witness closes intra-platform
+   phase confusion, it is worth more than everything else on this list combined — that confusion
+   is the *entire* remaining error budget.
+3. **Then, and only then, more data for novelty.** F2's ~50%-of-unseen-states ceiling is a
+   sample-size problem, not a modelling one, and no fusion rule moves it.
 
 ## What died here
 
