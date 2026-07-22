@@ -210,15 +210,19 @@ class LiveActuator:
         # The capture also yields the screenshot the visual witness needs, so collecting and
         # perceiving are one round trip rather than two. Both are best-effort: perception is an
         # aid, never a dependency, and a drive must run exactly as before without it.
-        shot = None
+        captured = perception_live.CapturedTurn()
         if self._collect:
-            shot = perception_live.capture_now(
+            captured = perception_live.capture_now(
                 self._post, self._addr(), task=self._task,
                 state=None, domain_id=ats_registry.classify_ats(url),
                 form_state={"unanswered": raw})
+        # Perceive the capture we just took, not a rebuild of it. The witnesses are fitted on
+        # `/capture` artifacts, so handing one back is what makes the live and training views the
+        # same view; the synthesized fallback only runs when the capture did not land.
         belief = perception_live.sense(
-            url=url, page_text=page_text, ax_candidates=candidates, screenshot_path=shot,
-            domain_id=ats_registry.classify_ats(url))
+            url=url, page_text=page_text, title=str(auth.get("title") or ""),
+            ax_candidates=candidates, screenshot_path=captured.screenshot,
+            artifact=captured.artifact, domain_id=ats_registry.classify_ats(url))
 
         bundle = build_bundle(self._task, url, page_text, goal_text=self._goal,
                               scan=raw, journal_tail=tail,

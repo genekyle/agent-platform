@@ -274,3 +274,51 @@ class RunObserverSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(artifact["acquisition"]["capture_status"]["screenshot"]["status"], "unavailable")
         self.assertEqual(artifact["grounded_candidates"], [])
         self.assertEqual(artifact["ranked_candidates"], [])
+
+
+class TabAddressingTest(unittest.IsolatedAsyncioTestCase):
+    """An addressed capture must land on the addressed tab, or not happen at all.
+
+    Live, 2026-07-22: `LiveActuator` addresses tabs by CDP `tab_id` only (an id survives a
+    navigation; a url does not), but `list_pages` exposes a 1-based index and no target id, so the
+    id comparison in `_select_tab` could never match. `_verify_target_tab`'s every branch was keyed
+    on `expected_url`, which an id-only caller leaves as None — so the guard written to stop
+    "poisoning the corpus with a mislabelled state" passed, and four captures of a stale
+    post-apply tab were written carrying the state label of the page the drive was actually on.
+    """
+
+    def setUp(self):
+        import app.main as m
+        self.m = m
+
+    def test_a_cdp_tab_id_resolves_to_its_url(self):
+        targets = [{"id": "AAA", "url": "https://www.indeed.com/jobs?q=x"},
+                   {"id": "BBB", "url": "https://smartapply.indeed.com/post-apply"}]
+
+        class _Resp:
+            def read(self_inner):
+                return json.dumps(targets).encode()
+            def __enter__(self_inner):
+                return self_inner
+            def __exit__(self_inner, *a):
+                return False
+
+        with patch("urllib.request.urlopen", return_value=_Resp()):
+            self.assertEqual(self.m._url_for_tab_id("http://localhost:9328", "AAA"),
+                             "https://www.indeed.com/jobs?q=x")
+            self.assertIsNone(self.m._url_for_tab_id("http://localhost:9328", "MISSING"))
+
+    async def test_an_unpinnable_addressed_capture_refuses_instead_of_taking_the_front_tab(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            await self.m._verify_target_tab(None, expected_url=None, tab_pinned=False,
+                                            addressed=True)
+        self.assertIn("frontmost", str(ctx.exception))
+
+    async def test_a_caller_that_named_no_tab_still_gets_the_front_tab(self):
+        """Not every capture addresses a tab; those callers asked for whatever is in front."""
+        class _Session:
+            async def call_tool(self_inner, name, args):
+                return {"url": "https://example.test/x", "title": "t"}
+
+        await self.m._verify_target_tab(_Session(), expected_url=None, tab_pinned=False,
+                                        addressed=False)

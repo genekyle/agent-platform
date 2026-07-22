@@ -24,6 +24,96 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-22 (4) — The first progressive-autonomy drive: we were capturing the wrong tab
+
+**The run.** First live drive with authority + the teacher seat wired (`/api/controller/run`,
+`progressive=true`), on a real Indeed apply. Everything the plan promised to record, recorded: the
+first 4 `decision_journal` rows ever to carry `belief_*` / `control_mode` / `authority_axis`, the
+first teacher inbox tickets with real reasoning on both sides, the first accepted scoped `Lesson`,
+captures + AX sidecars every turn, and the Submit gate holding. And the drive was **unusable**:
+`mode_mix {red: 2}`, `rung0_share 0.0`, GREEN/YELLOW/ORANGE never once.
+
+**What we believed.** That `belief_novelty` saturating at 1.00 meant the perception witnesses were
+mis-calibrated for live pages — a modelling problem, to be fixed by re-fitting or by widening the
+live featurizer.
+
+**What's actually true — `/capture` was capturing a different tab than the one being driven.**
+Proven by asking for one tab and reading back another: requested `tab_id=7EE2CE…`
+(`indeed.com/jobs?q=reporting+analyst…`), got an artifact whose `page_identity.url` was
+`smartapply.indeed.com/…/review-module`. Four of the drive's captures recorded a **stale
+post-apply tab** while carrying the state label of the page the drive was actually on.
+
+Two individually-correct rules composed into a silent mislabel:
+
+1. `LiveActuator._addr()` addresses by **`tab_id` only**, on purpose — *"tab_id only: stable across
+   navigation. A stale tab_url would mis-address after a Continue click navigates."* Correct.
+2. `app/main.py::_select_tab` states in its own docstring that *"list_pages exposes no CDP
+   targetId, so a tab_id alone cannot address a page — the URL is the only handle we get"*, then
+   compares the CDP target id against a **1-based list index**. It can never match, so it returned
+   "not pinned" every time. Also correct, as far as it goes.
+
+And the guard that exists precisely to stop this — `_verify_target_tab`, whose docstring says *"a
+capture of the WRONG page is worse than no capture… FAIL LOUD"* — **had every branch keyed on
+`expected_url`**. An id-only caller leaves that `None`, so the guard sailed past and the capture
+fell through to whatever tab was frontmost. **The safety check was inert for exactly the caller it
+most needed to protect.**
+
+**Why this produced the novelty saturation, and why we chased the wrong thing first.** The DOM
+witness read AX from the *addressed* tab while the visual witness scored a screenshot of a
+*different* tab. They were never disagreeing about a page — they were looking at two pages. Hence
+`agreement: split` with both novelty scores pinned at 1.00, hence RED on every turn
+(`authority()` maps a novelty block straight to RED). A perception bug and a corpus-poisoning bug
+wearing the same symptom.
+
+**A real second cause, found on the way and fixed too.** `perception.live.sense()` synthesized an
+artifact from AX candidates rather than featurizing the capture the same turn had just written.
+That synthesis is strictly thinner than the `/capture` artifacts the witnesses are fitted on — no
+`ph:`, no `title:`, no `flag:`, and it duplicates one 60-capped candidate list into both element
+views, so the featurizer reads 60 controls twice instead of 120 distinct ones. Measured against
+the promoted witness on real captures from this drive:
+
+| featurized from | cosine | margin | novelty |
+|---|---|---|---|
+| the real `/capture` artifact | **0.79** | **0.33** | **0.72** |
+| the synthesized lookalike | 0.21 | 0.03 | 0.97 |
+
+The synthesis also predicted `workday_review` for an Indeed review page. `capture_now` already
+opened that artifact to resolve the screenshot and then threw it away; it now returns it
+(`CapturedTurn`) and `sense()` featurizes the real thing. **One featurizer over two artifact
+shapes is the same drift the module was written to prevent, wearing a different hat.**
+
+**A third, smaller, still worth knowing.** The promoted observer was fitted at `feature_set: v3`
+while `dom_witness.FEATURE_SET_VERSION` had moved to `v4`. Harmless *today* only because the v4
+`field:` namespace is empty for pre-2026-07-22 captures — but live captures now carry `form_state`,
+so it would have started mattering on the next drive. Re-fitted (174 rows / 59 states).
+
+**Two design holes the same run exposed, NOT yet fixed** (they need an operator decision):
+- **A novelty-RED cannot be instructed.** `authority()` grades RED for two different reasons —
+  the executor cannot reach the page, *or* novelty blocks — but `authority_seam.takeover` rejects
+  an `instruct` answer on the stated assumption that *"the executor is what could not reach the
+  page"*. With `reach_gaps: []` every time, `PLAN_progressive_autonomy` §2's intended path (teacher
+  supplies the meaning, the local actuator performs and verifies it, the step stays journaled) is
+  unreachable exactly when reach is fine. This is the plan's own falsifier #4, on turn one.
+- **A takeover cannot report a new tab.** Clicking Apply opened the application in a new tab; the
+  drive was bound to the old `tab_id`, so a legitimate takeover had no way to tell the loop where
+  the work went, and the drive had to be aborted and re-addressed by hand.
+
+**Where it's encoded now.** `apps/mcp/app/main.py` — `_url_for_tab_id` (CDP id → URL via the
+browser's own `/json/list`, a free local socket) so an id-only caller is addressable, and
+`_verify_target_tab(addressed=…)` which now **refuses** when an explicit address could not be
+pinned, while a caller that named no tab still gets the front tab. `perception/live.py` —
+`CapturedTurn`, `read_artifact`, `sense(artifact=…)`, and `artifact_from_live` demoted in its own
+docstring to the fallback it should always have been. `controller/live_actuator.py` — perceives the
+capture it just took, and finally passes the `title` it always had. Pinned by
+`test_main.py::TabAddressingTest` and two new `test_perception_live.py` cases.
+
+**The transferable lesson.** A guard whose every branch is keyed on one optional parameter is not a
+guard for callers that omit it. Both of these bugs were *documented in the docstring of the very
+function that had them* — the code said "a tab_id alone cannot address a page" and then tried to,
+and said "FAIL LOUD" while failing silent. Prose next to a rule is not the rule.
+
+---
+
 ## 2026-07-22 — The teacher had no seat, so it wrote scripts; and four things the real corpus taught us
 
 **What we believed.** That "the teacher keeps free-handing scripts around the Interaction API" was

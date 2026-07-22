@@ -225,9 +225,11 @@ async def observe_live_capture(
     async with stdio_client(build_server_params(browser_url)) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            pinned = await _select_tab(session, tab_id, tab_url) if (tab_id or tab_url) else False
+            addressed = bool(tab_id or tab_url)
+            pinned = await _select_tab(session, tab_id, tab_url, browser_url) if addressed else False
             # Verify we're on the intended tab, not the control panel — and not some OTHER tab.
-            await _verify_target_tab(session, expected_url=tab_url, tab_pinned=pinned)
+            await _verify_target_tab(session, expected_url=tab_url, tab_pinned=pinned,
+                                     addressed=addressed)
             return await capture_observation(
                 session,
                 scenario=scenario,
@@ -260,13 +262,43 @@ def _parse_pages(payload: Any) -> list[dict[str, Any]]:
     return out
 
 
-async def _select_tab(session: ClientSession, tab_id: Optional[str], tab_url: Optional[str]) -> bool:
+def _url_for_tab_id(browser_url: str, tab_id: str) -> Optional[str]:
+    """A CDP target id -> that target's current URL, read from the browser's own /json/list.
+
+    This is the bridge between two addressing schemes that could not talk to each other, and the
+    absence of it silently poisoned the corpus (live, 2026-07-22). The controller addresses tabs
+    by CDP `tab_id` on purpose — it is the only handle that survives a navigation — while
+    `list_pages` exposes a 1-based index and a URL and no target id at all, so `_select_tab`'s
+    id comparison could never match and every controller capture quietly fell through to whatever
+    tab happened to be frontmost. Four captures of a stale post-apply tab were written and
+    labelled with the state of the page the drive was actually on.
+
+    The browser is already open and this is a local socket, so resolving the id costs nothing.
+    """
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{browser_url.rstrip('/')}/json/list", timeout=5) as fh:
+            targets = json.loads(fh.read().decode("utf-8") or "[]")
+    except Exception:
+        return None
+    for t in targets if isinstance(targets, list) else []:
+        if isinstance(t, dict) and str(t.get("id")) == str(tab_id):
+            return str(t.get("url") or "") or None
+    return None
+
+
+async def _select_tab(session: ClientSession, tab_id: Optional[str], tab_url: Optional[str],
+                      browser_url: str = "") -> bool:
     """Select the intended page and report whether it was actually PINNED.
 
-    list_pages exposes no CDP targetId, so a tab_id alone cannot address a page — the URL is the
-    only handle we get. Returns True only when we selected a page we could positively identify;
-    False means we do not know what we're looking at, and the caller must refuse to capture rather
-    than write a mislabelled artifact (see _verify_target_tab).
+    list_pages exposes no CDP targetId, so a tab_id alone cannot address a page directly — the URL
+    is the only handle we get. When the caller addressed by id, we resolve that id to its URL via
+    the browser's own /json/list first (`_url_for_tab_id`) and then match on the URL, so an id-only
+    caller is addressable instead of silently landing on the front tab. Returns True only when we
+    selected a page we could positively identify; False means we do not know what we're looking at,
+    and the caller must refuse to capture rather than write a mislabelled artifact
+    (see _verify_target_tab).
     """
     try:
         pages = _parse_pages(normalize_capture_tool_payload(await session.call_tool("list_pages", {})))
@@ -274,6 +306,10 @@ async def _select_tab(session: ClientSession, tab_id: Optional[str], tab_url: Op
         return False
     if not pages:
         return False
+
+    # An id-only caller: turn the id into the URL that list_pages can actually match on.
+    if tab_id and not tab_url and browser_url:
+        tab_url = _url_for_tab_id(browser_url, tab_id)
 
     match = None
     if tab_url:
@@ -295,14 +331,29 @@ async def _select_tab(session: ClientSession, tab_id: Optional[str], tab_url: Op
 
 
 async def _verify_target_tab(session: ClientSession, *, expected_url: Optional[str] = None,
-                             tab_pinned: bool = False) -> None:
+                             tab_pinned: bool = False, addressed: bool = False) -> None:
     """Confirm we're on the intended page before capturing.
 
     A capture of the WRONG page is worse than no capture: it lands in the corpus as a confidently
     labelled example and teaches the classifier a lie. So a url mismatch is only tolerable when we
     positively pinned the tab by id (then it's a redirect, and the tab is still the right one). If
     the tab was NOT pinned, a mismatch means we have no idea what we're looking at — FAIL LOUD.
+
+    `addressed` is the case this guard used to miss entirely, and missing it cost us a poisoned
+    corpus and a controller pinned to RED (live, 2026-07-22). Every check below is keyed on
+    `expected_url`, so a caller that addressed a tab by ID ALONE — which is exactly what
+    `LiveActuator` does, deliberately, because an id survives navigation and a url does not — hit
+    `expected_url=None`, sailed past every branch, and captured whatever was frontmost. An
+    explicit address that could not be honoured must fail, not silently degrade to a different
+    page; a caller that named no tab at all still gets the front tab, because that is what it
+    asked for.
     """
+    if addressed and not tab_pinned:
+        raise RuntimeError(
+            "Capture was addressed to a specific tab (tab_id/tab_url) but that tab could not be "
+            "pinned, so the capture would be of whatever page is frontmost. Refusing rather than "
+            "poisoning the corpus with a mislabelled state."
+        )
     try:
         result = await session.call_tool("evaluate_script", {"function": "() => ({ url: location.href, title: document.title })"})
         payload = normalize_capture_tool_payload(result)

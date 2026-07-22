@@ -22,6 +22,7 @@ the drive running exactly as it ran before. `None` is a real answer everywhere h
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -60,6 +61,16 @@ def artifact_from_live(*, url: str = "", title: str = "",
 
     Reads `caption or name` from an AX candidate, matching `fingerprint.ax_summary` exactly, so
     the witness and the fingerprint cannot disagree about what a control is called.
+
+    THE FALLBACK, not the main path (measured live 2026-07-22). A synthesized artifact is
+    strictly thinner than the `/capture` artifacts the witnesses are fitted on — it carries no
+    `ph:` (AX candidates have no placeholders), no `title:`, no `flag:`, and it duplicates one
+    capped candidate list into both element views, so the featurizer reads the first 60 controls
+    twice instead of 120 distinct ones. Scored against the promoted witness on a page whose state
+    has 20 training examples, that gap is the difference between cosine **0.82-0.86** (a real
+    capture) and **0.2755** (this synthesis) — which saturated the class-conditional novelty
+    percentile at 1.00 on every page and pinned the whole controller to RED. Prefer
+    `CapturedTurn.artifact`; use this only when the capture did not land.
     """
     elements = []
     ranked = []
@@ -85,8 +96,18 @@ def sense(*, url: str = "", page_text: str = "", title: str = "",
           ax_candidates: Optional[list[dict]] = None,
           screenshot_path: Optional[Path] = None,
           domain_id: str = "",
+          artifact: Optional[dict[str, Any]] = None,
           prior: tuple[str, ...] = ()) -> Optional[dict]:
     """Perceive one live observation. Returns `BeliefState.as_dict()`, or None if unavailable.
+
+    `artifact` is the capture this turn ALREADY wrote (`CapturedTurn.artifact`). Pass it whenever
+    it exists: the corpus the witnesses were fitted on is made of exactly these, so featurizing
+    the real thing makes the live and training views identical **by construction** rather than by
+    a synthesis that has to be kept in sync. The 2026-07-22 live run is what forced this — the
+    synthesized artifact scored cosine 0.2755 where a real capture of the same state scores 0.82,
+    and the resulting novelty of 1.00 on every page made the controller ungovernable. This module
+    always meant to have one featurizer; it turned out one featurizer over two artifact SHAPES is
+    the same drift wearing a different hat.
 
     `prior` is the recipe's `expected_next` — the transition prior. Passing it costs nothing and
     is the cheapest evidence in the system: the recipe already predicted where this action should
@@ -100,7 +121,8 @@ def sense(*, url: str = "", page_text: str = "", title: str = "",
         from perception.observer import Observation
         belief = eng.observe(
             Observation(
-                artifact=artifact_from_live(url=url, title=title, ax_candidates=ax_candidates),
+                artifact=artifact if artifact else artifact_from_live(
+                    url=url, title=title, ax_candidates=ax_candidates),
                 page_text=page_text or "",
                 screenshot_path=screenshot_path,
                 url=url,
@@ -111,6 +133,31 @@ def sense(*, url: str = "", page_text: str = "", title: str = "",
         return belief.as_dict()
     except Exception:
         logger.exception("perception: sense failed; the drive continues without a belief")
+        return None
+
+
+@dataclass(frozen=True)
+class CapturedTurn:
+    """What one turn's `/capture` produced: the artifact itself and its screenshot.
+
+    Both halves are optional and `CapturedTurn()` is the honest "nothing landed" — perception is
+    an aid, never a dependency. The artifact is carried rather than discarded because it is the
+    exact shape the witnesses were fitted on, so `sense()` can featurize it instead of
+    synthesizing a thinner lookalike (see `artifact_from_live`).
+    """
+
+    artifact: Optional[dict[str, Any]] = None
+    screenshot: Optional[Path] = None
+
+
+def read_artifact(artifact_filename: str) -> Optional[dict[str, Any]]:
+    """The capture artifact `/capture` just wrote, or None."""
+    import json
+
+    from perception.dataset import artifacts_root
+    try:
+        return json.loads((artifacts_root() / "observer-traces" / artifact_filename).read_text())
+    except Exception:
         return None
 
 
@@ -151,8 +198,13 @@ def screenshot_for_artifact(artifact_filename: str) -> Optional[Path]:
 def capture_now(post: Any, addr: dict[str, Any], *, scenario: str = "controller_turn",
                 task: str = "", state: Optional[str] = None,
                 domain_id: str = "",
-                form_state: Optional[dict[str, Any]] = None) -> Optional[Path]:
-    """Trigger a `/capture` for this turn and return the screenshot path, or None.
+                form_state: Optional[dict[str, Any]] = None) -> CapturedTurn:
+    """Trigger a `/capture` for this turn and hand back what it wrote.
+
+    Returns a `CapturedTurn`; an empty one means nothing landed and the drive continues without
+    a new row. The artifact is returned alongside the screenshot because `sense()` should
+    featurize the real capture rather than a synthesized lookalike — reading it costs nothing
+    here, since resolving the screenshot already opens the same file.
 
     `post` is the caller's own HTTP helper (the actuator's `_post`), so this adds no second
     transport and inherits the caller's timeouts and error handling. The corpus grows through
@@ -173,8 +225,9 @@ def capture_now(post: Any, addr: dict[str, Any], *, scenario: str = "controller_
         result = post("/capture", body) or {}
         filename = result.get("filename") or ""
         if not filename:
-            return None
-        return screenshot_for_artifact(filename)
+            return CapturedTurn()
+        return CapturedTurn(artifact=read_artifact(filename),
+                            screenshot=screenshot_for_artifact(filename))
     except Exception:
         logger.exception("perception: capture failed; the drive continues without a new row")
-        return None
+        return CapturedTurn()

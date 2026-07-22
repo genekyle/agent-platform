@@ -83,15 +83,62 @@ def test_sense_returns_a_serialized_belief(monkeypatch):
     assert belief["uncertainty"]["state"] == 0.1
 
 
+def test_sense_featurizes_the_real_capture_rather_than_rebuilding_one(monkeypatch):
+    """The witnesses are fitted on `/capture` artifacts, so a turn that HAS one must perceive it.
+
+    Live, 2026-07-22: the synthesized artifact scored cosine 0.2755 against the centroid of a
+    state with 20 training examples, where a real capture of that state scores 0.82-0.86. The
+    class-conditional novelty percentile therefore read 1.00 on every page, and since a novelty
+    block grades RED, the controller could never act. One artifact shape, not two.
+    """
+    seen = {}
+
+    class _Fake:
+        def observe(self, obs, prior=()):
+            from interaction.belief import BeliefState
+            seen["artifact"] = obs.artifact
+            return BeliefState(state="indeed_search_results", agreement="agree",
+                               uncertainty={"state": 0.1, "novelty": 0.1})
+
+    monkeypatch.setattr(perception_live, "observer", lambda: _Fake())
+    real = {"acquisition": {"page_identity": {"url": "https://x.test/", "title": "Real"},
+                            "actionable_elements": [{"role": "button", "name": "Continue",
+                                                     "placeholder": "search here"}]},
+            "ranked_candidates": [{"target": {"role": "button", "label": "Continue"}}]}
+    perception_live.sense(url="https://x.test/", artifact=real,
+                          ax_candidates=[{"role": "link", "name": "Synthesized"}])
+    assert seen["artifact"] is real, "the capture was rebuilt instead of read"
+
+
+def test_sense_still_synthesizes_when_the_capture_did_not_land(monkeypatch):
+    """The fallback stays: a capture server that is down must not blind the drive."""
+    seen = {}
+
+    class _Fake:
+        def observe(self, obs, prior=()):
+            from interaction.belief import BeliefState
+            seen["artifact"] = obs.artifact
+            return BeliefState(state="x", agreement="one_sided", uncertainty={"state": 0.5})
+
+    monkeypatch.setattr(perception_live, "observer", lambda: _Fake())
+    perception_live.sense(url="https://x.test/", artifact=None, title="Indeed",
+                          ax_candidates=[{"role": "link", "name": "Synthesized"}])
+    acq = seen["artifact"]["acquisition"]
+    assert acq["page_identity"]["title"] == "Indeed"
+    assert acq["actionable_elements"][0]["name"] == "Synthesized"
+
+
 def test_a_failed_capture_never_breaks_the_turn():
     def _boom(path, payload):
         raise RuntimeError("capture server down")
 
-    assert perception_live.capture_now(_boom, {"tab_id": "t"}) is None
+    captured = perception_live.capture_now(_boom, {"tab_id": "t"})
+    assert captured.artifact is None and captured.screenshot is None
 
 
 def test_capture_with_no_filename_is_none_not_a_guess():
-    assert perception_live.capture_now(lambda p, b: {}, {"tab_id": "t"}) is None
+    captured = perception_live.capture_now(lambda p, b: {}, {"tab_id": "t"})
+    assert captured.artifact is None and captured.screenshot is None
 
 
 # --- the screenshot is READ from the artifact, never guessed --------------------------
