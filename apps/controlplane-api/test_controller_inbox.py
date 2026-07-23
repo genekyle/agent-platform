@@ -237,3 +237,60 @@ def test_the_adapter_does_not_edit_teach():
     is injectable precisely so a new transport is an addition, never a change."""
     import inspect
     assert "inbox" not in inspect.getsource(teach)
+
+
+# --- the coaching pane's two verbs (2026-07-23) ---------------------------------------
+def test_approve_answers_a_parked_turn_by_acting_on_the_local_proposal(tmp_path, monkeypatch):
+    """The Go button. Until now `approve` on an ORANGE turn read as a refusal and handed further
+    up, so the one control the operator most wanted did nothing.
+
+    The rung is deliberately NOT re-stamped: the local layer is still who decided, and shadow
+    agreement has to keep scoring it honestly. Only a CORRECTION is teacher-authored.
+    """
+    monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", str(tmp_path))
+    import threading
+    import time as _time
+
+    from controller.authority_seam import InboxSeat
+
+    proposal = Decision(intent="click", params={"control": "Continue"}, confidence=0.4,
+                        rung="recipe", rationale="the recipe's next action", escalate=True)
+    seat = InboxSeat(timeout=3.0, poll=0.05)
+
+    def _answer():
+        for _ in range(200):
+            _time.sleep(0.02)
+            pend = inbox_mod.pending()
+            if pend:
+                inbox_mod.respond(pend[0]["id"], action="approve",
+                                  note="this ATS always asks twice")
+                return
+
+    threading.Thread(target=_answer, daemon=True).start()
+    got = seat.instruct(a_bundle(), proposal, None)
+
+    assert got is not None, "approve was read as a refusal"
+    assert got.acts, "an approved decision must be allowed to act"
+    assert got.intent == "click" and got.params == {"control": "Continue"}
+    assert got.rung == "recipe", "approving must not re-attribute the decision to the teacher"
+    assert "this ATS always asks twice" in got.rationale
+    assert "operator_note" in got.evidence
+
+
+def test_an_operator_note_rides_into_the_decision_that_gets_journaled(tmp_path, monkeypatch):
+    """The operator's situational knowledge was the one input with nowhere to live — said in
+    chat, lost. A note becomes evidence on the row, which is what makes it lesson material."""
+    monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", str(tmp_path))
+
+    why = "the work-experience section is empty and the page says so only in prose"
+    req = inbox_mod.ask(kind=inbox_mod.RequestKind.INSTRUCT.value, task="indeed_apply")
+    inbox_mod.respond(req.id, action="instruct",
+                      decision=Decision(intent="click", params={"control": "Add another"},
+                                        confidence=0.9, rung="teacher", rationale=why),
+                      rationale=why,
+                      note="Indeed usually prefills this from the profile; it did not here")
+
+    row = inbox_mod.get(req.id)
+    got = inbox_mod.decision_from_response(row.get("response"))
+    assert "Indeed usually prefills this" in got.rationale
+    assert "operator_note" in got.evidence

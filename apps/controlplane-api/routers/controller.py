@@ -136,7 +136,11 @@ class RunBody(BaseModel):
     #: ORANGE/RED park for the teacher via `/api/controller/teacher/pending` instead of ending the
     #: drive. Set false only to reproduce the pre-authority behaviour for a comparison.
     progressive: bool = True
-    park_seconds: float = 300.0       # how long a parked drive waits before behaving as it used to
+    #: How long a parked drive waits. 1800 rather than the inbox default of 300 because a park is
+    #: now serviced by a HUMAN through the coaching pane, and 5 minutes expired twice on us while
+    #: the answer was still being worked out (2026-07-22). A park that dies mid-thought teaches
+    #: the operator not to use the pane.
+    park_seconds: float = 1800.0
     #: Let the SYSTEM press Submit on this run. OFF by default and per-request on purpose — an
     #: operator authorising one measured drive must not turn into a system that always submits.
     #: It releases the consequential HOLD only; the authority ceiling still grades a submit as
@@ -360,6 +364,10 @@ class TeacherRespondBody(BaseModel):
     #: Where the work went, when a takeover moved it to another tab (clicking Apply opens the
     #: application in a new window). Only the teacher who watched it knows.
     new_tab_id: str = ""
+    #: The operator's own words about this stop, in their language. Rides into the acting
+    #: decision's rationale and therefore into the journal — situational knowledge that used to
+    #: live only in chat.
+    note: str = ""
 
 
 @router.post("/api/controller/teacher/{request_id}/respond")
@@ -393,7 +401,7 @@ def teacher_respond(request_id: str, body: TeacherRespondBody) -> dict[str, Any]
     try:
         payload = inbox_mod.respond(request_id, action=body.action, decision=decision,
                                     lesson=lesson_obj, rationale=body.rationale,
-                                    new_tab_id=body.new_tab_id)
+                                    new_tab_id=body.new_tab_id, note=body.note)
     except inbox_mod.InboxError as exc:
         return {"ok": False, "detail": str(exc)}
     return {"ok": True, "response": payload,

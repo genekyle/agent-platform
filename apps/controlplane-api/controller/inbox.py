@@ -236,7 +236,7 @@ class InboxError(ValueError):
 
 def respond(request_id: str, *, action: str, decision: Optional[Decision] = None,
             lesson: Optional[Lesson] = None, rationale: str = "",
-            new_tab_id: str = "") -> dict[str, Any]:
+            new_tab_id: str = "", note: str = "") -> dict[str, Any]:
     """Answer a parked question. Validates before it writes.
 
     The validation is not ceremony. `instruct` and `correct` are the two actions that put an
@@ -277,6 +277,13 @@ def respond(request_id: str, *, action: str, decision: Optional[Decision] = None
     # and a successful takeover reads as no progress (live, 2026-07-22).
     if new_tab_id:
         payload["new_tab_id"] = str(new_tab_id)
+    # The operator's own words about THIS stop — "this ATS always asks X", "skip the resume step
+    # here". Added with the coaching pane (2026-07-23) because the operator's situational
+    # knowledge was the one input to this system with nowhere to live: it was said in chat and
+    # lost. Carried into the acting decision's rationale, so it lands in the journal as evidence
+    # and becomes lesson material rather than scrollback (§10).
+    if note:
+        payload["note"] = str(note)
 
     answered_at = datetime.now(timezone.utc).isoformat()
     _append({"id": request_id, "status": "answered", "response": payload,
@@ -292,11 +299,15 @@ def decision_from_response(response: Optional[dict]) -> Optional[Decision]:
     d = response.get("decision")
     if not isinstance(d, dict) or not d.get("intent"):
         return None
+    note = str(response.get("note") or "")
+    why = d.get("rationale", "")
+    if note:
+        why = f"{why} | operator: {note}" if why else f"operator: {note}"
     return Decision(intent=d["intent"], params=dict(d.get("params") or {}),
                     confidence=float(d.get("confidence", 1.0)), rung="teacher",
-                    rationale=d.get("rationale", ""),
+                    rationale=why,
                     expected_next=tuple(d.get("expected_next") or ()),
-                    evidence=tuple(d.get("evidence") or ()))
+                    evidence=tuple(d.get("evidence") or ()) + (("operator_note",) if note else ()))
 
 
 def lesson_from_response(response: Optional[dict]) -> Optional[Lesson]:

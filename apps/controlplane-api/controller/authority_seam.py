@@ -115,7 +115,24 @@ class InboxSeat:
             self.on_answer(request, response)
         if not response:
             return None
-        if response.get("action") != inbox_mod.ResponseAction.INSTRUCT.value:
+        action = response.get("action")
+        # APPROVE — "act on the proposal as-is", the same meaning `teach.ReviewAction.APPROVE`
+        # has. Added for the operator's coaching pane (2026-07-23): the Go button answers a parked
+        # turn by confirming what the local layer already proposed, and until now that answer was
+        # read as a refusal and handed further up, so the one button the operator most wanted did
+        # nothing. Only `escalate` clears, exactly as `teach.correct` does — approving does NOT
+        # re-stamp the rung, because the local layer is still who decided and shadow agreement has
+        # to keep scoring it honestly.
+        if action == inbox_mod.ResponseAction.APPROVE.value:
+            from dataclasses import replace
+            note = str(response.get("note") or "")
+            why = decision.rationale
+            if note:
+                why = f"{why} | operator: {note}" if why else f"operator: {note}"
+            return replace(decision, escalate=False, rationale=why,
+                           evidence=tuple(decision.evidence) + (("operator_note",) if note else ()))
+        if action not in (inbox_mod.ResponseAction.INSTRUCT.value,
+                          inbox_mod.ResponseAction.CORRECT.value):
             # `escalate` and anything else mean "not mine either" — hand further up rather than
             # inventing an action out of a refusal.
             return None
