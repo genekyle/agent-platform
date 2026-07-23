@@ -1263,3 +1263,7 @@ textarea:focus-visible {
 }
 .window-anomaly svg { flex-shrink: 0; margin-top: 2px; }
 .window-anomaly em { font-style: normal; color: var(--text-muted); }
+
+/* Attention inbox: handoff context + recurrence */
+.attention-state { font-family: var(--font-mono, monospace); font-size: 12.5px; color: var(--text-muted); margin-right: 6px; }
+.attention-recurs { margin-right: 6px; }

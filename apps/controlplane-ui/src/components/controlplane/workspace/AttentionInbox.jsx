@@ -68,11 +68,26 @@ export function AttentionInbox({ host = null, title = "Needs your attention", sh
               <div className="attention-item__body">
                 <div className="attention-item__why">
                   {dom && <span className="badge badge--muted attention-domain"><DomainIcon id={dom.id} size={13} /> {dom.short}</span>}
+                  {h.context?.state ? <span className="attention-state">{h.context.state}</span> : null}
+                  {h.occurrences > 1 && (
+                    <span className="badge badge--warn attention-recurs" title="the same situation, raised this many times">
+                      ×{h.occurrences}
+                    </span>
+                  )}
                   {h.why || "The agent stopped and needs a human."}
                 </div>
+                {/* What the agent actually knew — so this reads as evidence, not a generic shrug. */}
+                {h.context?.needs?.length ? (
+                  <div className="attention-item__hint">the page needs: {h.context.needs.join(", ")}</div>
+                ) : null}
+                {h.context?.observer?.agreement === "split" ? (
+                  <div className="attention-item__hint">
+                    observer disagrees with the recipe (it read “{h.context.observer.state}”)
+                  </div>
+                ) : null}
                 {h.suggestion && <div className="attention-item__hint">{h.suggestion}</div>}
                 <div className="attention-item__meta">
-                  {h.task_goal ? `${h.task_goal} · ` : ""}{fmtTime(h.ts)}
+                  {h.task_goal ? `${h.task_goal} · ` : ""}{fmtTime(h.last_seen || h.ts)}
                   {Array.isArray(h.tried) && h.tried.length ? ` · tried ${h.tried.length} step${h.tried.length === 1 ? "" : "s"}` : ""}
                 </div>
               </div>
