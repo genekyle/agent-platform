@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getJSON, postJSON, fmtTime } from "./api";
 import { AppIcon } from "../../../ui/Icon";
+import { ContextBlob } from "./ContextBlob";
 
 // The Coaching pane — the operator's seat in a RUNNING drive.
 //
@@ -204,6 +205,8 @@ export function CoachingPane({ title = "Coaching" }) {
                   {blocked ? <div className="coaching-blocked">{blocked}</div> : null}
                 </div>
 
+                <ContextBlob req={req} />
+
                 {/* The note — always visible, because it is the point */}
                 <textarea
                   className="coaching-note"
@@ -260,7 +263,7 @@ export function CoachingPane({ title = "Coaching" }) {
                     {busy === req.id ? "…" : "Go"}
                   </button>
                   <button
-                    className={`btn btn-sm${blocked ? " btn-primary" : ""}`}
+                    className="btn btn-sm"
                     disabled={busy === req.id}
                     onClick={() =>
                       setEditing((s) => ({

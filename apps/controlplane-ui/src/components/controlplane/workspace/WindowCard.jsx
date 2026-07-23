@@ -114,12 +114,16 @@ export function WindowCard({ domainId, tabId = "" }) {
         })}
       </div>
 
-      <div className="window-actions">
-        <button className="btn btn-sm" onClick={tidy} disabled={busy || !closable.length}>
-          {busy ? "…" : closable.length ? `Tidy ${closable.length}` : "Nothing to tidy"}
-        </button>
-        {msg && <span className="attention-item__hint">{msg}</span>}
-      </div>
+      {(closable.length > 0 || msg) && (
+        <div className="window-actions">
+          {closable.length > 0 && (
+            <button className="btn btn-sm" onClick={tidy} disabled={busy}>
+              {busy ? "…" : `Tidy ${closable.length}`}
+            </button>
+          )}
+          {msg && <span className="attention-item__hint">{msg}</span>}
+        </div>
+      )}
     </div>
   );
 }
