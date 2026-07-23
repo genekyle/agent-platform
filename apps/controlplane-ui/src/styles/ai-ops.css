@@ -1243,3 +1243,11 @@ textarea:focus-visible {
 
 /* Why Go is unavailable — stated, never a silently dead button. */
 .coaching-blocked { margin-top: 6px; font-size: 12px; color: var(--warning, #d8a657); }
+
+/* --- Session window card ------------------------------------------------------------ */
+.window-tabs { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.window-tab { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.window-tab__url { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.window-tab__flag { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--success); flex-shrink: 0; }
+.window-tab__flag--closable { color: var(--text-muted); }
+.window-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
