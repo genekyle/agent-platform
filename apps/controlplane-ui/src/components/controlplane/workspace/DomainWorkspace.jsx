@@ -5,8 +5,7 @@ import { AutomationMode } from "./AutomationMode";
 import { GoalsPanel } from "./GoalsPanel";
 import { TasksPanel } from "./TasksPanel";
 import { AttentionInbox } from "./AttentionInbox";
-import { CoachingPane } from "./CoachingPane";
-import { WindowCard } from "./WindowCard";
+import { LiveDrivePanel } from "./LiveDrivePanel";
 import { ActivityFeed } from "./ActivityFeed";
 import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
@@ -30,6 +29,7 @@ const TAB_TO_SECTION = {
 };
 
 function DataTab({ domain, tab, onOpenTraining }) {
+  if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
   if (tab === "accounts") {
     // Career-Search sub-domains (Workday, …) show the company-first ATS accounts filtered to THIS
@@ -78,8 +78,6 @@ function Overview({ domain, mode, goalState, onToggleGoal }) {
 
   return (
     <div className="cockpit">
-      <CoachingPane />
-      <WindowCard domainId={domain.id} />
       <AttentionInbox host={domain.host} />
       <div className="cockpit-grid">
         <GoalsPanel domain={domain} mode={mode} goalState={goalState} onToggleGoal={onToggleGoal} />
