@@ -1,61 +1,49 @@
 import { useCallback, useEffect, useState } from "react";
 import { getJSON, postJSON, fmtTime } from "./api";
 import { AppIcon } from "../../../ui/Icon";
-import { ContextBlob } from "./ContextBlob";
+import { ContextDrawer } from "./ContextDrawer";
 
-// The Coaching pane — the operator's seat in a RUNNING drive.
+// The Coaching pane — the operator's seat in a running drive.
 //
-// Operator-directed 2026-07-23. The teacher inbox already existed and was serviced over HTTP by
-// the local Claude agent; this is the same seam with the operator in it. Deliberately NOT a
-// play/pause button: a parked drive is not "paused", it is asking a specific question, and the
-// useful control is a CONTINUATION that shows what it knows, what it has done, and what it wants
-// to do next — so pressing Go is a judgement rather than a shrug.
+// Two surfaces, split on purpose (redesigned 2026-07-23). The pane itself is a COMPACT QUEUE:
+// one row per parked drive — mode, where it is, the one-line reason it stopped, the action it
+// wants — so the whole thing is a glance, and the panels below it (the session window, the
+// attention inbox) are not shoved a full screen down by an inline wall of context. The full
+// picture — where it thinks it is, how sure, what each witness saw, what the page is asking,
+// what it intends and why — opens in its own drawer (ContextDrawer), because that much
+// information deserves width and a layout, not a cramped column inside a list item.
 //
-// Two things here are load-bearing rather than decorative:
-//
-//   * "Correct" is as prominent as "Go". The golden training rows come from CORRECTIONS; a pane
-//     whose easy path is always "yes" produces agreement and no signal, which quietly starves the
-//     thing the whole flywheel runs on.
-//   * The note field. The operator's situational knowledge ("this ATS always asks twice", "skip
-//     the resume step here") was the one input to this system with nowhere to live — it was said
-//     in chat and lost. A note rides into the acting decision's rationale and lands in the
-//     journal as evidence, which is what makes it lesson material.
+// Load-bearing, not decorative:
+//   * Correct is a peer of Go, never quieter. The golden training rows come from CORRECTIONS; a
+//     pane whose easy path is always "yes" produces agreement and no signal.
+//   * The note field. Situational knowledge ("this ATS always asks twice") was the one input to
+//     this system with nowhere to live; a note rides into the acting decision's rationale and
+//     lands in the journal as evidence.
+//   * Go disables — with its reason shown — when the proposal carries no value, because decide()
+//     never invents an answer and approving a valueless set_text would type an empty string.
 
-// Intents that are meaningless without a value. `decide()` deliberately never invents an answer
-// value — that axis belongs to resolve_answer and past it to the human — so its proposal for a
-// text field is a SHAPE ("set_text on Job title"), not a bid to act. Approving one as-is would
-// type an empty string, which looks like the operator agreeing to something they did not read.
-// Go is disabled for these; Correct is the honest path, and the pane says so.
-const NEEDS_A_VALUE = new Set(["set_text", "select_option", "set_date", "check_group", "upload"]);
+const MODE_TONE = { green: "ok", yellow: "warn", orange: "warn", red: "bad" };
 
-function incompleteReason(pred) {
-  if (!pred?.intent) return "nothing was proposed to approve";
-  const p = pred.params || {};
-  if (NEEDS_A_VALUE.has(pred.intent) && !p.value && !p.values && !p.month) {
-    return `it proposed ${pred.intent} on "${p.field || "a field"}" but no value — it will not invent one. Use Correct.`;
-  }
-  return "";
-}
-
-const MODE_TONE = {
-  green: "ok",
-  yellow: "warn",
-  orange: "warn",
-  red: "bad",
-};
-
-// The bundle_prompt is the frozen serialisation the reasoner itself reads. Rather than invent a
-// second shape for the UI, pull the sections back out of it — one source of truth, and what the
-// operator sees is literally what the policy saw.
 function section(prompt, name) {
   if (!prompt) return "";
   const re = new RegExp(`# ${name}\\n([\\s\\S]*?)(?=\\n# |$)`);
   return (prompt.match(re)?.[1] || "").trim();
 }
-
 function fieldOf(block, key) {
-  const line = block.split("\n").find((l) => l.trim().startsWith(`${key}:`));
+  const line = (block || "").split("\n").find((l) => l.trim().startsWith(`${key}:`));
   return line ? line.split(":").slice(1).join(":").trim() : "";
+}
+
+// decide() deliberately never invents an answer value, so its proposal for a text field is a
+// shape ("set_text on Job title"), not a bid to act. Approving one would type an empty string.
+const NEEDS_A_VALUE = new Set(["set_text", "select_option", "set_date", "check_group", "upload"]);
+export function incompleteReason(pred) {
+  if (!pred?.intent) return "nothing was proposed to approve";
+  const p = pred.params || {};
+  if (NEEDS_A_VALUE.has(pred.intent) && !p.value && !p.values && !p.month) {
+    return `proposed ${pred.intent} on "${p.field || "a field"}" but no value — it will not invent one. Use Correct.`;
+  }
+  return "";
 }
 
 export function CoachingPane({ title = "Coaching" }) {
@@ -64,6 +52,7 @@ export function CoachingPane({ title = "Coaching" }) {
   const [notes, setNotes] = useState({});
   const [editing, setEditing] = useState({});
   const [error, setError] = useState("");
+  const [openId, setOpenId] = useState(null);
 
   const load = useCallback(() => {
     getJSON("/api/controller/teacher/pending")
@@ -73,8 +62,6 @@ export function CoachingPane({ title = "Coaching" }) {
 
   useEffect(() => {
     load();
-    // A parked drive polls the queue every second; 3s here is well inside the park window and
-    // cheap (a file tail), so the pane feels live without being a hot loop.
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [load]);
@@ -90,6 +77,7 @@ export function CoachingPane({ title = "Coaching" }) {
       });
       setNotes((n) => ({ ...n, [req.id]: "" }));
       setEditing((e) => ({ ...e, [req.id]: null }));
+      setOpenId(null);
       load();
     } catch (e) {
       setError(e.message || "could not answer");
@@ -105,11 +93,9 @@ export function CoachingPane({ title = "Coaching" }) {
     try {
       params = draft.params ? JSON.parse(draft.params) : {};
     } catch {
-      setError("params must be JSON, e.g. {\"control\": \"Continue\"}");
+      setError('params must be JSON, e.g. {"control": "Continue"}');
       return;
     }
-    // A correction MUST carry real reasoning — the server enforces it (§10), because the WHY is
-    // the training signal and a placeholder teaches WHAT with no rule to generalise from.
     const why = (notes[req.id] || "").trim();
     if (why.length < 12) {
       setError("a correction needs a reason — that reasoning is the training signal");
@@ -120,6 +106,8 @@ export function CoachingPane({ title = "Coaching" }) {
       rationale: why,
     });
   };
+
+  const openReq = items.find((r) => r.id === openId) || null;
 
   return (
     <div className="layer">
@@ -140,155 +128,88 @@ export function CoachingPane({ title = "Coaching" }) {
         items.map((req) => {
           const state = section(req.bundle_prompt, "STATE");
           const recipe = section(req.bundle_prompt, "RECIPE");
-          const recent = section(req.bundle_prompt, "RECENT");
-          const windowBlock = section(req.bundle_prompt, "WINDOW");
-          const unanswered = (req.bundle_prompt || "").match(/# UNANSWERED \((\d+)\)/)?.[1];
+          const belief = req.belief_prompt || "";
           const pred = req.prediction || {};
-          const draft = editing[req.id];
           const tone = MODE_TONE[req.mode] || "warn";
           const blocked = incompleteReason(pred);
+          const recipeState = fieldOf(state, "state");
+          const beliefState = fieldOf(belief, "state");
+          const disagree = beliefState && recipeState && beliefState !== recipeState;
 
           return (
-            <div key={req.id} className="attention-item coaching-item">
-              <div className="attention-item__body">
-                {/* WHERE we are */}
-                <div className="attention-item__why">
-                  <span className={`badge badge--${tone}`}>{req.mode}</span>{" "}
-                  <strong>{req.state || "an unrecognised page"}</strong>
-                  {req.maturity ? <span className="badge badge--muted"> {req.maturity}</span> : null}
+            <div key={req.id} className="coach-row">
+              <button
+                className="coach-row__main"
+                onClick={() => setOpenId(req.id)}
+                title="Open the full context"
+              >
+                <div className="coach-row__line">
+                  <span className={`badge badge--${tone}`}>{req.mode}</span>
+                  <strong className="coach-row__state">{req.state || "an unrecognised page"}</strong>
+                  {disagree && (
+                    <span className="coach-row__tag coach-row__tag--warn">witnesses disagree</span>
+                  )}
                 </div>
-
-                {/* WHY it stopped — the authority verdict, in its own words */}
-                <div className="attention-item__hint">{req.authority_reason}</div>
-                {req.reach_gaps?.length ? (
-                  <div className="attention-item__hint">
-                    can’t operate: {req.reach_gaps.join(", ")}
-                  </div>
-                ) : null}
-
-                {/* CONTEXT: done, next, form, window */}
-                <div className="coaching-grid">
-                  <div>
-                    <div className="coaching-label">Next per the recipe</div>
-                    <div>{fieldOf(recipe, "next_action") || "—"}</div>
-                  </div>
-                  <div>
-                    <div className="coaching-label">Unanswered fields</div>
-                    <div>{unanswered ?? "—"}</div>
-                  </div>
-                  <div>
-                    <div className="coaching-label">ATS</div>
-                    <div>{fieldOf(state, "ats") || "—"}</div>
-                  </div>
-                  {windowBlock ? (
-                    <div>
-                      <div className="coaching-label">Window</div>
-                      <div>{fieldOf(windowBlock, "tabs")} · {fieldOf(windowBlock, "roles")}</div>
-                    </div>
-                  ) : null}
+                <div className="coach-row__wants">
+                  wants <code>{pred.intent || "—"}{pred.params ? " " + JSON.stringify(pred.params) : ""}</code>
                 </div>
-
-                {recent ? (
-                  <details className="coaching-details">
-                    <summary>What it has done</summary>
-                    <pre>{recent}</pre>
-                  </details>
-                ) : null}
-
-                {/* WHAT IT WANTS TO DO — the thing Go actually approves */}
-                <div className="coaching-proposal">
-                  <div className="coaching-label">It proposes</div>
-                  <code>
-                    {pred.intent || "—"} {pred.params ? JSON.stringify(pred.params) : ""}
-                  </code>
-                  {pred.rationale ? <div className="attention-item__hint">{pred.rationale}</div> : null}
-                  {blocked ? <div className="coaching-blocked">{blocked}</div> : null}
+                <div className="coach-row__meta">
+                  {req.task ? `${req.task} · ` : ""}{req.kind} · {fmtTime(req.ts)} · open for detail →
                 </div>
+              </button>
 
-                <ContextBlob req={req} />
-
-                {/* The note — always visible, because it is the point */}
-                <textarea
-                  className="coaching-note"
-                  rows={2}
-                  placeholder="Note for the hand-off — what you know that it doesn't. Rides into the journal."
-                  value={notes[req.id] || ""}
-                  onChange={(e) => setNotes((n) => ({ ...n, [req.id]: e.target.value }))}
-                />
-
-                {draft ? (
-                  <div className="coaching-correct">
-                    <input
-                      placeholder="intent (click / set_text / select_option / submit)"
-                      value={draft.intent || ""}
-                      onChange={(e) =>
-                        setEditing((s) => ({ ...s, [req.id]: { ...draft, intent: e.target.value } }))
-                      }
-                    />
-                    <input
-                      placeholder={'params, e.g. {"control": "Continue"}'}
-                      value={draft.params || ""}
-                      onChange={(e) =>
-                        setEditing((s) => ({ ...s, [req.id]: { ...draft, params: e.target.value } }))
-                      }
-                    />
-                    <button className="btn btn-sm btn-primary" onClick={() => correct(req)}>
-                      Send correction
-                    </button>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => setEditing((s) => ({ ...s, [req.id]: null }))}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : null}
-
-                <div className="attention-item__meta">
-                  {req.task ? `${req.task} · ` : ""}
-                  {req.kind} · {fmtTime(req.ts)}
-                </div>
+              <div className="coach-row__actions">
+                <button
+                  className="btn btn-sm"
+                  disabled={busy === req.id || !!blocked}
+                  onClick={() => answer(req, "approve")}
+                  title={blocked || "Act on the proposal as-is and keep going"}
+                >
+                  {busy === req.id ? "…" : "Go"}
+                </button>
+                <button className="btn btn-sm" disabled={busy === req.id} onClick={() => setOpenId(req.id)}>
+                  Correct
+                </button>
+                <button
+                  className="btn btn-sm btn-ghost"
+                  disabled={busy === req.id}
+                  onClick={() => answer(req, "abort", { rationale: notes[req.id] || "operator stopped the drive" })}
+                >
+                  Stop
+                </button>
               </div>
-
-              {!draft && (
-                <div className="coaching-actions">
-                  {/* Go and Correct sit side by side, same weight. The corrections are the
-                      training signal; a pane that makes "yes" the only easy answer starves it. */}
-                  <button
-                    className="btn btn-sm btn-primary"
-                    disabled={busy === req.id || !!blocked}
-                    onClick={() => answer(req, "approve")}
-                    title={blocked || "Act on the proposal as-is and keep going"}
-                  >
-                    {busy === req.id ? "…" : "Go"}
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    disabled={busy === req.id}
-                    onClick={() =>
-                      setEditing((s) => ({
-                        ...s,
-                        [req.id]: {
-                          intent: pred.intent || "",
-                          params: pred.params ? JSON.stringify(pred.params) : "",
-                        },
-                      }))
-                    }
-                  >
-                    Correct
-                  </button>
-                  <button
-                    className="btn btn-sm btn-ghost"
-                    disabled={busy === req.id}
-                    onClick={() => answer(req, "abort", { rationale: notes[req.id] || "operator stopped the drive" })}
-                  >
-                    Stop
-                  </button>
-                </div>
-              )}
             </div>
           );
         })
+      )}
+
+      {openReq && (
+        <ContextDrawer
+          req={openReq}
+          busy={busy === openReq.id}
+          blocked={incompleteReason(openReq.prediction || {})}
+          note={notes[openReq.id] || ""}
+          draft={editing[openReq.id]}
+          error={error}
+          onNote={(v) => setNotes((n) => ({ ...n, [openReq.id]: v }))}
+          onStartCorrect={() =>
+            setEditing((s) => ({
+              ...s,
+              [openReq.id]: {
+                intent: openReq.prediction?.intent || "",
+                params: openReq.prediction?.params ? JSON.stringify(openReq.prediction.params) : "",
+              },
+            }))
+          }
+          onDraft={(patch) =>
+            setEditing((s) => ({ ...s, [openReq.id]: { ...(s[openReq.id] || {}), ...patch } }))
+          }
+          onCancelCorrect={() => setEditing((s) => ({ ...s, [openReq.id]: null }))}
+          onGo={() => answer(openReq, "approve")}
+          onCorrect={() => correct(openReq)}
+          onStop={() => answer(openReq, "abort", { rationale: notes[openReq.id] || "operator stopped the drive" })}
+          onClose={() => setOpenId(null)}
+        />
       )}
     </div>
   );
