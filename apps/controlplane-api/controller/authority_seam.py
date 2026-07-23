@@ -142,7 +142,8 @@ class InboxSeat:
                                   detail=response.get("rationale", "") or "teacher aborted")
         if action == inbox_mod.ResponseAction.TAKEOVER_DONE.value:
             return TakeoverResult(resumed=True,
-                                  detail=response.get("rationale", "") or "checkpoint reached")
+                                  detail=response.get("rationale", "") or "checkpoint reached",
+                                  new_tab_id=response.get("new_tab_id") or None)
         # Any other answer to a takeover ticket (escalate, or an instruction we cannot execute
         # because the executor is what could not reach the page) ends the detour honestly.
         return TakeoverResult(resumed=False, aborted=True,

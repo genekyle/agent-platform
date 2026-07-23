@@ -105,9 +105,15 @@ def test_authority_truth_table_is_pinned():
                      reach=reachable).mode == ControlMode.YELLOW.value
     assert authority(maturity=Maturity.UNSEEN.value, belief=sure,
                      reach=reachable).mode == ControlMode.ORANGE.value
+    # Novelty on a page we CAN operate is a knowledge gap, so ORANGE — the teacher supplies the
+    # meaning and the local executor still acts. Corrected 2026-07-22: grading it RED meant every
+    # novelty block demanded a takeover, and a takeover accepts no instruction, so live drives had
+    # no way to be taught at all. RED is the capability verdict now, and reach is what earns it.
     assert authority(maturity=Maturity.CERTIFIED.value, belief=novel,
-                     reach=reachable).mode == ControlMode.RED.value
+                     reach=reachable).mode == ControlMode.ORANGE.value
     assert authority(maturity=Maturity.CERTIFIED.value, belief=sure,
+                     reach=blocked).mode == ControlMode.RED.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=novel,
                      reach=blocked).mode == ControlMode.RED.value
 
 

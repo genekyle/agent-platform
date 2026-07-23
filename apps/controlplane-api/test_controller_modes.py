@@ -338,3 +338,60 @@ def test_the_seam_uses_one_definition_of_consequential():
 
     assert "CONSEQUENTIAL_INTENTS" in inspect.getsource(authority_seam.default_authority)
     assert authority_seam.CONSEQUENTIAL_INTENTS is loop.CONSEQUENTIAL_INTENTS
+
+
+# --- a takeover that moves the work to another tab (live gap, 2026-07-22) --------------
+def test_a_takeover_can_report_that_the_work_moved_to_a_new_tab():
+    """Clicking Apply opens the application in a NEW tab, and only the teacher saw it happen.
+
+    Without this the loop kept observing the tab it was constructed with — the search results —
+    so a successful takeover read as no progress, and the drive had to be aborted and the new tab
+    addressed by hand. The retarget must land BEFORE the re-observation, or the loop photographs
+    the tab it just left.
+    """
+    class _Retargetable(FakeActuator):
+        def __init__(self, bundles):
+            super().__init__(bundles)
+            self.retargeted = []
+            self.retargeted_when_observed = []
+
+        def retarget(self, tab_id):
+            self.retargeted.append(tab_id)
+            return True
+
+        def observe(self):
+            self.retargeted_when_observed.append(list(self.retargeted))
+            return super().observe()
+
+    seat = ScriptedSeat(takeover=TakeoverResult(resumed=True, new_tab_id="TAB-B"))
+    act = _Retargetable([a_bundle()])
+    run_controller(act, programs=Programs(CONTINUE_PROGRAM), max_steps=2, seat=seat,
+                   authority=fixed_authority(
+                       Maturity.CERTIFIED.value,
+                       reach=ActuationReach(can_operate=False, gaps=("widget:signature_pad",))))
+
+    # This authority is permanently RED, so the loop hands over on every turn and reports the
+    # same move each time — what matters is that it followed at all, and followed FIRST.
+    assert act.retargeted[0] == "TAB-B", "the loop ignored where the teacher said the work went"
+    assert act.retargeted_when_observed[-1][:1] == ["TAB-B"], \
+        "re-observed before following the tab"
+
+
+def test_a_takeover_without_a_new_tab_leaves_the_target_alone():
+    """The common case must not touch the tab: only a teacher who SAW a window open reports one."""
+    class _Retargetable(FakeActuator):
+        def __init__(self, bundles):
+            super().__init__(bundles)
+            self.retargeted = []
+
+        def retarget(self, tab_id):
+            self.retargeted.append(tab_id)
+            return True
+
+    seat = ScriptedSeat(takeover=TakeoverResult(resumed=True, detail="signature entered"))
+    act = _Retargetable([a_bundle()])
+    run_controller(act, programs=Programs(CONTINUE_PROGRAM), max_steps=2, seat=seat,
+                   authority=fixed_authority(
+                       Maturity.CERTIFIED.value,
+                       reach=ActuationReach(can_operate=False, gaps=("widget:signature_pad",))))
+    assert act.retargeted == []

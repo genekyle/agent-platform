@@ -85,6 +85,11 @@ class TakeoverResult:
     #: before the inbox existed.
     timed_out: bool = False
     detail: str = ""
+    #: The work moved to another tab and the teacher is saying where. Live 2026-07-22: clicking
+    #: Apply opened the application in a NEW tab, and a takeover had no way to report that, so the
+    #: loop kept observing the tab it started on and a successful teacher action read as no
+    #: progress. Honoured only if the actuator can `retarget`.
+    new_tab_id: Optional[str] = None
 
 
 class TeacherSeat(Protocol):
@@ -376,6 +381,11 @@ def run_controller(
                 return LoopResult(STATUS_ABORTED, step,
                                   result.detail or "teacher aborted during takeover",
                                   bundle, decision, records)
+            # The work may have moved to a different tab — a takeover that clicks Apply opens the
+            # application in a new window, and only the teacher who watched it knows where it went.
+            # Follow BEFORE re-observing, or the re-observation photographs the tab we left.
+            if result.new_tab_id and hasattr(actuator, "retarget"):
+                actuator.retarget(result.new_tab_id)
             # Re-OBSERVE and re-decide. The teacher changed the page — that is why they drove —
             # so the decision we were holding is itself stale, and the mode must be recomputed
             # from what is on screen NOW. This is "re-evaluate local control after every teacher

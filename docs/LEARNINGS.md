@@ -24,6 +24,38 @@ Entry format: `## YYYY-MM-DD — <title>`, then *what we believed*, *what's actu
 
 ---
 
+## 2026-07-23 — A worktree's controlplane-api tests import `interaction` from MAIN, not the worktree
+
+**What we believed.** That running the suites inside a git worktree tests the worktree's code. It
+is the whole reason `CLAUDE.md` recommends worktrees for concurrent sessions.
+
+**What's actually true, and it is asymmetric.** `packages/interaction` is installed **editable**,
+pointing at `/Users/geno/Projects/agent-platform/packages/interaction` — the MAIN checkout. So:
+
+| run from | `import interaction` resolves to |
+|---|---|
+| `packages/interaction` (its own tests) | the **worktree** source — pytest puts rootdir first on `sys.path` |
+| `apps/controlplane-api` (the big suite) | the **main repo**, via the editable `.pth` |
+
+So a cross-package change edited in a worktree is exercised by that package's own tests and
+**invisible to the controlplane-api suite until it is merged**. Concretely, on 2026-07-22 the
+novelty→ORANGE change made `test_authority.py` fail-then-pass in the worktree while
+`test_controller_evals.py::test_authority_truth_table_is_pinned` reported green — because it was
+still asserting against main's *old* truth table. The instant the merge landed, the same test
+failed. The suite was not flaky and the merge did not break it; the pre-merge green was measuring
+the wrong code.
+
+**Why it bit rather than being noticed:** the same change had a pinned truth table in **two**
+places, one per package, and only the co-located one could see the edit.
+
+**Where it's encoded now.** This entry, plus the corrected assertion in
+`test_controller_evals.py`. The working rule: **after editing `packages/*` in a worktree, merge to
+main before trusting a green `apps/controlplane-api` run** — or run that suite from the main
+checkout. `make controller-evals` cannot save you here either; it resolves `../../.venv`, which a
+worktree does not have.
+
+---
+
 ## 2026-07-22 (4) — The first progressive-autonomy drive: we were capturing the wrong tab
 
 **The run.** First live drive with authority + the teacher seat wired (`/api/controller/run`,

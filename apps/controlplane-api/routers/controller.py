@@ -357,6 +357,9 @@ class TeacherRespondBody(BaseModel):
     lesson: Optional[TeacherLessonIn] = None
     rationale: str = ""                           # the WHY — §10, held to is_real_rationale
     verified: bool = False                        # did the taught step actually work?
+    #: Where the work went, when a takeover moved it to another tab (clicking Apply opens the
+    #: application in a new window). Only the teacher who watched it knows.
+    new_tab_id: str = ""
 
 
 @router.post("/api/controller/teacher/{request_id}/respond")
@@ -389,7 +392,8 @@ def teacher_respond(request_id: str, body: TeacherRespondBody) -> dict[str, Any]
                             evidence=tuple(body.decision.evidence))
     try:
         payload = inbox_mod.respond(request_id, action=body.action, decision=decision,
-                                    lesson=lesson_obj, rationale=body.rationale)
+                                    lesson=lesson_obj, rationale=body.rationale,
+                                    new_tab_id=body.new_tab_id)
     except inbox_mod.InboxError as exc:
         return {"ok": False, "detail": str(exc)}
     return {"ok": True, "response": payload,

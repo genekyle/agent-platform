@@ -558,6 +558,28 @@ class LiveActuator:
         self._tab_id = fresh["tab_id"]
         return True
 
+    def retarget(self, tab_id: str) -> bool:
+        """Follow the work to a different tab, on the teacher's word.
+
+        The gap this closes, found live 2026-07-22: clicking Apply opened the application in a NEW
+        tab, and a takeover that had legitimately moved the work there had no way to say so. The
+        loop went on observing the tab it was constructed with — the search results — so a
+        successful teacher action looked like no progress at all, and the drive had to be aborted
+        and re-addressed by hand.
+
+        Distinct from `re_resolve_tab`, deliberately: that RECOVERS a pinned target that died, and
+        discovers the replacement itself. This one is told, by a teacher who watched a click open a
+        window. Both drop the carried per-tab state, because keeping a scan or a landed state from
+        the previous tab is exactly how a stale observation gets attributed to the wrong page.
+        """
+        if not tab_id or tab_id == self._tab_id:
+            return False
+        self._tab_id = tab_id
+        self._last_scan = []
+        self._last_url = ""
+        self._last_state = None
+        return True
+
     def rescan_required(self) -> tuple[dict, ...]:
         """Find required controls the ordinary scan missed, with a DIFFERENT instrument.
 

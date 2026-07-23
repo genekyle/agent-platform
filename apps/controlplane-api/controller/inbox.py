@@ -235,7 +235,8 @@ class InboxError(ValueError):
 
 
 def respond(request_id: str, *, action: str, decision: Optional[Decision] = None,
-            lesson: Optional[Lesson] = None, rationale: str = "") -> dict[str, Any]:
+            lesson: Optional[Lesson] = None, rationale: str = "",
+            new_tab_id: str = "") -> dict[str, Any]:
     """Answer a parked question. Validates before it writes.
 
     The validation is not ceremony. `instruct` and `correct` are the two actions that put an
@@ -271,6 +272,11 @@ def respond(request_id: str, *, action: str, decision: Optional[Decision] = None
         }
     if lesson is not None:
         payload["lesson"] = lesson.as_dict()
+    # "The work is over there now." A teacher who watched a click open a window is the only
+    # party that knows it; without this the loop keeps observing the tab it was constructed with
+    # and a successful takeover reads as no progress (live, 2026-07-22).
+    if new_tab_id:
+        payload["new_tab_id"] = str(new_tab_id)
 
     answered_at = datetime.now(timezone.utc).isoformat()
     _append({"id": request_id, "status": "answered", "response": payload,
