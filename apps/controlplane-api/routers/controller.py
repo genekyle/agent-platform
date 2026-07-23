@@ -9,6 +9,7 @@ it decided, at which rung, what it escalated, and how well it agrees with the te
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import Any, Optional
 
 import httpx
@@ -378,10 +379,17 @@ def window_tidy(body: WindowBody) -> dict[str, Any]:
             refused.append({"tab_id": tab.tab_id, "url": tab.short_url,
                             "detail": out.get("detail", "")})
 
+    # Let the browser retire the targets before recounting. Without this the re-read races the
+    # close and reports "4 -> 4" on a tab that really did go, which reads as "nothing happened" —
+    # the precise misperception this whole endpoint exists to correct.
+    if closed:
+        time.sleep(1.0)
     after = _capture_post_sync("/list_tabs", {"browser_url": body.browser_url})
+    after_count = after.get("count") if after.get("ok") else None
     return {"ok": True, "closed": closed, "refused": refused,
             "reasons": list(win.reasons),
-            "tabs_before": win.count, "tabs_after": after.get("count", win.count)}
+            "tabs_before": win.count,
+            "tabs_after": after_count if after_count is not None else win.count - len(closed)}
 
 
 @router.get("/api/controller/coverage")
