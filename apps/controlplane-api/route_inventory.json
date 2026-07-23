@@ -126,6 +126,8 @@
   "POST /api/controller/teach/commit",
   "POST /api/controller/teach/observe",
   "POST /api/controller/teacher/{request_id}/respond",
+  "POST /api/controller/window",
+  "POST /api/controller/window/tidy",
   "POST /api/drive_lock",
   "POST /api/events",
   "POST /api/facebook/listings",

@@ -147,6 +147,10 @@ class RunBody(BaseModel):
     #: consequential, the control must be named rather than inferred, and human_required states,
     #: BLOCKED and the never-auto-solve-a-challenge rule are untouched.
     allow_submit: bool = False
+    #: Let the drive CLOSE tabs that hold no work (terminal / blank), not merely report them.
+    #: Off by default because the window is shared with the operator and closing is irreversible;
+    #: surveying happens every turn regardless.
+    tidy: bool = False
 
 
 @router.post("/api/controller/run")
@@ -178,7 +182,8 @@ async def run_live(body: RunBody) -> dict[str, Any]:
 
     actuator = LiveActuator(base_url=settings.capture_server_url, browser_url=body.browser_url,
                             tab_id=body.tab_id, task=body.task, goal_text=body.goal_text,
-                            driver="humanized", allow_submit=body.allow_submit)
+                            driver="humanized", allow_submit=body.allow_submit,
+                            tidy=body.tidy)
     model = HaikuReasoner() if body.mode == "assisted" else None
 
     # Progressive autonomy, wired at THE production call site. `run_controller` defaults both to
@@ -193,6 +198,10 @@ async def run_live(body: RunBody) -> dict[str, Any]:
                          on_park=lambda r: parks.append(
                              {"id": r.id, "kind": r.kind, "state": r.state, "mode": r.mode,
                               "why": r.authority_reason, "gaps": r.reach_gaps}))
+
+    tidied: tuple[str, ...] = ()
+    if body.tidy:
+        tidied = await run_in_threadpool(actuator.tidy_window)
 
     trail: list[dict[str, Any]] = []
     reviews: list[dict[str, Any]] = []
@@ -253,6 +262,7 @@ async def run_live(body: RunBody) -> dict[str, Any]:
         "ok": True, "status": result.status, "reason": result.reason, "steps": result.steps,
         "mode": body.mode,
         "progressive": body.progressive,
+        "tidied_tabs": list(tidied),
         "mode_mix": mode_mix,
         "teacher_turns": sum(mode_mix.get(m, 0) for m in ("orange", "red")),
         "parked": parks,
@@ -299,6 +309,79 @@ def programs() -> dict[str, Any]:
                           "expected_exit": list(p.expected_exit), "stale": p.stale,
                           "compiled_from": list(p.compiled_from), "verified_at": p.verified_at}
                          for p in progs], "count": len(progs)}
+
+
+def _capture_post_sync(path: str, payload: dict) -> dict[str, Any]:
+    """One blocking POST to the capture server. Never raises — an unreachable browser is an
+    honest `{ok: false}` the caller can report, not a 500 the operator has to decode."""
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            r = client.post(f"{settings.capture_server_url.rstrip('/')}{path}", json=payload)
+            r.raise_for_status()
+            return r.json() or {}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+
+
+class WindowBody(BaseModel):
+    browser_url: str
+    tab_id: str = ""          # which tab is the work on; it is never proposed for closing
+
+
+@router.post("/api/controller/window")
+def window_survey(body: WindowBody) -> dict[str, Any]:
+    """What is open in this session, and what holds no work. READ-ONLY — closes nothing.
+
+    The controller has surveyed the window on every turn since the tab manager landed, but only
+    inside a drive, so between drives there was no way to ask. Reading `/json/list` is a local
+    socket, so this is free even on a metered connection.
+    """
+    from controller import window as window_mod
+
+    res = _capture_post_sync("/list_tabs", {"browser_url": body.browser_url})
+    if not res.get("ok"):
+        return {"ok": False, "detail": res.get("detail", "could not list tabs"), "window": None}
+    win = window_mod.survey(res.get("tabs") or [], active_tab_id=body.tab_id)
+    return {"ok": True, "window": win.as_dict(),
+            "tabs": [{"tab_id": t.tab_id, "role": t.role, "url": t.short_url,
+                      "active": t.is_active} for t in win.tabs]}
+
+
+@router.post("/api/controller/window/tidy")
+def window_tidy(body: WindowBody) -> dict[str, Any]:
+    """Close the tabs `plan_hygiene` says hold no work. OPERATOR-TRIGGERED, never automatic.
+
+    Wired because it was missing, and the miss is the exact failure this repo keeps naming: the
+    policy, the endpoint and the plan all existed after the tab manager landed, and NOTHING could
+    call the closing half — a capability that exists but has no call site is a capability the
+    system does not have (the 2026-07-16 corpus reckoning, one altitude up).
+
+    Surveying stays free and automatic; closing stays explicit and asked-for. The rails are in
+    `plan_hygiene`, not here: never the active tab, never the last tab, never an unknown role,
+    never the only search tab. `/close_tab` refuses the control panel and the last tab as well, so
+    the two agree rather than one trusting the other.
+    """
+    from controller import window as window_mod
+
+    res = _capture_post_sync("/list_tabs", {"browser_url": body.browser_url})
+    if not res.get("ok"):
+        return {"ok": False, "detail": res.get("detail", "could not list tabs"), "closed": []}
+    win = window_mod.survey(res.get("tabs") or [], active_tab_id=body.tab_id)
+
+    closed, refused = [], []
+    for tab in win.closable:
+        out = _capture_post_sync("/close_tab", {"browser_url": body.browser_url,
+                                                "tab_id": tab.tab_id})
+        if out.get("ok"):
+            closed.append({"tab_id": tab.tab_id, "role": tab.role, "url": tab.short_url})
+        else:
+            refused.append({"tab_id": tab.tab_id, "url": tab.short_url,
+                            "detail": out.get("detail", "")})
+
+    after = _capture_post_sync("/list_tabs", {"browser_url": body.browser_url})
+    return {"ok": True, "closed": closed, "refused": refused,
+            "reasons": list(win.reasons),
+            "tabs_before": win.count, "tabs_after": after.get("count", win.count)}
 
 
 @router.get("/api/controller/coverage")

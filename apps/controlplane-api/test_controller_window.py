@@ -115,3 +115,26 @@ def test_the_window_block_is_counts_and_roles_never_a_url_per_tab():
     text = window_to_prompt(win.as_dict())
     assert "tabs: 2" in text and "apply=1" in text
     assert "SECRET" not in text and "vjk" not in text
+
+
+# --- the closing half needs a CALL SITE, or the capability does not exist ---------------
+def test_the_window_endpoints_are_registered():
+    """The miss this file is guarding against: `tidy_window` was written, tested and unreachable.
+
+    A capability with no call site is a capability the system does not have — the 2026-07-16
+    corpus reckoning one altitude up, and exactly what the operator saw as "it may be in but I
+    see lack of functionality".
+    """
+    import main
+
+    paths = {f"{m} {r.path}" for r in main.app.routes
+             for m in (getattr(r, "methods", None) or ()) if m not in ("HEAD", "OPTIONS")}
+    assert "POST /api/controller/window" in paths
+    assert "POST /api/controller/window/tidy" in paths
+
+
+def test_a_drive_can_be_asked_to_tidy_and_defaults_not_to():
+    from routers.controller import RunBody
+
+    assert RunBody(browser_url="x", tab_id="t").tidy is False
+    assert RunBody(browser_url="x", tab_id="t", tidy=True).tidy is True
