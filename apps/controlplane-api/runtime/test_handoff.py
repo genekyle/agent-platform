@@ -209,3 +209,83 @@ def test_escalation_callback_shapes_a_controller_escalation(monkeypatch, tmp_pat
     assert row["detail"] == "no program for this state"
     assert row["tried"][0]["state"] == "acme_questions"
     assert row["tried"][0]["layer"] == "model"
+
+
+def test_escalation_callback_carries_context_from_the_bundle(monkeypatch, tmp_path):
+    """The record should say WHERE it was and WHAT the page wanted, not just 'unrecognised'."""
+    _quiet(monkeypatch, tmp_path)
+
+    class B:
+        goal_text, task, url, state = "apply", "apply", "https://acme/apply", "acme_questions"
+        next_action = "click Continue"
+        unanswered = ({"field": "Job title", "kind": "input"}, {"field": "Company", "kind": "input"})
+        belief = {"state": "acme_submitted", "agreement": "split"}
+
+    class D:
+        rationale, intent, rung, confidence = "no program", "set_text", "teacher", 0.3
+        escalation_axis = "unknown_state"
+
+    handoff_mod.escalation_callback(task_goal="apply run")(B(), D())
+    ctx = handoff_mod.list_handoffs()[0]["context"]
+    assert ctx["state"] == "acme_questions"
+    assert ctx["needs"] == ["Job title", "Company"]        # names only, never values
+    assert ctx["observer"] == {"state": "acme_submitted", "agreement": "split"}
+    assert ctx["stuck_on"] == "unknown_state"
+
+
+# --- dedup: one situation, one open handoff (live 2026-07-23) ---------------------------
+def test_the_same_situation_updates_one_handoff_instead_of_stacking(monkeypatch, tmp_path):
+    """Four drives parking on one work-experience page had made four identical handoffs. A repeat
+    of the same page+state+reason must bump the open record, not open a fifth."""
+    monkeypatch.setattr(handoff_mod, "_handoffs_path", lambda: tmp_path / "handoffs.jsonl")
+    monkeypatch.setenv("HANDOFF_NOTIFY", "off")
+
+    url = "https://smartapply.indeed.com/beta/indeedapply/form/resume-module/profile-work-experience/append"
+    first = handoff_mod.emit_escalation(reason="unexpected_state", task_goal="finish the application",
+                                        url=url, state="indeed_apply_resume_review")
+    second = handoff_mod.emit_escalation(reason="unexpected_state",
+                                         task_goal="finish and submit the application",
+                                         url=url + "?vjk=abc", state="indeed_apply_resume_review")
+
+    assert first.id == second.id, "a repeat opened a new record instead of updating the open one"
+    assert second.occurrences == 2
+    openh = handoff_mod.list_handoffs(open_only=True)
+    assert len(openh) == 1, "the inbox should hold ONE handoff for one situation"
+    assert openh[0]["occurrences"] == 2
+
+
+def test_a_different_page_is_a_different_handoff(monkeypatch, tmp_path):
+    monkeypatch.setattr(handoff_mod, "_handoffs_path", lambda: tmp_path / "handoffs.jsonl")
+    monkeypatch.setenv("HANDOFF_NOTIFY", "off")
+    a = handoff_mod.emit_escalation(reason="unexpected_state", task_goal="g",
+                                    url="https://x/apply/step-1", state="s1")
+    b = handoff_mod.emit_escalation(reason="unexpected_state", task_goal="g",
+                                    url="https://x/apply/step-2", state="s2")
+    assert a.id != b.id
+    assert len(handoff_mod.list_handoffs(open_only=True)) == 2
+
+
+def test_a_resolved_situation_can_be_raised_fresh(monkeypatch, tmp_path):
+    """Dedup only collapses OPEN handoffs. Once the operator clears one, the same page stopping
+    again is genuinely new — it must not silently re-open the resolved record."""
+    monkeypatch.setattr(handoff_mod, "_handoffs_path", lambda: tmp_path / "handoffs.jsonl")
+    monkeypatch.setenv("HANDOFF_NOTIFY", "off")
+    a = handoff_mod.emit_escalation(reason="unexpected_state", task_goal="g",
+                                    url="https://x/apply/step", state="s")
+    handoff_mod.resolve(a.id)
+    b = handoff_mod.emit_escalation(reason="unexpected_state", task_goal="g",
+                                    url="https://x/apply/step", state="s")
+    assert b.id != a.id
+    assert len(handoff_mod.list_handoffs(open_only=True)) == 1
+
+
+def test_context_is_carried_so_the_record_is_not_generic(monkeypatch, tmp_path):
+    monkeypatch.setattr(handoff_mod, "_handoffs_path", lambda: tmp_path / "handoffs.jsonl")
+    monkeypatch.setenv("HANDOFF_NOTIFY", "off")
+    ctx = {"state": "indeed_apply_resume_review", "needs": ["Job title", "Company"],
+           "observer": "disagrees with the recipe"}
+    h = handoff_mod.emit_escalation(reason="unexpected_state", task_goal="g",
+                                    url="https://x/apply", state="indeed_apply_resume_review",
+                                    context=ctx)
+    got = handoff_mod.list_handoffs(open_only=True)[0]
+    assert got["context"]["needs"] == ["Job title", "Company"]

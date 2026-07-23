@@ -130,6 +130,17 @@ class HandoffRecord:
     tab_url: Optional[str] = None
     diagnostic: Optional[dict[str, Any]] = None                 # e.g. post-failure captcha probe
     resolved_at: Optional[str] = None
+    #: The fingerprint of the SITUATION — page + state — so a repeat of the same stuck moment
+    #: updates this record instead of opening a fifth copy of it (live 2026-07-23: four drives
+    #: parked on one work-experience page produced four identical handoffs).
+    situation_key: str = ""
+    #: How many times this same situation has been raised, and when last. `occurrences > 1` is the
+    #: honest signal that the agent keeps hitting a wall the operator has not cleared.
+    occurrences: int = 1
+    last_seen: str = ""
+    #: What the agent actually KNEW when it stopped — the state, what the page is asking for, what
+    #: the observer thought — so the record carries evidence instead of the same generic sentence.
+    context: Optional[dict[str, Any]] = None
 
 
 def _compact_step(step: Any) -> dict[str, Any]:
@@ -210,6 +221,22 @@ def build_handoff(result: Any, *, task_goal: str, training_session_id: Optional[
     )
 
 
+def _norm_url(url: str) -> str:
+    """Page identity: host + path, no query/fragment. Two visits to the same apply step share it."""
+    import re
+    u = re.sub(r"^https?://", "", (url or ""), flags=re.I)
+    return u.split("#")[0].split("?")[0].rstrip("/").lower()
+
+
+def _situation_key(*, url: str = "", state: str = "", reason: str = "") -> str:
+    """The fingerprint of a stuck MOMENT. Deliberately keyed on WHERE we are (page + state), not on
+    the task_goal text — the same wall was hit by drives whose goal strings differed only in
+    wording ("finish" vs "finish and submit"), and a free-text label must not fork one situation
+    into several. `reason` scopes it so a captcha and a novel page on the same URL stay distinct.
+    """
+    return "|".join((reason or "", _norm_url(url), (state or "").strip().lower()))
+
+
 # --- Persistence -------------------------------------------------------------
 def _handoffs_path() -> Path:
     base = Path(settings.observer_artifacts_dir)
@@ -220,14 +247,33 @@ def _handoffs_path() -> Path:
     return p
 
 
-def persist(handoff: HandoffRecord) -> None:
-    """Append the handoff to the durable log. Best-effort — never raises."""
+def _append_row(row: dict[str, Any]) -> bool:
+    """Append one overlay/record row to the durable log. Best-effort. `list_handoffs` merges rows
+    by id, so an overlay (same id, a few fields) updates the record without rewriting history."""
     try:
         with _lock:
             with _handoffs_path().open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(asdict(handoff)) + "\n")
+                fh.write(json.dumps(row) + "\n")
+        return True
     except Exception:
-        logger.exception("failed to persist handoff %s", handoff.id)
+        logger.exception("failed to append handoff row %s", row.get("id"))
+        return False
+
+
+def persist(handoff: HandoffRecord) -> None:
+    """Append the handoff to the durable log. Best-effort — never raises."""
+    _append_row(asdict(handoff))
+
+
+def _find_open_by_situation(key: str) -> Optional[dict[str, Any]]:
+    """The most recent OPEN handoff for this situation, or None. Empty keys never match — a record
+    with no page/state is not a situation we can safely merge onto."""
+    if not key:
+        return None
+    for row in list_handoffs(open_only=True, limit=0):
+        if row.get("situation_key") == key:
+            return row
+    return None
 
 
 def list_handoffs(*, open_only: bool = False, limit: int = 50) -> list[dict[str, Any]]:
@@ -265,14 +311,7 @@ def resolve(handoff_id: str) -> bool:
         return False
     marker = {"id": handoff_id, "status": "resolved",
               "resolved_at": datetime.now(timezone.utc).isoformat()}
-    try:
-        with _lock:
-            with _handoffs_path().open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(marker) + "\n")
-        return True
-    except Exception:
-        logger.exception("failed to resolve handoff %s", handoff_id)
-        return False
+    return _append_row(marker)
 
 
 # --- Notification ------------------------------------------------------------
@@ -324,6 +363,7 @@ def emit(result: Any, *, task_goal: str, training_session_id: Optional[int] = No
 def emit_escalation(*, reason: str, task_goal: str, detail: str = "", url: str = "",
                     tab_url: Optional[str] = None, tried: Optional[list[dict[str, Any]]] = None,
                     training_session_id: Optional[int] = None,
+                    state: str = "", context: Optional[dict[str, Any]] = None,
                     loop_status: str = "escalated") -> Optional[HandoffRecord]:
     """The same alert, for callers that DON'T have a `runtime.loop.LoopResult`.
 
@@ -333,16 +373,39 @@ def emit_escalation(*, reason: str, task_goal: str, detail: str = "", url: str =
     whichever loop raised it, lands in the SAME handoffs log (and therefore the same Session
     Activity timeline, as `kind:"escalation"`) and fires the same notification.
 
+    DEDUPED (2026-07-23): if an OPEN handoff already describes this same situation (same page +
+    state + reason), this bumps its `occurrences`/`last_seen` and re-notifies quietly, rather than
+    opening a fresh copy. Four drives parking on one work-experience page had produced four
+    identical handoffs; the operator asked the system to recognise "this is the same thing I
+    already flagged" instead of stacking duplicates.
+
     Best-effort by construction — an alert must never break the drive it is reporting on.
     """
     try:
+        now = datetime.now(timezone.utc).isoformat()
+        key = _situation_key(url=url, state=state, reason=reason)
+
+        # Already flagged and still open? Update in place — one situation, one record.
+        existing = _find_open_by_situation(key)
+        if existing is not None:
+            occ = int(existing.get("occurrences") or 1) + 1
+            overlay = {"id": existing["id"], "status": "open", "occurrences": occ,
+                       "last_seen": now, "detail": detail or existing.get("detail", "")}
+            if context:
+                overlay["context"] = context
+            _append_row(overlay)
+            merged = {**existing, **overlay}
+            logger.info("handoff %s recurred (x%d) — same situation, not a new record",
+                        existing["id"], occ)
+            return HandoffRecord(**{k: merged.get(k) for k in HandoffRecord.__dataclass_fields__})
+
         g = _REASON_GUIDANCE.get(reason, {
             "why": "The agent stopped and needs a human.",
             "suggestion": "Review the detail below and complete or unblock the step.",
         })
         handoff = HandoffRecord(
             id=f"hoff_{uuid.uuid4().hex[:12]}",
-            ts=datetime.now(timezone.utc).isoformat(),
+            ts=now,
             status="open",
             task_goal=task_goal,
             training_session_id=training_session_id,
@@ -355,6 +418,10 @@ def emit_escalation(*, reason: str, task_goal: str, detail: str = "", url: str =
             screenshot_path="",
             tried=list(tried or []),
             tab_url=tab_url,
+            situation_key=key,
+            occurrences=1,
+            last_seen=now,
+            context=context,
         )
         persist(handoff)
         notify(handoff)
@@ -362,6 +429,33 @@ def emit_escalation(*, reason: str, task_goal: str, detail: str = "", url: str =
     except Exception:  # noqa: BLE001 — never raise into the drive being reported on
         logger.exception("failed to emit escalation handoff (reason=%s)", reason)
         return None
+
+
+def _bundle_context(bundle: Any, decision: Any) -> dict[str, Any]:
+    """What the agent KNEW when it stopped — pulled off the bundle so the handoff carries evidence
+    instead of the same generic sentence. All best-effort: a fake bundle in a test, or a partial
+    one, just yields fewer keys. Field NAMES only from the unanswered set, never values (PRINCIPLES
+    §4 — a handoff record must not carry an application answer)."""
+    ctx: dict[str, Any] = {}
+    state = getattr(bundle, "state", None)
+    if state:
+        ctx["state"] = state
+    needs = [u.get("field") for u in (getattr(bundle, "unanswered", ()) or [])
+             if isinstance(u, dict) and u.get("field")]
+    if needs:
+        ctx["needs"] = needs[:8]
+    nxt = getattr(bundle, "next_action", None)
+    if nxt:
+        ctx["recipe_next"] = nxt
+    belief = getattr(bundle, "belief", None)
+    if isinstance(belief, dict) and belief.get("state"):
+        # The observer's own read, and whether it agreed — the "witnesses disagree" signal, in the
+        # record. A split between the recipe and the observer is exactly why a page reads as novel.
+        ctx["observer"] = {"state": belief.get("state"), "agreement": belief.get("agreement")}
+    axis = getattr(decision, "escalation_axis", "") or ""
+    if axis:
+        ctx["stuck_on"] = axis
+    return ctx
 
 
 def escalation_callback(*, task_goal: str, reason: str = "unexpected_state",
@@ -379,6 +473,8 @@ def escalation_callback(*, task_goal: str, reason: str = "unexpected_state",
             task_goal=task_goal or getattr(bundle, "goal_text", "") or getattr(bundle, "task", ""),
             detail=getattr(decision, "rationale", "") or "",
             url=getattr(bundle, "url", "") or "",
+            state=getattr(bundle, "state", "") or "",
+            context=_bundle_context(bundle, decision),
             training_session_id=training_session_id,
             tried=[{
                 "state": getattr(bundle, "state", None),
