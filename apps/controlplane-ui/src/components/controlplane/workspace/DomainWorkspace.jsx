@@ -6,6 +6,7 @@ import { GoalsPanel } from "./GoalsPanel";
 import { TasksPanel } from "./TasksPanel";
 import { AttentionInbox } from "./AttentionInbox";
 import { LiveDrivePanel } from "./LiveDrivePanel";
+import { SessionControlPanel } from "./SessionControlPanel";
 import { ActivityFeed } from "./ActivityFeed";
 import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
@@ -29,6 +30,7 @@ const TAB_TO_SECTION = {
 };
 
 function DataTab({ domain, tab, onOpenTraining }) {
+  if (tab === "control") return <SessionControlPanel domain={domain} />;
   if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
   if (tab === "accounts") {

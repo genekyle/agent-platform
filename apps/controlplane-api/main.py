@@ -67,6 +67,7 @@ from schemas import (
 )
 from settings import settings
 from deps import _artifacts_dir, _session_browser_url, _slugify, utcnow
+from observed_jobs import upsert_observed_jobs
 from migrations import migrate_schema
 from seed import (
     backfill_goal_stages,
@@ -105,6 +106,7 @@ from routers import events as events_router  # noqa: E402
 from routers import facebook as facebook_router  # noqa: E402
 from routers import inventory as inventory_router  # noqa: E402
 from routers import providers as providers_router  # noqa: E402
+from routers import session_control as session_control_router  # noqa: E402
 from routers import sessions as sessions_router  # noqa: E402
 from routers import workspace as workspace_router  # noqa: E402
 
@@ -1220,49 +1222,11 @@ async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"extractor unreachable: {exc}")
 
-    new_count, dup_count = _upsert_observed_jobs(db, raw.get("jobs", []),
-                                                 body.platform, body.search_query)
+    new_count, dup_count = upsert_observed_jobs(db, raw.get("jobs", []),
+                                                body.platform, body.search_query)
     db.commit()
     return {"ok": True, "scraped": raw.get("count", 0), "new": new_count,
             "duplicates": dup_count, "search_query": body.search_query}
-
-
-def _upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
-                          search_query: Optional[str]) -> tuple[int, int]:
-    """UPSERT scraped job cards into observed_jobs, deduped by job_id = '{platform}:{external_id}'.
-    A re-seen job bumps seen_count + last_seen_at (and records the search) instead of duplicating;
-    blank fields are backfilled. Returns (new, duplicate) counts. Does NOT commit — the caller does,
-    so a multi-page sweep commits once per page. Shared by /api/jobs/extract and /api/search/sweep."""
-    now = utcnow()
-    new_count = dup_count = 0
-    for j in jobs:
-        ext = (j.get("external_id") or "").strip()
-        if not ext:
-            continue
-        job_id = f"{platform}:{ext}"
-        row = db.get(ObservedJob, job_id)
-        if row is None:
-            row = ObservedJob(
-                job_id=job_id, platform=platform, external_id=ext,
-                title=(j.get("title") or "")[:400], company=(j.get("company") or "")[:300],
-                location=(j.get("location") or "")[:300], url=(j.get("url") or "")[:1200],
-                salary=(j.get("salary") or "")[:200] or None,
-                search_queries=[search_query] if search_query else [],
-                first_seen_at=now, last_seen_at=now, seen_count=1,
-            )
-            db.add(row)
-            new_count += 1
-        else:
-            row.seen_count += 1
-            row.last_seen_at = now
-            if search_query and search_query not in (row.search_queries or []):
-                row.search_queries = (row.search_queries or []) + [search_query]
-            # backfill any fields that were blank before
-            row.title = row.title or (j.get("title") or "")[:400]
-            row.company = row.company or (j.get("company") or "")[:300]
-            row.location = row.location or (j.get("location") or "")[:300]
-            dup_count += 1
-    return new_count, dup_count
 
 
 _SENIORITY = {"senior", "sr", "junior", "jr", "lead", "principal", "staff", "associate",
@@ -1969,7 +1933,7 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
         ex = await _capture_post("/extract_jobs",
                                  {"browser_url": browser_url, "tab_url": "indeed.com/jobs"})
         cards = ex.get("jobs", []) if ex.get("ok") else []
-        new_c, _dup = _upsert_observed_jobs(db, cards, "indeed", query)
+        new_c, _dup = upsert_observed_jobs(db, cards, "indeed", query)
         db.commit()
         pages_swept += 1
         total_found += len(cards)
@@ -5152,6 +5116,7 @@ def create_app() -> FastAPI:
     app.include_router(facebook_router.router)
     app.include_router(inventory_router.router)
     app.include_router(providers_router.router)
+    app.include_router(session_control_router.router)
     app.include_router(sessions_router.router)
     app.include_router(workspace_router.router)
 

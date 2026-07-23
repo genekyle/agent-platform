@@ -2164,3 +2164,57 @@ vision has demonstrably earned is the **cross-check**, not novelty supremacy. Re
 captures; if it still holds, witness B's job shrinks to platform + cross-check and the plan should
 say so. (What NB could never do stands: 0.500 AUROC, exactly chance — a posterior over known
 classes cannot represent "I have never been here.")
+
+## 2026-07-23 — End flags were the wrong abstraction: checkpoints, and why re-running a search is a cost
+
+We kept failing to define "task complete" for the search loop, and treated that as a gap to fill.
+It is not a gap — it is the wrong question. **These tasks have no terminal state**, and the
+start-stop shape an end flag implies is not merely inelegant on Indeed, it is *destructive*:
+repeat the same query too often and Indeed caches/collapses it, so results we already pulled stop
+coming back. A design that restarts a task to "finish it properly" burns the thing it is
+gathering. Operator, verbatim: *"creating flags for what we are doing HAVE to be open ended, it
+will need to hang onto session shape."*
+
+The replacement (`session_checkpoints.py`) asks a different question — not "is it done?" but
+**"how far up the ladder are we, and what's next?"** A checkpoint is a milestone that, once
+reached, is HELD for the session's life and never re-executed just because we came back around
+to it. Two kinds, and the distinction is the whole design:
+
+* **standing** (browser reachable, signed in) — must be true CONTINUOUSLY. Cheap to verify every
+  step and **safe to re-run** when it lapses.
+* **consuming** (query submitted, distance filter applied) — reaching it **spent something that
+  cannot be spent twice**. Once held it is NEVER re-run, even when the page no longer looks like
+  it. A lapsed consuming rung produces a **RECOVER** instruction (get back to the results we
+  already have), never a repeat.
+
+**The ladder is open-ended by construction.** Four fixed rungs reach the start line, then it
+grows one rung per results page — `page:1`, `page:2`, … There is no last rung to flag. "Task
+complete" is not something we invent; it is the *observed* fact that the ladder cannot grow (no
+next page), and even then closing out is the operator's call. That is what "hang onto session
+shape" means in code: the session holds its shape and advances a cursor.
+
+### Three things that only fell out once it was built
+
+* **The observation map has to be tri-state.** `True | False | None`, where **None means "we did
+  not check" and must never read as a regression** — otherwise one flaky probe sends us re-running
+  a rung that costs a real Indeed query. `radius_set` is permanently None: there is no cheap
+  read-back of the distance pill, and guessing would be the confidently-wrong failure mode we
+  already catalogued in the ATS-facet bug.
+* **A consuming rung must be marked only on PROOF.** `run_query` re-reads the tabs afterwards and
+  requires a results URL actually carrying our query; if it cannot prove it, the rung is left
+  **unmarked** and the operator is told. Unmarked means it will be retried — which is the harm —
+  so this is the one place where proof matters more than progress.
+* **The phase boundary is where the design earns the word "independence."** While climbing, the
+  crank works rungs by itself (nothing consequential to ask about). At the start line it *stops*
+  and hands the page over. The operator asked for exactly this split, and it maps cleanly onto
+  the existing authority ladder rather than competing with it.
+
+Landed as `session_checkpoints.py` (pure, 19 tests), `routers/session_control.py` (the crank +
+read model, 24 tests) and the Session control tab. Verified live against session 16: the crank
+marked `provisioned` off a real CDP probe and then **stopped at the credential wall** rather than
+typing anything — the hard boundary holding without a special case for it.
+
+**Open**: the ladder is Indeed-search-shaped. Apply has its own consuming rungs (a submitted
+application is the ultimate once-only act) and should reuse this module rather than grow a
+parallel vocabulary. And `initialize` refuses a *second query in one session* — the enforcement
+point for all of the above — which means "search three variants" is now explicitly three sessions.

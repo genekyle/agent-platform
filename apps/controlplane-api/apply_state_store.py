@@ -213,6 +213,11 @@ class Blackboard:
     plan: list[Subtask] = field(default_factory=list)
     current_subtask_id: Optional[str] = None
     search_state: SearchState = field(default_factory=SearchState)
+    # The checkpoint ledger (session_checkpoints.Ledger, serialized): which rungs of the
+    # open-ended ladder this session has reached. Lives here because a checkpoint is exactly the
+    # kind of "written down, not re-derived" fact the blackboard exists for — and because a rung
+    # that cost a real Indeed query must survive a process restart, or we'd pay for it twice.
+    checkpoints: dict[str, Any] = field(default_factory=dict)
     world: dict[str, Any] = field(default_factory=dict)   # tabs, active_tab_index, page_state, role
     form_state: list[FieldState] = field(default_factory=list)
     blockers: list[Blocker] = field(default_factory=list)
@@ -231,6 +236,7 @@ class Blackboard:
             "plan": [asdict(s) for s in self.plan],
             "current_subtask_id": self.current_subtask_id,
             "search_state": asdict(self.search_state),
+            "checkpoints": self.checkpoints,
             "world": self.world,
             "form_state": [asdict(f) for f in self.form_state],
             "blockers": [asdict(b) for b in self.blockers],
@@ -251,6 +257,7 @@ class Blackboard:
         bb.plan = [Subtask(**s) for s in d.get("plan", [])]
         bb.current_subtask_id = d.get("current_subtask_id")
         bb.search_state = SearchState(**d.get("search_state", {}))
+        bb.checkpoints = d.get("checkpoints", {}) or {}
         bb.world = d.get("world", {})
         bb.form_state = [FieldState(**f) for f in d.get("form_state", [])]
         bb.blockers = [Blocker(**b) for b in d.get("blockers", [])]

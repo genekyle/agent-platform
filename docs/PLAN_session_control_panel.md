@@ -182,16 +182,31 @@ Layout, top to bottom:
 | Read-only "watch it think" | ✅ `POST /api/controller/observe` (perceive→plan, no act) |
 | Stepwise teacher act | ✅ `/teach/observe` + `/teach/commit` |
 | Autonomous loop | ✅ `/api/controller/run` (fire-and-forget with parks) |
-| **Session lifecycle object** (initialize/ready/running/paused/ended) | ❌ **missing** |
-| **`session/step` — one crank, all four stages returned** | ❌ **missing** (the skeleton) |
-| **Initiator provenance in the call** | ❌ missing (compose with existing `rung`) |
+| **Session lifecycle object** (initialize/ready/running/paused/ended) | 🟡 **initialize + the ladder built** (`session_checkpoints.Ledger` on the blackboard); paused/ended not yet |
+| **`session/step` — one crank, all four stages returned** | 🟡 **built as `/api/session_control/{id}/step`** — one crank over the checkpoint ladder; the four *stages* are not yet the unit (see §12) |
+| **Initiator provenance in the call** | ✅ `initiator: operator\|auto\|teacher`, recorded on every rung |
 | **Micro-step / stage barrier** | ❌ missing |
 | **Pause (queued, checked at a safe seam)** | ❌ missing |
 | **Safe exit + cleanup** | ❌ missing |
-| **The Control Panel UI** | ❌ missing (LiveDrivePanel is the precursor to fold in) |
-| **End-flags / completion detection** | ❌ missing — TBD (§11) |
+| **The Control Panel UI** | 🟡 **first slice built** — Session control tab: query input, the ladder, page + results + choose. Pause/exit/micro-step not folded in |
+| **End-flags / completion detection** | ✅ **dissolved, not built** — the open-ended ladder replaces it (§10) |
 
 The muscles exist; the **skeleton and the cockpit** do not. That is the whole build.
+
+## 12. What the first slice actually built (2026-07-23) — and what it deliberately did not
+
+Built: `session_checkpoints.py` (the ladder, pure, 19 tests), `routers/session_control.py`
+(`initialize` / `step` / `choose` / read model, 24 tests), and the **Session control** tab.
+
+One deviation from §8 worth naming: **the crank's unit is a checkpoint, not a
+perceive→plan→act→verify beat.** Those are compatible but not the same thing — a rung like
+"signed in" is a whole beat's worth of work, while reviewing a page is mostly perception plus a
+human decision. The stage-level contract in §8 is still owed and is where micro-stepping lands;
+this slice bought the *cadence* first because that was the missing skeleton.
+
+Still owed from §9: pause (queued, honored at a safe seam), safe exit + cleanup, micro-step, the
+single-active guard, and initialize actually *provisioning* Chrome rather than probing one that
+already exists.
 
 ## 8. The `session/step` contract (sketch — to be firmed in the build plan)
 
@@ -230,9 +245,18 @@ POST /api/controller/session/{id}/step
 
 ## 10. Open questions / TBD
 
-- **End-flags.** No completion detection exists. What *is* "task complete" for look-for-jobs
-  (a page swept? a count?) vs apply-and-search (N applications submitted?)? Until defined, pause→
-  exit is the only clean end. *(Operator: "still no end flags created yet so this will be TBD.")*
+- **~~End-flags~~ — ANSWERED 2026-07-23: there are none, and that is the design.** The question
+  "what is task complete?" was wrong. These tasks have no terminal state, and the start-stop shape
+  an end flag implies is *destructive* on Indeed — repeat a query and Indeed collapses its results.
+  Replaced by an **open-ended checkpoint ladder** (`session_checkpoints.py`): rungs that are HELD
+  once reached, split into **standing** (must stay true; safe to re-run) and **consuming** (spent
+  something unrepeatable; a lapse RECOVERS, never repeats). Four fixed rungs reach the start line,
+  then it grows one rung per results page, so there is no last rung to flag. Completion is the
+  *observed* fact that the ladder cannot grow (no next page) — and closing out stays the
+  operator's call. Built: `routers/session_control.py` + the Session control tab. See
+  `docs/LEARNINGS.md` 2026-07-23.
+  - Still open: the ladder is search-shaped. **Apply's** consuming rungs (a submitted application
+    is the ultimate once-only act) should reuse the module, not fork a parallel vocabulary.
 - **Multi-session.** Single-active now; the lifecycle object should carry a session id from day one
   so multi-session is a guard change, not a rewrite.
 - **Auto cadence pacing.** In auto mode, what turns the crank and how fast — a server-side ticker,

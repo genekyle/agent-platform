@@ -60,6 +60,7 @@ export const DOMAIN_CATALOG = [
     blurb: "Find and apply to jobs on Indeed.",
     tabs: [
       { id: "overview", label: "Overview" },
+      { id: "control", label: "Session control" },
       { id: "live", label: "Live drive" },
       { id: "jobs", label: "Jobs" },
       { id: "profile", label: "Application Profile" },

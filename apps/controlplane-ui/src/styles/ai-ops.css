@@ -1267,3 +1267,52 @@ textarea:focus-visible {
 /* Attention inbox: handoff context + recurrence */
 .attention-state { font-family: var(--font-mono, monospace); font-size: 12.5px; color: var(--text-muted); margin-right: 6px; }
 .attention-recurs { margin-right: 6px; }
+
+/* --- Session control panel: the checkpoint ladder + the page under review ----------------
+   The ladder reads top-to-bottom as a climb. A CONSUMING rung is visually marked "spent" so
+   the operator can see at a glance which rungs cost something real and will never re-run. */
+.sc-setup { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.sc-field { display: flex; flex-direction: column; gap: 4px; min-width: 180px; flex: 1 1 180px; }
+.sc-field--narrow { min-width: 90px; flex: 0 0 90px; }
+.sc-field > span { font-size: 12px; color: var(--text-muted); }
+.sc-field input {
+  padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line);
+  background: transparent; color: inherit; font: inherit; font-size: 13px;
+}
+.sc-field input:disabled { color: var(--text-muted); background: rgba(127,127,127,0.06); }
+
+.rungs { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rung { display: flex; gap: 10px; padding: 7px 0; align-items: flex-start; position: relative; }
+/* the climb line — connects each rung to the next */
+.rung:not(:last-child)::before {
+  content: ""; position: absolute; left: 10px; top: 27px; bottom: -2px;
+  width: 1px; background: var(--line);
+}
+.rung__mark {
+  flex: 0 0 auto; width: 21px; height: 21px; padding: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; z-index: 1;
+}
+.rung__body { min-width: 0; }
+.rung__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rung__label { font-size: 13.5px; font-weight: 600; }
+.rung--pending .rung__label { color: var(--text-muted); font-weight: 500; }
+.rung__meta { margin-top: 3px; font-size: 11.5px; color: var(--text-subtle); line-height: 1.5; }
+
+.sc-crank { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sc-awaiting {
+  display: flex; gap: 6px; align-items: flex-start;
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 6px;
+  font-size: 12.5px; line-height: 1.5;
+  color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+.sc-awaiting svg { flex-shrink: 0; margin-top: 2px; }
+
+.sc-results { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+.sc-results th {
+  text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--text-subtle); font-weight: 600; padding: 4px 8px 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.sc-results td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.sc-results tr.is-picked td { background: var(--accent-soft); }
+.sc-results td:first-child, .sc-results th:first-child { width: 26px; }
