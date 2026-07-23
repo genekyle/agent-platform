@@ -1169,3 +1169,77 @@ textarea:focus-visible {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* --- Coaching pane: the operator's seat in a running drive (2026-07-23) ------------- */
+.coaching-item { align-items: flex-start; }
+.coaching-error { color: var(--danger) !important; margin-bottom: 8px; }
+
+.coaching-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 16px;
+  margin: 10px 0;
+}
+.coaching-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.coaching-details { margin: 6px 0; }
+.coaching-details summary { cursor: pointer; color: var(--text-muted); font-size: 13px; }
+.coaching-details pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-x: auto;          /* a long step list scrolls itself, never the page */
+  white-space: pre-wrap;
+}
+
+.coaching-proposal {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent, #6aa7ff);
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+  border-radius: 0 6px 6px 0;
+}
+.coaching-proposal code { font-size: 13px; word-break: break-word; }
+
+.coaching-note {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.coaching-correct { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.coaching-correct input {
+  flex: 1 1 200px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* Go and Correct carry the SAME weight on purpose: the golden training rows come from
+   corrections, so a pane whose easy path is always "yes" starves the flywheel. */
+.coaching-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+
+@media (max-width: 720px) {
+  .coaching-actions { flex-direction: row; flex-wrap: wrap; }
+}
+
+/* Why Go is unavailable — stated, never a silently dead button. */
+.coaching-blocked { margin-top: 6px; font-size: 12px; color: var(--warning, #d8a657); }

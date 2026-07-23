@@ -5,6 +5,7 @@ import { AutomationMode } from "./AutomationMode";
 import { GoalsPanel } from "./GoalsPanel";
 import { TasksPanel } from "./TasksPanel";
 import { AttentionInbox } from "./AttentionInbox";
+import { CoachingPane } from "./CoachingPane";
 import { ActivityFeed } from "./ActivityFeed";
 import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
@@ -76,6 +77,7 @@ function Overview({ domain, mode, goalState, onToggleGoal }) {
 
   return (
     <div className="cockpit">
+      <CoachingPane />
       <AttentionInbox host={domain.host} />
       <div className="cockpit-grid">
         <GoalsPanel domain={domain} mode={mode} goalState={goalState} onToggleGoal={onToggleGoal} />
