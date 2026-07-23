@@ -322,3 +322,55 @@ class TabAddressingTest(unittest.IsolatedAsyncioTestCase):
 
         await self.m._verify_target_tab(_Session(), expected_url=None, tab_pinned=False,
                                         addressed=False)
+
+
+class ListTabsTest(unittest.TestCase):
+    """`/list_tabs` — the answer to "what is open right now", which nothing could give until now.
+
+    /close_tab could close one and _discover_target could find one, but the controller had no way
+    to SEE its window, and three faults on 2026-07-22 traced back to that.
+    """
+
+    def test_only_page_targets_are_reported(self):
+        import asyncio
+
+        import app.main_server as ms
+
+        targets = [
+            {"id": "A", "type": "page", "url": "https://www.indeed.com/jobs", "title": "Jobs"},
+            {"id": "S", "type": "service_worker", "url": "https://x/sw.js", "title": ""},
+            {"id": "B", "type": "page", "url": "https://smartapply.indeed.com/x", "title": "App"},
+        ]
+
+        class _Resp:
+            def json(self_inner):
+                return targets
+
+        class _Client:
+            async def __aenter__(self_inner):
+                return self_inner
+            async def __aexit__(self_inner, *a):
+                return False
+            async def get(self_inner, url):
+                return _Resp()
+
+        with patch("httpx.AsyncClient", lambda **k: _Client()):
+            out = asyncio.run(ms.list_tabs(ms.ListTabsRequest(browser_url="http://b")))
+
+        self.assertTrue(out["ok"])
+        self.assertEqual([t["tab_id"] for t in out["tabs"]], ["A", "B"])
+        self.assertEqual(out["count"], 2)
+
+    def test_an_unreachable_browser_is_an_empty_list_not_a_crash(self):
+        """A drive must degrade to "I cannot see the window", never die of not looking."""
+        import asyncio
+
+        import app.main_server as ms
+
+        def _boom(**k):
+            raise RuntimeError("browser gone")
+
+        with patch("httpx.AsyncClient", _boom):
+            out = asyncio.run(ms.list_tabs(ms.ListTabsRequest(browser_url="http://b")))
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["tabs"], [])

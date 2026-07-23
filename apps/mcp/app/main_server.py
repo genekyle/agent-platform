@@ -1844,6 +1844,40 @@ class CloseTabRequest(BaseModel):
     focus_tab_url: Optional[str] = None  # after closing, activate the tab whose URL contains this (e.g. "indeed.com/jobs")
 
 
+class ListTabsRequest(BaseModel):
+    """List the session's page tabs — the input the controller's window manager never had."""
+    browser_url: str = "http://127.0.0.1:9222"
+
+
+@app.post("/list_tabs")
+async def list_tabs(body: ListTabsRequest):
+    """Every page tab in this session, as `{tab_id, url, title}`.
+
+    `/close_tab` could already close one and `_discover_target` could find one, but nothing could
+    ANSWER "what is open right now" — so the controller drove a window it could not see, and three
+    separate faults on 2026-07-22 (a capture of a stale tab, an unnoticed new tab, a submit on a
+    stale tab) all traced back to that. `controller/window.py` turns this list into a policy.
+
+    Reads the browser's own /json/list: a local socket, so it is free even on a metered connection
+    (LOW_DATA_MODE) and safe to call every turn. Never raises — an unreachable browser is an empty
+    list with `ok: false`, because a drive must degrade to "I cannot see the window", never crash.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            targets = (await client.get(f"{body.browser_url}/json/list")).json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("list_tabs failed: %s", exc)
+        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}", "tabs": []}
+
+    tabs = [{"tab_id": str(t.get("id") or ""), "url": str(t.get("url") or ""),
+             "title": str(t.get("title") or "")}
+            for t in (targets if isinstance(targets, list) else [])
+            if t.get("type") == "page"]
+    return {"ok": True, "tabs": tabs, "count": len(tabs)}
+
+
 @app.post("/close_tab")
 async def close_tab(body: CloseTabRequest):
     """Close the identified tab via the CDP HTTP endpoint (GET /json/close/<id>), then optionally

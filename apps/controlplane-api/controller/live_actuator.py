@@ -36,6 +36,7 @@ from typing import Any, Callable, Optional
 import apply_recipe
 import ats_registry
 import apply_fields
+from controller import window as window_mod
 from controller.bundle import build_bundle
 from perception import live as perception_live
 from controller.loop import ActOutcome
@@ -128,7 +129,8 @@ class LiveActuator:
                  settle_tries: int = 3, settle_delay: float = 0.7,
                  sleep_fn: Optional[Callable[[float], None]] = None,
                  re_resolve: Optional[Callable[[], Optional[dict]]] = None,
-                 collect: bool = True, allow_submit: bool = False) -> None:
+                 collect: bool = True, allow_submit: bool = False,
+                 tidy: bool = False) -> None:
         self._browser_url = browser_url
         self._tab_id = tab_id
         self._task = task
@@ -154,6 +156,9 @@ class LiveActuator:
         # `default_authority` still grades a submit against `loop.CONSEQUENTIAL_INTENTS`, so the
         # bar for how SURE we must be is untouched. It changes who may press, not how sure.
         self._allow_submit = allow_submit
+        # May this actuator CLOSE tabs? Off by default: the window is shared with the
+        # operator, and surveying is free while closing is irreversible.
+        self._tidy = tidy
         # Carried between observe() and act(): the RAW scan (field -> selector, for Indeed's
         # dynamic fields), the current url, the current ats + state.
         self._last_scan: list[dict] = []
@@ -231,9 +236,15 @@ class LiveActuator:
             ax_candidates=candidates, screenshot_path=captured.screenshot,
             artifact=captured.artifact, domain_id=ats_registry.classify_ats(url))
 
+        # --- the window: what ELSE is open. Free (a local socket) and best-effort, like
+        # perception: a browser that will not list its tabs leaves `window=None`, which renders
+        # nothing and behaves exactly as the controller did before it could see the window.
+        window = self._survey_window()
+
         bundle = build_bundle(self._task, url, page_text, goal_text=self._goal,
                               scan=raw, journal_tail=tail,
-                              ax_candidates=candidates, belief=belief)
+                              ax_candidates=candidates, belief=belief,
+                              window=window.as_dict() if window else None)
         self._ats = bundle.ats or ats_registry.classify_ats(url)
         self._last_state = bundle.state
 
@@ -557,6 +568,38 @@ class LiveActuator:
         self._browser_url = fresh.get("browser_url") or self._browser_url
         self._tab_id = fresh["tab_id"]
         return True
+
+    def _survey_window(self) -> Optional["window_mod.WindowState"]:
+        """List the session's tabs and turn them into a policy. Never raises, never closes.
+
+        Closing is a separate, explicit call (`tidy_window`) because a janitor that closes tabs as
+        a side effect of LOOKING is indistinguishable from a bug when it is wrong — and this window
+        is shared with the operator, who may have opened something themselves.
+        """
+        res = self._post("/list_tabs", {"browser_url": self._browser_url})
+        if not res.get("ok"):
+            return None
+        return window_mod.survey(res.get("tabs") or [], active_tab_id=self._tab_id)
+
+    def tidy_window(self, window: Optional["window_mod.WindowState"] = None) -> tuple[str, ...]:
+        """Close what `plan_hygiene` says holds no work. Returns what was actually closed.
+
+        Deliberately NOT called from `observe()`. The plan is reported into the Bundle every turn
+        so the reasoner, the supervisor and the operator can all SEE the clutter; acting on it is a
+        decision with consequences and gets its own call site, gated by `self._tidy`.
+        """
+        win = window or self._survey_window()
+        if not (win and self._tidy):
+            return ()
+        closed: list[str] = []
+        for tab in win.closable:
+            res = self._post("/close_tab", {"browser_url": self._browser_url,
+                                            "tab_id": tab.tab_id})
+            if res.get("ok"):
+                closed.append(tab.tab_id)
+            else:
+                logger.warning("tidy_window: %s refused: %s", tab.short_url, res.get("detail"))
+        return tuple(closed)
 
     def retarget(self, tab_id: str) -> bool:
         """Follow the work to a different tab, on the teacher's word.

@@ -288,3 +288,38 @@ def test_every_journalled_row_is_replayable_not_just_golden_and_shadow():
     # still PII-free: the raw url and the lessons prose never enter the corpus
     assert "lessons" not in plain.bundle_snapshot
     assert plain.bundle_snapshot["url"] == _bundle().route     # route, not the query-bearing url
+
+
+# --- the WINDOW block: visible when known, invisible when not (2026-07-23) -------------
+def test_a_bundle_without_a_window_renders_exactly_the_prompt_it_always_did():
+    """THE property that let `Bundle.window` enter the prompt at all.
+
+    `belief` and `ax_identities` stayed out of the prompt because a mid-corpus feature drift makes
+    every row before it untrainable. The window has to be READABLE — a reasoner cannot act on tab
+    clutter it cannot see, which was the whole complaint — so the risk is handled in the renderer
+    instead: no window, no section, byte-identical prompt, replay evals still comparable.
+    """
+    from interaction.decision import bundle_to_prompt
+
+    assert "# WINDOW" not in bundle_to_prompt(_bundle())
+
+
+def test_the_window_block_reports_clutter_the_reasoner_can_act_on():
+    from interaction.decision import window_to_prompt
+
+    text = window_to_prompt({
+        "count": 5, "budget": 4, "over_budget": True, "active_role": "apply",
+        "roles": {"search": 1, "apply": 2, "terminal": 2},
+        "closable": [{"tab_id": "c", "role": "terminal", "url": "smartapply/…/post-apply"}],
+    })
+    assert "tabs: 5 (budget 4)" in text
+    assert "over_budget: yes" in text
+    assert "closable: 1 (terminal)" in text
+
+
+def test_an_empty_or_unseen_window_says_nothing_at_all():
+    from interaction.decision import window_to_prompt
+
+    assert window_to_prompt(None) == ""
+    assert window_to_prompt({}) == ""
+    assert window_to_prompt({"count": 0}) == ""

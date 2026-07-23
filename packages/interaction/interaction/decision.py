@@ -210,6 +210,24 @@ class Bundle:
     #: change once shadow agreement says it earns its tokens, not as a side effect of wiring.
     belief: Optional[dict] = None
 
+    #: --- the window: "what ELSE is open, and is any of it in the way"
+    #: `controller.window.WindowState.as_dict()`, or None when nothing listed the tabs.
+    #:
+    #: The controller drove tabs it could not see until 2026-07-23: everything above is SINGULAR —
+    #: one url, one state — so `decide()` could not reason about the window, the supervisor could
+    #: not name a tab fault, and the maturity registry could never learn one. Three incidents on
+    #: 2026-07-22 were all this single blind spot: a capture that photographed a stale tab, an
+    #: Apply click whose new tab the drive never noticed, and a Submit that bounced because the
+    #: tab it was pressed on had gone stale.
+    #:
+    #: UNLIKE `belief` and `ax_identities`, this one IS rendered — see `window_to_prompt` — and
+    #: the reason is that the reasoner cannot act on what it cannot read, which was the whole
+    #: complaint. The feature-contract risk is handled by the renderer instead of by omission: it
+    #: emits NOTHING when `window` is absent, so every bundle journaled before this field existed
+    #: produces a byte-identical prompt and the replay evals stay comparable. Counts and roles
+    #: only, never a url per tab — this rides in a prompt and into every journaled row.
+    window: Optional[dict] = None
+
 
 # --- the Decision: what the controller EMITS ----------------------------------------
 @dataclass(frozen=True)
@@ -375,6 +393,31 @@ def _fmt_recent(items: tuple[dict, ...]) -> str:
     return "\n".join(lines)
 
 
+def window_to_prompt(window: Optional[dict]) -> str:
+    """The compact `# WINDOW` block: what ELSE is open, and is any of it in the way.
+
+    Returns "" when there is nothing to say, and that is load-bearing rather than tidy: a bundle
+    journaled before `Bundle.window` existed renders exactly the prompt it always rendered, so the
+    replay evals and shadow-agreement numbers stay comparable across the change.
+
+    Counts and roles only. A url per tab would put the whole window into every prompt and every
+    journaled row, which is the raw-dump this architecture keeps out of prompts.
+    """
+    if not window or not window.get("count"):
+        return ""
+    roles = window.get("roles") or {}
+    role_text = ", ".join(f"{k}={v}" for k, v in roles.items()) or "(none)"
+    lines = [f"tabs: {window.get('count')} (budget {window.get('budget')})",
+             f"roles: {role_text}",
+             f"active: {window.get('active_role') or '(unknown)'}"]
+    if window.get("over_budget"):
+        lines.append("over_budget: yes — a cluttered window slows every operation in it")
+    closable = window.get("closable") or []
+    if closable:
+        lines.append(f"closable: {len(closable)} ({', '.join(c.get('role', '?') for c in closable)})")
+    return "\n".join(lines)
+
+
 def bundle_to_prompt(bundle: Bundle) -> str:
     """The STABLE serialization of a Bundle — the reasoner's prompt and L4's feature set.
 
@@ -405,6 +448,9 @@ def bundle_to_prompt(bundle: Bundle) -> str:
         f"next_action: {bundle.next_action or '(none)'}",
         f"expected_next: {expected}",
     ]
+    window = window_to_prompt(bundle.window)
+    if window:
+        parts += ["", "# WINDOW", window]
     if bundle.lessons:
         parts += ["", "# LESSONS", bundle.lessons]
     parts += [
