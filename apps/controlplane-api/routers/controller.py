@@ -9,6 +9,7 @@ it decided, at which rung, what it escalated, and how well it agrees with the te
 from __future__ import annotations
 
 import dataclasses
+import logging
 import time
 from typing import Any, Optional
 
@@ -31,6 +32,7 @@ from interaction.contract import Outcome
 from interaction.decision import Bundle, Decision, bundle_to_prompt
 from settings import settings
 
+logger = logging.getLogger("controller.routes")
 router = APIRouter()
 
 
@@ -200,9 +202,21 @@ async def run_live(body: RunBody) -> dict[str, Any]:
                              {"id": r.id, "kind": r.kind, "state": r.state, "mode": r.mode,
                               "why": r.authority_reason, "gaps": r.reach_gaps}))
 
+    # Survey the window once at the start — for its HEALTH, always, not only to tidy. A duplicate
+    # application (two apply tabs of one job) is a fault the operator asked us to flag, so it
+    # surfaces on the run whether or not tidy is on; with tidy on, the orphan is also closed.
     tidied: tuple[str, ...] = ()
+    window_health: dict[str, Any] = {}
+    start_window = await run_in_threadpool(actuator._survey_window)  # noqa: SLF001 — same module
+    if start_window is not None:
+        window_health = {"health": start_window.health,
+                         "anomalies": [a.as_dict() for a in start_window.anomalies]}
+        if start_window.health != "ok":
+            logger.warning("controller run %s: window health=%s anomalies=%s",
+                           body.session_id or body.task, start_window.health,
+                           [a.kind for a in start_window.anomalies])
     if body.tidy:
-        tidied = await run_in_threadpool(actuator.tidy_window)
+        tidied = await run_in_threadpool(actuator.tidy_window, start_window)
 
     trail: list[dict[str, Any]] = []
     reviews: list[dict[str, Any]] = []
@@ -264,6 +278,7 @@ async def run_live(body: RunBody) -> dict[str, Any]:
         "mode": body.mode,
         "progressive": body.progressive,
         "tidied_tabs": list(tidied),
+        "window_health": window_health,
         "mode_mix": mode_mix,
         "teacher_turns": sum(mode_mix.get(m, 0) for m in ("orange", "red")),
         "parked": parks,

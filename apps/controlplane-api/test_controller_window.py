@@ -89,9 +89,10 @@ def test_the_last_tab_is_never_closable():
 
 
 def test_over_budget_retires_superseded_applications_but_keeps_the_newest():
+    """Over budget with applications on DIFFERENT hosts — genuinely different jobs in flight, so
+    it thins by age (never the newest, never the active, never search) rather than by duplicate."""
     urls = [("A", "https://www.indeed.com/jobs?q=x")]
-    urls += [(f"P{i}", f"https://smartapply.indeed.com/beta/indeedapply/form/step-{i}")
-             for i in range(5)]
+    urls += [(f"P{i}", f"https://co{i}.wd5.myworkdayjobs.com/job/step") for i in range(5)]
     win = w.survey(_tabs(*urls), active_tab_id="P4", budget=3)
     assert win.over_budget
     closed = {t.tab_id for t in win.closable}
@@ -99,6 +100,16 @@ def test_over_budget_retires_superseded_applications_but_keeps_the_newest():
     assert "P3" not in closed, "closed the newest application instead of the oldest"
     assert "A" not in closed, "closed the search tab we return to"
     assert {"P0", "P1", "P2"} <= closed
+
+
+def test_many_apply_tabs_on_one_host_collapse_to_the_driven_one():
+    """Same host is the stronger signal than budget: five smartapply tabs are one application with
+    four orphans, so driving one closes the other four regardless of the budget."""
+    urls = [(f"P{i}", f"https://smartapply.indeed.com/beta/indeedapply/form/step-{i}")
+            for i in range(5)]
+    win = w.survey(_tabs(*urls), active_tab_id="P4", budget=3)
+    closed = {t.tab_id for t in win.closable}
+    assert closed == {"P0", "P1", "P2", "P3"}, "should keep only the driven tab"
 
 
 def test_hygiene_never_plans_to_close_everything():
@@ -138,3 +149,73 @@ def test_a_drive_can_be_asked_to_tidy_and_defaults_not_to():
 
     assert RunBody(browser_url="x", tab_id="t").tidy is False
     assert RunBody(browser_url="x", tab_id="t", tidy=True).tidy is True
+
+
+# --- health: two tabs, one application (live 2026-07-23) --------------------------------
+def _apply_tabs():
+    """The real shape that prompted this: two smartapply tabs, one Nichols application, at
+    different steps — an orphan from an earlier Apply re-entry, plus the search tab."""
+    return _tabs(
+        ("WORK", "https://smartapply.indeed.com/beta/indeedapply/form/resume-module/profile-work-experience/append"),
+        ("RESUME", "https://smartapply.indeed.com/beta/indeedapply/form/resume-selection-module/resume-selection"),
+        ("SEARCH", "https://www.indeed.com/jobs?q=reporting+analyst"),
+    )
+
+
+def test_two_apply_tabs_on_one_host_are_flagged_as_an_anomaly():
+    """A given ATS runs ONE apply flow per session, so a second apply tab is not a second job —
+    it is an orphan, and the window's health must say so rather than count it as normal clutter."""
+    win = w.survey(_apply_tabs())
+    assert win.health == "warn"
+    kinds = {a.kind for a in win.anomalies}
+    assert w.ANOMALY_DUPLICATE_APPLICATION in kinds
+
+
+def test_a_duplicate_application_is_not_auto_closed_when_we_are_driving_neither():
+    """Between drives we do not know which tab holds the work; closing the wrong one discards it.
+    Flag, and leave the choice to the operator — never guess."""
+    win = w.survey(_apply_tabs())          # no active tab
+    assert win.closable == ()
+    a = next(a for a in win.anomalies if a.kind == w.ANOMALY_DUPLICATE_APPLICATION)
+    assert a.resolvable is False and a.keeper == ""
+
+
+def test_the_orphan_is_closed_when_we_are_driving_the_other():
+    """Driving one of them makes it the keeper — the orphaned twin becomes closable, even though
+    both are `apply` and the window is not over budget."""
+    win = w.survey(_apply_tabs(), active_tab_id="WORK")
+    closed = {t.tab_id for t in win.closable}
+    assert closed == {"RESUME"}, "should close the orphan and keep the tab we are driving"
+    a = next(a for a in win.anomalies if a.kind == w.ANOMALY_DUPLICATE_APPLICATION)
+    assert a.resolvable and a.keeper == "WORK"
+
+
+def test_exact_duplicates_are_resolvable_without_an_active_tab():
+    """Identical copies have no 'more advanced' one to lose, so any keeper is safe."""
+    win = w.survey(_tabs(
+        ("A", "https://acme.wd5.myworkdayjobs.com/job/x"),
+        ("B", "https://acme.wd5.myworkdayjobs.com/job/x"),
+        ("S", "https://www.indeed.com/jobs?q=x"),
+    ))
+    a = next(a for a in win.anomalies if a.kind == w.ANOMALY_EXACT_DUPLICATE)
+    assert a.resolvable
+    assert len(win.closable) == 1 and win.closable[0].tab_id in {"A", "B"}
+
+
+def test_two_different_workday_tenants_are_not_a_duplicate():
+    """Different companies use different Workday hosts, so two apply tabs across hosts are two
+    real applications, not an anomaly — the host is what makes 'same application' meaningful."""
+    win = w.survey(_tabs(
+        ("A", "https://acme.wd5.myworkdayjobs.com/job/x"),
+        ("B", "https://globex.wd1.myworkdayjobs.com/job/y"),
+    ))
+    assert not [a for a in win.anomalies if a.kind == w.ANOMALY_DUPLICATE_APPLICATION]
+
+
+def test_a_healthy_window_reports_ok():
+    win = w.survey(_tabs(
+        ("A", "https://smartapply.indeed.com/beta/indeedapply/form/review-module"),
+        ("S", "https://www.indeed.com/jobs?q=x"),
+    ), active_tab_id="A")
+    assert win.health == "ok"
+    assert win.as_dict()["health"] == "ok"

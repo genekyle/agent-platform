@@ -103,6 +103,99 @@ class TabInfo:
         return bits[0] if len(bits) == 1 else f"{bits[0]}/…/{bits[-1]}"[:64]
 
 
+#: Two tabs are the SAME APPLICATION when they are the apply flow of the same host. A given ATS
+#: runs exactly one apply flow per session — Indeed opens one `smartapply.indeed.com` window per
+#: Apply click, Workday one tenant flow — so a second apply tab on that host is not a second job,
+#: it is an ORPHAN: an earlier Apply/re-entry that was left behind (observed live 2026-07-23, two
+#: smartapply tabs for one Nichols application). This is the "something is very wrong" the operator
+#: asked the tab manager to notice, not merely clutter to retire when over budget.
+ANOMALY_EXACT_DUPLICATE = "exact_duplicate"
+ANOMALY_DUPLICATE_APPLICATION = "duplicate_application"
+
+
+def _host(url: str) -> str:
+    return re.sub(r"^https?://", "", (url or "")).split("/")[0].split("?")[0].lower()
+
+
+def _norm_url(url: str) -> str:
+    """URL identity for exact-duplicate detection: no scheme case, no fragment, no trailing slash."""
+    u = re.sub(r"^https?://", "", (url or ""), flags=re.I)
+    return u.split("#")[0].rstrip("/").lower()
+
+
+@dataclass(frozen=True)
+class Anomaly:
+    """Something wrong with the window, named — not a tab to close but a SITUATION to flag.
+
+    `keeper` is the tab we would keep if we resolved it; "" means we cannot tell which is the real
+    one and must not guess (closing the wrong apply tab discards real progress). `resolvable` is
+    exactly `bool(keeper)`: the tab manager only closes a duplicate when it knows which one holds
+    the work — otherwise it raises its hand and lets the operator choose.
+    """
+    kind: str
+    why: str
+    tab_ids: tuple[str, ...]
+    keeper: str = ""
+
+    @property
+    def resolvable(self) -> bool:
+        return bool(self.keeper)
+
+    def redundant(self) -> tuple[str, ...]:
+        return tuple(t for t in self.tab_ids if t != self.keeper)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "why": self.why, "tab_ids": list(self.tab_ids),
+                "keeper": self.keeper, "resolvable": self.resolvable}
+
+
+def detect_anomalies(tabs: tuple["TabInfo", ...], *, active_tab_id: str = "") -> tuple[Anomaly, ...]:
+    """Health check over the window. Pure. Finds duplicates the role counts alone cannot see.
+
+    Exact-URL duplicates are unambiguous — the copies are identical, so any one is the keeper and
+    the rest are safe to close. Same-application duplicates (two apply tabs on one host) are the
+    real hazard: they are the same in-progress application, and the keeper is the one we are
+    DRIVING. If we are not driving either (a survey between drives), we flag and stop — picking
+    the less-advanced tab to keep would throw away the more-advanced one's work.
+    """
+    anomalies: list[Anomaly] = []
+    seen: set[str] = set()
+
+    # 1 — exact duplicates (any role).
+    by_url: dict[str, list[TabInfo]] = {}
+    for t in tabs:
+        by_url.setdefault(_norm_url(t.url), []).append(t)
+    for url, group in by_url.items():
+        if len(group) < 2 or not url:
+            continue
+        ids = tuple(t.tab_id for t in group)
+        keeper = active_tab_id if active_tab_id in ids else ids[0]
+        anomalies.append(Anomaly(
+            kind=ANOMALY_EXACT_DUPLICATE, tab_ids=ids, keeper=keeper,
+            why=f"{len(group)} tabs open on the exact same page ({group[0].short_url})"))
+        seen.update(ids)
+
+    # 2 — same-application duplicates: >1 apply tab on one host, not already an exact dup.
+    by_host: dict[str, list[TabInfo]] = {}
+    for t in tabs:
+        if t.role == ROLE_APPLY and t.tab_id not in seen:
+            by_host.setdefault(_host(t.url), []).append(t)
+    for host, group in by_host.items():
+        if len(group) < 2:
+            continue
+        ids = tuple(t.tab_id for t in group)
+        # The keeper is the tab we are driving; if none, we do not know which holds the work.
+        keeper = active_tab_id if active_tab_id in ids else ""
+        anomalies.append(Anomaly(
+            kind=ANOMALY_DUPLICATE_APPLICATION, tab_ids=ids, keeper=keeper,
+            why=(f"{len(group)} application tabs open on {host} — one apply flow should be open at "
+                 f"a time, so the extras are orphaned re-entries"
+                 + ("" if keeper else "; not driving any of them, so which to keep is the "
+                    "operator's call"))))
+
+    return tuple(anomalies)
+
+
 @dataclass(frozen=True)
 class WindowState:
     """Everything the controller should know about the window it is operating in."""
@@ -110,6 +203,7 @@ class WindowState:
     active_tab_id: str = ""
     closable: tuple[TabInfo, ...] = ()
     reasons: tuple[str, ...] = ()
+    anomalies: tuple[Anomaly, ...] = ()
     budget: int = TAB_BUDGET
 
     @property
@@ -119,6 +213,12 @@ class WindowState:
     @property
     def over_budget(self) -> bool:
         return self.count > self.budget
+
+    @property
+    def health(self) -> str:
+        """`ok` | `warn`. A window with an anomaly or over budget is not healthy, and the reasoner,
+        the cockpit and the tidy pass all read this one word before the details."""
+        return "warn" if (self.anomalies or self.over_budget) else "ok"
 
     @property
     def active(self) -> Optional[TabInfo]:
@@ -134,11 +234,13 @@ class WindowState:
             "count": self.count,
             "budget": self.budget,
             "over_budget": self.over_budget,
+            "health": self.health,
             "active_role": self.active.role if self.active else None,
             "active_tab_id": self.active_tab_id,
             "roles": {r: len(self.by_role(r)) for r in
                       (ROLE_SEARCH, ROLE_APPLY, ROLE_ERRAND, ROLE_TERMINAL, ROLE_BLANK,
                        ROLE_UNKNOWN) if self.by_role(r)},
+            "anomalies": [a.as_dict() for a in self.anomalies],
             "closable": [{"tab_id": t.tab_id, "role": t.role, "url": t.short_url}
                          for t in self.closable],
             "reasons": list(self.reasons),
@@ -147,7 +249,7 @@ class WindowState:
 
 def survey(tabs: Iterable[dict[str, Any]], *, active_tab_id: str = "",
            budget: int = TAB_BUDGET) -> WindowState:
-    """A raw tab list -> the window, with hygiene already planned.
+    """A raw tab list -> the window, with hygiene and health already assessed.
 
     `tabs` is whatever the lister returns: dicts carrying at least `tab_id` (or `id`) and `url`.
     """
@@ -162,13 +264,16 @@ def survey(tabs: Iterable[dict[str, Any]], *, active_tab_id: str = "",
         infos.append(TabInfo(tab_id=tid, url=url, role=classify_tab(url),
                              is_active=bool(active_tab_id) and tid == active_tab_id))
     ordered = tuple(infos)
-    closable, reasons = plan_hygiene(ordered, active_tab_id=active_tab_id, budget=budget)
+    anomalies = detect_anomalies(ordered, active_tab_id=active_tab_id)
+    closable, reasons = plan_hygiene(ordered, active_tab_id=active_tab_id, budget=budget,
+                                     anomalies=anomalies)
     return WindowState(tabs=ordered, active_tab_id=active_tab_id, closable=closable,
-                       reasons=reasons, budget=budget)
+                       reasons=reasons, anomalies=anomalies, budget=budget)
 
 
 def plan_hygiene(tabs: tuple[TabInfo, ...], *, active_tab_id: str = "",
-                 budget: int = TAB_BUDGET) -> tuple[tuple[TabInfo, ...], tuple[str, ...]]:
+                 budget: int = TAB_BUDGET,
+                 anomalies: tuple[Anomaly, ...] = ()) -> tuple[tuple[TabInfo, ...], tuple[str, ...]]:
     """What SHOULD be closed, and why. Pure; closes nothing.
 
     Four rails, and each one is a mistake we can point at rather than a precaution:
@@ -180,32 +285,55 @@ def plan_hygiene(tabs: tuple[TabInfo, ...], *, active_tab_id: str = "",
       be theirs, and "I could not identify it" is the weakest possible reason to close something.
     * **Never the only SEARCH tab.** It is the drive's home base between applications
       (`BOUNDS.tab_hygiene`), and reopening it means a fresh page load, which costs real data.
+
+    Beyond hygiene it also RESOLVES anomalies: a duplicate whose keeper is known (an exact copy,
+    or an orphaned apply flow of the application we are driving) has its redundant tabs retired
+    here, regardless of the budget — a duplicate is a fault, not clutter, so it does not wait for
+    the window to get crowded. A duplicate whose keeper is unknown is left for the operator; it
+    still surfaces as an anomaly, it just is not auto-closed.
     """
     if len(tabs) <= 1:
         return (), ()
 
+    by_id = {t.tab_id: t for t in tabs}
     out: list[TabInfo] = []
     why: list[str] = []
-    searches = [t for t in tabs if t.role == ROLE_SEARCH]
+    chosen: set[str] = set()
 
-    for t in tabs:
-        if t.tab_id == active_tab_id:
+    def _add(t: TabInfo, reason: str) -> None:
+        if t.tab_id in chosen or t.tab_id == active_tab_id:
+            return
+        chosen.add(t.tab_id)
+        out.append(t)
+        why.append(reason)
+
+    # 0 — resolvable duplicates first, so the keeper is protected before anything else runs.
+    for a in anomalies:
+        if not a.resolvable:
             continue
+        label = ("orphaned duplicate application — a second apply flow for the job we are already "
+                 "driving elsewhere" if a.kind == ANOMALY_DUPLICATE_APPLICATION
+                 else "an exact duplicate of another open tab")
+        for tid in a.redundant():
+            t = by_id.get(tid)
+            if t is not None:
+                _add(t, f"{a.kind}:{t.short_url} — {label}")
+
+    searches = [t for t in tabs if t.role == ROLE_SEARCH]
+    for t in tabs:
         if t.role in (ROLE_TERMINAL, ROLE_BLANK):
             if t.role == ROLE_SEARCH and len(searches) <= 1:
                 continue
-            out.append(t)
-            why.append(f"{t.role}:{t.short_url} — finished or empty, it holds no work")
+            _add(t, f"{t.role}:{t.short_url} — finished or empty, it holds no work")
 
     # Over budget: retire the OLDEST duplicate applications, never the newest (that is where the
     # work most likely is) and never the active one. Only kicks in past the budget, so a normal
     # two-tab drive never trips it.
     if len(tabs) - len(out) > budget:
         applies = [t for t in tabs
-                   if t.role == ROLE_APPLY and t.tab_id != active_tab_id and t not in out]
+                   if t.role == ROLE_APPLY and t.tab_id != active_tab_id and t.tab_id not in chosen]
         for t in applies[:-1]:                       # keep the newest
-            out.append(t)
-            why.append(f"apply:{t.short_url} — over the {budget}-tab budget and superseded")
+            _add(t, f"apply:{t.short_url} — over the {budget}-tab budget and superseded")
 
     # The last-tab rail, applied to the PLAN rather than trusted downstream.
     if len(out) >= len(tabs):

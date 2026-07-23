@@ -410,6 +410,10 @@ def window_to_prompt(window: Optional[dict]) -> str:
     lines = [f"tabs: {window.get('count')} (budget {window.get('budget')})",
              f"roles: {role_text}",
              f"active: {window.get('active_role') or '(unknown)'}"]
+    if window.get("health") and window.get("health") != "ok":
+        lines.append(f"health: {window.get('health')} — the window is not in a normal state")
+    for a in window.get("anomalies") or []:
+        lines.append(f"anomaly[{a.get('kind')}]: {a.get('why')}")
     if window.get("over_budget"):
         lines.append("over_budget: yes — a cluttered window slows every operation in it")
     closable = window.get("closable") or []
