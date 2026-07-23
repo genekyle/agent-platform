@@ -1252,3 +1252,14 @@ textarea:focus-visible {
 .cv-actions { display: flex; gap: 8px; }
 .cv-blocked { margin: 8px 0 0; font-size: 12px; color: var(--warning, #d8a657); }
 .coaching-error { color: var(--danger, #e06c75) !important; margin-bottom: 8px; }
+
+/* Window health: a duplicate application is a fault surfaced, not clutter hidden. */
+.window-anomaly {
+  display: flex; gap: 6px; align-items: flex-start;
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 6px;
+  font-size: 12.5px; line-height: 1.5;
+  color: var(--warning, #d8a657);
+  background: color-mix(in srgb, var(--warning, #d8a657) 10%, transparent);
+}
+.window-anomaly svg { flex-shrink: 0; margin-top: 2px; }
+.window-anomaly em { font-style: normal; color: var(--text-muted); }

@@ -82,17 +82,30 @@ export function WindowCard({ domainId, tabId = "" }) {
   if (!win) return null;
 
   const closable = win.closable || [];
+  const anomalies = win.anomalies || [];
 
   return (
     <div className="layer">
       <div className="layer__head">
         <div className="layer__title layer__title--with-icon">
           <AppIcon name="layers" size={17} /> Session window
+          {win.health && win.health !== "ok" && (
+            <span className="badge badge--bad" style={{ marginLeft: 8 }}>{win.health}</span>
+          )}
         </div>
         <span className="layer__count">
           {win.count} tab{win.count === 1 ? "" : "s"} · budget {win.budget}
         </span>
       </div>
+
+      {/* Health first: a duplicate application is a fault, not clutter, and it names whether it can
+          resolve itself or needs the operator to pick which tab holds the work. */}
+      {anomalies.map((a, i) => (
+        <div key={i} className="window-anomaly">
+          <AppIcon name="alert" size={13} /> {a.why}
+          {!a.resolvable && <em> — surveyed between drives, so pick which to keep before tidying.</em>}
+        </div>
+      ))}
 
       {win.over_budget && (
         <div className="coaching-blocked">
