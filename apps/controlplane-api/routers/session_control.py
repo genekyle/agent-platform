@@ -980,12 +980,12 @@ async def apply_prompt_select(session_id: int, body: ApplyPromptBody,
     if step is None:
         raise HTTPException(status_code=409, detail="No open application.")
 
+    import apply_source
     if body.use_source:
-        import apply_source
         source = apply_source.source_from_job_id(step.job_id)
-        candidates = apply_source.source_candidates(source)
+        paths = apply_source.source_paths(source)          # [["Job Board","Indeed"], ..., ["Other"]]
     elif body.value:
-        candidates = [body.value]
+        paths = [[body.value]]                              # a flat dropdown: a one-level path
     else:
         raise HTTPException(status_code=422,
                             detail="Give an explicit value, or use_source for 'how did you hear'.")
@@ -994,35 +994,48 @@ async def apply_prompt_select(session_id: int, body: ApplyPromptBody,
     tab_id = _apply_tab(bb, obs).get("tab_id", "")
     tried: list[str] = []
     picked: Optional[str] = None
+    committed = False
     last_detail = ""
-    for value in candidates:
-        tried.append(value)
-        res = await _capture_post("/select_prompt", {
+    for path in paths:
+        leaf = path[-1]
+        tried.append(leaf)
+        # /select_prompt_path drills category -> leaf in one open session and VERIFIES the commit —
+        # OK only when the field actually took it, COMMITTED_UNCONFIRMED when the click landed but
+        # we could not confirm (never a false OK, the lesson from /select_prompt on this field).
+        res = await _capture_post("/select_prompt_path", {
             "browser_url": browser_url, "tab_id": tab_id,
-            "field_name": body.field_name, "value": value})
+            "field_name": body.field_name, "path": path})
         outcome = res.get("outcome")
         last_detail = res.get("detail", "")
-        if outcome in ("ok", "committed_unconfirmed"):
-            picked = value
+        if outcome == "ok":
+            picked, committed = leaf, True
             break
-        if outcome not in ("no_option",):
-            # not_opened / not_found are real errors (stale session, wrong field) — stop, don't
-            # keep hammering candidates against a prompt that is not even open.
+        if outcome == "committed_unconfirmed":
+            picked = leaf          # it clicked to the leaf; do not keep thrashing other paths
             break
+        if outcome not in ("no_option", "not_opened"):
+            break                  # not_found (wrong field) — a real error, stop
         await asyncio.sleep(1.0)
 
     rung = f"prompt:{form_fill_slug(body.field_name)}"
-    if picked is not None:
+    if picked is not None and committed:
         fell_back = body.use_source and picked == apply_source.FALLBACK
         step.record(rung, aps.OK,
                     f"selected {picked!r} in {body.field_name!r}"
-                    + (f" (source not offered, used Other after trying {tried[:-1]})"
-                       if fell_back else ""),
+                    + (f" (source not offered, used Other after {tried[:-1]})" if fell_back else ""),
                     initiator=body.initiator)
-        detail = (f"Selected {picked!r} in {body.field_name!r}."
-                  + (" The exact source was not an option, so Other — a truthful answer."
+        detail = (f"Selected and confirmed {picked!r} in {body.field_name!r}."
+                  + (" The exact source was not offered, so Other — a truthful answer."
                      if fell_back else ""))
         ok = True
+    elif picked is not None:
+        # Clicked to the leaf but the field did not confirm — surface it, do not claim success.
+        step.record(rung, aps.HUMAN_REQUIRED,
+                    f"clicked {picked!r} in {body.field_name!r} but could not confirm it committed",
+                    initiator=body.initiator)
+        detail = (f"Clicked {picked!r} in {body.field_name!r} but could not confirm it stuck "
+                  f"({last_detail}). Check the field in the window.")
+        ok = False
     else:
         step.record(rung, aps.UNKNOWN,
                     f"none of {tried} selectable in {body.field_name!r}: {last_detail}"[:200],

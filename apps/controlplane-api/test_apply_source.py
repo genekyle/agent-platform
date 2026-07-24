@@ -36,3 +36,15 @@ def test_source_from_job_id():
 def test_candidates_dedupe_case_insensitively():
     # a source whose only leaf were 'Other' must not list it twice
     assert src.source_candidates("indeed").count("Other") == 1
+
+
+def test_source_paths_drill_category_then_leaf():
+    """The nested case: Indeed hides under a Job Board category, so each is a 2-level path, and
+    Other stays flat."""
+    paths = src.source_paths("indeed")
+    assert paths == [["Job Board", "Indeed"], ["Job Board", "SimplyHired"], ["Other"]]
+
+
+def test_source_paths_end_in_other_flat():
+    for source in ("indeed", "linkedin", "unknown"):
+        assert src.source_paths(source)[-1] == ["Other"]

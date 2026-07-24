@@ -2080,12 +2080,12 @@ def test_prompt_select_source_picks_indeed_when_offered(monkeypatch):
     calls = []
 
     def _select(payload):
-        calls.append(payload["value"])
-        return {"outcome": "ok"} if payload["value"] == "Indeed" else {"outcome": "no_option"}
+        calls.append(payload["path"])
+        return {"outcome": "ok"} if payload["path"][-1] == "Indeed" else {"outcome": "no_option"}
 
     _, saved = _install(monkeypatch,
                         {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
-                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt_path": _select},
                         blackboard=_wd_step())
     try:
         r = client.post("/api/session_control/1/apply_prompt_select",
@@ -2093,7 +2093,7 @@ def test_prompt_select_source_picks_indeed_when_offered(monkeypatch):
     finally:
         _teardown()
     assert r["last_step"]["picked"] == "Indeed"
-    assert calls == ["Indeed"]                       # stopped at the first hit
+    assert calls == [["Job Board", "Indeed"]]        # drilled category > leaf, stopped at the hit
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert step.minis[-1].outcome == aps.OK
 
@@ -2102,11 +2102,11 @@ def test_prompt_select_falls_back_to_other_when_source_not_offered(monkeypatch):
     """The operator's rule: Indeed isn't always an option; Other is acceptable. It tries Indeed,
     SimplyHired, then Other — and records that it fell back."""
     def _select(payload):
-        return {"outcome": "ok"} if payload["value"] == "Other" else {"outcome": "no_option"}
+        return {"outcome": "ok"} if payload["path"][-1] == "Other" else {"outcome": "no_option"}
 
     _, saved = _install(monkeypatch,
                         {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
-                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt_path": _select},
                         blackboard=_wd_step())
     try:
         r = client.post("/api/session_control/1/apply_prompt_select",
@@ -2123,12 +2123,13 @@ def test_prompt_select_stops_on_a_real_error_not_no_option(monkeypatch):
     calls = []
 
     def _select(payload):
-        calls.append(payload["value"])
-        return {"outcome": "not_opened", "detail": "popup never opened"}
+        calls.append(payload["path"])
+        # not_opened on the first path is a stale prompt; not_opened is retried once then stops.
+        return {"outcome": "not_found", "detail": "field gone"}
 
     _install(monkeypatch,
              {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
-              "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+              "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt_path": _select},
              blackboard=_wd_step())
     try:
         r = client.post("/api/session_control/1/apply_prompt_select",
@@ -2136,17 +2137,17 @@ def test_prompt_select_stops_on_a_real_error_not_no_option(monkeypatch):
     finally:
         _teardown()
     assert r["last_step"]["ok"] is False
-    assert calls == ["Indeed"]                       # stopped at the first, did not try the rest
+    assert calls == [["Job Board", "Indeed"]]        # not_found stops immediately
 
 
 def test_prompt_select_explicit_value_for_a_dropdown(monkeypatch):
     """The same mechanism drives an ordinary dropdown: State = New Hampshire, one explicit value."""
     def _select(payload):
-        return {"outcome": "ok"} if payload["value"] == "New Hampshire" else {"outcome": "no_option"}
+        return {"outcome": "ok"} if payload["path"] == ["New Hampshire"] else {"outcome": "no_option"}
 
     _, saved = _install(monkeypatch,
                         {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
-                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt_path": _select},
                         blackboard=_wd_step())
     try:
         r = client.post("/api/session_control/1/apply_prompt_select",
@@ -2167,3 +2168,22 @@ def test_prompt_select_needs_a_value_or_source(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 422
+
+
+def test_prompt_select_unconfirmed_is_not_reported_as_success(monkeypatch):
+    """The verify-don't-assume fix: a click that could not be confirmed committed is
+    human_required, never a false OK."""
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/select_prompt_path": {"outcome": "committed_unconfirmed",
+                                                 "detail": "clicked, field still invalid"}},
+                        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_prompt_select",
+                        json={"field_name": "How Did You Hear About Us?", "use_source": True}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is False
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.HUMAN_REQUIRED

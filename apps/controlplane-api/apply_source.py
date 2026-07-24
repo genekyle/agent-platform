@@ -35,6 +35,12 @@ _SOURCE_LEAVES: dict[str, list[str]] = {
 #: never return an empty list and we can always answer without inventing.
 FALLBACK = "Other"
 
+#: The Workday "how did you hear" category that job-board leaves nest under. Seen live 2026-07-24:
+#: the option is literally "Job Board (LinkedIn, Indeed, etc.)" and Indeed is a LEAF inside it, so
+#: committing it is a two-level drill — category then leaf — not a single click. The search is
+#: fuzzy, so "Job Board" matches the full label.
+_JOB_BOARD_CATEGORY = "Job Board"
+
 
 def source_from_job_id(job_id: Optional[str]) -> str:
     """The source platform from a job ref like 'indeed:abc123' -> 'indeed'. '' when unknown."""
@@ -56,6 +62,20 @@ def source_candidates(source: Optional[str]) -> list[str]:
             seen.add(v.lower())
             out.append(v)
     return out
+
+
+def source_paths(source: Optional[str]) -> list[list[str]]:
+    """Ordered PATHS to try in a nested 'how did you hear' prompt — category then leaf — ending in
+    a flat ['Other'].
+
+    Job-board leaves (Indeed, SimplyHired, LinkedIn...) nest under the 'Job Board' category, so
+    each is a two-level path ['Job Board', leaf]. 'Other' is top-level, so it is a one-level path.
+    A path navigator (`/select_prompt_path`) drills each in order; the flat `source_candidates`
+    above stays for genuinely flat dropdowns (State), where there is no category to drill."""
+    leaves = _SOURCE_LEAVES.get((source or "").strip().lower(), [])
+    paths: list[list[str]] = [[_JOB_BOARD_CATEGORY, leaf] for leaf in leaves]
+    paths.append([FALLBACK])
+    return paths
 
 
 def known_sources() -> list[str]:

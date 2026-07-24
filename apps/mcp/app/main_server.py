@@ -304,6 +304,20 @@ class SelectPromptRequest(BaseModel):
     settle_seconds: float = 0.8
 
 
+class SelectPromptPathRequest(BaseModel):
+    """A Workday prompt where the value is NESTED — 'How did you hear' hides Indeed under a
+    category 'Job Board (LinkedIn, Indeed, etc.)'. /select_prompt is single-level (search once,
+    click once) and re-opens the field on every call, so it cannot drill category → leaf. This
+    carries the PATH and navigates it in one open session, then verifies the field committed."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    field_role: Optional[str] = "textbox"
+    field_name: str
+    path: list[str]            # ["Job Board", "Indeed"] — each level searched then clicked, in order
+    settle_seconds: float = 0.8
+
+
 # Find the VISIBLE searchBox (the one in the currently-open prompt popup) — offsetParent guards against
 # the other prompts' hidden search inputs. Returns its viewport-center in CSS px.
 _PROMPT_SEARCHBOX_JS = r"""
@@ -439,6 +453,126 @@ async def select_prompt(body: SelectPromptRequest):
     # accessible name after the search IS the staged confirmation.
     return {**common, "outcome": Outcome.OK, "steps": steps, "selected": body.value,
             "detail": f"searchBox={'yes' if sb.get('found') else 'no'}"}
+
+
+# Read whether a prompt field has COMMITTED a value: its own value/pill text and whether it is
+# still flagged invalid. This is the verification /select_prompt never did — clicking an option is
+# not the same as the field accepting it (a category click drills in and commits nothing).
+_PROMPT_COMMITTED_JS = r"""
+(fieldName => {
+  const norm = s => (s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const want = norm(fieldName);
+  // find the labelled prompt container
+  let field = null;
+  for (const el of document.querySelectorAll('[data-automation-id],[aria-label],label')) {
+    const lbl = norm(el.getAttribute('aria-label') || el.textContent);
+    if (lbl && (lbl === want || lbl.startsWith(want))) { field = el.closest('[data-automation-id]') || el; break; }
+  }
+  if (!field) return {found:false};
+  const scope = field.closest('div') || field;
+  const invalid = !!scope.querySelector('[aria-invalid="true"]');
+  // Workday shows the selection as a pill/button with the leaf text and a "Delete" affordance.
+  const pill = [...scope.querySelectorAll('[data-automation-id*="selectedItem"],[data-automation-id*="pill"],button,li')]
+    .map(n => (n.textContent||'').replace(/\s+/g,' ').trim()).filter(Boolean);
+  const open = !!document.querySelector('[data-automation-id="promptOption"],[role="listbox"]:not([aria-hidden="true"])');
+  return {found:true, invalid, open, pill: pill.slice(0,6)};
+})(%s)
+"""
+
+
+@app.post("/select_prompt_path")
+@journaled(Intent.SELECT_OPTION)
+async def select_prompt_path(body: SelectPromptPathRequest):
+    """Navigate a NESTED Workday prompt — category then leaf — in one open session, and VERIFY the
+    field committed before reporting OK.
+
+    Reuses /select_prompt's proven primitives (node-click open, trusted per-char search, native
+    node-click by accessible name) once per level, so it drills 'Job Board' → 'Indeed' instead of
+    clicking the category and stopping. OK is returned only when the field actually shows the
+    value and is no longer invalid; a click we cannot confirm is COMMITTED_UNCONFIRMED, never a
+    false OK (the lesson from /select_prompt over-reporting on this very field)."""
+    import asyncio
+    import json as _json
+
+    import websockets
+    from app.executor.driver import ActionRequest, get_driver
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    common = {"addressed_by": "role_name",
+              "target": f"{body.field_role or '*'}:{body.field_name}",
+              "widget_type": WidgetType.PROMPT_HIERARCHICAL.value}
+    steps: list[dict] = []
+    levels = [v for v in (body.path or []) if v and v.strip()]
+    if not levels:
+        return {**common, "outcome": Outcome.NOT_FOUND, "steps": steps, "detail": "empty path"}
+
+    node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
+                                     body.field_role, body.field_name)
+    steps.append({"step": "resolve", "field": body.field_name, "node": node_id})
+    if node_id is None:
+        return {**common, "outcome": Outcome.NOT_FOUND, "steps": steps,
+                "detail": f"prompt field not found: {body.field_name!r}"}
+
+    # Open the prompt once.
+    await get_driver("direct").move_and_act(
+        browser_url=body.browser_url,
+        request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=node_id),
+        tab_id=body.tab_id, tab_url=body.tab_url)
+    await asyncio.sleep(max(0.5, min(body.settle_seconds, 4.0)))
+
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        await cdp.send("Page.enable", {})
+        for i, level in enumerate(levels):
+            # type the level into the visible searchBox (each drill re-uses the open popup's box)
+            sb = (await cdp.send("Runtime.evaluate", {"expression": _PROMPT_SEARCHBOX_JS,
+                                                      "returnByValue": True})).get("result", {}).get("value") or {}
+            if sb.get("found"):
+                await _trusted_click(cdp, sb["x"], sb["y"])
+                await asyncio.sleep(0.2)
+                await cdp.send("Runtime.evaluate", {"expression":
+                    "(()=>{const el=document.activeElement; if(el&&el.value){el.value='';"
+                    "el.dispatchEvent(new Event('input',{bubbles:true}));}})()"})
+                for ch in level:
+                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch,
+                                                              "key": ch, "unmodifiedText": ch})
+                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
+                    await asyncio.sleep(0.05)
+                await asyncio.sleep(1.3)
+            # resolve the option by accessible name and click it (category drills in / leaf commits)
+            opt = None
+            for _ in range(6):
+                opt = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url, None, level)
+                if opt is not None:
+                    break
+                await asyncio.sleep(0.4)
+            steps.append({"step": f"level{i}", "value": level, "search_box": bool(sb.get("found")),
+                          "node": opt})
+            if opt is None:
+                return {**common, "outcome": Outcome.NO_OPTION if sb.get("found") else Outcome.NOT_OPENED,
+                        "steps": steps,
+                        "detail": f"level {i} {level!r} not found (searchBox="
+                                  f"{'yes' if sb.get('found') else 'no'})"}
+            await get_driver("direct").move_and_act(
+                browser_url=body.browser_url,
+                request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=opt),
+                tab_id=body.tab_id, tab_url=body.tab_url)
+            await asyncio.sleep(0.6)
+
+        # VERIFY the field committed — the whole point of the path variant.
+        vjs = _PROMPT_COMMITTED_JS % _json.dumps(body.field_name)
+        v = (await cdp.send("Runtime.evaluate", {"expression": vjs, "returnByValue": True})
+             ).get("result", {}).get("value") or {}
+
+    leaf = levels[-1]
+    committed = bool(v.get("found")) and not v.get("invalid") and \
+        any(leaf.lower() in p.lower() for p in (v.get("pill") or []))
+    _log_event("drive", f"prompt-path '{body.field_name}' <- {' > '.join(levels)}",
+               detail=f"committed={committed}", domain=body.tab_url)
+    return {**common, "steps": steps, "selected": leaf, "verify": v,
+            "outcome": Outcome.OK if committed else Outcome.COMMITTED_UNCONFIRMED,
+            "detail": f"path {' > '.join(levels)}; committed={committed}"}
 
 
 class ProbeRequest(BaseModel):
