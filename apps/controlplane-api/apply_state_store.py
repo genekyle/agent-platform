@@ -350,6 +350,16 @@ def start_cadence_run(bb: Blackboard, *, query: str = "", location: str = "",
     ss.stale = False
     bb.log("cadence_run_start",
            f"run {ss.cadence_run_id} query={ss.query!r} location={ss.location!r} authed={authed}")
+
+    # Opening a cadence run IS spending the query — it is the sweep's version of the control
+    # panel's `query_entered` rung. Record it on the checkpoint ledger too, or the two paths keep
+    # separate memories of the same unrepeatable act and the panel offers to search a session that
+    # already has (found live 2026-07-23 on session 16). One spend, one record.
+    import session_checkpoints as cps
+    ledger = cps.Ledger.from_dict(bb.checkpoints)
+    ledger.mark("query_entered",
+                evidence=f"cadence run {ss.cadence_run_id} for {ss.query!r}", initiator="auto")
+    bb.checkpoints = ledger.as_dict()
     return bb
 
 

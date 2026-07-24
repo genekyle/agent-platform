@@ -155,6 +155,39 @@ def test_initialize_refuses_a_second_query_once_the_first_was_spent(monkeypatch)
     assert "already ran" in r.json()["detail"]
 
 
+def test_a_session_that_already_swept_refuses_a_new_query(monkeypatch):
+    """THE live find, end to end. Session 16 had swept 'data analyst' via /api/search/sweep —
+    which never wrote the ledger — so the panel would have fired a second query on it. Loading
+    now adopts the prior cadence run, and the once-only rule covers history it did not witness."""
+    bb = store.new_blackboard(1)
+    bb.search_state.query = "data analyst"
+    bb.search_state.location = "Nashua, NH"
+    bb.search_state.cadence_run_id = "66a01e57c2e7"
+    bb.search_state.run_started_at = "2026-07-17T00:45:29+00:00"
+    bb.search_state.gathered_authenticated = True
+    # note: NO checkpoints — the sweep predates the ledger entirely
+    assert bb.checkpoints == {}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/initialize", json={"query": "reporting analyst"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    assert "already ran 'data analyst'" in r.json()["detail"]
+
+
+def test_the_sweep_path_now_records_the_query_it_spends(monkeypatch):
+    """The durable half of the fix: one spend, one record. `start_cadence_run` is the sweep's
+    version of `query_entered`, so it marks the same rung the panel would."""
+    bb = store.new_blackboard(1)
+    store.start_cadence_run(bb, query="data analyst", location="Nashua, NH", authed=True)
+    led = cps.Ledger.from_dict(bb.checkpoints)
+    assert led.holds("query_entered")
+    assert "data analyst" in led.reached["query_entered"].evidence
+
+
 def test_initialize_is_idempotent_for_the_same_query(monkeypatch):
     _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
                            "/auth_state": {"ok": True, "logged_in": True}},

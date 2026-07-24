@@ -162,6 +162,42 @@ def test_progress_reports_the_phase_boundary():
     assert at_line["preamble_held"] == at_line["preamble_total"] == len(cps.PREAMBLE)
 
 
+# --- adopting a query spent before the ledger was watching ---------------------------------
+def test_a_prior_cadence_run_is_adopted_as_the_spent_query():
+    """Found live 2026-07-23: session 16 had swept 'data analyst' to exhaustion via
+    /api/search/sweep, which never touched the ledger — so the ladder thought it had never
+    searched and would have let us fire a second query on it."""
+    led = cps.Ledger()
+    adopted = cps.adopt_prior_run(led, query="data analyst", cadence_run_id="66a01e57c2e7",
+                                  run_started_at="2026-07-17T00:45:29+00:00", authed=True)
+    assert adopted == "query_entered"
+    assert led.holds("query_entered")
+    row = led.reached["query_entered"]
+    assert "66a01e57c2e7" in row.evidence and "data analyst" in row.evidence
+    # the cost was paid when the run started, not when we noticed
+    assert row.at == "2026-07-17T00:45:29+00:00"
+
+
+def test_adopting_never_overwrites_a_rung_we_witnessed_ourselves():
+    led = cps.Ledger()
+    led.mark("query_entered", evidence="our own proof", initiator="operator")
+    assert cps.adopt_prior_run(led, query="x", cadence_run_id="abc") is None
+    assert led.reached["query_entered"].evidence == "our own proof"
+
+
+def test_no_prior_run_means_nothing_to_adopt():
+    """A genuinely fresh session must still be allowed to search."""
+    led = cps.Ledger()
+    assert cps.adopt_prior_run(led, query="data analyst", cadence_run_id="") is None
+    assert not led.holds("query_entered")
+
+
+def test_adoption_records_when_prior_data_was_gathered_logged_out():
+    led = cps.Ledger()
+    cps.adopt_prior_run(led, query="x", cadence_run_id="abc", authed=False)
+    assert "logged-out" in led.reached["query_entered"].evidence
+
+
 def test_every_consuming_rung_carries_a_recovery_that_is_not_a_repeat():
     """A consuming rung with no recovery instruction would leave the executor with nothing to do
     but re-run it — the failure this design exists to prevent."""

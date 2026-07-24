@@ -63,7 +63,16 @@ def _load(session_id: int, db: Session) -> tuple[TrainingSession, Any, cps.Ledge
     if session is None:
         raise HTTPException(status_code=404, detail="Training session not found")
     bb = store.load_or_create(session_id)
-    return session, bb, cps.Ledger.from_dict(bb.checkpoints)
+    ledger = cps.Ledger.from_dict(bb.checkpoints)
+    # A session may have spent its query before the ledger existed, or through the sweep path.
+    # Adopt that prior run so the once-only rule covers history it did not personally witness.
+    ss = bb.search_state
+    if cps.adopt_prior_run(ledger, query=ss.query, cadence_run_id=ss.cadence_run_id,
+                           run_started_at=ss.run_started_at,
+                           authed=ss.gathered_authenticated):
+        bb.checkpoints = ledger.as_dict()
+        bb.log("adopt", f"query_entered adopted from prior cadence run {ss.cadence_run_id}")
+    return session, bb, ledger
 
 
 def _persist(bb: Any, ledger: cps.Ledger) -> None:

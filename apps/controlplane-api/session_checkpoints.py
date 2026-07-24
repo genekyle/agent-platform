@@ -227,6 +227,35 @@ class NextStep:
         }
 
 
+def adopt_prior_run(ledger: Ledger, *, query: str = "", cadence_run_id: str = "",
+                    run_started_at: str = "", authed: bool = False) -> Optional[str]:
+    """Teach the ledger about a query this session spent BEFORE the ledger was watching.
+
+    THE HOLE THIS PLUGS, found live 2026-07-23. The once-only guarantee is only as strong as the
+    ledger's memory, and that memory starts empty on any session older than the ledger — or on
+    any query spent through a *different code path*. `/api/search/sweep` opens a cadence run via
+    `apply_state_store.start_cadence_run` and never touches the ledger, so a session that had
+    already swept 'data analyst' to exhaustion looked, to the ladder, like one that had never
+    searched. The panel would have let us fire a second query on it.
+
+    Two code paths spending the same unrepeatable resource, and only one recording it, is the
+    failure mode — not the specific migration. `cadence_run_id` is the provenance stamp that a
+    real search ran, so we adopt it as the `query_entered` rung instead of searching again.
+
+    Returns the rung id if one was adopted, else None. Never overwrites a rung already held.
+    """
+    if not cadence_run_id or ledger.holds("query_entered"):
+        return None
+    detail = f"run {cadence_run_id}" + (f" for {query!r}" if query else "")
+    row = ledger.mark("query_entered",
+                      evidence=f"adopted from a prior cadence run — {detail}"
+                               + ("" if authed else " (gathered logged-out)"),
+                      initiator="auto")
+    if run_started_at:
+        row.at = run_started_at   # the cost was paid then, not now
+    return "query_entered"
+
+
 def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1) -> NextStep:
     """The one decision this module exists to make: what does the next crank work on?
 
