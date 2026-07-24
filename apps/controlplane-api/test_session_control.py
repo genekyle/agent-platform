@@ -1642,3 +1642,101 @@ def test_reconcile_is_idempotent(monkeypatch):
     finally:
         _teardown()
     assert n1 == n2
+
+
+# --- orient: check where we are by CONTENT, not just the URL -----------------------------------
+def _wd_step(platform="workday"):
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].platform = platform
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "wd", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"}
+    return bb
+
+
+def test_orient_recognises_the_apply_method_modal_the_url_cannot_see(monkeypatch):
+    """The core fix. Clicking Apply opens a modal without changing the URL, so URL-only detection
+    called a good landing 'unexpected'. The modal's own button text is the signal."""
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "page_text": "Start Your Application",
+                      "candidates": [{"role": "button", "name": "Use My Last Application"},
+                                     {"role": "button", "name": "Autofill with Resume"}]}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/orient", json={}).json()
+    finally:
+        _teardown()
+    o = r["last_step"]["orient"]
+    assert o["state"] == "workday_apply_method"
+    assert o["progress"]["steps_to_submit"] == 8       # depth awareness
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].rung == "orient" and step.minis[-1].outcome == aps.OK
+
+
+def test_orient_reports_depth_from_submit(monkeypatch):
+    _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "page_text": "Please review your application before you submit",
+                      "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/orient", json={}).json()
+    finally:
+        _teardown()
+    o = r["last_step"]["orient"]
+    assert o["state"] == "workday_review" and o["progress"]["at_review_gate"] is True
+    assert o["progress"]["steps_to_submit"] == 0
+
+
+def test_orient_on_a_workday_origin_always_recognises_at_least_the_posting(monkeypatch):
+    """A Workday URL with no step marker is still the job posting — recognised, not new territory.
+    'New territory' is for platforms/pages we genuinely cannot place, not for a bare Workday page."""
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "page_text": "some page with no step marker", "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/orient", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["orient"]["state"] == "workday_job_posting"
+    assert "new" not in r["last_step"]["detail"].lower()
+
+
+def test_orient_does_not_spam_the_same_state(monkeypatch):
+    tabs = _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x")
+    scan = {"ok": True, "page_text": "Start Your Application",
+            "candidates": [{"role": "button", "name": "Use My Last Application"}]}
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": tabs, "/auth_state": {"ok": True, "logged_in": True},
+                         "/ax_scan": scan},
+                        blackboard=_wd_step())
+    try:
+        client.post("/api/session_control/1/orient", json={})
+        client.post("/api/session_control/1/orient", json={})
+    finally:
+        _teardown()
+    minis = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0].minis
+    assert sum(1 for m in minis if m.rung == "orient") == 1     # recorded once, not twice
+
+
+def test_orient_refuses_with_no_application_tab(monkeypatch):
+    bb = _wd_step()
+    bb.world.pop("apply_tab", None)      # nothing recorded, and only the search tab is open
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/orient", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 409

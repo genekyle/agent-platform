@@ -705,6 +705,91 @@ async def login_action(session_id: int, body: LoginActionBody,
 
 
 # --- the apply queue: one step per pick -------------------------------------------------------
+class OrientStepBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/orient")
+async def orient_step(session_id: int, body: OrientStepBody,
+                      db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Check where we actually are — by CONTENT, not just the URL.
+
+    The operator's "that first rung may be the 'check where I'm at' point". It reads the live
+    apply tab (AX + text), recognises the sub-state against the generalised markers, and reports
+    how far we are from Submit. Two things it fixes at once:
+
+    * **The URL-blind verification.** State detection was URL-only, so clicking Apply — which opens
+      a MODAL without changing the URL — landed "somewhere unexpected" even though it worked. The
+      modal's own text ("Use My Last Application") is the signal the URL could never carry.
+
+    * **Depth awareness.** A third-party apply is not always one click from the form: sometimes a
+      company careers page comes first, then Apply, then the tenant Workday app. `workday_progress`
+      names where we are in that spine, so a proposal can say "8 steps from Submit" instead of
+      assuming we are on the real application already.
+
+    It DRIVES NOTHING and records a lightweight `orient` mini-step only when the recognised state
+    changes — a read that repeats itself is not new knowledge.
+    """
+    _check_initiator(body.initiator)
+    import apply_recipe as ar
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409, detail="No open application to orient within.")
+
+    obs = await _observe(browser_url, bb.search_state.query)
+    url = _apply_tab_url(bb, obs)
+    if not url:
+        raise HTTPException(status_code=409,
+                            detail="No application tab is open to orient against.")
+    apply_tab = next((t for t in (obs.get("tabs") or []) if t.get("url") == url), {})
+
+    scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                            "tab_id": apply_tab.get("tab_id", "")}, timeout=25.0)
+    # Build the recognition text from the page text AND the control names — the modal's buttons are
+    # where "Use My Last Application" lives, and that is the whole signal here.
+    names = " ".join((c.get("name") or "") for c in (scan.get("candidates") or []))
+    text = f"{scan.get('page_text') or ''} {names}"
+
+    platform = step.platform or aps.classify_landing(url).platform
+    if platform == "workday":
+        state = ar.map_workday_state(url, text)
+        progress = ar.workday_progress(state)
+    else:
+        state = ar.describe_for_ats(platform, url, text).get("state", "unknown")
+        progress = {"state": state, "recognised": state not in ("unknown", None)}
+
+    recognised = bool(progress.get("recognised"))
+    depth = ""
+    if progress.get("steps_to_submit") is not None:
+        depth = f" · {progress['steps_to_submit']} step(s) from Submit"
+    detail = (f"On {platform}: {state}{depth}." if recognised
+              else f"On {platform} but this page ({state}) is not a state we recognise — new "
+                   f"territory, worth a careful look before the next move.")
+
+    # Record only on a CHANGE — the last orient of the same state is not news.
+    prior = next((m for m in reversed(step.minis) if m.rung == "orient"), None)
+    if prior is None or state not in (prior.detail or ""):
+        step.record("orient", aps.OK if recognised else aps.UNKNOWN,
+                    f"{state}{depth}", initiator=body.initiator)
+
+    bb.world = dict(bb.world or {})
+    bb.world["orient"] = {"platform": platform, "state": state, "progress": progress, "url": url}
+    bb.world["apply_tab"] = {**apply_tab} if apply_tab else {"url": url}
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.log("orient", f"{step.job_id}: {platform}/{state}{depth}")
+    _persist(bb, ledger)
+
+    obs2 = await _observe(browser_url, bb.search_state.query)
+    view = _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
+                 last={"ok": recognised, "action": "orient", "queue": queue.summary(),
+                       "orient": {"platform": platform, "state": state, "progress": progress},
+                       "detail": detail})
+    return view
+
+
 class ReconcileStepBody(BaseModel):
     initiator: str = "operator"
 

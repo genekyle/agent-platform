@@ -562,6 +562,15 @@ GREENHOUSE_LESSONS = {
 # matters: "create account"/"sign in" are checked before the generic apply steps, and the weak
 # "review" marker is phrased specifically so it doesn't fire on an incidental "review" elsewhere.
 _WORKDAY_STATE_MARKERS: list[tuple[str, str]] = [
+    # The apply-METHOD chooser — the "Start Your Application" modal that Apply opens. Added
+    # 2026-07-24 after driving it live: the click worked, the modal opened, but state detection was
+    # URL-only and a modal does not change the URL, so verification called a perfectly good landing
+    # "unexpected". These three lines are the content signal the URL could never carry. Placed
+    # first because the modal overlays the job posting and its buttons are the most specific thing
+    # on the page at that moment.
+    ("use my last application", "workday_apply_method"),
+    ("autofill with resume", "workday_apply_method"),
+    ("start your application", "workday_apply_method"),
     ("verify new password", "workday_create_account"),
     ("create account", "workday_create_account"),
     ("my information", "workday_my_information"),
@@ -573,6 +582,43 @@ _WORKDAY_STATE_MARKERS: list[tuple[str, str]] = [
     ("please review your application", "workday_review"),
     ("password", "workday_sign_in"),   # a password field with none of the above => the login wall
 ]
+
+# The Workday flow in order, from arrival to submitted — the "how far am I" spine. Operator, live
+# 2026-07-24: a third-party apply is not always one click from the form. Sometimes Indeed lands on
+# a company careers page, THEN Apply, THEN the tenant Workday app, THEN the real application. So
+# the flow has a PRE-WORKDAY approach (we can be on the company site before we are in Workday at
+# all) and then the Workday-internal steps. `workday_progress` locates where we are and how many
+# steps remain, so a proposal can say "you are 4 steps from Submit" instead of guessing depth.
+WORKDAY_FLOW_ORDER: list[str] = [
+    "company_careers_landing",   # pre-Workday: a branded careers page, not yet myworkdayjobs
+    "workday_job_posting",       # the posting, Apply not yet clicked
+    "workday_apply_method",      # the Start-Your-Application modal (choose how to apply)
+    "workday_apply_auth",        # sign in / create account gate
+    "workday_create_account",    # the account-creation leg (operator-owned)
+    "workday_sign_in",           # the sign-in leg
+    "workday_my_information",    # the form begins
+    "workday_my_experience",
+    "workday_questions",
+    "workday_voluntary_disclosures",
+    "workday_review",            # review & submit — the consequential gate
+    "workday_submitted",         # done
+]
+
+
+def workday_progress(state: Optional[str]) -> dict[str, Any]:
+    """Where `state` sits in the Workday flow, and how far from Submit — the depth awareness the
+    operator asked for. `steps_to_submit` counts to the review gate (the last thing before the
+    irreversible Submit); None-position means we do not recognise the state as part of the flow."""
+    order = WORKDAY_FLOW_ORDER
+    try:
+        i = order.index(state or "")
+    except ValueError:
+        return {"state": state, "position": None, "total": len(order),
+                "steps_to_submit": None, "recognised": False}
+    review_i = order.index("workday_review")
+    return {"state": state, "position": i, "total": len(order),
+            "steps_to_submit": max(0, review_i - i), "recognised": True,
+            "at_review_gate": state == "workday_review", "done": state == "workday_submitted"}
 
 _GREENHOUSE_STATE_MARKERS: list[tuple[str, str]] = [
     ("thank you for applying", "greenhouse_apply_submitted"),
