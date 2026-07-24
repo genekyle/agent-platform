@@ -509,6 +509,45 @@ export function SessionControlPanel({ domain }) {
                               Stopped on something only you can resolve.
                             </p>
                           )}
+                          {/* ACCOUNT HANDOFF. The one place credentials appear — and the boundary
+                              is loud: the system prepares the account and hands YOU the details;
+                              you type them and click Create Account. The agent never does. */}
+                          {last?.account && !s.done && (
+                            <div className="sc-account">
+                              <div className="sc-account__head">
+                                <AppIcon name="key" size={14} />
+                                {last.account.button} — {last.account.company} ({last.account.ats})
+                              </div>
+                              <p className="sc-account__boundary">
+                                <AppIcon name="shield" size={13} /> {last.account.boundary}
+                              </p>
+                              <dl className="sc-account__creds">
+                                <dt>Username</dt>
+                                <dd><code>{last.account.username || "—"}</code></dd>
+                                <dt>Password</dt>
+                                <dd>
+                                  {last.account.suggested_password
+                                    ? <code>{last.account.suggested_password}</code>
+                                    : <span className="rung__meta">
+                                        {last.account.suffix_configured
+                                          ? "—"
+                                          : "no suggestion configured — choose your own that meets the site's rules"}
+                                      </span>}
+                                </dd>
+                              </dl>
+                              <div className="cv-actions">
+                                <button className="btn btn-sm btn-primary" disabled={busy}
+                                        onClick={() => call("/apply_account", { mark_created: true, initiator: "operator" })}>
+                                  I created it — continue
+                                </button>
+                                <button className="btn btn-sm btn-ghost" disabled={busy}
+                                        onClick={() => flagStep(s.job_id, "parked:account_wall", "operator chose not to create the account")}>
+                                  Don't create — park it
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
                           {/* THE TEACHER'S PROPOSAL. Teacher runs pause anyway, so the surface
                               here is not another row of buttons but what it intends and why —
                               sitting where you can read it and steer. Correct is a PEER of Go,

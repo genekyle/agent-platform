@@ -1740,3 +1740,84 @@ def test_orient_refuses_with_no_application_tab(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 409
+
+
+# --- the account-creation handoff (the boundary made concrete) --------------------------------
+def _wd_at_wall():
+    bb = _wd_step()
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("workday_apply_method_choose", aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["orient"] = {"platform": "workday", "state": "workday_create_account", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"}
+    return bb
+
+
+def test_account_handoff_surfaces_credentials_and_never_drives(monkeypatch):
+    """THE boundary. The agent registers the account and hands the operator the credentials to
+    type; it never enters a password or creates the account. No /execute, ever."""
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                               "/auth_state": {"ok": True, "logged_in": True}},
+                              blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={}).json()
+    finally:
+        _teardown()
+    acct = r["last_step"]["account"]
+    assert acct["leg"] == "create_account" and acct["button"] == "Create Account"
+    assert acct["username"]                      # a username to use is surfaced
+    assert "never enters a password" in acct["boundary"]
+    assert r["awaiting"] == "operator_account"
+    assert "/execute" not in harness.paths()     # nothing was driven
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].rung == "account_handoff"
+    assert step.minis[-1].outcome == aps.HUMAN_REQUIRED
+    assert step.needs_operator() is True         # paused for the operator
+
+
+def test_the_password_is_never_written_to_the_event_log(monkeypatch):
+    """A handoff surfaces the credential for display; it must not be journaled into the event log."""
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={}).json()
+    finally:
+        _teardown()
+    pw = r["last_step"]["account"].get("suggested_password")
+    if pw:                                        # only meaningful when a suffix is configured
+        for e in saved["bb"].events:
+            assert pw not in e.detail
+
+
+def test_account_handoff_is_a_resume_not_a_terminal_park(monkeypatch):
+    """Creating the account continues the application; it does not end the step. Distinct from
+    apply_flag parked:account_wall, which is 'not making an account for this one'."""
+    bb = _wd_at_wall()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_account", json={})            # handoff
+        r = client.post("/api/session_control/1/apply_account",
+                        json={"mark_created": True}).json()                     # operator made it
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.done is False                     # NOT terminated
+    assert any(m.rung == "account_created" and m.outcome == aps.OK for m in step.minis)
+    assert "continue" in r["last_step"]["detail"]
+
+
+def test_account_handoff_refuses_without_a_classified_ats(monkeypatch):
+    bb = _with_queue(("indeed:a1", "Some Co", "Some Co"))   # platform not set
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 409 and "known ATS" in r.json()["detail"]

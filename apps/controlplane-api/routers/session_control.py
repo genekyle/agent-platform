@@ -705,6 +705,106 @@ async def login_action(session_id: int, body: LoginActionBody,
 
 
 # --- the apply queue: one step per pick -------------------------------------------------------
+class ApplyAccountBody(BaseModel):
+    initiator: str = "operator"
+    mark_created: bool = False     # True once the operator has created the account on the site
+
+
+@router.post("/api/session_control/{session_id}/apply_account")
+async def apply_account(session_id: int, body: ApplyAccountBody,
+                        db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The account-creation HANDOFF — the wall predicted for a no-account Workday apply.
+
+    THE BOUNDARY IS ABSOLUTE AND IT IS THE WHOLE POINT OF THIS ENDPOINT. The agent never types a
+    password, never fills the create-account form, never clicks Create Account. What it does is
+    everything AROUND that: register the company↔ATS account record, derive the credentials the
+    operator should use, and hand them over — then the operator types them and creates the account
+    themselves. This is the pause-at-creation pattern the accounts system was built for
+    (`ats_accounts`, which states in its own code that the agent does not enter the creds).
+
+    Account creation is NOT a terminal park here — it is a handoff that RESUMES. The step stays
+    open, marked human_required, until the operator has made the account; then `mark_created=True`
+    flips it active and the application continues to My Information. (Parking is still available via
+    apply_flag for a company the operator does not want an account with — this is the other leg:
+    "help me make it and keep going".)
+    """
+    _check_initiator(body.initiator)
+    import ats_accounts
+    session, bb, ledger = _load(session_id, db)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409, detail="No open application to create an account for.")
+    if (step.platform or "") not in {a["ats_id"] for a in _ats_platform_ids()}:
+        raise HTTPException(status_code=409,
+                            detail=f"Account handoff is for a known ATS; this step is "
+                                   f"{step.platform!r}. Classify it first.")
+    company = step.company or ""
+    if not company:
+        raise HTTPException(status_code=422,
+                            detail="No company on this step to open an account for.")
+
+    if body.mark_created:
+        res = ats_accounts.mark_created(company, step.platform)
+        if not res.get("ok"):
+            raise HTTPException(status_code=409, detail=res.get("detail", "could not mark created"))
+        step.record("account_created", aps.OK,
+                    f"{company} {step.platform} account created by the operator",
+                    initiator=body.initiator)
+        _save_queue(bb, queue)
+        _persist(bb, ledger)
+        obs = await _observe(_session_browser_url(session), bb.search_state.query)
+        return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                     last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                           "detail": f"{company} account marked created. The application can "
+                                     f"continue — orient, then work the next rung."})
+
+    # Surface the handoff. ensure_account registers the record; next_account_action decides the leg
+    # (create vs sign-in) and returns the credentials the OPERATOR types.
+    ensure = ats_accounts.ensure_account(company, step.platform,
+                                         login_url=(bb.world or {}).get("orient", {}).get("url", ""))
+    if not ensure.get("ok"):
+        raise HTTPException(status_code=409, detail=ensure.get("detail", "could not open account"))
+    action = ats_accounts.next_account_action(company, step.platform)
+    creds = action.get("credentials") or {}
+
+    step.record("account_handoff", aps.HUMAN_REQUIRED,
+                f"{action.get('leg')} {company} {step.platform}: operator creates it "
+                f"(button {action.get('button')!r})",
+                initiator=body.initiator)
+    _save_queue(bb, queue)
+    # Never log the password — the record carries the leg, not the secret.
+    bb.log("account_handoff", f"{company} {step.platform}: {action.get('leg')} handoff to operator")
+    _persist(bb, ledger)
+
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="operator_account",
+                 last={"ok": False, "action": "apply_account", "queue": queue.summary(),
+                       "account": {
+                           "leg": action.get("leg"), "button": action.get("button"),
+                           "company": company, "ats": step.platform,
+                           "username": creds.get("username"),
+                           "suggested_password": creds.get("suggested_password"),
+                           "suffix_configured": creds.get("suffix_configured"),
+                           "boundary": "You type these into the form and click "
+                                       f"{action.get('button')!r}. The agent never enters a "
+                                       "password or creates an account — that is yours.",
+                       },
+                       "detail": f"Account handoff for {company} ({step.platform}). Create the "
+                                 f"account in the window with the credentials shown, then press "
+                                 f"'I created it' to continue."})
+
+
+def _ats_platform_ids() -> list[dict[str, Any]]:
+    from ats_registry import ATS_PLATFORMS
+    return ATS_PLATFORMS
+
+
+def _save_queue(bb: Any, queue: aps.Queue) -> None:
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+
+
 class OrientStepBody(BaseModel):
     initiator: str = "operator"
 
