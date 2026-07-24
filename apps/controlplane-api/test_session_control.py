@@ -14,6 +14,7 @@ What is being pinned, in order of how expensive it is to get wrong:
 """
 
 import apply_state_store as store
+import apply_steps as aps
 import main
 import session_checkpoints as cps
 from db import get_db
@@ -627,9 +628,12 @@ def test_page_number_is_read_off_the_live_tab_not_memory(monkeypatch):
     assert r["page"] == 3
 
 
-def test_choose_records_picks_marks_the_page_and_advances(monkeypatch):
+def test_choosing_queues_the_picks_and_holds_the_page(monkeypatch):
+    """Choosing no longer FINISHES a page — it enqueues work. Operator: "if i check off 11 jobs
+    that's 11 steps and i don't continue until i fully apply." """
     bb = _at_start_line()
-    bb.world["page_results"] = [{"job_id": "indeed:a1"}, {"job_id": "indeed:a2"}]
+    bb.world["page_results"] = [{"job_id": "indeed:a1", "title": "Reporting Analyst"},
+                                {"job_id": "indeed:a2", "title": "BI Analyst"}]
     _, saved = _install(monkeypatch,
                         {"/list_tabs": _tabs(SEARCH_URL),
                          "/auth_state": {"ok": True, "logged_in": True},
@@ -637,14 +641,95 @@ def test_choose_records_picks_marks_the_page_and_advances(monkeypatch):
                         blackboard=bb)
     try:
         r = client.post("/api/session_control/1/choose",
-                        json={"picks": ["indeed:a1"], "note": "good fit"}).json()
+                        json={"picks": ["indeed:a1", "indeed:a2"], "note": "good fit"}).json()
+    finally:
+        _teardown()
+    led = cps.Ledger.from_dict(saved["bb"].checkpoints)
+    assert not led.holds("page:1")                       # the page is NOT done
+    assert r["awaiting"] == "apply"
+    assert r["queue_summary"]["remaining"] == 2
+    assert saved["bb"].search_state.page == 1            # and we did not advance
+    assert saved["bb"].search_state.approved == ["indeed:a1", "indeed:a2"]
+
+
+def test_the_page_completes_once_every_queued_apply_is_terminal(monkeypatch):
+    """The page rung is marked only when nothing is still open — and the evidence records how
+    many were actually submitted, not merely how many were picked."""
+    import apply_steps as aps
+    bb = _at_start_line()
+    bb.world["page_results"] = [{"job_id": "indeed:a1"}, {"job_id": "indeed:a2"}]
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:a1"}, {"job_id": "indeed:a2"}])
+    q.steps[0].finish(aps.SUBMITTED)
+    q.steps[1].finish(aps.PARKED_ACCOUNT_WALL, "operator owns account creation")
+    bb.world["apply_queue"] = q.as_dict()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/next_page": {"ok": True, "has_next": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:a1", "indeed:a2"]}).json()
     finally:
         _teardown()
     led = cps.Ledger.from_dict(saved["bb"].checkpoints)
     assert led.holds("page:1")
-    assert "1 picked of 2" in led.reached["page:1"].evidence
-    assert saved["bb"].search_state.approved == ["indeed:a1"]
-    assert saved["bb"].search_state.page == 2
+    assert "1 submitted" in led.reached["page:1"].evidence
+    assert r["page"] == 2
+
+
+def test_flagging_a_step_terminal_moves_the_queue_along(monkeypatch):
+    import apply_steps as aps
+    bb = _at_start_line()
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:a1", "title": "One"}, {"job_id": "indeed:a2", "title": "Two"}])
+    bb.world["apply_queue"] = q.as_dict()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "parked:unknown_ats",
+                              "detail": "never driven this one"}).json()
+    finally:
+        _teardown()
+    assert r["queue_summary"]["remaining"] == 1
+    assert "Next up: Two" in r["last_step"]["detail"]
+    back = aps.Queue.from_dict(saved["bb"].world["apply_queue"])
+    assert back.steps[0].terminal == "parked:unknown_ats"
+
+
+def test_an_invented_terminal_flag_is_refused_by_the_api(monkeypatch):
+    bb = _at_start_line()
+    q = aps.Queue(page=1); q.enqueue([{"job_id": "indeed:a1"}])
+    bb.world["apply_queue"] = q.as_dict()
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "basically_done"})
+    finally:
+        _teardown()
+    assert r.status_code == 422
+
+
+def test_a_finished_step_is_not_reopened_by_flagging_it_again(monkeypatch):
+    bb = _at_start_line()
+    q = aps.Queue(page=1); q.enqueue([{"job_id": "indeed:a1"}])
+    q.steps[0].finish(aps.SUBMITTED)
+    bb.world["apply_queue"] = q.as_dict()
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "abandoned:operator"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
 
 
 def test_choosing_nothing_still_counts_the_page_as_reviewed(monkeypatch):

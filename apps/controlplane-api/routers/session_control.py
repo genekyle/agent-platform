@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+import apply_steps as aps
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
@@ -218,6 +219,9 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "tab_count": len(obs.get("tabs") or []),
         "results": results if results is not None else (bb.world or {}).get("page_results", []),
         "picks": list(ss.approved or []),
+        # The apply queue for this page: N picks, N steps, and what each one is waiting on.
+        "queue": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).as_dict(),
+        "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
         "awaiting": awaiting,
         "last_step": last,
         "events": [{"ts": e.ts, "kind": e.kind, "detail": e.detail} for e in bb.events[-12:]],
@@ -691,6 +695,62 @@ async def login_action(session_id: int, body: LoginActionBody,
                                       f"it may have moved. Re-check."})
 
 
+# --- the apply queue: one step per pick -------------------------------------------------------
+class ApplyFlagBody(BaseModel):
+    job_id: str
+    flag: str                      # a terminal flag from apply_steps
+    detail: str = ""
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/apply_flag")
+async def apply_flag(session_id: int, body: ApplyFlagBody,
+                     db: Session = Depends(get_db)) -> dict[str, Any]:
+    """End one apply step with a terminal flag, so the page can eventually move on.
+
+    Every step must reach one of these — that is what stops a queue from either blocking forever
+    on an account wall or quietly losing an application nobody finished. `submitted` is the only
+    flag that means success; the rest record honestly why this one stopped.
+
+    `submitted` is deliberately NOT settable here without the operator saying so, because it is
+    the claim that a real application was sent. Nothing in this system marks that on its own.
+    """
+    _check_initiator(body.initiator)
+    if body.flag not in aps.TERMINAL_FLAGS:
+        raise HTTPException(status_code=422,
+                            detail=f"{body.flag!r} is not a terminal flag. "
+                                   f"Have: {sorted(aps.TERMINAL_FLAGS)}")
+    session, bb, ledger = _load(session_id, db)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = next((s for s in queue.steps if s.job_id == body.job_id), None)
+    if step is None:
+        raise HTTPException(status_code=404,
+                            detail=f"{body.job_id} is not in this page's apply queue.")
+    if step.done:
+        raise HTTPException(status_code=409,
+                            detail=f"{body.job_id} already ended as {step.terminal!r}. A finished "
+                                   f"application is not re-opened by flagging it again.")
+
+    step.finish(body.flag, body.detail)
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.log("apply_flag", f"{body.job_id} -> {body.flag}"
+                         + (f" ({body.detail})" if body.detail else ""))
+    _persist(bb, ledger)
+
+    summary = queue.summary()
+    nxt = queue.current()
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                 awaiting="apply" if summary["blocks_page"] else "choose",
+                 last={"ok": True, "action": "apply_flag", "queue": summary,
+                       "detail": (f"{body.job_id} ended as {body.flag}. "
+                                  + (f"Next up: {nxt.title or nxt.job_id}."
+                                     if nxt else
+                                     "Every application from this page is accounted for — "
+                                     "choose again to advance the page."))})
+
+
 # --- the clean start: provisioning through the tab manager ------------------------------------
 def _fresh_start_plan(obs: dict[str, Any]) -> dict[str, Any]:
     """What this window would have to close to be a clean start, via `controller.window` — the
@@ -804,14 +864,37 @@ async def choose(session_id: int, body: ChooseBody,
             approved.append(job_id)
     bb.search_state.approved = approved
 
+    # CHOOSING ENQUEUES WORK; IT DOES NOT FINISH A PAGE. Operator: "if i check off 11 jobs that's
+    # 11 steps and i don't continue until i fully apply." So each pick becomes its own step, and
+    # `page:N` is only marked once every one of them has reached a terminal flag.
+    by_id = {r.get("job_id"): r for r in (bb.world or {}).get("page_results", [])}
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    if queue.page != page:
+        queue = aps.Queue(page=page)     # a new page starts its own queue
+    added = queue.enqueue([by_id.get(j) or {"job_id": j} for j in body.picks])
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.log("choose", f"page {page}: picked {len(body.picks)} of {len(known)} "
+                     f"({added} queued to apply)" + (f" — {body.note}" if body.note else ""))
+
+    if queue.blocks_page():
+        summary = queue.summary()
+        _persist(bb, ledger)
+        obs_now = await _observe(browser_url, bb.search_state.query)
+        return _view(session, bb, ledger, obs_now, page=page, awaiting="apply",
+                     last={"ok": True, "action": "choose", "page": page, "queue": summary,
+                           "detail": f"{summary['remaining']} application(s) queued from page "
+                                     f"{page}. This page stays open until each one reaches a "
+                                     f"terminal flag — nothing is skipped."})
+
     rung = cps.page_rung(page)
-    ledger.mark(rung.id, evidence=f"{len(body.picks)} picked of {len(known)}"
+    ledger.mark(rung.id, evidence=f"{len(body.picks)} picked of {len(known)}; "
+                                  f"{queue.summary()['submitted']} submitted"
                                   + (f" — {body.note}" if body.note else ""),
                 initiator=body.initiator)
-    bb.log("choose", f"page {page}: picked {len(body.picks)} of {len(known)}"
-                     + (f" — {body.note}" if body.note else ""))
 
     advanced: dict[str, Any] = {"ok": True, "action": "choose", "page": page,
+                                "queue": queue.summary(),
                                 "detail": f"Page {page} reviewed; {len(body.picks)} picked."}
     if body.advance:
         nxt = await _capture_post("/next_page",

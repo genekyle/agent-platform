@@ -1,0 +1,295 @@
+"""Apply steps — one pick, one step, and a ladder whose shape is discovered while climbing it.
+
+Operator, after picking jobs off page 1: *"if i check off 11 jobs that's 11 steps and i don't
+continue until i fully apply."* So choosing does not complete a page — it **enqueues work**, and
+`page:N` stays open until every pick has reached a terminal flag.
+
+This is the search ladder's idea (`session_checkpoints`) at a second scale, with one genuinely new
+property. The search preamble is four rungs known before you start. An apply is not:
+
+    open pane -> verify identity -> enter apply -> [ ? ] -> ... -> submit
+                                                    ^
+                                    the platform is only knowable HERE
+
+You cannot tell from a results card whether a job is an Indeed in-app apply or a hop to Workday,
+Greenhouse, or something nobody has driven. So the ladder has a known PREFIX, a **discovery
+point**, and a tail that does not exist until the discovery happens. A step is a ladder that grows
+while you are on it.
+
+**Why every mini-step carries a flag.** Operator: *"each mini-step in each step will need a flag
+because this is some uncharted territory especially for newer ats."* Exactly so — and the flag that
+earns this module is `UNKNOWN`. A mini-step we cannot classify must record that it could not be
+classified, because the alternative is a gap that reads identically to a step that went fine. This
+is the same failure the challenge pre-gate had: "found nothing" and "could not look" are not the
+same answer, and only one of them is safe to continue from.
+
+Pure: no I/O, no browser, no DB. `routers/session_control.py` executes what this decides.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+# --- mini-step outcome flags -------------------------------------------------------------------
+OK = "ok"                        # did what it set out to do
+BLOCKED = "blocked"              # captcha / challenge — escalate, never solve
+HUMAN_REQUIRED = "human_required"  # a branch only a person may take (2FA, AI recruiter, password)
+UNKNOWN = "unknown"              # WE DO NOT RECOGNISE THIS. Not a failure — an admission.
+FAILED = "failed"                # tried, did not work, and we know why
+
+#: Flags that mean the step cannot proceed on its own. `UNKNOWN` is here deliberately: not
+#: recognising a screen is a reason to stop and ask, never a reason to press on hopefully.
+NEEDS_OPERATOR = frozenset({BLOCKED, HUMAN_REQUIRED, UNKNOWN})
+
+# --- terminal flags: how a step ENDS ------------------------------------------------------------
+#: The only success. An application is done when it is SUBMITTED and confirmed — not when the form
+#: is full, not when we reached the last page.
+SUBMITTED = "submitted"
+
+#: PARKED — genuinely unfinishable right now, by a cause the operator owns. The step is over for
+#: this session and stops holding the page, but it is not "done" and it is not forgotten.
+PARKED_ACCOUNT_WALL = "parked:account_wall"      # an ATS account only the operator may create
+PARKED_AI_RECRUITER = "parked:ai_recruiter"      # a video/audio interview gate
+PARKED_ASSESSMENT = "parked:assessment"          # a survey / skills test
+PARKED_UNKNOWN_ATS = "parked:unknown_ats"        # nobody has driven this platform yet
+PARKED_OPERATOR = "parked:operator"              # the operator's own call, reason recorded
+
+#: ABANDONED — nothing to apply to. Distinct from parked: parked means "not now", abandoned means
+#: "not ever", and conflating them puts dead requisitions back in the queue forever.
+ABANDONED_GONE = "abandoned:ats_unavailable"     # the posting outlived its requisition
+ABANDONED_OPERATOR = "abandoned:operator"        # the operator does not want it after seeing it
+
+TERMINAL_FLAGS = frozenset({
+    SUBMITTED, PARKED_ACCOUNT_WALL, PARKED_AI_RECRUITER, PARKED_ASSESSMENT,
+    PARKED_UNKNOWN_ATS, PARKED_OPERATOR, ABANDONED_GONE, ABANDONED_OPERATOR,
+})
+
+#: Terminal flags the operator must choose deliberately. `ABANDONED_GONE` is absent because a 404
+#: requisition is an observed fact, not a judgement call — asking about it would be theatre.
+OPERATOR_FLAGS = frozenset(TERMINAL_FLAGS - {SUBMITTED, ABANDONED_GONE})
+
+STATUS_QUEUED, STATUS_OPEN, STATUS_DONE = "queued", "open", "done"
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# --- the ladder's known prefix ------------------------------------------------------------------
+@dataclass(frozen=True)
+class MiniRung:
+    id: str
+    label: str
+    why: str
+
+
+#: Every apply starts the same way, whatever it turns into.
+PREFIX: tuple[MiniRung, ...] = (
+    MiniRung("open_pane", "Open the posting",
+             "Click the card so the detail pane loads — never a viewjob URL jump."),
+    MiniRung("verify_identity", "Confirm it is the intended job",
+             "The near-miss guard. A pane can show a different posting than the card you clicked, "
+             "and an application to the wrong job cannot be taken back."),
+    MiniRung("enter_apply", "Enter the application",
+             "Click Apply. Approval for this specific job came from the operator's pick."),
+    MiniRung("classify", "Work out where we landed",
+             "THE DISCOVERY POINT. Indeed in-app, a known ATS, or somewhere new — the rungs after "
+             "this one do not exist until this is answered."),
+)
+
+#: The last rung of every apply, whatever the middle turned out to be. Never automatic.
+SUBMIT_RUNG = MiniRung(
+    "submit", "Submit",
+    "The irreversible one. The operator confirms every submission, on every platform, always.")
+
+PREFIX_IDS = tuple(r.id for r in PREFIX)
+
+
+@dataclass
+class MiniStep:
+    """One recorded mini-step: what we tried, and what came of it. The flag is the point."""
+
+    rung: str
+    outcome: str
+    detail: str = ""
+    at: str = field(default_factory=_utcnow)
+    initiator: str = "operator"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"rung": self.rung, "outcome": self.outcome, "detail": self.detail,
+                "at": self.at, "initiator": self.initiator}
+
+
+@dataclass
+class ApplyStep:
+    """One pick, from the results card to a terminal flag."""
+
+    job_id: str
+    title: str = ""
+    company: str = ""
+    status: str = STATUS_QUEUED
+    platform: Optional[str] = None      # None until `classify` answers it
+    terminal: Optional[str] = None      # one of TERMINAL_FLAGS once done
+    terminal_detail: str = ""
+    minis: list[MiniStep] = field(default_factory=list)
+
+    @property
+    def done(self) -> bool:
+        return self.terminal is not None
+
+    @property
+    def last_flag(self) -> Optional[str]:
+        return self.minis[-1].outcome if self.minis else None
+
+    def needs_operator(self) -> bool:
+        """True when the step is stuck on something only a person may resolve."""
+        return not self.done and self.last_flag in NEEDS_OPERATOR
+
+    def next_rung(self) -> Optional[MiniRung]:
+        """The next prefix rung, or None once the prefix is walked (the tail is discovered)."""
+        reached = {m.rung for m in self.minis if m.outcome == OK}
+        for rung in PREFIX:
+            if rung.id not in reached:
+                return rung
+        return None
+
+    def record(self, rung: str, outcome: str, detail: str = "",
+               initiator: str = "operator") -> MiniStep:
+        mini = MiniStep(rung=rung, outcome=outcome, detail=detail, initiator=initiator)
+        self.minis.append(mini)
+        if self.status == STATUS_QUEUED:
+            self.status = STATUS_OPEN
+        return mini
+
+    def finish(self, flag: str, detail: str = "") -> None:
+        if flag not in TERMINAL_FLAGS:
+            raise ValueError(f"{flag!r} is not a terminal flag; have {sorted(TERMINAL_FLAGS)}")
+        self.terminal = flag
+        self.terminal_detail = detail
+        self.status = STATUS_DONE
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"job_id": self.job_id, "title": self.title, "company": self.company,
+                "status": self.status, "platform": self.platform, "terminal": self.terminal,
+                "terminal_detail": self.terminal_detail, "done": self.done,
+                "needs_operator": self.needs_operator(),
+                "next_rung": (nr.id if (nr := self.next_rung()) else None),
+                "minis": [m.as_dict() for m in self.minis]}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ApplyStep":
+        step = cls(job_id=d["job_id"], title=d.get("title", ""), company=d.get("company", ""),
+                   status=d.get("status", STATUS_QUEUED), platform=d.get("platform"),
+                   terminal=d.get("terminal"), terminal_detail=d.get("terminal_detail", ""))
+        step.minis = [MiniStep(**m) for m in d.get("minis", [])]
+        return step
+
+
+@dataclass
+class Queue:
+    """The picks from ONE page, as work. Order is the operator's pick order."""
+
+    page: int = 1
+    steps: list[ApplyStep] = field(default_factory=list)
+
+    def enqueue(self, picks: list[dict[str, Any]]) -> int:
+        """Add picks as steps. Idempotent by job_id — pressing Choose twice must not double the
+        work, and must never re-open a step that already finished."""
+        known = {s.job_id for s in self.steps}
+        added = 0
+        for p in picks:
+            jid = p.get("job_id")
+            if not jid or jid in known:
+                continue
+            self.steps.append(ApplyStep(job_id=jid, title=p.get("title", ""),
+                                        company=p.get("company", "")))
+            known.add(jid)
+            added += 1
+        return added
+
+    def current(self) -> Optional[ApplyStep]:
+        """The one step being worked: the first that has not reached a terminal flag.
+
+        Strictly one at a time. Two half-finished applications in one window is the duplicate-
+        application fault the tab manager already had to learn to spot.
+        """
+        for step in self.steps:
+            if not step.done:
+                return step
+        return None
+
+    def blocks_page(self) -> bool:
+        """Whether `page:N` may still not be marked. This is the operator's rule in one line:
+        do not move on while an application is unfinished."""
+        return self.current() is not None
+
+    def summary(self) -> dict[str, Any]:
+        by_flag: dict[str, int] = {}
+        for s in self.steps:
+            if s.terminal:
+                by_flag[s.terminal] = by_flag.get(s.terminal, 0) + 1
+        return {"page": self.page, "total": len(self.steps),
+                "done": sum(1 for s in self.steps if s.done),
+                "submitted": sum(1 for s in self.steps if s.terminal == SUBMITTED),
+                "remaining": sum(1 for s in self.steps if not s.done),
+                "blocks_page": self.blocks_page(), "by_flag": by_flag}
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"page": self.page, "steps": [s.as_dict() for s in self.steps]}
+
+    @classmethod
+    def from_dict(cls, d: Optional[dict[str, Any]]) -> "Queue":
+        d = d or {}
+        q = cls(page=int(d.get("page", 1)))
+        q.steps = [ApplyStep.from_dict(s) for s in d.get("steps", []) if s.get("job_id")]
+        return q
+
+
+# --- the discovery point --------------------------------------------------------------------
+@dataclass
+class Discovery:
+    """What the classify rung concluded, and whether we can proceed on it."""
+
+    platform: str
+    known: bool          # is there a recipe for this platform?
+    outcome: str         # OK when we can proceed; UNKNOWN when a human must teach it
+    detail: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"platform": self.platform, "known": self.known,
+                "outcome": self.outcome, "detail": self.detail}
+
+
+#: Platforms we have actually driven end to end. Anything else is uncharted, and says so.
+#: Deliberately a SHORT list: `ats_registry` recognises far more hosts than we have ever driven,
+#: and "we can name it" is not "we can complete it". Claiming a recipe we do not have is how you
+#: half-fill a real application.
+DRIVEN_PLATFORMS = frozenset({"indeed", "workday", "greenhouse"})
+
+
+def classify_landing(url: str, page_text: str = "") -> Discovery:
+    """Answer the discovery rung: what kind of apply did we land in?
+
+    Delegates identification to `ats_registry` (one source of truth for "which ATS is this") and
+    then asks a second, different question that the registry does not answer: **have we ever
+    driven it?** An unknown platform is reported as UNKNOWN so the step halts and the operator
+    teaches it live, rather than a generic form-filler guessing its way through somebody's real
+    job application.
+    """
+    from ats_registry import classify_ats
+
+    platform = classify_ats(url) or "unknown"
+    if "smartapply.indeed.com" in (url or "") or platform == "indeed":
+        return Discovery("indeed", True, OK,
+                         "Indeed's in-app application (smartapply) — the recipe we know best.")
+    if platform in DRIVEN_PLATFORMS:
+        return Discovery(platform, True, OK, f"{platform}: a platform we have driven before.")
+    if platform in ("company_site", "unknown", ""):
+        return Discovery(platform or "unknown", False, UNKNOWN,
+                         "This does not match any ATS we recognise. Halting so it can be driven "
+                         "and captured rather than guessed at.")
+    return Discovery(platform, False, UNKNOWN,
+                     f"{platform} is recognised by the registry but has never been driven end to "
+                     f"end here. Naming a platform is not knowing how to finish it.")
