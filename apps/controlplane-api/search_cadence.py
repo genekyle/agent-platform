@@ -11,6 +11,8 @@ cadence we follow by hand. Exposed at GET /api/search/cadence.
 
 from __future__ import annotations
 
+from typing import Optional
+
 # Bounds keep the cadence SAFE + human-paced (see feedback_bot_safety_live_sessions):
 # don't sweep endlessly, don't churn tabs, reach apply pages like a human.
 BOUNDS = {
@@ -52,6 +54,60 @@ SEARCH_RECIPE = [
 def search_recipe_states() -> list[str]:
     """The state ids the search spine advances through (for validation + the planner)."""
     return [entry["state"] for entry in SEARCH_RECIPE]
+
+
+# --- Finding the search box, by looking rather than by assuming --------------------------------
+#: Name fragments that identify each search control, best-match first. These are FRAGMENTS matched
+#: against the live accessible name — never the whole name, because the whole name is not stable.
+#:
+#: Written after getting it wrong live (2026-07-24, session 19). The first version hard-coded
+#: `("combobox", "What")`, `("combobox", "Where")` and `("button", "Find jobs")` from general
+#: knowledge of Indeed. All three were wrong on the real page, which offers:
+#:     combobox 'search: Job title, keywords, or company'
+#:     combobox 'Edit location'
+#:     button   'Search'
+#: Nothing typed, nothing clicked. The lesson is not "use these names instead" — these will drift
+#: too, and they differ between the logged-out home, the logged-in feed and the results page. It is
+#: that the names must be DISCOVERED from a scan every time, which is what this function does.
+_QUERY_HINTS = ("job title", "keywords", "what", "search:", "find jobs", "job search")
+_LOCATION_HINTS = ("location", "where", "city, state", "postal")
+_SUBMIT_HINTS = ("find jobs", "search", "find job")
+
+_TEXT_ROLES = ("combobox", "textbox", "searchbox")
+
+
+def find_search_controls(candidates: list[dict]) -> dict:
+    """Locate the query box, location box and submit button on whatever search page we are on.
+
+    Returns {query, location, submit} -> {"role", "name"}, omitting anything not found. Addressed
+    by role + accessible NAME (never a selector or a node id) so the caller drives through the AX
+    layer and survives node-id churn between scan and act.
+    """
+    out: dict[str, dict] = {}
+
+    def _pick(roles: tuple[str, ...], hints: tuple[str, ...]) -> Optional[dict]:
+        # Hints are ordered, so a page offering several matches yields the most specific one.
+        for hint in hints:
+            for c in candidates:
+                role = (c.get("role") or "").lower()
+                name = (c.get("name") or "").strip()
+                if role in roles and name and hint in name.lower():
+                    return {"role": role, "name": name}
+        return None
+
+    q = _pick(_TEXT_ROLES, _QUERY_HINTS)
+    if q:
+        out["query"] = q
+    loc = _pick(_TEXT_ROLES, _LOCATION_HINTS)
+    # A single box that matched both lists is the query box, not the location box — Indeed's
+    # results page names its keyword field "search: Job title, keywords, or company", and calling
+    # that the location field would type a city into the keyword box.
+    if loc and (not q or loc["name"] != q["name"]):
+        out["location"] = loc
+    sub = _pick(("button",), _SUBMIT_HINTS)
+    if sub:
+        out["submit"] = sub
+    return out
 
 
 CADENCE_MODES = {

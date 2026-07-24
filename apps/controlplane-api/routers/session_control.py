@@ -440,10 +440,9 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
 
 
 # --- the two rungs that actually drive ----------------------------------------------------------
-# Indeed's search box, by AX role + accessible name (PRINCIPLES §6 — never a bespoke selector).
-_WHAT_FIELD = ("combobox", "What")
-_WHERE_FIELD = ("combobox", "Where")
-_SUBMIT_BUTTON = ("button", "Find jobs")
+#: Outcomes /execute can legitimately return. Anything else — a FastAPI validation body, a
+#: transport error, an empty dict — is NOT a result and must never be read as one.
+_ACTED_OK = {"ok", "committed_unconfirmed"}
 
 
 async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict[str, Any],
@@ -453,26 +452,65 @@ async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict
     ONLY once the resulting URL actually carries our query. If we cannot prove it landed we
     leave the rung unmarked: an unmarked rung gets retried, and retrying a search we already
     ran is precisely the harm we are avoiding — so proof matters more here than anywhere else.
+
+    THE CONTROLS ARE DISCOVERED, NOT ASSUMED. The first version hard-coded "What"/"Where"/"Find
+    jobs" from general knowledge of Indeed; the live page offers "search: Job title, keywords, or
+    company", "Edit location" and "Search". All three missed, so nothing was typed and nothing was
+    clicked (2026-07-24, session 19). We scan and match, every time.
     """
+    import search_cadence
+
     query, location = bb.search_state.query, bb.search_state.location
     tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
 
-    async def _act(action_id: str, role: str, name: str, value: str = "") -> dict:
-        return await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_id": tab_id, "action_id": action_id,
-            "target_role": role, "target_name": name, "value": value, "driver": "humanized",
-        })
+    async def _act(action_id: str, ctrl: dict, value: str = "") -> tuple[bool, str]:
+        """One AX-addressed action. Returns (acted, detail).
 
-    typed = await _act("type", *_WHAT_FIELD, value=query)
-    if typed.get("outcome") == "not_found":
+        Strict about what counts as acted: the same drive reported "submitted" while every call
+        was in fact returning a 422 validation body, because the code asked `outcome != not_found`
+        and a response with no `outcome` at all sailed through. An unrecognised reply is a
+        failure, loudly.
+        """
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": action_id,
+            # Required by ExecuteRequest even on the act-by-name path, where it goes unused.
+            # Omitting it is a 422, not an action — the shape LiveActuator has always sent.
+            "target_bbox": {},
+            "target_role": ctrl["role"], "target_name": ctrl["name"],
+            "value": value, "driver": "humanized",
+        })
+        outcome = res.get("outcome")
+        if outcome in _ACTED_OK:
+            return True, ""
+        if outcome:
+            return False, f"{action_id} on {ctrl['name']!r} returned {outcome}"
+        detail = res.get("detail")
+        return False, (f"{action_id} on {ctrl['name']!r} got no outcome back "
+                       f"({str(detail)[:160] if detail else 'empty reply'})")
+
+    scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                               timeout=25.0)
+    controls = search_cadence.find_search_controls(scan.get("candidates") or [])
+    if "query" not in controls or "submit" not in controls:
+        seen = len(scan.get("candidates") or [])
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
-                "detail": "Could not find the 'What' search box on this page. Open Indeed's job "
-                          "search and step again."}
+                "detail": f"Could not find a search box and a submit button on this page "
+                          f"({seen} elements scanned; found "
+                          f"{', '.join(controls) or 'neither'}). Open Indeed's job search, then "
+                          f"step again."}
+
+    acted, why = await _act("type", controls["query"], value=query)
+    if not acted:
+        return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
+                "detail": f"Could not enter the query — {why}."}
     await asyncio.sleep(1.2)
-    if location:
-        await _act("type", *_WHERE_FIELD, value=location)
+    if location and "location" in controls:
+        await _act("type", controls["location"], value=location)
         await asyncio.sleep(1.0)
-    await _act("click", *_SUBMIT_BUTTON)
+    acted, why = await _act("click", controls["submit"])
+    if not acted:
+        return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
+                "detail": f"Typed the query but could not submit it — {why}."}
     await asyncio.sleep(3.0)
 
     # PROOF, not assumption: re-read the tabs and require a results URL carrying our query.
@@ -613,13 +651,16 @@ async def login_action(session_id: int, body: LoginActionBody,
     tab = (obs.get("tabs") or [{}])[0]
     res = await _capture_post("/execute", {
         "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
+        "target_bbox": {},   # required by ExecuteRequest even here, where it goes unused
         "target_role": body.role, "target_name": body.control_name, "driver": "humanized",
     })
     await asyncio.sleep(2.0)
 
     obs_after = await _observe(browser_url, bb.search_state.query)
     after = await _login_survey(browser_url, obs_after)
-    ok = res.get("outcome") not in ("not_found",)
+    # Only a recognised outcome counts as a click. A reply with no `outcome` is an error body,
+    # not a result — reading one as success is what let a whole drive report work it never did.
+    ok = res.get("outcome") in _ACTED_OK
     bb.log("login_step", f"clicked {body.control_name!r} -> {after['state']}")
     _persist(bb, ledger)
     return _view(session, bb, ledger, obs_after, page=_current_page(obs_after, bb),

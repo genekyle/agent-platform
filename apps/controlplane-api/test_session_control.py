@@ -108,6 +108,19 @@ def _tabs(*urls):
     return {"ok": True, "tabs": [{"tab_id": f"t{i}", "url": u} for i, u in enumerate(urls)]}
 
 
+#: The AX Indeed actually serves, measured live 2026-07-24 on session 19. The first version of the
+#: drive assumed "What" / "Where" / "Find jobs"; none of those exist here, so nothing was typed and
+#: nothing was clicked. Tests use the real shape so a hard-coded matcher cannot pass again.
+_SEARCH_PAGE_AX = {"ok": True, "page_text": "", "candidates": [
+    {"role": "button", "name": "Skip to main content", "backend_node_id": 1},
+    {"role": "combobox", "name": "search: Job title, keywords, or company", "backend_node_id": 2},
+    {"role": "combobox", "name": "Edit location", "backend_node_id": 3},
+    {"role": "button", "name": "Clear location input", "backend_node_id": 4},
+    {"role": "button", "name": "Search", "backend_node_id": 5},
+    {"role": "button", "name": "Account", "backend_node_id": 6},
+]}
+
+
 def _at_start_line(query="reporting analyst", location="Nashua, NH", page_url=SEARCH_URL):
     """A blackboard whose preamble is fully held — the stop-and-go phase."""
     bb = store.new_blackboard(1, query=query, location=location)
@@ -492,6 +505,7 @@ def test_run_query_marks_the_rung_only_on_proof(monkeypatch):
     harness, saved = _install(monkeypatch,
                               {"/list_tabs": _list_tabs,
                                "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
                                "/execute": {"outcome": "ok"}},
                               blackboard=_ready_for_query())
     try:
@@ -502,10 +516,13 @@ def test_run_query_marks_the_rung_only_on_proof(monkeypatch):
     led = cps.Ledger.from_dict(saved["bb"].checkpoints)
     assert led.holds("query_entered")
     assert "q='reporting analyst'" in led.reached["query_entered"].evidence
-    # driven through the AX layer by role + accessible name, not a selector
+    # driven through the AX layer by the names DISCOVERED on the page, not assumed ones
     execs = [p for p in harness.calls if p[0] == "/execute"]
-    assert [e[1]["target_name"] for e in execs] == ["What", "Where", "Find jobs"]
+    assert [e[1]["target_name"] for e in execs] == [
+        "search: Job title, keywords, or company", "Edit location", "Search"]
     assert all(e[1].get("driver") == "humanized" for e in execs)
+    # ExecuteRequest requires target_bbox even on the act-by-name path; omitting it is a 422
+    assert all("target_bbox" in e[1] for e in execs)
 
 
 def test_unproven_query_submission_is_left_unmarked(monkeypatch):
@@ -514,6 +531,7 @@ def test_unproven_query_submission_is_left_unmarked(monkeypatch):
     harness, saved = _install(monkeypatch,
                               {"/list_tabs": _tabs("https://www.indeed.com/"),
                                "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
                                "/execute": {"outcome": "ok"}},
                               blackboard=_ready_for_query())
     try:
@@ -528,6 +546,7 @@ def test_missing_search_box_asks_the_operator_rather_than_flailing(monkeypatch):
     harness, _ = _install(monkeypatch,
                           {"/list_tabs": _tabs("https://www.indeed.com/"),
                            "/auth_state": {"ok": True, "logged_in": True},
+                           "/ax_scan": _SEARCH_PAGE_AX,
                            "/execute": {"outcome": "not_found"}},
                           blackboard=_ready_for_query())
     try:
@@ -862,3 +881,66 @@ def test_a_page_with_no_visible_signin_says_so_plainly(monkeypatch):
     login = r["last_step"]["login"]
     assert login["can_drive"] is False and login["options"] == []
     assert "hidden it before" in login["detail"] and "2 elements seen" in login["detail"]
+
+
+def test_a_validation_error_from_execute_is_not_a_successful_action(monkeypatch):
+    """THE bug that wasted a live drive (2026-07-24). Every /execute call was returning a FastAPI
+    422 body because `target_bbox` was omitted — required even on the act-by-name path. The code
+    asked `outcome != "not_found"`, and a reply with no `outcome` AT ALL sailed through as
+    success, so the panel reported "submitted the query" having typed nothing and clicked
+    nothing. An unrecognised reply is a failure, loudly."""
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs("https://www.indeed.com/"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": _SEARCH_PAGE_AX,
+         "/execute": {"detail": [{"type": "missing", "loc": ["body", "target_bbox"]}]}},
+        blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_search_box"
+    assert "no outcome back" in r["last_step"]["detail"]
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+    # and it stopped at the first failure rather than blindly typing the location and submitting
+    assert len([p for p in harness.paths() if p == "/execute"]) == 1
+
+
+def test_a_failed_submit_click_does_not_claim_the_query_ran(monkeypatch):
+    """Typing succeeded, submitting did not. Marking the rung here would record a spend that
+    never happened and refuse the session the search it still needs."""
+    calls = {"n": 0}
+
+    def _execute(_payload):
+        calls["n"] += 1
+        return {"outcome": "ok"} if calls["n"] < 3 else {"outcome": "not_found"}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs("https://www.indeed.com/"),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/ax_scan": _SEARCH_PAGE_AX, "/execute": _execute},
+                        blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_search_box"
+    assert "could not submit" in r["last_step"]["detail"]
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+
+
+def test_no_search_controls_on_the_page_stops_before_acting(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("https://www.indeed.com/"),
+                           "/auth_state": {"ok": True, "logged_in": True},
+                           "/ax_scan": {"ok": True, "candidates": [
+                               {"role": "button", "name": "Account", "backend_node_id": 1}]}},
+                          blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_search_box"
+    assert "1 elements scanned" in r["last_step"]["detail"]
+    assert "/execute" not in harness.paths()

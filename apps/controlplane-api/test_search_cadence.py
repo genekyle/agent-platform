@@ -83,3 +83,66 @@ def test_submitted_regex_does_not_swallow_blocker_branches():
     assert ats["outcome"] == "ats_unavailable"
     acct = sc.classify_apply_outcome("Create an account to continue")
     assert acct["outcome"] == "account_creation"
+
+
+# --- finding the search box by LOOKING, not assuming ----------------------------------------
+def _cands(*pairs):
+    return [{"role": r, "name": n, "backend_node_id": i} for i, (r, n) in enumerate(pairs, 10)]
+
+
+#: Exactly what Indeed's logged-in home offered on 2026-07-24 (session 19). The first version of
+#: the drive assumed "What" / "Where" / "Find jobs" and matched none of them.
+_LIVE_INDEED = _cands(
+    ("button", "Skip to main content"),
+    ("combobox", "search: Job title, keywords, or company"),
+    ("combobox", "Edit location"),
+    ("button", "Clear location input"),
+    ("button", "Search"),
+    ("button", "Account"),
+)
+
+
+def test_finds_the_real_indeed_controls_not_the_assumed_ones():
+    got = sc.find_search_controls(_LIVE_INDEED)
+    assert got["query"]["name"] == "search: Job title, keywords, or company"
+    assert got["location"]["name"] == "Edit location"
+    assert got["submit"]["name"] == "Search"
+
+
+def test_the_assumed_names_are_absent_from_the_real_page():
+    """The regression, stated as the fact that caused it: nothing on the live page is called
+    What, Where or Find jobs, so a hard-coded matcher types into nothing and clicks nothing."""
+    names = {c["name"].lower() for c in _LIVE_INDEED}
+    assert not ({"what", "where", "find jobs"} & names)
+
+
+def test_a_page_naming_things_differently_still_resolves():
+    """The point is the matcher looks; these names are as provisional as the last set."""
+    got = sc.find_search_controls(_cands(
+        ("textbox", "What"), ("textbox", "Where"), ("button", "Find jobs")))
+    assert got["query"]["name"] == "What"
+    assert got["location"]["name"] == "Where"
+    assert got["submit"]["name"] == "Find jobs"
+
+
+def test_one_box_matching_both_lists_is_the_query_box():
+    """'search: Job title, keywords, or company' must never be taken for the location field —
+    that types a city into the keyword box."""
+    got = sc.find_search_controls(_cands(
+        ("combobox", "Job title, keywords, or company"), ("button", "Search")))
+    assert got["query"]["name"] == "Job title, keywords, or company"
+    assert "location" not in got
+
+
+def test_missing_controls_are_reported_as_missing():
+    got = sc.find_search_controls(_cands(("button", "Account"), ("link", "Help")))
+    assert got == {}
+
+
+def test_the_most_specific_hint_wins():
+    """Ordered hints, so a page with several plausible boxes yields the right one."""
+    got = sc.find_search_controls(_cands(
+        ("combobox", "What are you searching for"),
+        ("combobox", "Job title, keywords, or company"),
+        ("button", "Search")))
+    assert got["query"]["name"] == "Job title, keywords, or company"
