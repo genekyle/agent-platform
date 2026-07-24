@@ -705,6 +705,125 @@ async def login_action(session_id: int, body: LoginActionBody,
 
 
 # --- the apply queue: one step per pick -------------------------------------------------------
+class ReconcileStepBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/reconcile_step")
+async def reconcile_step(session_id: int, body: ReconcileStepBody,
+                         db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Align the current step's RECORD to what the live window actually shows.
+
+    The session's founding principle is that the browser is truth and the record is memory; when
+    they disagree, memory yields. This is the apply-step version of that. It exists because a
+    rebuilt queue starts every step at `queued` even when the browser is plainly mid-application —
+    the operator sees the Workday tab open and the record insisting nothing has happened, and is
+    asked to re-drive work the world already did.
+
+    It does NOT fabricate progress. It reads the open ATS tab and records only the rungs that tab
+    is PROOF of — you cannot be standing on a Workday application without having opened the pane,
+    confirmed it, and clicked Apply — with evidence pointing at the live URL. Where it cannot
+    honestly confirm something (a title that drifted between the Indeed pick and the ATS req) it
+    records UNKNOWN and says so, rather than quietly asserting a match. Reconciling the record is
+    not the same as vouching for it.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409, detail="No open application to reconcile.")
+
+    obs = await _observe(browser_url, bb.search_state.query)
+    ats_url = _apply_tab_url(bb, obs)
+    if not ats_url:
+        raise HTTPException(
+            status_code=409,
+            detail="No ATS application tab is open, so there is nothing the window can prove about "
+                   "this step. Work it forward instead.")
+
+    disc = aps.classify_landing(ats_url)
+    done = {m.rung for m in step.minis if m.outcome == aps.OK}
+    added: list[str] = []
+
+    # open_pane: an ATS tab open for this job is proof the pane was opened and Apply led here.
+    if "open_pane" not in done:
+        pane = (bb.world or {}).get("open_pane") or {}
+        step.record("open_pane", aps.OK,
+                    f"reconciled from the live window — the application tab is open ({ats_url[:90]})"
+                    + (f"; pane recorded as {pane.get('title')!r}" if pane.get("title") else ""),
+                    initiator=body.initiator)
+        added.append("open_pane")
+
+    # verify_identity: the near-miss guard, and the ONE rung reconcile must not rubber-stamp.
+    # Check the ATS destination against the pick; a drift (the Indeed title vs the req title) is
+    # exactly the kind of near-miss this rung exists to catch, so surface it rather than assume.
+    if "verify_identity" not in done:
+        if step.title and _title_matches(step.title, _last_path_words(ats_url)):
+            step.record("verify_identity", aps.OK,
+                        f"reconciled — the ATS req path matches {step.title!r}",
+                        initiator=body.initiator)
+            added.append("verify_identity")
+        else:
+            step.record("verify_identity", aps.UNKNOWN,
+                        f"the ATS destination ({_last_path_words(ats_url) or ats_url[:60]!r}) does "
+                        f"not obviously match the pick {step.title!r}. Confirm it is the same job "
+                        f"before continuing — titles can differ between Indeed and the employer, "
+                        f"but a wrong one cannot be un-applied.",
+                        initiator=body.initiator)
+
+    # enter_apply: we are on the ATS, so Apply was clicked. Only record it once identity is settled.
+    if "verify_identity" in {m.rung for m in step.minis if m.outcome == aps.OK} \
+            and "enter_apply" not in done:
+        step.record("enter_apply", aps.OK,
+                    f"reconciled — an application tab is open on {disc.platform}",
+                    initiator=body.initiator)
+        added.append("enter_apply")
+
+    # classify: name the platform from the live tab.
+    if "enter_apply" in {m.rung for m in step.minis if m.outcome == aps.OK} \
+            and "classify" not in done:
+        step.platform = disc.platform
+        step.record("classify", disc.outcome, f"{ats_url[:90]} -> {disc.detail}",
+                    initiator=body.initiator)
+        if disc.outcome == aps.OK:
+            added.append("classify")
+
+    bb.world = dict(bb.world or {})
+    bb.world["apply_tab"] = next((t for t in (obs.get("tabs") or [])
+                                  if t.get("url") == ats_url), {"url": ats_url})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.log("reconcile_step", f"{step.job_id}: recorded {added or 'nothing new'} from the live "
+                             f"window ({disc.platform})")
+    _persist(bb, ledger)
+    obs2 = await _observe(browser_url, bb.search_state.query)
+    stuck = step.needs_operator()
+    nxt = step.next_rung()
+    if stuck:
+        tail = "Identity could not be auto-confirmed — check it before continuing."
+    elif nxt:
+        tail = f"Next: {nxt.label}."
+    else:
+        tail = f"Next: the {step.platform} flow — not built yet, so propose the rung."
+    return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
+                 last={"ok": not stuck, "action": "reconcile_step", "queue": queue.summary(),
+                       "detail": (f"Aligned the record to the live window: {step.platform} "
+                                  f"application, recorded {', '.join(added) or 'nothing new'}. "
+                                  + tail)})
+
+
+def _last_path_words(url: str) -> str:
+    """The human-readable job slug from an ATS URL, spaced out — e.g. a Workday
+    '/job/Boston/Compliance-Reporting-Associate_M...' becomes 'Compliance Reporting Associate'.
+    Used to check an ATS destination against the Indeed pick title."""
+    from urllib.parse import unquote, urlparse
+    path = urlparse(url or "").path
+    seg = next((s for s in reversed(path.split("/")) if s and "job" not in s.lower()), "")
+    seg = unquote(seg).split("_")[0]
+    return " ".join(w for w in seg.replace("-", " ").split() if not w.isdigit())
+
+
 class RebuildQueueBody(BaseModel):
     initiator: str = "operator"
 

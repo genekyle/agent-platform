@@ -1563,3 +1563,82 @@ def test_rebuild_keeps_progress_on_a_half_driven_step(monkeypatch):
     assert len(steps["indeed:a1"]["minis"]) == 2          # progress kept
     assert steps["indeed:a2"]["title"] == "Two"           # the missing one added
     assert "1 application(s) restored" in r["last_step"]["detail"]
+
+
+# --- reconciling a step's record to the live window -------------------------------------------
+def test_reconcile_step_records_what_the_open_ats_tab_proves(monkeypatch):
+    """The browser is truth, the record is memory. A rebuilt step starts at `queued` even when a
+    Workday tab is plainly open — reconcile records the prefix that tab is PROOF of, so the
+    operator is not asked to re-drive work the world already did."""
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Associate", "MFS"))
+    bb.world["open_pane"] = {"title": "Compliance Reporting Associate", "apply_type": "company_site"}
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL,
+            "https://mfs.wd1.myworkdayjobs.com/en-US/MFS-Careers/job/Boston/Compliance-Reporting-Associate_M"),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/reconcile_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    outcomes = {m.rung: m.outcome for m in step.minis}
+    assert outcomes["open_pane"] == aps.OK
+    assert outcomes["verify_identity"] == aps.OK        # req path matches the pick
+    assert outcomes["enter_apply"] == aps.OK
+    assert step.platform == "workday"
+    assert all("reconciled" in m.detail or "->" in m.detail for m in step.minis)
+    assert saved["bb"].world["apply_tab"]["url"].startswith("https://mfs.wd1")
+
+
+def test_reconcile_flags_a_title_drift_instead_of_rubber_stamping_it(monkeypatch):
+    """verify_identity is the near-miss guard and the one rung reconcile must NOT auto-confirm.
+    A Workday req that does not match the Indeed pick is exactly what it exists to catch."""
+    bb = _with_queue(("indeed:a1", "Senior Warehouse Associate", "MFS"))
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL,
+            "https://mfs.wd1.myworkdayjobs.com/en-US/MFS/job/Boston/Compliance-Reporting-Analyst_M"),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/reconcile_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    vi = next(m for m in step.minis if m.rung == "verify_identity")
+    assert vi.outcome == aps.UNKNOWN
+    assert step.needs_operator() is True
+    # and it did NOT go on to record enter_apply on an unconfirmed identity
+    assert not any(m.rung == "enter_apply" for m in step.minis)
+
+
+def test_reconcile_refuses_when_no_ats_tab_is_open(monkeypatch):
+    """Nothing to prove: if only the Indeed search is open, the window says nothing about progress."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_with_queue(("indeed:a1", "One", "Acme")))
+    try:
+        r = client.post("/api/session_control/1/reconcile_step", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 409 and "nothing the window can prove" in r.json()["detail"]
+
+
+def test_reconcile_is_idempotent(monkeypatch):
+    """Running it twice adds nothing the second time — the rungs are already recorded."""
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Associate", "MFS"))
+    tabs = _tabs(SEARCH_URL,
+        "https://mfs.wd1.myworkdayjobs.com/en-US/MFS/job/Boston/Compliance-Reporting-Associate_M")
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": tabs, "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={})
+        n1 = len(aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0].minis)
+        client.post("/api/session_control/1/reconcile_step", json={})
+        n2 = len(aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0].minis)
+    finally:
+        _teardown()
+    assert n1 == n2
