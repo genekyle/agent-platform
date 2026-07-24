@@ -2288,3 +2288,35 @@ never whether it does. Style is not a safety mechanism; a captcha does not care 
 damage — the unproven-submission rule left `query_entered` unmarked rather than claiming a search
 that never happened, which is why nothing was lost and the retry was free. The architecture's own
 principle kept catching its author.
+
+## 2026-07-24 — Nested Workday prompt: the verification worked, the drill-in click did not (yet)
+
+Building "How did you hear about us?" for the live MFS Workday apply surfaced the nested-prompt
+case the operator predicted: Indeed is not a top-level option, it is a LEAF under a category
+literally labelled "Job Board (LinkedIn, Indeed, etc.)". Two findings, one good and one open.
+
+**The good one — verification caught a lie, twice.** `/select_prompt` (single-level) returned
+`ok` on this field while the screenshot showed it still red and the dropdown open on the category.
+`ok` there means "I clicked a node named Indeed", not "the field committed the value" — the same
+class of over-report as `/execute`'s ok. The fix was `/select_prompt_path` + `_PROMPT_COMMITTED_JS`,
+which reads the field's own value/pill and aria-invalid AFTER the clicks and returns OK only when
+the field actually took it, `COMMITTED_UNCONFIRMED` otherwise. On the live drive it correctly
+reported `committed=False` and `apply_prompt_select` recorded HUMAN_REQUIRED, not a false success.
+**The lesson holds at every layer: a click is not a commit, and only the field can confirm.**
+
+**The open one — the category drill-in.** `/select_prompt_path` drills the path in one open
+session, but native-clicking the "Job Board (…)" category ROW does not expand it into its leaves —
+after the click the popup is still at the top level. So the leaf "Indeed" is never reachable and
+the field cannot commit. The native backend-node click that works to COMMIT a flat option does not
+appear to trigger Workday's DRILL-IN on a category row (likely the resolved node is the text span,
+not the row's click handler, or the chevron needs the event). Next: resolve/click the category's
+own row (or chevron) element, or send a real mouse event at the row, and re-verify. The
+infrastructure around it — source→path resolution (`apply_source.source_paths`), the try-each-path
+loop, Other as the truthful floor, and commit verification — is right and tested; only the
+category-expand click is unsolved.
+
+Also confirmed this session: the transient "account_create failed" the operator flagged never
+reached the corpus. The MFS account is `status=active`; the decision journal has zero
+account_create failures (the only account row is the Apply click, ok). `apply_account` records
+operational mini-steps on the blackboard, it does not write training data — so a retry that failed
+then succeeded is honest local history, not a poisoned example.
