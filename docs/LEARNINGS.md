@@ -2218,3 +2218,73 @@ typing anything — the hard boundary holding without a special case for it.
 application is the ultimate once-only act) and should reuse this module rather than grow a
 parallel vocabulary. And `initialize` refuses a *second query in one session* — the enforcement
 point for all of the above — which means "search three variants" is now explicitly three sessions.
+
+## 2026-07-24 — The first live drive of the control panel: five bugs, one shape
+
+Standing up one session for the first control-panel drive found five bugs. Four were mine and
+**all four were the same mistake: recording something as true that was never verified.** Worth
+writing down as one lesson rather than five, because the shape is what generalises.
+
+| where | the unverified assertion |
+|---|---|
+| `_stop_training_chrome` | SIGTERM'd a **pid** and wrote `stopped`. The pid was a launcher Chrome had replaced; the real browser lived on and kept the profile locked. |
+| the profile-conflict guard | trusted the **DB row's status**. A row saying `stopped` does not unlock a directory. |
+| `_launch_training_chrome` | wrote `chrome_debug_port` from `Popen`. The wait-for-CDP loop already existed and its result was **discarded** — session 18 was `active` on port 9322, pid 10514, neither of which existed. |
+| my own first fix | verified the **recorded port** had gone dark. That port was never alive, so it read as instantly dark and reported a clean stop over a browser still serving on another port. |
+| `step` (the panel) | built the view from the observation taken **before** dispatch, so a rung that had just succeeded rendered as a lapse — it told the operator to recover from a search that had worked. |
+
+The fifth was `/execute` returning a **422 for every call** (`target_bbox` is required even on the
+act-by-name path) while the caller asked `outcome != "not_found"` — so a reply carrying no
+`outcome` at all passed as an action performed. The panel reported submitting a query having typed
+nothing and clicked nothing. `LiveActuator` had always sent `"target_bbox": {}`; **the convention
+existed and I did not follow it.**
+
+### Three things that generalise
+
+- **Verify the thing the next step needs, not the thing you happen to have.** Stop should confirm
+  *the profile is released* (what a launch needs), not that a port went quiet. The port was the
+  handle we had; the profile was the fact that mattered.
+- **A process holds a lock; a responsive debug port does not.** An early draft of
+  `profile_conflict` required CDP to answer before calling something a conflict — which would wave
+  through exactly the zombie that breaks the next launch, since `ps` only lists live processes.
+  Writing the test corrected the model.
+- **Act, then re-observe.** `step` was the only endpoint that did not, and it produced a
+  self-contradiction the moment a rung succeeded. The `observed_delta` hook it used instead was
+  dead code nothing ever populated.
+
+### And the one that was pure assumption
+
+`run_query` addressed Indeed's search box as `("combobox", "What")`, `("combobox", "Where")`,
+`("button", "Find jobs")` — written from general knowledge of Indeed rather than a scan. The live
+page offers `search: Job title, keywords, or company`, `Edit location`, and `Search`. **None of the
+three assumed names exists anywhere on it.** The fix is not better constants — they drift, and they
+already differ between the logged-out home, the logged-in feed and the results page.
+`search_cadence.find_search_controls` discovers them from a fresh AX scan every time. Same lesson
+one layer down: the logged-out home exposes **no** sign-in control to AX at all (173 candidates,
+the only match a button named `Account`), so login hides behind a menu widget and a matcher looking
+only for "sign in" would report no way to log in on the page whose entire job is logging you in.
+
+### Two things the operator named that were real gaps, not bugs
+
+- **Login was the one rung the system did not own.** It reported "the operator signs in" and
+  offered nothing to press. The boundary was never "we refuse to open the login page" — it is that
+  we never type a password or clear 2FA. Everything before that is a click a human makes before any
+  secret exists. The auth rung now surveys and hands back pressable options, and refuses to act on
+  a screen whose next action IS the secret.
+- **A cockpit that only refreshes when you press something shows a past that has stopped being
+  true.** The panel now pings every 5s (all local CDP sockets, free in low-data mode) with a live
+  marker, because a frozen panel and a fresh one otherwise look identical.
+
+### Pacing became a named thing
+
+`set_distance` fired with no pause; `run_query` had three hard-coded, invariant sleeps.
+`execution_style.py` splits HOW from WHAT: `fast` (the old behaviour, kept and named), `human`
+(default, ~1.6s median around an action), `unhurried` (the long tail — a cadence that is always
+1.5s is its own signature). Chosen once per sequence so a drive is coherent. **The bot-safety floor
+applies to every style including `fast`** — style decides how far *above* the floor a run sits,
+never whether it does. Style is not a safety mechanism; a captcha does not care how fast we typed.
+
+**What held up:** the checkpoint ladder. Every one of these was caught by a guard rather than by
+damage — the unproven-submission rule left `query_entered` unmarked rather than claiming a search
+that never happened, which is why nothing was lost and the retry was free. The architecture's own
+principle kept catching its author.
