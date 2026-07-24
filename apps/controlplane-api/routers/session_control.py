@@ -157,11 +157,32 @@ def _page_from_url(url: str) -> int:
         return 1
 
 
-async def _detect_block(browser_url: str, urls: list[str]) -> Optional[dict]:
+async def _list_targets(browser_url: str) -> list[dict]:
+    """EVERY CDP target, iframes included — the right source for challenge detection, and a
+    separate seam from `/list_tabs` on purpose.
+
+    `/list_tabs` filters to `type == "page"`. That is correct for the window/tab manager and
+    WRONG here: a reCAPTCHA challenge is an IFRAME, so a block check fed the page list is
+    structurally incapable of finding one. This pre-gate was reading the filtered list and could
+    never have fired on the exact thing it exists to catch (found 2026-07-23). Reading
+    `{browser_url}/json` is a local socket — free even in low-data mode.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{browser_url}/json")
+            data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception:  # noqa: BLE001 — an unreadable window degrades to "no frames seen"
+        return []
+
+
+async def _detect_block(browser_url: str, _page_urls: list[str]) -> Optional[dict]:
     """Captcha/checkpoint pre-gate. Runs on EVERY crank, before anything is decided — a blocked
     page is diagnosed as blocked, not as a broken field (feedback_captcha_first_check_on_blocked).
     Never auto-solved: an active block escalates to the operator, always."""
     import escalation_rules
+    targets = await _list_targets(browser_url)
+    urls = [str(t.get("url") or "") for t in targets] or _page_urls
     block = escalation_rules.detect_block_frames(urls)
     if not block or block.get("strength") != "active":
         return block
@@ -342,16 +363,37 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
 
     if action == "probe_browser":
         tabs = obs.get("tabs") or []
-        if obs["observed"].get("provisioned"):
-            ledger.mark("provisioned", evidence=f"{len(tabs)} tabs open", initiator=initiator)
-            bb.log("checkpoint", f"provisioned — session Chrome holds {len(tabs)} tabs")
-            return {"ok": True, "action": action,
-                    "detail": f"Session Chrome is up with {len(tabs)} tab(s)."}
-        detail = ("Session Chrome is up but has no tabs open — there is nothing to drive. "
-                  "Open Indeed in that window, then step again."
-                  if obs.get("reachable") else
-                  "Session Chrome is not answering. Start it before stepping.")
-        return {"ok": False, "action": action, "awaiting": "operator_browser", "detail": detail}
+        if not obs["observed"].get("provisioned"):
+            detail = ("Session Chrome is up but has no tabs open — there is nothing to drive. "
+                      "Open Indeed in that window, then step again."
+                      if obs.get("reachable") else
+                      "Session Chrome is not answering. Start it before stepping.")
+            return {"ok": False, "action": action, "awaiting": "operator_browser",
+                    "detail": detail}
+
+        # "Ready" means a window that is CLEAN and OURS. A persistent profile restores its previous
+        # session's tabs, so a fresh session inherits whatever the last one left behind — and
+        # inheriting a half-finished apply form is how you end up driving someone else's work
+        # (found live 2026-07-23). Propose the clean start; never perform it silently.
+        #
+        # ONLY AT THE START, though. `provisioned` is a STANDING rung, so it is re-checked every
+        # step — and mid-drive a window legitimately holds several tabs (search plus the apply it
+        # opened). Re-running the inherited-tabs test then would call our own working tabs junk and
+        # jam the loop forever. Once the rung is held, hygiene (`plan_hygiene`) owns the window.
+        plan = _fresh_start_plan(obs) if not ledger.holds("provisioned") else {"to_close": []}
+        if plan["to_close"]:
+            return {"ok": False, "action": action, "awaiting": "operator_clean_start",
+                    "fresh_start": plan,
+                    "detail": f"This window has {len(plan['to_close'])} tab(s) inherited from a "
+                              f"previous session"
+                              + (f", including {len(plan['holds_work'])} that may hold real work"
+                                 if plan["holds_work"] else "")
+                              + ". Clean start clears them before we begin."}
+
+        ledger.mark("provisioned", evidence=f"clean window, {len(tabs)} tab(s)", initiator=initiator)
+        bb.log("checkpoint", f"provisioned — clean window with {len(tabs)} tab(s)")
+        return {"ok": True, "action": action,
+                "detail": f"Session Chrome is up with a clean window ({len(tabs)} tab)."}
 
     if action == "auth_probe":
         if obs["observed"].get("authenticated"):
@@ -473,6 +515,76 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session) -> 
             "awaiting": "choose",
             "detail": f"Page {page}: {len(results)} results — {new_count} new, "
                       f"{dup_count} already seen. Choose what to do with them."}
+
+
+# --- the clean start: provisioning through the tab manager ------------------------------------
+def _fresh_start_plan(obs: dict[str, Any]) -> dict[str, Any]:
+    """What this window would have to close to be a clean start, via `controller.window` — the
+    system's one tab manager, not a bespoke scan. Read-only."""
+    from controller import window as window_mod
+    win = window_mod.survey(obs.get("tabs") or [])
+    to_close, keeper, reasons = window_mod.plan_fresh_start(win.tabs)
+    holds_work = window_mod.inherited_work(to_close)
+    return {
+        "to_close": [{"tab_id": t.tab_id, "role": t.role, "url": t.short_url} for t in to_close],
+        "keeper": {"tab_id": keeper.tab_id, "role": keeper.role,
+                   "url": keeper.short_url} if keeper else None,
+        "reasons": list(reasons),
+        "holds_work": [{"tab_id": t.tab_id, "role": t.role, "url": t.short_url}
+                       for t in holds_work],
+    }
+
+
+class CleanStartBody(BaseModel):
+    initiator: str = "operator"
+    confirm_discards_work: bool = False   # required when an inherited tab may hold real work
+
+
+@router.post("/api/session_control/{session_id}/clean_start")
+async def clean_start(session_id: int, body: CleanStartBody,
+                      db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Close the tabs a fresh session inherited, so it begins on a window that is clean and ours.
+
+    OPERATOR-TRIGGERED, never automatic — the same rule the window card already follows, and it
+    matters more here: a persistent profile's restored window can contain a half-finished
+    application. When the plan would discard something that looks like real work (an apply flow or
+    a cross-domain errand) this refuses without `confirm_discards_work`, so nobody loses an
+    application to a provisioning step.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query)
+    plan = _fresh_start_plan(obs)
+
+    if not plan["to_close"]:
+        return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                     last={"ok": True, "action": "clean_start",
+                           "detail": "The window is already clean."})
+
+    if plan["holds_work"] and not body.confirm_discards_work:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{len(plan['holds_work'])} inherited tab(s) look like real work in progress "
+                    f"({', '.join(t['url'] for t in plan['holds_work'])}). Confirm to discard "
+                    f"them, or finish them first — a provisioning step should not silently throw "
+                    f"away an application."))
+
+    closed, failed = [], []
+    for tab in plan["to_close"]:
+        res = await _capture_post("/close_tab", {"browser_url": browser_url,
+                                                 "tab_id": tab["tab_id"]})
+        (closed if res.get("ok") else failed).append(tab["url"])
+
+    bb.log("clean_start", f"closed {len(closed)} inherited tab(s)"
+                          + (f"; {len(failed)} refused" if failed else ""))
+    _persist(bb, ledger)
+    obs_after = await _observe(browser_url, bb.search_state.query)
+    return _view(session, bb, ledger, obs_after, page=_current_page(obs_after, bb),
+                 last={"ok": not failed, "action": "clean_start",
+                       "detail": f"Closed {len(closed)} inherited tab(s)."
+                                 + (f" {len(failed)} would not close: {', '.join(failed)}."
+                                    if failed else " Step to continue.")})
 
 
 # --- the operator's choice ------------------------------------------------------------------------

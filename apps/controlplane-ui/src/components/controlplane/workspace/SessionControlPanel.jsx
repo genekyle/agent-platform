@@ -26,6 +26,7 @@ const AWAITING_COPY = {
   operator_login: "Sign in to Indeed in the session window — we never type passwords or clear 2FA.",
   operator_challenge: "A challenge is up. Clear it yourself in the window — we never auto-solve.",
   operator_browser: "The session's Chrome isn't answering. Start it, then step again.",
+  operator_clean_start: "This window still holds tabs from a previous session. Clear them before we begin.",
   operator_search_box: "Couldn't find Indeed's search box. Open the job search, then step again.",
   operator_verify: "The search was submitted but not confirmed. Check the window before stepping.",
   operator_filter: "The distance filter wouldn't set. We don't gather below the radius floor.",
@@ -276,6 +277,43 @@ export function SessionControlPanel({ domain }) {
             <p className="sc-awaiting">
               <AppIcon name="alert" size={14} /> {AWAITING_COPY[awaiting]}
             </p>
+          )}
+
+          {/* The inherited window. Shown in full and never cleared silently — a persistent
+              profile's restored tabs can include somebody's half-finished application. */}
+          {last?.fresh_start?.to_close?.length > 0 && (
+            <div className="sc-inherited">
+              <div className="sc-inherited__head">
+                Inherited from a previous session — {last.fresh_start.to_close.length} tab(s) to close
+              </div>
+              <ul className="sc-inherited__list">
+                {last.fresh_start.to_close.map((t) => (
+                  <li key={t.tab_id} className={t.role === "apply" || t.role === "errand" ? "is-work" : ""}>
+                    <span className="badge badge--muted">{t.role}</span> {t.url}
+                    {(t.role === "apply" || t.role === "errand") && <em> — may hold real work</em>}
+                  </li>
+                ))}
+              </ul>
+              {last.fresh_start.keeper && (
+                <div className="rung__meta">
+                  Keeping <code>{last.fresh_start.keeper.url}</code> to land on.
+                </div>
+              )}
+              <div className="cv-actions" style={{ marginTop: 10 }}>
+                <button
+                  className="btn btn-sm btn-primary"
+                  disabled={busy}
+                  onClick={() => call("/clean_start", {
+                    initiator: "operator",
+                    confirm_discards_work: last.fresh_start.holds_work.length > 0,
+                  })}
+                >
+                  {busy ? "…" : last.fresh_start.holds_work.length > 0
+                    ? `Clean start — discard ${last.fresh_start.holds_work.length} in-progress`
+                    : "Clean start"}
+                </button>
+              </div>
+            </div>
           )}
 
           {/* --- the page's results, and the choice ------------------------------- */}

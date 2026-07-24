@@ -1316,3 +1316,15 @@ textarea:focus-visible {
 .sc-results td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .sc-results tr.is-picked td { background: var(--accent-soft); }
 .sc-results td:first-child, .sc-results th:first-child { width: 26px; }
+
+/* The inherited window at provisioning. Listed in full, never cleared silently — a restored
+   persistent profile can hold somebody's half-finished application. */
+.sc-inherited {
+  margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: rgba(127,127,127,0.05);
+}
+.sc-inherited__head { font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; }
+.sc-inherited__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.sc-inherited__list li { font-size: 12.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sc-inherited__list li.is-work { color: var(--warning); }
+.sc-inherited__list em { font-style: normal; color: var(--warning); }

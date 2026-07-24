@@ -342,6 +342,47 @@ def plan_hygiene(tabs: tuple[TabInfo, ...], *, active_tab_id: str = "",
     return tuple(out), tuple(why)
 
 
+def plan_fresh_start(tabs: tuple[TabInfo, ...]) -> tuple[tuple[TabInfo, ...], Optional[TabInfo],
+                                                         tuple[str, ...]]:
+    """What a session should close to START on a clean window. Pure; closes nothing.
+
+    This is deliberately NOT `plan_hygiene`, and the difference is the situation rather than the
+    strictness. Hygiene runs mid-drive on a window we share with a human, so it protects the
+    active tab, the only search tab, and anything it cannot classify. **Provisioning is the
+    opposite situation:** a persistent profile restores its previous window, so on a fresh session
+    every tab is inherited from work that already ended. Applying the hygiene rails here would
+    preserve exactly the junk we are trying to be rid of — on 2026-07-23 that was a half-finished
+    `smartapply` form and a stale Manchester NH search, and hygiene would have kept the search
+    because it was the "only" one.
+
+    So: everything goes, except we keep exactly one tab to land on (Chrome and `/close_tab` both
+    refuse to close the last one). Preference order for the survivor is a blank tab, then the
+    least-committed role — never an apply flow, which is the tab most likely to hold real work.
+
+    Returns (to_close, keeper, reasons). An empty plan means the window is already clean.
+    """
+    if not tabs:
+        return (), None, ()
+
+    # Rank candidates to SURVIVE: blank is ideal (nothing to lose), apply is worst (a form in
+    # progress). The keeper gets navigated to the target site afterwards, so its content does not
+    # matter — only that discarding it costs nothing.
+    survivor_rank = {ROLE_BLANK: 0, ROLE_TERMINAL: 1, ROLE_UNKNOWN: 2,
+                     ROLE_SEARCH: 3, ROLE_ERRAND: 4, ROLE_APPLY: 5}
+    keeper = min(tabs, key=lambda t: (survivor_rank.get(t.role, 3), t.tab_id))
+
+    to_close = tuple(t for t in tabs if t.tab_id != keeper.tab_id)
+    reasons = tuple(f"{t.role}:{t.short_url} — inherited from a previous session" for t in to_close)
+    return to_close, keeper, reasons
+
+
+def inherited_work(tabs: tuple[TabInfo, ...]) -> tuple[TabInfo, ...]:
+    """Inherited tabs that plausibly hold REAL work, so a fresh start is proposed and never
+    silently performed. An abandoned apply form is someone's half-finished application; the
+    operator decides whether it is worth keeping, not us."""
+    return tuple(t for t in tabs if t.role in (ROLE_APPLY, ROLE_ERRAND))
+
+
 # The `# WINDOW` prompt block lives in `interaction.decision.window_to_prompt`, beside
 # `bundle_to_prompt` — the prompt is the frozen feature contract, so its every part belongs in the
 # contract module, and `interaction` must not import from the control plane.

@@ -66,6 +66,7 @@ from schemas import (
     WorkerHeartbeatResponse,
 )
 from settings import settings
+import browser_provisioning
 from deps import _artifacts_dir, _session_browser_url, _slugify, utcnow
 from observed_jobs import upsert_observed_jobs
 from migrations import migrate_schema
@@ -270,7 +271,24 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
     # A persistent profile dir can back only ONE live Chrome at a time (Chrome locks it). Reap any
     # sibling sessions on the same profile whose browser is actually DEAD (so a stale row can't
     # falsely block us); only a genuinely-alive sibling is a real conflict.
+    #
+    # STATUS IS NOT THE LOCK. Rows are filtered to active/starting below, which means a row marked
+    # `stopped` whose browser is still alive sails straight past this guard — exactly what happened
+    # on 2026-07-23 (session 16 read `stopped`, its Chrome kept serving CDP and kept the dir
+    # locked, and the next launch silently handed off to it). So ask the machine, not the table.
     if session.persistent_profile:
+        holder = browser_provisioning.profile_conflict(
+            user_data_dir=str(_profile_dir_for(session)),
+        )
+        if holder is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Profile '{session.persistent_profile}' is already held by a live Chrome "
+                       f"(pid {holder.pid}"
+                       + (f", port {holder.debug_port}" if holder.debug_port else "")
+                       + "). Stop that session first — launching onto a locked profile silently "
+                         "attaches to the running browser instead of starting a new one.",
+            )
         siblings = db.scalars(
             select(TrainingSession).where(
                 TrainingSession.persistent_profile == session.persistent_profile,
@@ -326,21 +344,40 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
     db.commit()
     db.refresh(session)
 
-    # Wait until the CDP endpoint actually answers before returning, so callers get a browser
-    # that's truly ready to drive (not one still starting up).
-    deadline = time.monotonic() + 20.0
-    while time.monotonic() < deadline and not channel_browser.cdp_reachable(port):
-        time.sleep(0.4)
+    # Wait until the CDP endpoint actually answers — and ACT on the answer. This loop already
+    # existed and its result was discarded, which is how session 18 came to be recorded `active`
+    # on port 9322 with pid 10514, neither of which existed: Chrome found the profile in use,
+    # handed off to the running browser and exited, and we wrote it all down anyway. A session
+    # record must never assert something it has not verified.
+    if not browser_provisioning.await_debuggable(port, cdp_reachable=channel_browser.cdp_reachable):
+        session.status = "failed"
+        session.chrome_stopped_at = utcnow()
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Chrome was launched for session {session.id} but nothing answered CDP on "
+                   f"port {port} within {browser_provisioning.LAUNCH_TIMEOUT_S:.0f}s. The session "
+                   f"is marked failed rather than recorded as running on a port that is not there.",
+        )
     return session
 
 
-def _stop_training_chrome(session: TrainingSession) -> None:
-    if not session.chrome_process_pid:
-        return
-    try:
-        os.kill(session.chrome_process_pid, 15)
-    except ProcessLookupError:
-        pass
+def _stop_training_chrome(session: TrainingSession) -> "browser_provisioning.StopResult":
+    """Stop this session's browser and CONFIRM it went dark.
+
+    Was: SIGTERM the recorded pid and return. That pid is often a launcher Chrome already replaced,
+    so the browser survived while the row said `stopped` — and a stopped-but-alive browser keeps
+    the profile locked, which is what broke the next launch (2026-07-23). Now it also kills
+    whatever is genuinely holding the profile, then verifies, and the caller refuses to write
+    `stopped` unless it is true.
+    """
+    import channel_browser
+    return browser_provisioning.stop_browser(
+        port=session.chrome_debug_port,
+        recorded_pid=session.chrome_process_pid,
+        user_data_dir=session.chrome_user_data_dir or "",
+        cdp_reachable=channel_browser.cdp_reachable,
+    )
 
 
 def _training_annotation_from_capture(capture: TrainingCapture) -> dict:
@@ -2218,7 +2255,11 @@ def stop_training_session(session_id: int, force: bool = False, db: Session = De
     allowed, reason = session_manager.may_touch(protected=session.protected, action="stop", force=force)
     if not allowed:
         raise HTTPException(status_code=409, detail=reason)
-    _stop_training_chrome(session)
+    result = _stop_training_chrome(session)
+    if not result.stopped:
+        # Refusing to lie is the whole point: a row saying `stopped` over a browser that is still
+        # serving is what silently locked the profile and broke the next launch.
+        raise HTTPException(status_code=502, detail=result.detail)
     now = utcnow()
     session.status = "stopped"
     session.chrome_stopped_at = now

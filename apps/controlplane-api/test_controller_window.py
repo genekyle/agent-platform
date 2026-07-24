@@ -219,3 +219,58 @@ def test_a_healthy_window_reports_ok():
     ), active_tab_id="A")
     assert win.health == "ok"
     assert win.as_dict()["health"] == "ok"
+
+
+# --- fresh start: provisioning is not hygiene ---------------------------------------------
+def _infos(*pairs):
+    return tuple(w.TabInfo(tab_id=tid, url=url, role=w.classify_tab(url))
+                 for tid, url in pairs)
+
+
+def test_fresh_start_clears_everything_but_one_landing_tab():
+    """A persistent profile restores its old w. On a fresh session all of it is inherited,
+    so all of it goes — except one tab to land on, because the last tab cannot be closed."""
+    tabs = _infos(("a", "https://smartapply.indeed.com/beta/indeedapply/form/resume-module"),
+                 ("b", "https://www.indeed.com/jobs?q=reporting+analyst&l=Manchester%2C+NH"),
+                 ("c", "about:blank"))
+    to_close, keeper, reasons = w.plan_fresh_start(tabs)
+    assert keeper.tab_id == "c"                      # blank survives — discarding it costs nothing
+    assert {t.tab_id for t in to_close} == {"a", "b"}
+    assert len(reasons) == 2 and all("previous session" in r for r in reasons)
+
+
+def test_fresh_start_never_keeps_an_apply_flow_as_the_survivor():
+    """The survivor gets navigated away, so it must be the tab least likely to hold work."""
+    tabs = _infos(("a", "https://smartapply.indeed.com/beta/indeedapply/form/resume-module"),
+                 ("b", "https://www.indeed.com/jobs?q=x"))
+    _to_close, keeper, _why = w.plan_fresh_start(tabs)
+    assert keeper.role != w.ROLE_APPLY
+
+
+def test_fresh_start_would_close_the_only_search_tab_where_hygiene_would_not():
+    """The distinction that earns a separate function. plan_hygiene protects the only search tab
+    because mid-drive it is home base; at provisioning it is just last session's stale search."""
+    tabs = _infos(("a", "about:blank"),
+                 ("b", "https://www.indeed.com/jobs?q=stale+search"))
+    hygiene_closable, _why = w.plan_hygiene(tabs)
+    assert "b" not in {t.tab_id for t in hygiene_closable}
+    fresh_closable, keeper, _r = w.plan_fresh_start(tabs)
+    assert "b" in {t.tab_id for t in fresh_closable} and keeper.tab_id == "a"
+
+
+def test_fresh_start_on_an_already_clean_window_is_an_empty_plan():
+    to_close, keeper, reasons = w.plan_fresh_start(_infos(("a", "about:blank")))
+    assert to_close == () and reasons == () and keeper.tab_id == "a"
+
+
+def test_fresh_start_on_no_tabs_proposes_nothing():
+    assert w.plan_fresh_start(()) == ((), None, ())
+
+
+def test_inherited_work_flags_apply_and_errand_tabs_only():
+    """These are the tabs a clean start must not silently discard — a half-finished application
+    is someone's work, and provisioning should ask before throwing it away."""
+    tabs = _infos(("a", "https://smartapply.indeed.com/beta/indeedapply/form/resume-module"),
+                 ("b", "https://www.indeed.com/jobs?q=x"),
+                 ("c", "about:blank"))
+    assert {t.tab_id for t in w.inherited_work(tabs)} == {"a"}

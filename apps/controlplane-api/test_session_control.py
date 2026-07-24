@@ -65,11 +65,18 @@ class _Harness:
         return [p for p, _ in self.calls]
 
 
-def _install(monkeypatch, responses, *, blackboard=None):
-    """Wire the seam, an in-memory blackboard, and the DB override. Returns the harness plus a
-    one-element list holding the persisted blackboard so tests can read the ledger back."""
+def _install(monkeypatch, responses, *, blackboard=None, frames=None):
+    """Wire the seams, an in-memory blackboard, and the DB override. Returns the harness plus a
+    one-element list holding the persisted blackboard so tests can read the ledger back.
+
+    `frames` are raw CDP targets (iframes included) for the challenge pre-gate — a SEPARATE seam
+    from /list_tabs, which only ever returns type == "page"."""
     harness = _Harness(responses)
     monkeypatch.setattr(sc, "_capture_post", harness)
+
+    async def _targets(_browser_url):
+        return list(frames or [])
+    monkeypatch.setattr(sc, "_list_targets", _targets)
 
     saved = {"bb": blackboard}
 
@@ -232,6 +239,121 @@ def test_an_empty_chrome_is_not_provisioned(monkeypatch):
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("provisioned")
 
 
+APPLY_TAB = "https://smartapply.indeed.com/beta/indeedapply/form/resume-module"
+STALE_SEARCH = "https://www.indeed.com/jobs?q=reporting+analyst&l=Manchester%2C+NH"
+
+
+def test_a_window_inherited_from_a_previous_session_is_not_provisioned(monkeypatch):
+    """Found live 2026-07-23: a persistent profile restores its old window, so a 'fresh' session
+    opened onto a half-finished smartapply form and a stale Manchester search. Ready means the
+    window is clean AND ours."""
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs("about:blank", APPLY_TAB, STALE_SEARCH),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_clean_start"
+    fs = r["last_step"]["fresh_start"]
+    assert len(fs["to_close"]) == 2
+    assert fs["keeper"]["role"] == "blank"
+    assert [t["role"] for t in fs["holds_work"]] == ["apply"]
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("provisioned")
+
+
+def test_a_clean_window_provisions_straight_away(monkeypatch):
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs("https://www.indeed.com/"),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True and "clean window" in r["last_step"]["detail"]
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("provisioned")
+
+
+def test_clean_start_refuses_to_silently_discard_an_application(monkeypatch):
+    """A provisioning step must not throw away someone's half-finished apply flow."""
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("about:blank", APPLY_TAB),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+                          blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/clean_start", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 409 and "real work in progress" in r.json()["detail"]
+    assert "/close_tab" not in harness.paths()
+
+
+def test_clean_start_closes_inherited_tabs_once_confirmed(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("about:blank", APPLY_TAB, STALE_SEARCH),
+                           "/auth_state": {"ok": True, "logged_in": True},
+                           "/close_tab": {"ok": True}},
+                          blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/clean_start",
+                        json={"confirm_discards_work": True}).json()
+    finally:
+        _teardown()
+    closes = [p for p in harness.calls if p[0] == "/close_tab"]
+    assert len(closes) == 2                      # both inherited tabs, never the keeper
+    assert r["last_step"]["ok"] is True and "Closed 2" in r["last_step"]["detail"]
+
+
+def test_clean_start_needs_no_confirmation_when_nothing_holds_work(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("about:blank", STALE_SEARCH),
+                           "/auth_state": {"ok": True, "logged_in": True},
+                           "/close_tab": {"ok": True}},
+                          blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/clean_start", json={}).json()
+    finally:
+        _teardown()
+    assert len([p for p in harness.calls if p[0] == "/close_tab"]) == 1
+    assert r["last_step"]["ok"] is True
+
+
+def test_a_held_provisioned_rung_stops_relitigating_the_window(monkeypatch):
+    """`provisioned` is STANDING, so it is re-checked every step. Mid-drive the window rightly
+    holds a search tab and the apply it opened — re-running the inherited-tabs test then would
+    call our own working tabs junk and jam the loop. Once held, hygiene owns the window."""
+    bb = store.new_blackboard(1, query="reporting analyst")
+    led = cps.Ledger()
+    led.mark("provisioned", evidence="clean window")
+    bb.checkpoints = led.as_dict()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, APPLY_TAB),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] != "operator_clean_start"
+    # it got past the window entirely and worked the next real rung
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
+
+
+def test_clean_start_on_an_already_clean_window_does_nothing(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("https://www.indeed.com/"),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+                          blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/clean_start", json={}).json()
+    finally:
+        _teardown()
+    assert "already clean" in r["last_step"]["detail"]
+    assert "/close_tab" not in harness.paths()
+
+
 def test_an_unreachable_chrome_reads_differently_from_an_empty_one(monkeypatch):
     """Both leave us unprovisioned, but the operator has to do different things about them."""
     _install(monkeypatch,
@@ -275,14 +397,19 @@ def test_logged_out_hands_the_credential_wall_to_the_operator(monkeypatch):
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
 
 
+#: A live reCAPTCHA as CDP actually reports it: an IFRAME target, never a page. /list_tabs filters
+#: to type == "page", so a block check fed that list could not see this — the 2026-07-23 bug.
+_RECAPTCHA_FRAME = {"type": "iframe", "url": "https://www.google.com/recaptcha/api2/bframe?k=x"}
+
+
 def test_active_captcha_stops_the_crank_before_anything_is_decided(monkeypatch):
     bb = store.new_blackboard(1, query="reporting analyst")
     harness, _ = _install(
         monkeypatch,
-        {"/list_tabs": _tabs("https://www.indeed.com/",
-                             "https://www.google.com/recaptcha/api2/bframe?k=x"),
+        {"/list_tabs": _tabs("https://www.indeed.com/"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/challenge_visibility": {"ok": True, "blocking": True, "checkbox_visible": True}},
+        frames=[{"type": "page", "url": "https://www.indeed.com/"}, _RECAPTCHA_FRAME],
         blackboard=bb)
     try:
         r = client.post("/api/session_control/1/step", json={}).json()
@@ -293,16 +420,35 @@ def test_active_captcha_stops_the_crank_before_anything_is_decided(monkeypatch):
     assert "/execute" not in harness.paths() and "/set_distance" not in harness.paths()
 
 
+def test_the_challenge_gate_sees_iframes_that_list_tabs_filters_out(monkeypatch):
+    """THE regression. A reCAPTCHA is an iframe; /list_tabs returns only pages. Feeding the page
+    list to detect_block_frames made this gate structurally unable to fire on the one thing it
+    exists to catch — silently, because 'no block found' looks identical to 'all clear'."""
+    harness, _ = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs("https://www.indeed.com/"),      # no captcha visible here at all
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/challenge_visibility": {"ok": True, "blocking": True}},
+        frames=[_RECAPTCHA_FRAME],
+        blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_challenge"
+    assert "/execute" not in harness.paths()
+
+
 def test_preloaded_hidden_recaptcha_does_not_stop_the_crank(monkeypatch):
     """Indeed preloads reCAPTCHA Enterprise invisibly on EVERY page, so a URL-only detector calls
     it active constantly. The visibility probe downgrades it to advisory — otherwise the panel
     would be permanently jammed on a challenge nobody is being shown."""
     _, saved = _install(
         monkeypatch,
-        {"/list_tabs": _tabs("https://www.indeed.com/",
-                             "https://www.google.com/recaptcha/api2/bframe?k=x"),
+        {"/list_tabs": _tabs("https://www.indeed.com/"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/challenge_visibility": {"ok": True, "blocking": False}},
+        frames=[{"type": "page", "url": "https://www.indeed.com/"}, _RECAPTCHA_FRAME],
         blackboard=store.new_blackboard(1, query="reporting analyst"))
     try:
         r = client.post("/api/session_control/1/step", json={}).json()
