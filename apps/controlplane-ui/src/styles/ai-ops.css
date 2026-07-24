@@ -1369,3 +1369,5 @@ textarea:focus-visible {
 .sc-mini--failed em { color: var(--danger); }
 
 .sc-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line); }
+.sc-flags--end { align-items: center; border-top: none; padding-top: 4px; margin-top: 4px; opacity: 0.85; }
+.sc-flags--end .rung__meta { margin-right: 2px; }

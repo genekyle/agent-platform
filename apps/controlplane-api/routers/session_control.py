@@ -696,6 +696,175 @@ async def login_action(session_id: int, body: LoginActionBody,
 
 
 # --- the apply queue: one step per pick -------------------------------------------------------
+#: Names that mean "start the application", most-specific first. Indeed labels this differently
+#: depending on where the application actually goes, and the label is our first hint at the
+#: platform — "Apply on company site" is telling us we are about to leave.
+_APPLY_HINTS = ("apply now", "easily apply", "apply on company site", "apply with indeed", "apply")
+
+
+def _title_matches(expected: str, seen: str) -> bool:
+    """Is the open pane the job we picked? Deliberately loose on punctuation and case, strict on
+    content: Indeed renders a card title and a pane title that differ in whitespace and suffixes
+    ('- Boston', ' | Indeed.com') but never in the actual role."""
+    def norm(s: str) -> set:
+        return {w for w in "".join(c if c.isalnum() else " " for c in (s or "").lower()).split()
+                if len(w) > 2}
+    want, got = norm(expected), norm(seen)
+    if not want or not got:
+        return False
+    return len(want & got) / len(want) >= 0.6
+
+
+class ApplyStepBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/apply_step")
+async def apply_step(session_id: int, body: ApplyStepBody,
+                     db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Work the CURRENT application's next mini-rung. One crank, one rung, one recorded flag.
+
+    This is the crank the queue was missing. Shipping the queue with only terminal-flag buttons
+    made every step look like something to dismiss rather than something to do — the operator's
+    exact words: "what am i supposed to do next, it didn't even do anything to our session."
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409,
+                            detail="Nothing to work — every application from this page has ended.")
+
+    obs = await _observe(browser_url, bb.search_state.query)
+    block = obs.get("block")
+    if block and block.get("strength") == "active":
+        step.record("challenge", aps.BLOCKED, f"active {block.get('provider')}",
+                    initiator=body.initiator)
+        return _save_queue_and_view(session, bb, ledger, queue, obs,
+                                    ok=False, detail="A challenge is up — clear it yourself. "
+                                                     "We never auto-solve.")
+
+    rung = step.next_rung()
+    if rung is None:
+        return _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
+                                    detail="Past the known prefix. The rungs from here depend on "
+                                           f"the platform ({step.platform or 'unclassified'}), and "
+                                           "those are not built yet — drive it and flag the result.")
+
+    tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
+    style = xs.pick_style()
+    await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    if rung.id == "open_pane":
+        ext = step.job_id.split(":", 1)[-1]
+        res = await _capture_post("/open_job_card",
+                                  {"browser_url": browser_url, "external_id": ext})
+        if not res.get("ok"):
+            step.record("open_pane", aps.FAILED, res.get("detail") or "card did not open",
+                        initiator=body.initiator)
+            detail = f"Could not open {step.title or step.job_id}: {res.get('detail') or 'no pane'}."
+        else:
+            # /open_job_card already CONFIRMS the pane switched, which is the expensive half of
+            # the near-miss guard — Indeed auto-opens the first result, so an unconfirmed click
+            # returns the previous job's pane looking perfectly fine.
+            bb.world = dict(bb.world or {})
+            bb.world["open_pane"] = {"title": res.get("title", ""),
+                                     "apply_type": res.get("apply_type", "")}
+            step.record("open_pane", aps.OK,
+                        f"pane switched to {res.get('title', '')!r}"
+                        + (f" · apply_type={res.get('apply_type')}" if res.get("apply_type") else ""),
+                        initiator=body.initiator)
+            detail = f"Opened {res.get('title') or step.job_id}."
+
+    elif rung.id == "verify_identity":
+        seen = ((bb.world or {}).get("open_pane") or {}).get("title", "")
+        if not step.title:
+            step.record("verify_identity", aps.UNKNOWN,
+                        f"no expected title recorded for {step.job_id}; pane shows {seen!r}",
+                        initiator=body.initiator)
+            detail = ("I have no title to check this against, so I cannot confirm it is the job "
+                      "you picked. Check the pane yourself before entering.")
+        elif _title_matches(step.title, seen):
+            step.record("verify_identity", aps.OK, f"pane title {seen!r} matches the pick",
+                        initiator=body.initiator)
+            detail = f"Confirmed: the pane is {step.title!r}."
+        else:
+            # Refusing loudly. An application to the wrong job cannot be taken back.
+            step.record("verify_identity", aps.FAILED,
+                        f"expected {step.title!r} but the pane shows {seen!r}",
+                        initiator=body.initiator)
+            detail = (f"STOP — the pane shows {seen!r} but you picked {step.title!r}. Not entering "
+                      f"an application on a job I cannot confirm.")
+
+    elif rung.id == "enter_apply":
+        scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                   timeout=25.0)
+        ctrl = None
+        for hint in _APPLY_HINTS:
+            ctrl = next((c for c in (scan.get("candidates") or [])
+                         if (c.get("role") or "").lower() == "button"
+                         and hint in (c.get("name") or "").lower()), None)
+            if ctrl:
+                break
+        if ctrl is None:
+            step.record("enter_apply", aps.UNKNOWN,
+                        f"no apply control found among {len(scan.get('candidates') or [])} elements",
+                        initiator=body.initiator)
+            detail = "I cannot see an Apply button on this pane. Scroll it into view, or flag it."
+        else:
+            before = {t.get("tab_id") for t in (obs.get("tabs") or [])}
+            res = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+                "target_bbox": {}, "target_role": "button",
+                "target_name": ctrl.get("name"), "driver": "humanized"})
+            await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+            if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+                step.record("enter_apply", aps.FAILED,
+                            f"click on {ctrl.get('name')!r} returned {res.get('outcome') or 'nothing'}",
+                            initiator=body.initiator)
+                detail = f"Could not click {ctrl.get('name')!r}."
+            else:
+                after = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+                new = [t for t in (after.get("tabs") or []) if t.get("tab_id") not in before]
+                bb.world = dict(bb.world or {})
+                bb.world["apply_tab"] = new[0] if new else None
+                step.record("enter_apply", aps.OK,
+                            f"clicked {ctrl.get('name')!r}"
+                            + (f"; opened a new tab" if new else "; stayed in this tab"),
+                            initiator=body.initiator)
+                detail = (f"Clicked {ctrl.get('name')!r}. "
+                          + (f"It opened a new tab — step again to find out where we landed."
+                             if new else "No new tab; step again to classify where we are."))
+
+    else:  # classify — the discovery point
+        apply_tab = (bb.world or {}).get("apply_tab") or {}
+        url = apply_tab.get("url") or ((obs.get("tabs") or [{}])[-1]).get("url", "")
+        disc = aps.classify_landing(url)
+        step.platform = disc.platform
+        step.record("classify", disc.outcome, f"{url[:120]} -> {disc.detail}",
+                    initiator=body.initiator)
+        detail = disc.detail
+
+    return _save_queue_and_view(session, bb, ledger, queue, obs,
+                                ok=step.last_flag == aps.OK, detail=detail, pace=style)
+
+
+def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool, detail: str,
+                         pace=None) -> dict[str, Any]:
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    _persist(bb, ledger)
+    last: dict[str, Any] = {"ok": ok, "action": "apply_step", "detail": detail,
+                            "queue": queue.summary()}
+    if pace is not None:
+        last["pace"] = xs.describe(pace)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                 awaiting="apply", last=last)
+
+
+
 class ApplyFlagBody(BaseModel):
     job_id: str
     flag: str                      # a terminal flag from apply_steps

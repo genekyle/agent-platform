@@ -485,8 +485,21 @@ export function SessionControlPanel({ domain }) {
                               Stopped on something only you can resolve.
                             </p>
                           )}
+                          {/* WORK THE STEP. This is the button the first cut was missing: the
+                              queue shipped with only ways to END a step, so every application
+                              looked like something to dismiss rather than something to do. */}
                           <div className="sc-flags">
                             <button className="btn btn-sm btn-primary" disabled={busy}
+                                    onClick={() => call("/apply_step", { initiator: "operator" })}>
+                              {busy ? "…" : s.next_rung
+                                ? `Work this · ${s.next_rung.replace(/_/g, " ")}`
+                                : "Work this step"}
+                            </button>
+                          </div>
+
+                          <div className="sc-flags sc-flags--end">
+                            <span className="rung__meta">or end it:</span>
+                            <button className="btn btn-sm" disabled={busy}
                                     title="Only press this when the application is CONFIRMED sent"
                                     onClick={() => flagStep(s.job_id, "submitted")}>
                               Submitted

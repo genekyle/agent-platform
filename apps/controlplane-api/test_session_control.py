@@ -1080,3 +1080,124 @@ def test_the_view_reflects_the_world_after_the_action_not_before(monkeypatch):
     finally:
         _teardown()
     assert r["tab_count"] == 1          # the window as it is NOW, not as it was
+
+
+# --- working an apply step: the crank the queue was missing -----------------------------------
+def _with_queue(*jobs):
+    bb = _at_start_line()
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": j[0], "title": j[1], "company": j[2]} for j in jobs])
+    bb.world["apply_queue"] = q.as_dict()
+    return bb
+
+
+def test_apply_step_opens_the_pane_for_the_current_job(monkeypatch):
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": {"ok": True, "title": "Compliance Reporting Analyst",
+                            "apply_type": "indeed_apply"}},
+        blackboard=_with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS")))
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    call = next(p for p in harness.calls if p[0] == "/open_job_card")
+    assert call[1]["external_id"] == "a1"            # job_id prefix stripped
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert [m.outcome for m in step.minis] == [aps.OK]
+    assert step.next_rung().id == "verify_identity"
+    assert r["last_step"]["ok"] is True
+
+
+def test_verify_identity_refuses_when_the_pane_is_a_different_job(monkeypatch):
+    """The near-miss guard, as behaviour. An application to the wrong job cannot be taken back."""
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("open_pane", aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["open_pane"] = {"title": "Senior Warehouse Associate"}
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(SEARCH_URL),
+                               "/auth_state": {"ok": True, "logged_in": True}},
+                              blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.FAILED
+    assert step.next_rung().id == "verify_identity"     # blocked here, does not advance
+    assert "STOP" in r["last_step"]["detail"]
+    assert "/execute" not in harness.paths()            # nothing was clicked
+
+
+def test_verify_identity_passes_on_a_loose_title_match(monkeypatch):
+    """Card and pane titles differ in punctuation and suffixes but never in the actual role."""
+    bb = _with_queue(("indeed:a1", "Sales Revenue Analyst - Boston", "Datadog"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("open_pane", aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["open_pane"] = {"title": "Sales Revenue Analyst | Datadog"}
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_step", json={})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.OK
+
+
+def test_classify_records_an_unknown_ats_without_guessing(monkeypatch):
+    bb = _with_queue(("indeed:a1", "Financial Analyst", "Globex"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t9", "url": "https://careers.globex.io/apply/1"}
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.UNKNOWN
+    assert step.platform in ("company_site", "unknown")
+    assert "guessed at" in r["last_step"]["detail"]
+
+
+def test_a_challenge_halts_the_apply_step(monkeypatch):
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True},
+         "/challenge_visibility": {"ok": True, "blocking": True}},
+        frames=[{"type": "iframe", "url": "https://www.google.com/recaptcha/api2/bframe?k=x"}],
+        blackboard=_with_queue(("indeed:a1", "One", "Acme")))
+    try:
+        client.post("/api/session_control/1/apply_step", json={})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.BLOCKED
+    assert "/open_job_card" not in harness.paths()
+
+
+def test_apply_step_refuses_when_the_queue_is_drained(monkeypatch):
+    bb = _with_queue(("indeed:a1", "One", "Acme"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].finish(aps.SUBMITTED)
+    bb.world["apply_queue"] = q.as_dict()
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 409
