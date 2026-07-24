@@ -1336,7 +1336,7 @@ def test_a_proposal_drives_nothing_and_waits(monkeypatch):
                               blackboard=_teach_ready())
     try:
         r = client.post("/api/session_control/1/apply_propose",
-                        json={"intent": "click", "params": {"field": "Continue"},
+                        json={"intent": "click", "params": {"control": "Continue"},
                               "rationale": "the resume step is done",
                               "note": "AI-use attestation may follow"}).json()
     finally:
@@ -1408,7 +1408,8 @@ def test_a_correction_without_a_reason_is_refused(monkeypatch):
              blackboard=_proposed(_teach_ready()))
     try:
         r = client.post("/api/session_control/1/apply_decide",
-                        json={"action": "correct", "intent": "click", "rationale": "no"})
+                        json={"action": "correct", "intent": "click",
+                              "params": {"control": "Continue"}, "rationale": "no"})
     finally:
         _teardown()
     assert r.status_code == 422 and "training signal" in r.json()["detail"]
@@ -1438,3 +1439,48 @@ def test_deciding_with_nothing_pending_is_refused(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 409
+
+
+def test_a_malformed_proposal_is_refused_before_the_operator_sees_it(monkeypatch):
+    """The whole point of validating at propose time: the operator's approval should mean
+    something, and a click addressed with `field` reached act time once already."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_propose",
+                        json={"intent": "click", "params": {"field": "Apply now"},
+                              "rationale": "the apply control is visible"})
+    finally:
+        _teardown()
+    assert r.status_code == 422 and "needs control" in r.json()["detail"]
+
+
+def test_a_malformed_correction_is_refused_too(monkeypatch):
+    _fake_teach(monkeypatch, {"held": False, "outcome": "ok"})
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_proposed(_teach_ready()))
+    try:
+        r = client.post("/api/session_control/1/apply_decide",
+                        json={"action": "correct", "intent": "click",
+                              "params": {"field": "Continue"},
+                              "rationale": "the resume module needs Continue not Apply"})
+    finally:
+        _teardown()
+    assert r.status_code == 422 and "needs control" in r.json()["detail"]
+
+
+def test_the_view_surfaces_the_observed_apply_type(monkeypatch):
+    """A proposal must be made against what the pane REPORTED, not what we assumed. On 2026-07-24
+    a proposal cited apply_type=indeed_apply for a posting whose pane said company_site."""
+    bb = _teach_ready()
+    bb.world["open_pane"] = {"title": "Compliance Reporting Analyst", "apply_type": "company_site"}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["open_pane"]["apply_type"] == "company_site"

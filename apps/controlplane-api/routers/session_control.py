@@ -224,6 +224,12 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "queue": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).as_dict(),
         # What the teacher intends next, if anything — the pause the operator steers from.
         "proposal": (bb.world or {}).get("apply_proposal"),
+        # What the OPEN PANE says the application is. Read at open_pane and surfaced here so a
+        # proposal is made against the observed apply type rather than an assumed one — on
+        # 2026-07-24 a proposal cited "apply_type=indeed_apply" as evidence for a posting whose
+        # pane had plainly reported `company_site`. Fabricated evidence is worse than none: it
+        # lands in the corpus looking exactly like the real thing.
+        "open_pane": (bb.world or {}).get("open_pane"),
         "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
         "awaiting": awaiting,
         "last_step": last,
@@ -886,6 +892,10 @@ async def apply_propose(session_id: int, body: ApplyProposeBody,
         raise HTTPException(status_code=422,
                             detail="A proposal needs its reasoning — that is what the operator is "
                                    "being asked to agree or disagree WITH.")
+    # Well-formed BEFORE it is offered. Approving an action nobody checked is meaningless, and a
+    # `click {"field": ...}` got all the way through approval to act-time once already.
+    if (why := aps.validate_action(body.intent, body.params)):
+        raise HTTPException(status_code=422, detail=f"Cannot propose that: {why}")
 
     bb.world = dict(bb.world or {})
     bb.world["apply_proposal"] = {
@@ -947,6 +957,8 @@ async def apply_decide(session_id: int, body: ApplyDecideBody,
                 status_code=422,
                 detail="A correction needs a reason. That reasoning IS the training signal — it is "
                        "the whole reason a correction is worth more than an approval.")
+        if (why := aps.validate_action(body.intent, body.params)):
+            raise HTTPException(status_code=422, detail=f"Cannot act that correction: {why}")
         teach = ApplyTeachBody(intent=body.intent, params=body.params,
                                rationale=body.rationale, evidence=list(prop.get("evidence") or []),
                                expected_next=list(prop.get("expected_next") or []),

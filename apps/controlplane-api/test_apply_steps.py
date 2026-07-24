@@ -228,3 +228,43 @@ def test_the_queue_round_trips_through_its_json_shape():
 def test_from_dict_survives_an_empty_or_missing_queue():
     assert aps.Queue.from_dict(None).steps == []
     assert aps.Queue.from_dict({}).blocks_page() is False
+
+
+# --- is the action even well-formed? --------------------------------------------------------
+def test_a_click_addressed_with_field_is_refused():
+    """The live failure, 2026-07-24. `field` is the SET_TEXT key; a click needs `control`. It was
+    stored, rendered as a confident proposal, approved, and only then failed at act time."""
+    why = aps.validate_action("click", {"field": "Apply now"})
+    assert why and "needs control" in why and "field=" in why
+
+
+def test_a_well_formed_click_passes():
+    assert aps.validate_action("click", {"control": "Apply now"}) is None
+    assert aps.validate_action("click", {"name": "Apply now"}) is None
+
+
+def test_set_text_needs_both_field_and_value():
+    assert aps.validate_action("set_text", {"field": "Email"}) is not None
+    assert aps.validate_action("set_text", {"field": "Email", "value": "a@b.c"}) is None
+
+
+def test_an_intent_outside_the_vocabulary_is_refused():
+    why = aps.validate_action("press_the_button", {"control": "x"})
+    assert why and "not in the intent vocabulary" in why
+
+
+def test_a_missing_intent_is_refused():
+    assert aps.validate_action("", {}) == "no intent given"
+
+
+def test_read_only_intents_need_no_params():
+    assert aps.validate_action("observe", {}) is None
+    assert aps.validate_action("scan_required", {}) is None
+
+
+def test_validation_does_not_silently_rewrite_a_wrong_key():
+    """Guessing that `field` meant `control` would paper over a teacher with the vocabulary wrong
+    — and the vocabulary is the thing the students learn."""
+    params = {"field": "Apply now"}
+    aps.validate_action("click", params)
+    assert params == {"field": "Apply now"}      # untouched

@@ -247,6 +247,55 @@ class Queue:
         return q
 
 
+# --- is this action even well-formed? ---------------------------------------------------------
+#: The params each intent actually needs, mirroring `interaction.contract.Intent` and the keys
+#: `controller.live_actuator` reads. Alternatives are given because the actuator accepts several
+#: names for the same slot (`control`/`name`/`value` all address a click's target).
+#:
+#: This exists because of a live failure on 2026-07-24: a proposal was authored as
+#: `click {"field": "Apply now"}` — `field` is the SET_TEXT key, not the click key — and nothing
+#: checked it. It was stored, rendered as a confident proposal, approved by the operator, and only
+#: then discovered at act time as "click with no control name". **Asking someone to approve an
+#: action nobody has checked is well-formed makes their approval meaningless**, and it spends their
+#: attention on a failure we could have caught for free.
+_INTENT_PARAMS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "click": (("control", "name", "value"),),
+    "submit": (("control", "name"),),
+    "set_text": (("field",), ("value",)),
+    "select_option": (("field",), ("value",)),
+    "set_date": (("field",), ("month",), ("year",)),
+    "check_group": (("field",), ("values",)),
+    "upload": (("field",), ("path", "files")),
+    "scroll": (("direction", "amount", "value"),),
+    "describe": (("field",),),
+    "observe": (),
+    "scan_required": (),
+    "resolve_answer": (("question",),),
+}
+
+
+def validate_action(intent: str, params: dict[str, Any]) -> Optional[str]:
+    """Why this action cannot be performed as written, or None if it is well-formed.
+
+    Deliberately NOT a guess-and-fix: silently rewriting `field` to `control` would paper over a
+    teacher that has the vocabulary wrong, and the vocabulary is the thing the students learn.
+    Say what is missing and let it be corrected on the record.
+    """
+    intent = (intent or "").strip()
+    if not intent:
+        return "no intent given"
+    if intent not in _INTENT_PARAMS:
+        return (f"{intent!r} is not in the intent vocabulary. Have: "
+                f"{', '.join(sorted(_INTENT_PARAMS))}")
+    params = params or {}
+    for slot in _INTENT_PARAMS[intent]:
+        if not any(str(params.get(k, "")).strip() for k in slot):
+            got = ", ".join(f"{k}={v!r}" for k, v in params.items()) or "nothing"
+            return (f"{intent!r} needs {' or '.join(slot)}, but got {got}. "
+                    f"(`field` addresses a form field; `control` addresses a button.)")
+    return None
+
+
 # --- the discovery point --------------------------------------------------------------------
 @dataclass
 class Discovery:
