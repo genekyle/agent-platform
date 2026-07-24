@@ -182,6 +182,36 @@ def test_step_marks_provisioned_when_chrome_answers(monkeypatch):
     assert r["next"]["checkpoint_id"] == "authenticated"
 
 
+def test_an_empty_chrome_is_not_provisioned(monkeypatch):
+    """Found live 2026-07-23: both session Chromes were up with ZERO tabs, and this rung marked
+    itself held on the evidence "0 tabs answering" — a string that says its own opposite. A
+    browser with nothing open has nothing to look at, type into, or sign in on."""
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": {"ok": True, "tabs": []},
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_browser"
+    assert "no tabs open" in r["last_step"]["detail"]
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("provisioned")
+
+
+def test_an_unreachable_chrome_reads_differently_from_an_empty_one(monkeypatch):
+    """Both leave us unprovisioned, but the operator has to do different things about them."""
+    _install(monkeypatch,
+             {"/list_tabs": {"ok": False, "detail": "connection refused"}},
+             blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_browser"
+    assert "not answering" in r["last_step"]["detail"]
+
+
 def test_step_without_a_query_refuses(monkeypatch):
     _install(monkeypatch, {}, blackboard=store.new_blackboard(1))
     try:

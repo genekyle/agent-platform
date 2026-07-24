@@ -91,13 +91,21 @@ async def _observe(browser_url: str, query: str) -> dict[str, Any]:
     tabs_res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
     tabs = tabs_res.get("tabs") or []
     observed: dict[str, Any] = {
-        "provisioned": bool(tabs_res.get("ok")),
+        # A Chrome that answers but holds NO page is not ready to work — there is nothing to look
+        # at, type into, or sign in on. Found live 2026-07-23: both session Chromes were up with
+        # zero tabs and this rung marked itself held on the evidence "0 tabs answering", which
+        # says its own opposite. Reachable is necessary, not sufficient.
+        "provisioned": bool(tabs_res.get("ok")) and len(tabs) > 0,
         "authenticated": None,
         "query_entered": None,
         "radius_set": None,   # no cheap read-back — stays unknown on purpose
     }
-    if not tabs_res.get("ok"):
-        return {"observed": observed, "tabs": [], "search_tab": None, "block": None}
+    # `reachable` is kept separate from `provisioned` so the executor can tell "Chrome is down"
+    # from "Chrome is up but empty" — two different things for the operator to do.
+    reachable = bool(tabs_res.get("ok"))
+    if not reachable or not tabs:
+        return {"observed": observed, "tabs": tabs, "search_tab": None, "block": None,
+                "reachable": reachable}
 
     auth = await _capture_post("/auth_state", {"browser_url": browser_url}, timeout=8.0)
     observed["authenticated"] = bool(auth.get("ok") and auth.get("logged_in"))
@@ -108,7 +116,8 @@ async def _observe(browser_url: str, query: str) -> dict[str, Any]:
     observed["query_entered"] = search_tab is not None
 
     block = await _detect_block(browser_url, [t.get("url", "") for t in tabs])
-    return {"observed": observed, "tabs": tabs, "search_tab": search_tab, "block": block}
+    return {"observed": observed, "tabs": tabs, "search_tab": search_tab, "block": block,
+            "reachable": True}
 
 
 def _find_search_tab(tabs: list[dict], query: str) -> Optional[dict]:
@@ -323,14 +332,17 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
     action = nxt.checkpoint.action
 
     if action == "probe_browser":
-        ok = bool(obs["observed"].get("provisioned"))
-        if ok:
-            ledger.mark("provisioned", evidence=f"{len(obs.get('tabs') or [])} tabs answering",
-                        initiator=initiator)
-            bb.log("checkpoint", "provisioned — session Chrome is answering")
-            return {"ok": True, "action": action, "detail": "Session Chrome is reachable."}
-        return {"ok": False, "action": action, "awaiting": "operator_browser",
-                "detail": "Session Chrome is not answering. Start it before stepping."}
+        tabs = obs.get("tabs") or []
+        if obs["observed"].get("provisioned"):
+            ledger.mark("provisioned", evidence=f"{len(tabs)} tabs open", initiator=initiator)
+            bb.log("checkpoint", f"provisioned — session Chrome holds {len(tabs)} tabs")
+            return {"ok": True, "action": action,
+                    "detail": f"Session Chrome is up with {len(tabs)} tab(s)."}
+        detail = ("Session Chrome is up but has no tabs open — there is nothing to drive. "
+                  "Open Indeed in that window, then step again."
+                  if obs.get("reachable") else
+                  "Session Chrome is not answering. Start it before stepping.")
+        return {"ok": False, "action": action, "awaiting": "operator_browser", "detail": detail}
 
     if action == "auth_probe":
         if obs["observed"].get("authenticated"):
