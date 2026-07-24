@@ -33,6 +33,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 import apply_steps as aps
 import execution_style as xs
@@ -849,6 +850,90 @@ async def apply_step(session_id: int, body: ApplyStepBody,
 
     return _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style)
+
+
+class ApplyTeachBody(BaseModel):
+    """One teacher-authored action inside the current application."""
+
+    intent: str
+    params: dict[str, Any] = {}
+    rationale: str = ""                 # WHY — this is the training signal, not decoration
+    evidence: list[str] = []
+    expected_next: list[str] = []
+    rung: str = ""                      # what to call this mini-step; defaults to the intent
+    initiator: str = "teacher"
+
+
+@router.post("/api/session_control/{session_id}/apply_teach")
+async def apply_teach(session_id: int, body: ApplyTeachBody,
+                      db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Teach one action inside the current apply step — driven, journaled, AND recorded on the step.
+
+    The teaching surface already existed (`/api/controller/teach/commit`: act one Decision through
+    the humanized actuator, journal it with the teacher's rationale as evidence, hold SUBMIT for
+    the operator). What it did not do is know about apply steps. Teaching through it directly would
+    journal perfectly and leave the step's mini-step trail empty — two surfaces with separate
+    memories of the same act, which is precisely the bug found this morning where the sweep spent
+    a query the checkpoint ledger never heard about. One act, one record, in both places.
+
+    This delegates the driving and journaling wholesale rather than reimplementing them: the Open
+    Brain contract (rationale + evidence + the golden contrast) is not something to have a second
+    version of.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409, detail="No application is open to teach.")
+    if not body.rationale.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="A taught action needs a rationale. The WHY is the training signal — an action "
+                   "with no reasoning teaches the students nothing they could not have guessed.")
+
+    # Drive the APPLY tab when there is one; the search tab otherwise.
+    apply_tab = (bb.world or {}).get("apply_tab") or {}
+    tab_id = apply_tab.get("tab_id") or ((await _observe(_session_browser_url(session),
+                                                         bb.search_state.query))
+                                         .get("tabs") or [{}])[0].get("tab_id", "")
+
+    from routers import controller as controller_router
+    commit_body = controller_router.TeachCommitBody(
+        browser_url=_session_browser_url(session), tab_id=tab_id,
+        task="indeed_apply", goal_text=f"apply to {step.title or step.job_id}",
+        decision=controller_router.TeachDecisionIn(
+            intent=body.intent, params=dict(body.params or {}), rationale=body.rationale,
+            evidence=list(body.evidence), expected_next=list(body.expected_next)),
+        session_id=str(session_id))
+    try:
+        res = await run_in_threadpool(controller_router.teach_commit, commit_body)
+    except Exception as exc:  # noqa: BLE001 — a failed teach is a recorded fact, not a 500
+        res = {"held": False, "outcome": "error", "detail": f"{type(exc).__name__}: {exc}",
+               "journaled": False}
+
+    rung = body.rung or body.intent
+    if res.get("held"):
+        # SUBMIT was held by the consequential gate. That is the system working, and it is the
+        # operator's to press — recorded as needing them rather than as a failure.
+        outcome, detail = aps.HUMAN_REQUIRED, res.get("detail", "held for the operator")
+    elif res.get("outcome") == "ok":
+        outcome, detail = aps.OK, (f"{body.intent} -> {res.get('landed_state') or 'acted'}"
+                                   + ("" if res.get("verified") is not False
+                                      else " (landed somewhere unexpected)"))
+    else:
+        outcome, detail = aps.FAILED, f"{body.intent} -> {res.get('outcome')}: {res.get('detail','')}"
+
+    step.record(rung, outcome, detail[:300], initiator=body.initiator)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    view = _save_queue_and_view(session, bb, ledger, queue, obs,
+                                ok=outcome == aps.OK,
+                                detail=f"Taught {body.intent!r}: {detail}")
+    view["last_step"]["taught"] = {"journaled": res.get("journaled"), "held": res.get("held"),
+                                   "outcome": res.get("outcome"),
+                                   "landed_state": res.get("landed_state"),
+                                   "verified": res.get("verified")}
+    return view
 
 
 def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool, detail: str,

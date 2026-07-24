@@ -1201,3 +1201,116 @@ def test_apply_step_refuses_when_the_queue_is_drained(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 409
+
+
+# --- teaching inside an apply step ------------------------------------------------------------
+def _teach_ready():
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "apply1", "url": "https://smartapply.indeed.com/x"}
+    return bb
+
+
+def _fake_teach(monkeypatch, result):
+    from routers import controller as cr
+    seen = {}
+
+    def _commit(body):
+        seen["body"] = body
+        return result
+    monkeypatch.setattr(cr, "teach_commit", _commit)
+    return seen
+
+
+def test_a_taught_action_lands_on_the_step_and_in_the_journal(monkeypatch):
+    """One act, one record, in BOTH places. Teaching through /teach/commit alone journals
+    perfectly and leaves the step's trail empty — two surfaces with separate memories of the same
+    act, the bug already found once today with the sweep and the ledger."""
+    seen = _fake_teach(monkeypatch, {"held": False, "outcome": "ok", "journaled": True,
+                                     "landed_state": "indeed_apply_questions", "verified": True})
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_teach",
+                        json={"intent": "click", "params": {"field": "Continue"},
+                              "rationale": "the resume step is done; Continue moves to questions",
+                              "rung": "resume_review"}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].rung == "resume_review" and step.minis[-1].outcome == aps.OK
+    assert step.minis[-1].initiator == "teacher"
+    assert r["last_step"]["taught"]["journaled"] is True
+    # it drove the APPLY tab, not the search tab
+    assert seen["body"].tab_id == "apply1"
+    assert seen["body"].decision.rationale.startswith("the resume step is done")
+
+
+def test_a_taught_action_without_a_reason_is_refused(monkeypatch):
+    """The WHY is the training signal. An action with no reasoning teaches the students nothing
+    they could not have guessed."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_teach",
+                        json={"intent": "click", "rationale": "   "})
+    finally:
+        _teardown()
+    assert r.status_code == 422 and "training signal" in r.json()["detail"]
+
+
+def test_a_held_submit_records_as_needing_the_operator_not_as_a_failure(monkeypatch):
+    """The consequential gate firing is the system working. It must not read as a broken step."""
+    _fake_teach(monkeypatch, {"held": True, "journaled": True,
+                              "detail": "SUBMIT held for the operator"})
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_teach",
+                        json={"intent": "submit", "rationale": "every field is answered"}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.HUMAN_REQUIRED
+    assert step.needs_operator() is True
+    assert r["last_step"]["taught"]["held"] is True
+
+
+def test_a_failed_teach_is_recorded_rather_than_raised(monkeypatch):
+    _fake_teach(monkeypatch, {"held": False, "outcome": "not_found",
+                              "detail": "target gone", "journaled": True})
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_teach",
+                        json={"intent": "click", "rationale": "trying the Continue button"})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.FAILED
+
+
+def test_teaching_with_no_open_application_is_refused(monkeypatch):
+    bb = _with_queue(("indeed:a1", "One", "Acme"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"]); q.steps[0].finish(aps.SUBMITTED)
+    bb.world["apply_queue"] = q.as_dict()
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_teach",
+                        json={"intent": "click", "rationale": "anything"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
