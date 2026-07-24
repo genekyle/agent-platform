@@ -208,6 +208,7 @@ export function SessionControlPanel({ domain }) {
   const currentStep = queue.find((s) => !s.done) || null;
 
   const proposal = p.proposal || null;
+  const accountHandoff = p.account_handoff || null;
 
   const flagStep = (jobId, flag, detail = "") =>
     call("/apply_flag", { job_id: jobId, flag, detail, initiator: "operator" });
@@ -512,24 +513,24 @@ export function SessionControlPanel({ domain }) {
                           {/* ACCOUNT HANDOFF. The one place credentials appear — and the boundary
                               is loud: the system prepares the account and hands YOU the details;
                               you type them and click Create Account. The agent never does. */}
-                          {last?.account && !s.done && (
+                          {accountHandoff && accountHandoff.job_id === s.job_id && !s.done && (
                             <div className="sc-account">
                               <div className="sc-account__head">
                                 <AppIcon name="key" size={14} />
-                                {last.account.button} — {last.account.company} ({last.account.ats})
+                                {accountHandoff.button} — {accountHandoff.company} ({accountHandoff.ats})
                               </div>
                               <p className="sc-account__boundary">
-                                <AppIcon name="shield" size={13} /> {last.account.boundary}
+                                <AppIcon name="shield" size={13} /> {accountHandoff.boundary}
                               </p>
                               <dl className="sc-account__creds">
                                 <dt>Username</dt>
-                                <dd><code>{last.account.username || "—"}</code></dd>
+                                <dd><code>{accountHandoff.username || "—"}</code></dd>
                                 <dt>Password</dt>
                                 <dd>
-                                  {last.account.suggested_password
-                                    ? <code>{last.account.suggested_password}</code>
+                                  {accountHandoff.suggested_password
+                                    ? <code>{accountHandoff.suggested_password}</code>
                                     : <span className="rung__meta">
-                                        {last.account.suffix_configured
+                                        {accountHandoff.suffix_configured
                                           ? "—"
                                           : "no suggestion configured — choose your own that meets the site's rules"}
                                       </span>}

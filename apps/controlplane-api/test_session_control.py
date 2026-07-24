@@ -1821,3 +1821,38 @@ def test_account_handoff_refuses_without_a_classified_ats(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 409 and "known ATS" in r.json()["detail"]
+
+
+def test_account_handoff_persists_on_the_view_so_a_reload_keeps_it(monkeypatch):
+    """The handoff lived only in last_step, which a fresh GET does not carry — an operator who
+    refreshed lost the credentials panel. It now persists in world like the proposal does."""
+    bb = _wd_at_wall()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_account", json={})   # surface the handoff
+        g = client.get("/api/session_control/1").json()                # a fresh read (no last_step)
+    finally:
+        _teardown()
+    assert g["account_handoff"]["button"] == "Create Account"
+    assert g["account_handoff"]["job_id"] == "indeed:a1"
+
+
+def test_parking_clears_a_lingering_handoff(monkeypatch):
+    """A finished step must not carry its handoff onto the next job."""
+    bb = _wd_at_wall()
+    bb.world["apply_queue"] = aps.Queue.from_dict(bb.world["apply_queue"]).as_dict()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_account", json={})
+        client.post("/api/session_control/1/apply_flag",
+                    json={"job_id": "indeed:a1", "flag": "parked:account_wall"})
+        g = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert g["account_handoff"] is None

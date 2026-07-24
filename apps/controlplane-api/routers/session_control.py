@@ -224,6 +224,8 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "queue": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).as_dict(),
         # What the teacher intends next, if anything — the pause the operator steers from.
         "proposal": (bb.world or {}).get("apply_proposal"),
+        # A pending account-creation handoff (durable, survives reloads like the proposal).
+        "account_handoff": (bb.world or {}).get("account_handoff"),
         # What the OPEN PANE says the application is. Read at open_pane and surfaced here so a
         # proposal is made against the observed apply type rather than an assumed one — on
         # 2026-07-24 a proposal cited "apply_type=indeed_apply" as evidence for a posting whose
@@ -752,6 +754,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                     f"{company} {step.platform} account created by the operator",
                     initiator=body.initiator)
         _save_queue(bb, queue)
+        bb.world.pop("account_handoff", None)   # the handoff is resolved
         _persist(bb, ledger)
         obs = await _observe(_session_browser_url(session), bb.search_state.query)
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
@@ -773,6 +776,18 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                 f"(button {action.get('button')!r})",
                 initiator=body.initiator)
     _save_queue(bb, queue)
+    handoff = {
+        "job_id": step.job_id, "leg": action.get("leg"), "button": action.get("button"),
+        "company": company, "ats": step.platform,
+        "username": creds.get("username"),
+        "suggested_password": creds.get("suggested_password"),
+        "suffix_configured": creds.get("suffix_configured"),
+        "boundary": f"You type these into the form and click {action.get('button')!r}. The agent "
+                    "never enters a password or creates an account — that is yours.",
+    }
+    # Persist the handoff in world so it survives a poll or a page reload — the same durability the
+    # proposal has. `last_step` alone is transient, and an operator who refreshed lost the panel.
+    bb.world["account_handoff"] = handoff
     # Never log the password — the record carries the leg, not the secret.
     bb.log("account_handoff", f"{company} {step.platform}: {action.get('leg')} handoff to operator")
     _persist(bb, ledger)
@@ -780,16 +795,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     obs = await _observe(_session_browser_url(session), bb.search_state.query)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="operator_account",
                  last={"ok": False, "action": "apply_account", "queue": queue.summary(),
-                       "account": {
-                           "leg": action.get("leg"), "button": action.get("button"),
-                           "company": company, "ats": step.platform,
-                           "username": creds.get("username"),
-                           "suggested_password": creds.get("suggested_password"),
-                           "suffix_configured": creds.get("suffix_configured"),
-                           "boundary": "You type these into the form and click "
-                                       f"{action.get('button')!r}. The agent never enters a "
-                                       "password or creates an account — that is yours.",
-                       },
+                       "account": handoff,
                        "detail": f"Account handoff for {company} ({step.platform}). Create the "
                                  f"account in the window with the credentials shown, then press "
                                  f"'I created it' to continue."})
@@ -1505,6 +1511,11 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     step.finish(body.flag, body.detail)
     bb.world = dict(bb.world or {})
     bb.world["apply_queue"] = queue.as_dict()
+    # A finished step must not leave its handoff or proposal lingering onto the next job.
+    if (bb.world.get("account_handoff") or {}).get("job_id") == step.job_id:
+        bb.world.pop("account_handoff", None)
+    if (bb.world.get("apply_proposal") or {}).get("job_id") == step.job_id:
+        bb.world.pop("apply_proposal", None)
     bb.log("apply_flag", f"{body.job_id} -> {body.flag}"
                          + (f" ({body.detail})" if body.detail else ""))
     _persist(bb, ledger)
