@@ -944,3 +944,54 @@ def test_no_search_controls_on_the_page_stops_before_acting(monkeypatch):
     assert r["awaiting"] == "operator_search_box"
     assert "1 elements scanned" in r["last_step"]["detail"]
     assert "/execute" not in harness.paths()
+
+
+def test_a_successful_query_does_not_render_as_needing_recovery(monkeypatch):
+    """Seen live 2026-07-24. The rung was marked on real proof, but the view was built from the
+    observation taken BEFORE the action — so it still said query_entered was False, and holding
+    those two together reads as "spent but its effect is gone". The panel told the operator to
+    recover from a search that had just worked. Acting must be followed by re-observing."""
+    calls = {"n": 0}
+
+    def _list_tabs(_payload):
+        calls["n"] += 1
+        # home page while deciding; the real results page from the moment the query lands
+        return _tabs("https://www.indeed.com/") if calls["n"] == 1 else _tabs(SEARCH_URL)
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _list_tabs,
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/ax_scan": _SEARCH_PAGE_AX,
+                         "/execute": {"outcome": "ok"}},
+                        blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+    assert r["awaiting"] != "recover"
+    assert r["next"]["kind"] != "recover"
+    # the ladder shows it HELD, not lapsed — and the view reflects the results page we landed on
+    rung = next(x for x in r["ladder"] if x["id"] == "query_entered")
+    assert rung["status"] == "held"
+    assert r["observed"]["query_entered"] is True
+
+
+def test_the_view_reflects_the_world_after_the_action_not_before(monkeypatch):
+    """The general form: provisioning a browser that comes up mid-step must not report the
+    pre-action window either."""
+    calls = {"n": 0}
+
+    def _list_tabs(_payload):
+        calls["n"] += 1
+        return {"ok": False, "tabs": []} if calls["n"] == 1 else _tabs("https://www.indeed.com/")
+
+    _install(monkeypatch,
+             {"/list_tabs": _list_tabs, "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["tab_count"] == 1          # the window as it is NOW, not as it was

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, postJSON, fmtTime } from "./api";
 import { AppIcon } from "../../../ui/Icon";
 
@@ -17,6 +17,11 @@ import { AppIcon } from "../../../ui/Icon";
 //     to re-run the query, the whole design has been lost.
 //   * Step is unattended while climbing and STOPS at the start line. Everything past that point
 //     waits for a human pick, because past that point the actions are consequential.
+
+//: How often the panel re-reads the session. Every call is a local CDP socket (tabs + auth state),
+//: so this costs no bandwidth — the number is about how quickly the operator should see the world
+//: change, not about load.
+const PING_MS = 5000;
 
 const RUNG_TONE = { held: "ready", next: "accent", pending: "muted", regressed: "warn", lapsed: "warn" };
 const RUNG_MARK = { held: "check", next: "play", pending: "circle", regressed: "refresh", lapsed: "alert" };
@@ -89,6 +94,9 @@ export function SessionControlPanel({ domain }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // A ref, not the state, because the interval closes over its first render.
+  const busyRef = useRef(false);
+  busyRef.current = busy;
 
   // Find this domain's live session. Everything below hangs off one session id.
   useEffect(() => {
@@ -101,17 +109,34 @@ export function SessionControlPanel({ domain }) {
       .catch(() => setSessionId(null));
   }, [domain.id]);
 
+  // The panel PINGS the session rather than only reading it when you press something. The world
+  // moves underneath us — you sign in by hand, a challenge appears, a tab closes — and a cockpit
+  // that only refreshes on click shows a past that has stopped being true. The read model is all
+  // local CDP sockets, so this is free even in low-data mode.
   const load = useCallback(() => {
     if (!sessionId) return;
     getJSON(`/api/session_control/${sessionId}`)
       .then((d) => {
-        setPanel(d);
-        setForm((f) => (d.query ? { query: d.query, location: d.location || "", radius_miles: d.radius_miles || 50 } : f));
+        // A poll carries no last_step; keep the one the operator is still reading rather than
+        // blanking the result of the action they just took.
+        setPanel((prev) => ({ ...d, last_step: d.last_step ?? prev?.last_step ?? null }));
+        // Sync the form ONCE, when a declared query first arrives. Re-syncing on every ping would
+        // overwrite what the operator is mid-way through typing.
+        setForm((f) => (d.query && !f.query
+          ? { query: d.query, location: d.location || "", radius_miles: d.radius_miles || 50 }
+          : f));
+        setError("");
       })
       .catch((e) => setError(e.message || "could not read the session"));
   }, [sessionId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    // Paused while an action is in flight: a ping landing mid-step would render a half-applied
+    // world, and the action's own response is fresher than anything a poll could fetch.
+    const t = setInterval(() => { if (!busyRef.current) load(); }, PING_MS);
+    return () => clearInterval(t);
+  }, [load]);
 
   const call = async (path, body) => {
     setBusy(true);
@@ -169,6 +194,9 @@ export function SessionControlPanel({ domain }) {
           </div>
           <span className="layer__sub">
             {atLine ? "At the start line — stop and go" : "Climbing to the start line"}
+            <span className="sc-live" title={`Re-reading the session every ${PING_MS / 1000}s`}>
+              <span className="sc-live__dot" /> live
+            </span>
           </span>
         </div>
 

@@ -346,7 +346,15 @@ async def step(session_id: int, body: StepBody,
                              browser_url=browser_url, page=page, initiator=body.initiator, db=db)
     _persist(bb, ledger)
 
-    obs_after = {**obs, "observed": {**obs["observed"], **(result.pop("observed_delta", {}) or {})}}
+    # RE-OBSERVE AFTER ACTING. `obs` was taken BEFORE the dispatch, so reusing it renders the
+    # world as it was when we decided, not as the action left it. That reads as a contradiction
+    # the instant a rung succeeds: `run_query` marks `query_entered` on proof, the stale
+    # observation still says False, and `next_step` puts the two together as "held but its effect
+    # is gone" — telling the operator to RECOVER from a search that had just worked perfectly
+    # (seen live 2026-07-24). Every other endpoint here already re-observes; step was the
+    # exception, and the `observed_delta` hook it used instead was never populated by anything.
+    # Observing is a local CDP socket, so this costs nothing but a round trip.
+    obs_after = await _observe(browser_url, query)
     return _view(session, bb, ledger, obs_after,
                  page=result.pop("page", page),
                  results=result.pop("results", None),
