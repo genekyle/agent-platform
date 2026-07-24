@@ -392,7 +392,8 @@ def test_logged_out_hands_the_credential_wall_to_the_operator(monkeypatch):
         _teardown()
     assert r["awaiting"] == "operator_login"
     assert r["last_step"]["ok"] is False
-    assert "never type passwords" in r["last_step"]["detail"]
+    # The rung is not held and nothing was typed. The system now also OFFERS ways in (see the
+    # login-step tests below) — but offering a click must never become entering a credential.
     assert "/execute" not in harness.paths()
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
 
@@ -460,6 +461,16 @@ def test_preloaded_hidden_recaptcha_does_not_stop_the_crank(monkeypatch):
 
 
 # --- run_query: the one consuming act ---------------------------------------------------------
+def _ready_for_provisioned():
+    """Provisioned held, so a step goes straight to the auth rung."""
+    bb = store.new_blackboard(1, query="reporting analyst", location="Nashua, NH")
+    led = cps.Ledger()
+    led.mark("provisioned", evidence="clean window")
+    bb.checkpoints = led.as_dict()
+    bb.world = {"radius_miles": 50}
+    return bb
+
+
 def _ready_for_query(query="reporting analyst"):
     bb = store.new_blackboard(1, query=query, location="Nashua, NH")
     led = cps.Ledger()
@@ -712,3 +723,142 @@ def test_get_panel_is_read_only(monkeypatch):
     assert r["query"] == "reporting analyst"
     assert r["progress"]["at_start_line"] is True
     assert set(harness.paths()) <= {"/list_tabs", "/auth_state"}   # nothing driven
+
+
+# --- login is a step the system owns, up to the secret --------------------------------------
+def _ax(*controls, page_text=""):
+    return {"ok": True, "page_text": page_text,
+            "candidates": [{"role": r, "name": n, "backend_node_id": i}
+                           for i, (r, n) in enumerate(controls, start=50)]}
+
+
+def test_the_auth_rung_offers_ways_in_instead_of_a_dead_end(monkeypatch):
+    """The operator's complaint, live 2026-07-24: the ladder said 'signed in' was next and gave
+    them nothing to press, so login was the one rung the system did not own."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://www.indeed.com/"),
+              "/auth_state": {"ok": True, "logged_in": False},
+              "/ax_scan": _ax(("button", "Account"), ("link", "Sign in with a code"))},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert login["can_drive"] is True
+    names = [o["name"] for o in login["options"]]
+    assert "Sign in with a code" in names and "Account" in names
+    assert names.index("Sign in with a code") < names.index("Account")   # most-direct first
+
+
+def test_an_account_menu_alone_still_counts_as_a_way_in(monkeypatch):
+    """Indeed's logged-out home exposes NO 'Sign in' to AX — 173 candidates, only an 'Account'
+    button (measured live). A matcher looking solely for 'sign in' would report no way to log in
+    on the page whose whole job is logging you in."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://www.indeed.com/"),
+              "/auth_state": {"ok": True, "logged_in": False},
+              "/ax_scan": _ax(("button", "Account"), ("link", "Post a job"))},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert [o["name"] for o in r["last_step"]["login"]["options"]] == ["Account"]
+
+
+def test_a_password_screen_offers_nothing_to_drive(monkeypatch):
+    """The boundary, stated as behaviour: once the next action IS the secret, we have no options."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://secure.indeed.com/auth"),
+              "/auth_state": {"ok": True, "logged_in": False},
+              "/ax_scan": _ax(("textbox", "Email"), ("textbox", "Password"),
+                              ("button", "Sign in"))},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert login["state"] == "signin_form"
+    assert login["can_drive"] is False and login["options"] == []
+    assert "you type it, not us" in login["detail"]
+
+
+def test_login_action_clicks_a_way_in_through_the_ax_layer(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("https://www.indeed.com/"),
+                           "/auth_state": {"ok": True, "logged_in": False},
+                           "/ax_scan": _ax(("button", "Account")),
+                           "/execute": {"outcome": "ok"}},
+                          blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/login_action",
+                        json={"control_name": "Account", "role": "button"}).json()
+    finally:
+        _teardown()
+    ex = next(p for p in harness.calls if p[0] == "/execute")
+    assert ex[1]["action_id"] == "click" and ex[1]["target_name"] == "Account"
+    assert ex[1]["driver"] == "humanized"
+    assert r["last_step"]["ok"] is True
+
+
+def test_login_action_refuses_a_control_it_cannot_see(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("https://www.indeed.com/"),
+                           "/auth_state": {"ok": True, "logged_in": False},
+                           "/ax_scan": _ax(("button", "Account"))},
+                          blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/login_action",
+                        json={"control_name": "Continue with Google"})
+    finally:
+        _teardown()
+    assert r.status_code == 422
+    assert "/execute" not in harness.paths()
+
+
+def test_login_action_refuses_to_touch_a_credential_screen(monkeypatch):
+    """The boundary again, from the other side: no request can talk the system into driving a
+    password screen, however the option was named."""
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("https://secure.indeed.com/auth"),
+                           "/auth_state": {"ok": True, "logged_in": False},
+                           "/ax_scan": _ax(("textbox", "Password"), ("button", "Sign in"))},
+                          blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/login_action",
+                        json={"control_name": "Sign in"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    assert "/execute" not in harness.paths()
+
+
+def test_login_action_is_refused_once_already_signed_in(monkeypatch):
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://www.indeed.com/"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/login_action", json={"control_name": "Account"})
+    finally:
+        _teardown()
+    assert r.status_code == 409 and "Already signed in" in r.json()["detail"]
+
+
+def test_a_page_with_no_visible_signin_says_so_plainly(monkeypatch):
+    """AX has missed Indeed's sign-in link before and only a screenshot found it. 'I cannot see
+    one' must not be reported as 'there is not one'."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://www.indeed.com/"),
+              "/auth_state": {"ok": True, "logged_in": False},
+              "/ax_scan": _ax(("link", "Post a job"), ("link", "Help"))},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert login["can_drive"] is False and login["options"] == []
+    assert "hidden it before" in login["detail"] and "2 elements seen" in login["detail"]

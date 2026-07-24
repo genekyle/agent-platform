@@ -23,7 +23,7 @@ const RUNG_MARK = { held: "check", next: "play", pending: "circle", regressed: "
 
 // What the operator is being asked for, in their words rather than the API's.
 const AWAITING_COPY = {
-  operator_login: "Sign in to Indeed in the session window — we never type passwords or clear 2FA.",
+  operator_login: "Not signed in. Pick a way in below, or sign in directly in the window — we never type passwords or clear 2FA.",
   operator_challenge: "A challenge is up. Clear it yourself in the window — we never auto-solve.",
   operator_browser: "The session's Chrome isn't answering. Start it, then step again.",
   operator_clean_start: "This window still holds tabs from a previous session. Clear them before we begin.",
@@ -277,6 +277,52 @@ export function SessionControlPanel({ domain }) {
             <p className="sc-awaiting">
               <AppIcon name="alert" size={14} /> {AWAITING_COPY[awaiting]}
             </p>
+          )}
+
+          {/* Login: what the system can SEE and DO from here. The clicks toward a login screen are
+              ours; the credential itself never is. An empty option list is a real answer and says
+              which — "this screen needs you" vs "I cannot see a way in on this page". */}
+          {last?.login && (
+            <div className="sc-login">
+              <div className="sc-login__head">
+                <AppIcon name="key" size={14} /> Signing in
+                <span className="badge badge--muted">{last.login.state}</span>
+                {last.login.seen ? (
+                  <span className="rung__meta">{last.login.seen} elements seen</span>
+                ) : null}
+              </div>
+              {last.login.options?.length > 0 ? (
+                <>
+                  <div className="rung__meta">I can click any of these for you:</div>
+                  <div className="sc-login__opts">
+                    {last.login.options.map((o) => (
+                      <button
+                        key={o.name}
+                        className="btn btn-sm"
+                        disabled={busy}
+                        title={o.why}
+                        onClick={() => call("/login_action", {
+                          control_name: o.name, role: o.role, initiator: "operator",
+                        })}
+                      >
+                        {o.name}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="cv-blocked">
+                    You take over at the password or code — we never type either.
+                  </p>
+                </>
+              ) : (
+                <p className="cv-blocked">{last.login.detail}</p>
+              )}
+              <div className="cv-actions" style={{ marginTop: 8 }}>
+                <button className="btn btn-sm btn-primary" disabled={busy}
+                        onClick={() => call("/step", { initiator: "operator" })}>
+                  {busy ? "…" : "I've signed in — re-check"}
+                </button>
+              </div>
+            </div>
           )}
 
           {/* The inherited window. Shown in full and never cleared silently — a persistent

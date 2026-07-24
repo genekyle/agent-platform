@@ -401,12 +401,18 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                         initiator=initiator)
             bb.log("checkpoint", "authenticated — signed in to Indeed")
             return {"ok": True, "action": action, "detail": "Signed in."}
-        # HARD BOUNDARY: the agent never types passwords or clears 2FA. Hand it over.
+
+        # NOT SIGNED IN IS A STEP, NOT A DEAD END. The boundary is that we never type a password or
+        # clear a 2FA challenge — it was never that we refuse to open the login page. Reporting
+        # "the operator signs in" and offering nothing meant login was the one rung the system did
+        # not own: the operator could see it was next and had nothing to press (operator, live
+        # 2026-07-24). So we survey what this page actually offers and hand back real options.
         ledger.release("authenticated")
-        bb.log("handoff", "not signed in — operator owns the credential wall")
-        return {"ok": False, "action": action, "awaiting": "operator_login",
-                "detail": "Not signed in to Indeed. The operator signs in — we never type "
-                          "passwords or clear 2FA."}
+        login = await _login_survey(browser_url, obs)
+        bb.log("handoff", f"not signed in ({login['state']}) — "
+                          f"{len(login['options'])} way(s) in offered")
+        return {"ok": False, "action": action, "awaiting": "operator_login", "login": login,
+                "detail": login["detail"]}
 
     if action == "run_query":
         return await _run_query(bb=bb, ledger=ledger, browser_url=browser_url,
@@ -515,6 +521,113 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session) -> 
             "awaiting": "choose",
             "detail": f"Page {page}: {len(results)} results — {new_count} new, "
                       f"{dup_count} already seen. Choose what to do with them."}
+
+
+# --- login: a step the system owns, up to the secret ------------------------------------------
+#: Where the agent stops, always. These are the states whose next action IS the secret itself, and
+#: no amount of "the system should own every step" changes who owns those.
+_HUMAN_ONLY_LOGIN = {"signin_form", "mfa", "captcha", "login_error", "create_form"}
+
+_HUMAN_ONLY_COPY = {
+    "signin_form": "The password field is up — you type it, not us. Sign in and press Re-check.",
+    "mfa": "A verification code is being asked for. Enter it yourself, then press Re-check.",
+    "captcha": "A challenge is up. Clear it yourself — we never auto-solve.",
+    "login_error": "The last sign-in attempt was rejected. Fix it in the window, then Re-check.",
+    "create_form": "This is an account-creation form. Creating accounts is yours, not ours.",
+}
+
+
+async def _login_survey(browser_url: str, obs: dict[str, Any]) -> dict[str, Any]:
+    """What the system can SEE and DO about signing in, right now.
+
+    Answers the question the old dead-end could not: not "are we logged in" (no) but "what is the
+    next possible move, and can we make it". Clicks toward a login screen are ours; the credential
+    itself is never.
+    """
+    import login_reasoner as lr
+
+    tab = (obs.get("tabs") or [{}])[0]
+    scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                            "tab_id": tab.get("tab_id", "")}, timeout=25.0)
+    candidates = scan.get("candidates") or []
+    page_text = str(scan.get("page_text") or "")
+    state = lr.classify_login_state(candidates, page_text, logged_in=False)
+    entries = lr.find_signin_entries(candidates)
+
+    if state in _HUMAN_ONLY_LOGIN:
+        return {"state": state, "url": tab.get("url", ""), "options": [], "can_drive": False,
+                "detail": _HUMAN_ONLY_COPY.get(state, "This screen needs you, not us."),
+                "seen": len(candidates)}
+
+    if not entries:
+        # AX genuinely showing nothing is a real answer and a known one: Indeed has served a page
+        # whose sign-in link AX could not see, and only a screenshot found it. Say so plainly
+        # rather than implying the page has no way in.
+        return {"state": state, "url": tab.get("url", ""), "options": [], "can_drive": False,
+                "detail": f"No sign-in control is visible to the accessibility tree on this page "
+                          f"({len(candidates)} elements seen). Indeed has hidden it before — sign "
+                          f"in directly in the window, then press Re-check.",
+                "seen": len(candidates)}
+
+    return {"state": state, "url": tab.get("url", ""), "can_drive": True,
+            "options": [{"name": e["name"], "role": e["role"], "why": e["why"]} for e in entries],
+            "detail": f"Not signed in. {len(entries)} way(s) in from here — pick one and I'll "
+                      f"click it; you take over at the password.",
+            "seen": len(candidates)}
+
+
+class LoginActionBody(BaseModel):
+    control_name: str                   # the accessible NAME of the control to click
+    role: str = "button"
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/login_action")
+async def login_action(session_id: int, body: LoginActionBody,
+                       db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Click ONE control on the way to a login screen, then re-survey.
+
+    This is the half of login the agent may own: opening the account menu, choosing "sign in with
+    a code", picking an SSO provider — all clicks a human makes before any secret exists. It
+    refuses to touch a screen that is asking for the secret, so "drive the login" can never become
+    "type the password". Driven through the AX layer by role + accessible name, like everything
+    else (PRINCIPLES §6).
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query)
+
+    if obs["observed"].get("authenticated"):
+        raise HTTPException(status_code=409, detail="Already signed in — step instead.")
+
+    before = await _login_survey(browser_url, obs)
+    if not before["can_drive"]:
+        raise HTTPException(status_code=409, detail=before["detail"])
+    if body.control_name not in {o["name"] for o in before["options"]}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{body.control_name!r} is not one of the ways in I can see "
+                   f"({', '.join(o['name'] for o in before['options']) or 'none'}). Re-check first.")
+
+    tab = (obs.get("tabs") or [{}])[0]
+    res = await _capture_post("/execute", {
+        "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
+        "target_role": body.role, "target_name": body.control_name, "driver": "humanized",
+    })
+    await asyncio.sleep(2.0)
+
+    obs_after = await _observe(browser_url, bb.search_state.query)
+    after = await _login_survey(browser_url, obs_after)
+    ok = res.get("outcome") not in ("not_found",)
+    bb.log("login_step", f"clicked {body.control_name!r} -> {after['state']}")
+    _persist(bb, ledger)
+    return _view(session, bb, ledger, obs_after, page=_current_page(obs_after, bb),
+                 awaiting=None if obs_after["observed"].get("authenticated") else "operator_login",
+                 last={"ok": ok, "action": "login_action", "login": after,
+                       "detail": (f"Clicked {body.control_name!r}. " + after["detail"]) if ok
+                                 else f"Could not find {body.control_name!r} on the page any more — "
+                                      f"it may have moved. Re-check."})
 
 
 # --- the clean start: provisioning through the tab manager ------------------------------------

@@ -152,6 +152,54 @@ def find_login_fields(candidates: list[dict]) -> dict:
     return out
 
 
+#: Controls that lead TOWARD a sign-in, ordered most-direct first. Distinct from `find_login_fields`
+#: on purpose: those find the credential inputs to fill, these find the way IN — the clicks a human
+#: makes before any secret is involved, which is exactly the part the agent may own.
+#:
+#: `account` earns its place from a live scan (2026-07-24, session 19): Indeed's logged-out home
+#: exposes NO "Sign in" control to AX at all — 173 candidates, and the only one on this list was a
+#: button named "Account". Login sits behind a menu widget, so the way in is a two-step reveal
+#: (`project_widget_protocol_layer`: AX finds elements, not widgets). A matcher that only looked
+#: for "sign in" would report "no way to log in" on the page whose entire job is logging you in.
+SIGNIN_ENTRY_HINTS = (
+    ("sign in", "the sign-in control"),
+    ("log in", "the log-in control"),
+    ("sign-in", "the sign-in control"),
+    ("sign in with a code", "the emailed sign-in code (Indeed's fallback when SSO is not wanted)"),
+    ("continue with google", "Google SSO — opens Google's own window"),
+    ("continue with apple", "Apple SSO — opens Apple's own window"),
+    ("google", "Google SSO — opens Google's own window"),
+    ("apple", "Apple SSO — opens Apple's own window"),
+    ("account", "the account menu — sign-in usually hides behind it"),
+)
+
+
+def find_signin_entries(candidates: list[dict]) -> list[dict]:
+    """Every control that plausibly leads toward signing in, best-first.
+
+    These are CLICKS, never credentials, which is what makes them safe for the agent to drive: the
+    hard boundary is that we never type a password or clear a 2FA challenge, not that we refuse to
+    open the login page. Returns [{name, role, backend_node_id, why}] — deduped by name so a page
+    listing "Sign in" three times offers one option.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for hint, why in SIGNIN_ENTRY_HINTS:
+        for c in candidates:
+            role = (c.get("role") or "").lower()
+            name = (c.get("name") or "").strip()
+            if role not in ("link", "button", "menuitem") or not name:
+                continue
+            if hint not in name.lower() or name.lower() in seen:
+                continue
+            if c.get("backend_node_id") is None:
+                continue
+            seen.add(name.lower())
+            out.append({"name": name, "role": role,
+                        "backend_node_id": c.get("backend_node_id"), "why": why})
+    return out
+
+
 def find_control(candidates: list[dict], substrs, roles=("link", "button")) -> Optional[dict]:
     """The first candidate whose name contains any of `substrs` and whose role is in `roles`.
     Returns {name, backend_node_id, role} or None."""
