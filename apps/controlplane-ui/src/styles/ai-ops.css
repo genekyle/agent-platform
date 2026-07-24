@@ -1371,3 +1371,16 @@ textarea:focus-visible {
 .sc-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line); }
 .sc-flags--end { align-items: center; border-top: none; padding-top: 4px; margin-top: 4px; opacity: 0.85; }
 .sc-flags--end .rung__meta { margin-right: 2px; }
+
+/* The teacher's proposal: what it intends and why, where the operator can steer it. Correct is a
+   peer of Go, never quieter — a surface whose easy path is always "yes" yields no training signal. */
+.sc-proposal {
+  margin-top: 9px; padding: 10px 12px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--reasoning) 45%, var(--line));
+  background: color-mix(in srgb, var(--reasoning) 9%, transparent);
+}
+.sc-proposal__head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12.5px; font-weight: 600; color: var(--reasoning); }
+.sc-proposal__head code { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: rgba(127,127,127,0.15); color: var(--text); }
+.sc-proposal__why { margin: 7px 0 0; font-size: 13px; line-height: 1.5; }
+.sc-proposal__note { display: flex; gap: 5px; align-items: flex-start; margin: 7px 0 0; font-size: 12.5px; color: var(--warning); }
+.sc-proposal__note svg { flex-shrink: 0; margin-top: 3px; }

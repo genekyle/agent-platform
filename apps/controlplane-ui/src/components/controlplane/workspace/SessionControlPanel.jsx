@@ -115,6 +115,7 @@ export function SessionControlPanel({ domain }) {
   const [form, setForm] = useState({ query: "", location: "", radius_miles: 50 });
   const [picks, setPicks] = useState([]);
   const [note, setNote] = useState("");
+  const [correcting, setCorrecting] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // A ref, not the state, because the interval closes over its first render.
@@ -206,8 +207,31 @@ export function SessionControlPanel({ domain }) {
   const qs = p.queue_summary || { total: 0, done: 0, submitted: 0, blocks_page: false };
   const currentStep = queue.find((s) => !s.done) || null;
 
+  const proposal = p.proposal || null;
+
   const flagStep = (jobId, flag, detail = "") =>
     call("/apply_flag", { job_id: jobId, flag, detail, initiator: "operator" });
+
+  const decide = async (body) => {
+    const d = await call("/apply_decide", body);
+    if (d) setCorrecting(null);
+  };
+
+  const sendCorrection = () => {
+    if (!correcting?.intent) { setError("a correction needs an intent"); return; }
+    let params = {};
+    try {
+      params = correcting.params ? JSON.parse(correcting.params) : {};
+    } catch {
+      setError('params must be JSON, e.g. {"field": "Work authorization", "value": "Yes"}');
+      return;
+    }
+    if (correcting.rationale.trim().length < 12) {
+      setError("a correction needs a reason — that reasoning is the training signal");
+      return;
+    }
+    decide({ action: "correct", intent: correcting.intent, params, rationale: correcting.rationale });
+  };
 
   const doChoose = async (advance) => {
     const d = await call("/choose", { picks, note, advance, initiator: "operator" });
@@ -485,6 +509,70 @@ export function SessionControlPanel({ domain }) {
                               Stopped on something only you can resolve.
                             </p>
                           )}
+                          {/* THE TEACHER'S PROPOSAL. Teacher runs pause anyway, so the surface
+                              here is not another row of buttons but what it intends and why —
+                              sitting where you can read it and steer. Correct is a PEER of Go,
+                              never quieter: the golden training rows come from disagreement, and
+                              a surface whose easy path is always "yes" produces agreement and no
+                              signal. */}
+                          {proposal && proposal.job_id === s.job_id && (
+                            <div className="sc-proposal">
+                              <div className="sc-proposal__head">
+                                <AppIcon name="sparkle" size={14} /> Teacher proposes
+                                <code>{proposal.intent}</code>
+                                {Object.keys(proposal.params || {}).length > 0 && (
+                                  <span className="rung__meta">
+                                    {Object.entries(proposal.params)
+                                      .map(([k, v]) => `${k}: ${v}`).join(" · ")}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="sc-proposal__why">{proposal.rationale}</p>
+                              {proposal.note && (
+                                <p className="sc-proposal__note">
+                                  <AppIcon name="alert" size={12} /> {proposal.note}
+                                </p>
+                              )}
+                              {proposal.expected_next?.length > 0 && (
+                                <div className="rung__meta">
+                                  expects → {proposal.expected_next.join(", ")}
+                                </div>
+                              )}
+
+                              {correcting ? (
+                                <div className="cv-correct" style={{ marginTop: 8 }}>
+                                  <input placeholder="intent instead (click / set_text / select_option …)"
+                                         value={correcting.intent}
+                                         onChange={(e) => setCorrecting((c) => ({ ...c, intent: e.target.value }))} />
+                                  <input placeholder='params, e.g. {"field": "Work authorization", "value": "Yes"}'
+                                         value={correcting.params}
+                                         onChange={(e) => setCorrecting((c) => ({ ...c, params: e.target.value }))} />
+                                  <textarea className="cv-note-in" rows={2}
+                                            placeholder="Why the teacher was wrong — this reasoning is the training signal. Required."
+                                            value={correcting.rationale}
+                                            onChange={(e) => setCorrecting((c) => ({ ...c, rationale: e.target.value }))} />
+                                  <div className="cv-actions">
+                                    <button className="btn btn-sm btn-primary" disabled={busy}
+                                            onClick={sendCorrection}>Send correction</button>
+                                    <button className="btn btn-sm" onClick={() => setCorrecting(null)}>Cancel</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="sc-flags" style={{ borderTop: "none", paddingTop: 8 }}>
+                                  <button className="btn btn-sm" disabled={busy}
+                                          onClick={() => decide({ action: "go" })}>Go</button>
+                                  <button className="btn btn-sm" disabled={busy}
+                                          onClick={() => setCorrecting({ intent: proposal.intent,
+                                            params: JSON.stringify(proposal.params || {}), rationale: "" })}>
+                                    Correct
+                                  </button>
+                                  <button className="btn btn-sm btn-ghost" disabled={busy}
+                                          onClick={() => decide({ action: "skip" })}>Skip</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           {/* WORK THE STEP. This is the button the first cut was missing: the
                               queue shipped with only ways to END a step, so every application
                               looked like something to dismiss rather than something to do. */}

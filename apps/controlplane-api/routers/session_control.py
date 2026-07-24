@@ -222,6 +222,8 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "picks": list(ss.approved or []),
         # The apply queue for this page: N picks, N steps, and what each one is waiting on.
         "queue": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).as_dict(),
+        # What the teacher intends next, if anything — the pause the operator steers from.
+        "proposal": (bb.world or {}).get("apply_proposal"),
         "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
         "awaiting": awaiting,
         "last_step": last,
@@ -852,6 +854,121 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style)
 
 
+class ApplyProposeBody(BaseModel):
+    """What the teacher intends to do next, and why — written down BEFORE it happens."""
+
+    intent: str
+    params: dict[str, Any] = {}
+    rationale: str = ""
+    evidence: list[str] = []
+    expected_next: list[str] = []
+    rung: str = ""
+    note: str = ""                      # teacher's note to the operator about this step
+
+
+@router.post("/api/session_control/{session_id}/apply_propose")
+async def apply_propose(session_id: int, body: ApplyProposeBody,
+                        db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The teacher says what it means to do next. NOTHING is driven.
+
+    This is the pause the operator asked for: teacher runs stop anyway, so the natural surface is
+    not a row of buttons but the teacher's intent and reasoning, sitting where the operator can
+    read it and steer. A proposal is a claim about the next action, on the record, before the
+    action exists — which is also what makes disagreement legible: when the operator corrects it,
+    the two versions become a golden pair rather than the teacher's take silently vanishing.
+    """
+    session, bb, ledger = _load(session_id, db)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409, detail="No application is open to propose against.")
+    if not body.rationale.strip():
+        raise HTTPException(status_code=422,
+                            detail="A proposal needs its reasoning — that is what the operator is "
+                                   "being asked to agree or disagree WITH.")
+
+    bb.world = dict(bb.world or {})
+    bb.world["apply_proposal"] = {
+        "job_id": step.job_id, "intent": body.intent, "params": dict(body.params or {}),
+        "rationale": body.rationale, "evidence": list(body.evidence),
+        "expected_next": list(body.expected_next), "rung": body.rung or body.intent,
+        "note": body.note, "at": cps._utcnow(),
+    }
+    bb.log("propose", f"{step.job_id}: teacher proposes {body.intent} — {body.rationale[:80]}")
+    _persist(bb, ledger)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                 last={"ok": True, "action": "propose", "queue": queue.summary(),
+                       "detail": f"Proposed {body.intent!r} — waiting on you."})
+
+
+class ApplyDecideBody(BaseModel):
+    """The operator's answer to a proposal: go with it, correct it, or drop it."""
+
+    action: str                          # go | correct | skip
+    intent: str = ""                     # correct: what to do instead
+    params: dict[str, Any] = {}
+    rationale: str = ""                  # correct: WHY the teacher was wrong — the golden signal
+    note: str = ""
+
+
+@router.post("/api/session_control/{session_id}/apply_decide")
+async def apply_decide(session_id: int, body: ApplyDecideBody,
+                       db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Answer the pending proposal.
+
+    `correct` is the valuable one and is deliberately a peer of `go`, never quieter — the golden
+    training rows come from disagreement, and a surface whose easy path is always "yes" produces
+    agreement and no signal. A correction drives the OPERATOR's version and carries the teacher's
+    original into the journal as the competing take, so the students learn the contrast rather
+    than only the winner.
+    """
+    session, bb, ledger = _load(session_id, db)
+    prop = (bb.world or {}).get("apply_proposal")
+    if not prop:
+        raise HTTPException(status_code=409, detail="There is no proposal waiting.")
+
+    if body.action == "skip":
+        bb.world = dict(bb.world or {})
+        bb.world.pop("apply_proposal", None)
+        bb.log("skip", f"operator dropped the proposal to {prop.get('intent')}")
+        _persist(bb, ledger)
+        obs = await _observe(_session_browser_url(session), bb.search_state.query)
+        queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+        return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                     last={"ok": True, "action": "skip", "queue": queue.summary(),
+                           "detail": f"Dropped the proposal to {prop.get('intent')!r}."})
+
+    if body.action == "correct":
+        if not body.intent:
+            raise HTTPException(status_code=422, detail="A correction needs an intent.")
+        if len(body.rationale.strip()) < 12:
+            raise HTTPException(
+                status_code=422,
+                detail="A correction needs a reason. That reasoning IS the training signal — it is "
+                       "the whole reason a correction is worth more than an approval.")
+        teach = ApplyTeachBody(intent=body.intent, params=body.params,
+                               rationale=body.rationale, evidence=list(prop.get("evidence") or []),
+                               expected_next=list(prop.get("expected_next") or []),
+                               rung=prop.get("rung") or body.intent, initiator="operator",
+                               contrast={"intent": prop.get("intent"),
+                                         "params": prop.get("params") or {},
+                                         "rationale": prop.get("rationale", "")})
+    elif body.action == "go":
+        teach = ApplyTeachBody(intent=prop["intent"], params=prop.get("params") or {},
+                               rationale=prop.get("rationale", ""),
+                               evidence=list(prop.get("evidence") or []),
+                               expected_next=list(prop.get("expected_next") or []),
+                               rung=prop.get("rung") or prop["intent"], initiator="teacher")
+    else:
+        raise HTTPException(status_code=422, detail="action must be go | correct | skip")
+
+    bb.world = dict(bb.world or {})
+    bb.world.pop("apply_proposal", None)
+    _persist(bb, ledger)
+    return await apply_teach(session_id, teach, db)
+
+
 class ApplyTeachBody(BaseModel):
     """One teacher-authored action inside the current application."""
 
@@ -862,6 +979,10 @@ class ApplyTeachBody(BaseModel):
     expected_next: list[str] = []
     rung: str = ""                      # what to call this mini-step; defaults to the intent
     initiator: str = "teacher"
+    #: The take that LOST, when the operator corrected one. Journaled beside the acting decision
+    #: so both sides of the disagreement survive (PRINCIPLES §10 — the Open Brain keeps the
+    #: correction AND what it corrected, or the students only ever see winners).
+    contrast: Optional[dict[str, Any]] = None
 
 
 @router.post("/api/session_control/{session_id}/apply_teach")
@@ -905,6 +1026,12 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
         decision=controller_router.TeachDecisionIn(
             intent=body.intent, params=dict(body.params or {}), rationale=body.rationale,
             evidence=list(body.evidence), expected_next=list(body.expected_next)),
+        # A correction journals BOTH sides. `proposed` is teach_commit's existing golden-contrast
+        # slot, so the pair lands in the corpus the way every other correction does.
+        proposed=(controller_router.TeachDecisionIn(
+            intent=body.contrast.get("intent", ""),
+            params=dict(body.contrast.get("params") or {}),
+            rationale=body.contrast.get("rationale", "")) if body.contrast else None),
         session_id=str(session_id))
     try:
         res = await run_in_threadpool(controller_router.teach_commit, commit_body)

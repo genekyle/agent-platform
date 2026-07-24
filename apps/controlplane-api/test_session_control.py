@@ -1314,3 +1314,127 @@ def test_teaching_with_no_open_application_is_refused(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 409
+
+
+# --- the teacher proposes, the operator steers ------------------------------------------------
+def _proposed(bb, **over):
+    p = {"job_id": "indeed:a1", "intent": "click", "params": {"field": "Continue"},
+         "rationale": "the resume step is done; Continue moves to the questions",
+         "evidence": ["resume_module visible"], "expected_next": ["indeed_apply_questions"],
+         "rung": "resume_review", "note": "watch for the AI-use attestation next", "at": "now"}
+    p.update(over)
+    bb.world["apply_proposal"] = p
+    return bb
+
+
+def test_a_proposal_drives_nothing_and_waits(monkeypatch):
+    """The pause. A proposal is a claim about the next action, on the record, before it exists."""
+    seen = _fake_teach(monkeypatch, {"held": False, "outcome": "ok", "journaled": True})
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(SEARCH_URL),
+                               "/auth_state": {"ok": True, "logged_in": True}},
+                              blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_propose",
+                        json={"intent": "click", "params": {"field": "Continue"},
+                              "rationale": "the resume step is done",
+                              "note": "AI-use attestation may follow"}).json()
+    finally:
+        _teardown()
+    assert r["proposal"]["intent"] == "click"
+    assert r["proposal"]["note"] == "AI-use attestation may follow"
+    assert "body" not in seen                       # nothing was driven
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].rung == "classify"        # no new mini-step was recorded
+
+
+def test_a_proposal_without_reasoning_is_refused(monkeypatch):
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_propose",
+                        json={"intent": "click", "rationale": ""})
+    finally:
+        _teardown()
+    assert r.status_code == 422 and "disagree WITH" in r.json()["detail"]
+
+
+def test_go_commits_the_teachers_take_as_the_teacher(monkeypatch):
+    seen = _fake_teach(monkeypatch, {"held": False, "outcome": "ok", "journaled": True})
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_proposed(_teach_ready()))
+    try:
+        client.post("/api/session_control/1/apply_decide", json={"action": "go"})
+    finally:
+        _teardown()
+    assert seen["body"].decision.intent == "click"
+    assert seen["body"].proposed is None            # no disagreement, no contrast
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].initiator == "teacher"
+    assert saved["bb"].world.get("apply_proposal") is None   # consumed
+
+
+def test_a_correction_drives_the_operators_take_and_journals_both(monkeypatch):
+    """The golden pair. The operator's version acts; the teacher's losing take rides along as the
+    contrast, so the students learn the disagreement rather than only the winner."""
+    seen = _fake_teach(monkeypatch, {"held": False, "outcome": "ok", "journaled": True})
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_proposed(_teach_ready()))
+    try:
+        client.post("/api/session_control/1/apply_decide",
+                    json={"action": "correct", "intent": "select_option",
+                          "params": {"field": "Work authorization", "value": "Yes"},
+                          "rationale": "Continue is disabled until work auth is answered"})
+    finally:
+        _teardown()
+    assert seen["body"].decision.intent == "select_option"
+    assert seen["body"].decision.rationale.startswith("Continue is disabled")
+    assert seen["body"].proposed.intent == "click"          # the teacher's take, kept
+    assert seen["body"].proposed.rationale.startswith("the resume step is done")
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].initiator == "operator"
+
+
+def test_a_correction_without_a_reason_is_refused(monkeypatch):
+    """The reasoning IS the training signal — it is the whole reason a correction beats a yes."""
+    _fake_teach(monkeypatch, {"held": False, "outcome": "ok"})
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_proposed(_teach_ready()))
+    try:
+        r = client.post("/api/session_control/1/apply_decide",
+                        json={"action": "correct", "intent": "click", "rationale": "no"})
+    finally:
+        _teardown()
+    assert r.status_code == 422 and "training signal" in r.json()["detail"]
+
+
+def test_skip_drops_the_proposal_without_driving(monkeypatch):
+    seen = _fake_teach(monkeypatch, {"held": False, "outcome": "ok"})
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_proposed(_teach_ready()))
+    try:
+        r = client.post("/api/session_control/1/apply_decide", json={"action": "skip"}).json()
+    finally:
+        _teardown()
+    assert "body" not in seen
+    assert saved["bb"].world.get("apply_proposal") is None
+    assert "Dropped" in r["last_step"]["detail"]
+
+
+def test_deciding_with_nothing_pending_is_refused(monkeypatch):
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_teach_ready())
+    try:
+        r = client.post("/api/session_control/1/apply_decide", json={"action": "go"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
