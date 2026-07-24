@@ -41,6 +41,29 @@ const AWAITING_COPY = {
   operator_end: "This query is walked out. Closing the session is your call.",
 };
 
+// The ways an application can END other than being sent. `submitted` is deliberately not in this
+// list — it is the primary button, because it is the only one that means success and the only one
+// that claims a real application went out.
+//
+// Parked and abandoned stay visibly distinct: "not now" versus "not ever". Collapsing them either
+// resurrects dead requisitions forever or quietly drops applications you meant to come back to.
+const TERMINAL_CHOICES = [
+  { flag: "parked:account_wall", label: "Account wall",
+    why: "This ATS needs an account only you may create. Parked, not lost." },
+  { flag: "parked:unknown_ats", label: "Unknown ATS",
+    why: "Nobody has driven this platform yet — park it for a teaching session." },
+  { flag: "parked:ai_recruiter", label: "AI recruiter",
+    why: "A video/audio interview gate. Yours to complete, not ours." },
+  { flag: "parked:assessment", label: "Assessment",
+    why: "A survey or skills test stands between here and submit." },
+  { flag: "parked:operator", label: "Park",
+    why: "Your call — not now, come back to it." },
+  { flag: "abandoned:ats_unavailable", label: "Job gone",
+    why: "The requisition outlived the Indeed listing. Not ever, rather than not now." },
+  { flag: "abandoned:operator", label: "Not a fit",
+    why: "You looked and do not want it. Closed for good." },
+];
+
 // What the crank just did, in words. The raw action ids are dispatch keys, not labels.
 const ACTION_COPY = {
   probe_browser: "checked the browser",
@@ -178,6 +201,13 @@ export function SessionControlPanel({ domain }) {
 
   const toggle = (jobId) =>
     setPicks((prev) => (prev.includes(jobId) ? prev.filter((x) => x !== jobId) : [...prev, jobId]));
+
+  const queue = p.queue?.steps || [];
+  const qs = p.queue_summary || { total: 0, done: 0, submitted: 0, blocks_page: false };
+  const currentStep = queue.find((s) => !s.done) || null;
+
+  const flagStep = (jobId, flag, detail = "") =>
+    call("/apply_flag", { job_id: jobId, flag, detail, initiator: "operator" });
 
   const doChoose = async (advance) => {
     const d = await call("/choose", { picks, note, advance, initiator: "operator" });
@@ -393,6 +423,88 @@ export function SessionControlPanel({ domain }) {
                     : "Clean start"}
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* --- the apply queue: N picks, N steps, the page waits ------------------ */}
+          {queue.length > 0 && (
+            <div className="sc-queue">
+              <div className="sc-queue__head">
+                <AppIcon name="listTree" size={14} />
+                Applications from page {p.page}
+                <span className="badge badge--muted">
+                  {qs.done}/{qs.total} done · {qs.submitted} submitted
+                </span>
+              </div>
+              <p className="rung__meta">
+                {qs.blocks_page
+                  ? "This page stays open until every one reaches a terminal flag — nothing is skipped."
+                  : "Every application is accounted for. Choose again to advance the page."}
+              </p>
+
+              <ol className="sc-steps">
+                {queue.map((s) => {
+                  const isCurrent = !s.done && s.job_id === currentStep?.job_id;
+                  return (
+                    <li key={s.job_id}
+                        className={`sc-step ${s.done ? "is-done" : ""} ${isCurrent ? "is-current" : ""}`}>
+                      <div className="sc-step__line">
+                        <span className={`badge badge--${s.done
+                          ? (s.terminal === "submitted" ? "ready" : "muted")
+                          : (isCurrent ? "accent" : "muted")}`}>
+                          {s.done ? s.terminal : isCurrent ? "now" : "queued"}
+                        </span>
+                        <span className="sc-step__title">{s.title || s.job_id}</span>
+                        {s.company && <span className="rung__meta">{s.company}</span>}
+                        {s.platform && <span className="badge badge--muted">{s.platform}</span>}
+                      </div>
+                      {s.terminal_detail && <div className="rung__meta">{s.terminal_detail}</div>}
+
+                      {/* The mini-step trail. Every flag shown, because an unrecognised screen
+                          must be visible rather than inferred from a gap. */}
+                      {s.minis?.length > 0 && (
+                        <div className="sc-minis">
+                          {s.minis.map((m, i) => (
+                            <span key={i} className={`sc-mini sc-mini--${m.outcome}`} title={m.detail}>
+                              {m.rung} <em>{m.outcome}</em>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {isCurrent && (
+                        <>
+                          <div className="rung__meta" style={{ marginTop: 6 }}>
+                            {s.next_rung
+                              ? `Next: ${s.next_rung.replace(/_/g, " ")}`
+                              : "Past the known prefix — the rest depends on where we landed."}
+                          </div>
+                          {s.needs_operator && (
+                            <p className="sc-awaiting" style={{ marginTop: 6 }}>
+                              <AppIcon name="alert" size={14} />
+                              Stopped on something only you can resolve.
+                            </p>
+                          )}
+                          <div className="sc-flags">
+                            <button className="btn btn-sm btn-primary" disabled={busy}
+                                    title="Only press this when the application is CONFIRMED sent"
+                                    onClick={() => flagStep(s.job_id, "submitted")}>
+                              Submitted
+                            </button>
+                            {TERMINAL_CHOICES.map((f) => (
+                              <button key={f.flag} className="btn btn-sm" disabled={busy}
+                                      title={f.why}
+                                      onClick={() => flagStep(s.job_id, f.flag, f.why)}>
+                                {f.label}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
             </div>
           )}
 

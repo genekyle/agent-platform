@@ -1346,3 +1346,26 @@ textarea:focus-visible {
 .sc-live__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); animation: sc-pulse 2s ease-in-out infinite; }
 @keyframes sc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .sc-live__dot { animation: none; } }
+
+/* The apply queue: N picks, N steps, and the page waits for all of them. */
+.sc-queue { margin: 12px 0; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: rgba(127,127,127,0.04); }
+.sc-queue__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.sc-steps { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; counter-reset: step; }
+.sc-step { padding: 9px 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-1); }
+.sc-step.is-current { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.sc-step.is-done { opacity: 0.62; }
+.sc-step__line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sc-step__title { font-size: 13.5px; font-weight: 600; }
+
+/* Every mini-step's flag is shown. A gap in the trail reads identically to a step that went
+   fine, which is the whole reason `unknown` is a first-class outcome. */
+.sc-minis { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.sc-mini { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: rgba(127,127,127,0.12); color: var(--text-muted); }
+.sc-mini em { font-style: normal; font-weight: 600; margin-left: 3px; }
+.sc-mini--ok em { color: var(--success); }
+.sc-mini--unknown, .sc-mini--blocked, .sc-mini--human_required { background: var(--warning-soft); color: var(--warning); }
+.sc-mini--unknown em, .sc-mini--blocked em, .sc-mini--human_required em { color: var(--warning); }
+.sc-mini--failed { background: var(--danger-soft); color: var(--danger); }
+.sc-mini--failed em { color: var(--danger); }
+
+.sc-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line); }
