@@ -72,9 +72,16 @@ def source_paths(source: Optional[str]) -> list[list[str]]:
     each is a two-level path ['Job Board', leaf]. 'Other' is top-level, so it is a one-level path.
     A path navigator (`/select_prompt_path`) drills each in order; the flat `source_candidates`
     above stays for genuinely flat dropdowns (State), where there is no category to drill."""
+    # The operator's standard, verbatim (2026-07-24): "always try to find indeed and then use the
+    # drill down picker logic, if no indeed exists go straight to other." So the PRIMARY leaf
+    # (Indeed for an Indeed apply) drills under the Job Board category; if it is not offered, we go
+    # straight to the flat "Other", which is always present. Only the primary leaf is drilled —
+    # extra siblings are not part of the standard.
     leaves = _SOURCE_LEAVES.get((source or "").strip().lower(), [])
-    paths: list[list[str]] = [[_JOB_BOARD_CATEGORY, leaf] for leaf in leaves]
-    paths.append([FALLBACK])
+    paths: list[list[str]] = []
+    if leaves:
+        paths.append([_JOB_BOARD_CATEGORY, leaves[0]])   # Indeed, drilled under Job Board
+    paths.append([FALLBACK])                             # Other — the always-there backup
     return paths
 
 

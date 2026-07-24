@@ -42,7 +42,8 @@ def test_source_paths_drill_category_then_leaf():
     """The nested case: Indeed hides under a Job Board category, so each is a 2-level path, and
     Other stays flat."""
     paths = src.source_paths("indeed")
-    assert paths == [["Job Board", "Indeed"], ["Job Board", "SimplyHired"], ["Other"]]
+    # The operator's standard: try Indeed (drilled), then Other. Only the primary leaf is drilled.
+    assert paths == [["Job Board", "Indeed"], ["Other"]]
 
 
 def test_source_paths_end_in_other_flat():

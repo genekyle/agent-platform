@@ -455,6 +455,38 @@ async def select_prompt(body: SelectPromptRequest):
             "detail": f"searchBox={'yes' if sb.get('found') else 'no'}"}
 
 
+# Find a VISIBLE prompt option whose text contains the wanted value, and return its viewport-center
+# in CSS px. Scoped to the option roles Workday uses (menuItem/promptOption/role=option) and to
+# offsetParent!=null so a hidden template row is never matched. This is how the path navigator
+# clicks the actual clickable ROW (a category drills in, a leaf commits) with a trusted mouse event
+# — resolving by accessible NAME and native-clicking the AX node did not trigger Workday's drill-in
+# (found live 2026-07-24: the click landed on the wrong element and the popup stayed at top level).
+_PROMPT_OPTION_BOX_JS = r"""
+(want => {
+  const norm = s => (s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const w = norm(want);
+  const sel = '[data-automation-id="menuItem"],[data-automation-id="promptOption"],[role="option"]';
+  for (const el of document.querySelectorAll(sel)) {
+    if (el.offsetParent === null) continue;
+    if (!norm(el.textContent).includes(w)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width && r.height) return {found:true, x:r.left+r.width/2, y:r.top+r.height/2,
+                                     txt:norm(el.textContent).slice(0,45)};
+  }
+  return {found:false};
+})(%s)
+"""
+
+# Clear whatever is in the currently-focused prompt searchBox — a stale search term from a prior
+# attempt filters the option list and hides the row we want.
+_PROMPT_CLEAR_SEARCH_JS = r"""
+(()=>{const el=document.querySelector('input[data-automation-id="searchBox"]')
+  || [...document.querySelectorAll('input[type=text]')].find(i=>i.offsetParent);
+  if(el){el.focus(); el.value=''; el.dispatchEvent(new Event('input',{bubbles:true})); return true;}
+  return false;})()
+"""
+
+
 # Read whether a prompt field has COMMITTED a value: its own value/pill text and whether it is
 # still flagged invalid. This is the verification /select_prompt never did — clicking an option is
 # not the same as the field accepting it (a category click drills in and commits nothing).
@@ -520,45 +552,55 @@ async def select_prompt_path(body: SelectPromptPathRequest):
         tab_id=body.tab_id, tab_url=body.tab_url)
     await asyncio.sleep(max(0.5, min(body.settle_seconds, 4.0)))
 
+    async def _find_box(cdp, value: str) -> dict:
+        return (await cdp.send("Runtime.evaluate",
+                {"expression": _PROMPT_OPTION_BOX_JS % _json.dumps(value),
+                 "returnByValue": True})).get("result", {}).get("value") or {}
+
+    async def _type_search(cdp, value: str) -> bool:
+        sb = (await cdp.send("Runtime.evaluate", {"expression": _PROMPT_SEARCHBOX_JS,
+                                                  "returnByValue": True})).get("result", {}).get("value") or {}
+        if not sb.get("found"):
+            return False
+        await _trusted_click(cdp, sb["x"], sb["y"])
+        await asyncio.sleep(0.2)
+        await cdp.send("Runtime.evaluate", {"expression": _PROMPT_CLEAR_SEARCH_JS})
+        for ch in value:
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch,
+                                                      "key": ch, "unmodifiedText": ch})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(1.3)   # Workday's debounced fetch
+        return True
+
     target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
     async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
         cdp = _CDPSession(ws)
         await cdp.send("Page.enable", {})
+        # Clear any stale search term left in the box from a prior attempt.
+        await cdp.send("Runtime.evaluate", {"expression": _PROMPT_CLEAR_SEARCH_JS})
+        await asyncio.sleep(0.3)
+
         for i, level in enumerate(levels):
-            # type the level into the visible searchBox (each drill re-uses the open popup's box)
-            sb = (await cdp.send("Runtime.evaluate", {"expression": _PROMPT_SEARCHBOX_JS,
-                                                      "returnByValue": True})).get("result", {}).get("value") or {}
-            if sb.get("found"):
-                await _trusted_click(cdp, sb["x"], sb["y"])
-                await asyncio.sleep(0.2)
-                await cdp.send("Runtime.evaluate", {"expression":
-                    "(()=>{const el=document.activeElement; if(el&&el.value){el.value='';"
-                    "el.dispatchEvent(new Event('input',{bubbles:true}));}})()"})
-                for ch in level:
-                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": ch,
-                                                              "key": ch, "unmodifiedText": ch})
-                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
-                    await asyncio.sleep(0.05)
-                await asyncio.sleep(1.3)
-            # resolve the option by accessible name and click it (category drills in / leaf commits)
-            opt = None
-            for _ in range(6):
-                opt = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url, None, level)
-                if opt is not None:
-                    break
-                await asyncio.sleep(0.4)
-            steps.append({"step": f"level{i}", "value": level, "search_box": bool(sb.get("found")),
-                          "node": opt})
-            if opt is None:
-                return {**common, "outcome": Outcome.NO_OPTION if sb.get("found") else Outcome.NOT_OPENED,
+            # Try to find the row as-is (top-level categories are visible without typing); if it is
+            # not there, type to filter/fetch, then look again.
+            box = await _find_box(cdp, level)
+            typed = False
+            if not box.get("found"):
+                typed = await _type_search(cdp, level)
+                box = await _find_box(cdp, level)
+            steps.append({"step": f"level{i}", "value": level, "typed": typed,
+                          "found": bool(box.get("found")), "matched": box.get("txt")})
+            if not box.get("found"):
+                return {**common, "outcome": Outcome.NO_OPTION if typed else Outcome.NOT_OPENED,
                         "steps": steps,
-                        "detail": f"level {i} {level!r} not found (searchBox="
-                                  f"{'yes' if sb.get('found') else 'no'})"}
-            await get_driver("direct").move_and_act(
-                browser_url=body.browser_url,
-                request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=opt),
-                tab_id=body.tab_id, tab_url=body.tab_url)
-            await asyncio.sleep(0.6)
+                        "detail": f"level {i} {level!r} not found (typed={typed})"}
+            # Trusted mouse click on the ROW center — a category drills in, a leaf commits.
+            await _trusted_click(cdp, box["x"], box["y"])
+            await asyncio.sleep(0.8)
+            # Reset the search filter before the next drill level.
+            await cdp.send("Runtime.evaluate", {"expression": _PROMPT_CLEAR_SEARCH_JS})
+            await asyncio.sleep(0.3)
 
         # VERIFY the field committed — the whole point of the path variant.
         vjs = _PROMPT_COMMITTED_JS % _json.dumps(body.field_name)

@@ -2114,7 +2114,7 @@ def test_prompt_select_falls_back_to_other_when_source_not_offered(monkeypatch):
     finally:
         _teardown()
     assert r["last_step"]["picked"] == "Other"
-    assert r["last_step"]["tried"] == ["Indeed", "SimplyHired", "Other"]
+    assert r["last_step"]["tried"] == ["Indeed", "Other"]   # standard: Indeed, then Other
     assert "truthful" in r["last_step"]["detail"]
 
 
