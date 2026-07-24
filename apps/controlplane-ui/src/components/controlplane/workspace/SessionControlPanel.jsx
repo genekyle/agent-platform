@@ -297,6 +297,12 @@ export function SessionControlPanel({ domain }) {
                 {ACTION_COPY[last.action] || last.action}
               </span>
             )}
+            {/* The pace it actually ran at. Without this, "that felt too quick" is unfalsifiable. */}
+            {last?.pace && (
+              <span className="badge badge--muted" title={last.pace.why}>
+                {last.pace.style} pace
+              </span>
+            )}
           </div>
 
           {error && <div className="coaching-error">{error}</div>}

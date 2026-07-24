@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
 from models import TrainingSession
@@ -428,14 +429,19 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
 
     if action == "set_distance":
         miles = max(int((bb.world or {}).get("radius_miles") or 50), 50)
+        # Setting the pill RE-QUERIES the backend, so it is a navigation as far as pacing goes.
+        # This step used to fire with no pause at all and was over in about half a second.
+        style = xs.pick_style()
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         res = await _capture_post("/set_distance",
                                   {"browser_url": browser_url, "tab_url": "indeed.com/jobs",
                                    "min_miles": miles})
+        await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
         if res.get("applied"):
             ledger.mark("radius_set", evidence=f"distance pill set to {res.get('selected_miles')}mi",
                         initiator=initiator)
-            bb.log("checkpoint", f"radius_set — {res.get('selected_miles')}mi")
-            return {"ok": True, "action": action,
+            bb.log("checkpoint", f"radius_set — {res.get('selected_miles')}mi ({style.name} pace)")
+            return {"ok": True, "action": action, "pace": xs.describe(style),
                     "detail": f"Distance filter set to {res.get('selected_miles')} miles."}
         return {"ok": False, "action": action, "awaiting": "operator_filter",
                 "detail": f"Could not set the distance filter ({res.get('detail') or 'no option matched'}). "
@@ -507,19 +513,24 @@ async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict
                           f"{', '.join(controls) or 'neither'}). Open Indeed's job search, then "
                           f"step again."}
 
+    # One style for the whole sequence — a person is not brisk and dawdling in the same five
+    # seconds. The hard-coded 1.2 / 1.0 / 3.0 these replace were invariant, which is its own
+    # signature, and were scattered rather than expressed as a pace.
+    style = xs.pick_style()
+
     acted, why = await _act("type", controls["query"], value=query)
     if not acted:
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
                 "detail": f"Could not enter the query — {why}."}
-    await asyncio.sleep(1.2)
+    await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
     if location and "location" in controls:
         await _act("type", controls["location"], value=location)
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
     acted, why = await _act("click", controls["submit"])
     if not acted:
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
                 "detail": f"Typed the query but could not submit it — {why}."}
-    await asyncio.sleep(3.0)
+    await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
 
     # PROOF, not assumption: re-read the tabs and require a results URL carrying our query.
     after = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
@@ -534,6 +545,7 @@ async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict
     bb.search_state.page = _page_from_url(tab.get("url", ""))
     bb.log("checkpoint", f"query_entered — {query!r} spent once for this session")
     return {"ok": True, "action": "run_query", "page": bb.search_state.page,
+            "pace": xs.describe(style),
             "detail": f"Ran {query!r}. This session will not search again — page forward instead."}
 
 
