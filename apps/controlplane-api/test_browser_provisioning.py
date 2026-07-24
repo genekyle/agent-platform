@@ -91,17 +91,41 @@ def test_stop_kills_the_real_browser_when_the_recorded_pid_is_a_dead_launcher(mo
     def fake_terminate(pid):
         killed.append(pid)
         if pid == 81915:
-            dark["yet"] = True   # killing the REAL one is what takes the port down
+            dark["yet"] = True   # killing the REAL one is what frees the port and the profile
 
     monkeypatch.setattr(bp, "_terminate", fake_terminate)
     res = bp.stop_browser(port=9328, recorded_pid=58032, user_data_dir=PROFILE,
-                          cdp_reachable=reachable, ps_lines=_ps((81915, PROFILE, 9328)),
-                          sleep=lambda _s: None)
+                          cdp_reachable=reachable, timeout_s=2.0, sleep=lambda _s: None,
+                          ps_lines=lambda: [] if dark["yet"] else _ps((81915, PROFILE, 9328))())
     assert res.stopped is True
     assert 58032 in res.killed_pids and 81915 in res.killed_pids
 
 
-def test_stop_reports_failure_when_the_port_keeps_answering(monkeypatch):
+def test_stop_verifies_the_profile_is_released_not_just_the_recorded_port(monkeypatch):
+    """The second-order version of the same mistake. Session 18's recorded port 9322 was never
+    alive, so a port-only check found it instantly 'dark' and reported a clean stop — while the
+    browser genuinely holding the profile kept serving on 9328. Verify what the next launch
+    actually needs: that the profile has been released."""
+    monkeypatch.setattr(bp, "_terminate", lambda _pid: None)   # nothing actually dies
+    res = bp.stop_browser(port=9322, recorded_pid=10514, user_data_dir=PROFILE,
+                          cdp_reachable=_reachable(),          # 9322 is dark, as it always was
+                          ps_lines=_ps((81915, PROFILE, 9328)),  # but 81915 still holds the dir
+                          adopt_orphans=True, timeout_s=0.5, sleep=lambda _s: None)
+    assert res.stopped is False
+    assert "81915" in res.detail and "still holds" in res.detail
+
+
+def test_stop_succeeds_once_the_profile_is_actually_free(monkeypatch):
+    gone = {"yet": False}
+    monkeypatch.setattr(bp, "_terminate", lambda _pid: gone.__setitem__("yet", True))
+    res = bp.stop_browser(port=9322, recorded_pid=None, user_data_dir=PROFILE,
+                          cdp_reachable=_reachable(), adopt_orphans=True,
+                          ps_lines=lambda: [] if gone["yet"] else _ps((81915, PROFILE, 9328))(),
+                          timeout_s=2.0, sleep=lambda _s: None)
+    assert res.stopped is True and "profile released" in res.detail
+
+
+def test_stop_reports_failure_when_the_browser_will_not_die(monkeypatch):
     """The honest-failure path. If the browser will not die we must NOT let the caller write
     `stopped` — that lie is what locked the profile in the first place."""
     monkeypatch.setattr(bp, "_terminate", lambda _pid: None)
@@ -109,7 +133,7 @@ def test_stop_reports_failure_when_the_port_keeps_answering(monkeypatch):
                           cdp_reachable=_reachable(9328), ps_lines=_ps((81915, PROFILE, 9328)),
                           timeout_s=0.5, sleep=lambda _s: None)
     assert res.stopped is False
-    assert "STILL answering" in res.detail
+    assert "did not stop" in res.detail and "keeps the profile locked" in res.detail
 
 
 def test_stop_is_a_noop_when_nothing_was_running():
@@ -119,13 +143,39 @@ def test_stop_is_a_noop_when_nothing_was_running():
 
 
 def test_stop_leaves_another_sessions_browser_on_the_same_profile_alone(monkeypatch):
-    """Two ports on one profile shouldn't happen, but if it does we only kill ours."""
+    """Two ports on one profile shouldn't happen, but if it does we only kill ours — unless the
+    caller says we own the profile outright (see the orphan test below)."""
     killed = []
     monkeypatch.setattr(bp, "_terminate", lambda pid: killed.append(pid))
     bp.stop_browser(port=9328, recorded_pid=None, user_data_dir=PROFILE,
-                    cdp_reachable=_reachable(), sleep=lambda _s: None,
-                    ps_lines=_ps((81915, PROFILE, 9328), (555, PROFILE, 9400)))
+                    cdp_reachable=_reachable(), sleep=lambda _s: None, timeout_s=2.0,
+                    ps_lines=lambda: ([] if 81915 in killed else _ps((81915, PROFILE, 9328))())
+                                     + _ps((555, PROFILE, 9400))())
     assert 81915 in killed and 555 not in killed
+
+
+def test_stop_adopts_an_orphan_holding_our_profile_on_an_unrecorded_port(monkeypatch):
+    """The second live find. Session 18's row said port 9322; the browser actually holding its
+    profile answered on 9328. A port-matched stop skipped the only process that mattered and then
+    reported success — a clean stop over a browser that never died. When nothing else is live on
+    the profile, the profile is the identity, not the port we wrote down."""
+    killed = []
+    monkeypatch.setattr(bp, "_terminate", lambda pid: killed.append(pid))
+    res = bp.stop_browser(port=9322, recorded_pid=10514, user_data_dir=PROFILE,
+                          cdp_reachable=_reachable(), sleep=lambda _s: None, timeout_s=2.0,
+                          adopt_orphans=True,
+                          ps_lines=lambda: [] if 81915 in killed else _ps((81915, PROFILE, 9328))())
+    assert 81915 in killed and res.stopped is True
+
+
+def test_without_adoption_the_orphan_is_left_alone(monkeypatch):
+    """The guard that makes adoption safe: another session live on this profile keeps its browser."""
+    killed = []
+    monkeypatch.setattr(bp, "_terminate", lambda pid: killed.append(pid))
+    bp.stop_browser(port=9322, recorded_pid=None, user_data_dir=PROFILE,
+                    cdp_reachable=_reachable(), sleep=lambda _s: None,
+                    adopt_orphans=False, ps_lines=_ps((81915, PROFILE, 9328)))
+    assert killed == []
 
 
 # --- defect 3: never record a port we have not probed ---------------------------------------

@@ -112,6 +112,7 @@ class StopResult:
 def stop_browser(*, port: Optional[int], recorded_pid: Optional[int], user_data_dir: str,
                  cdp_reachable: Callable[..., bool],
                  ps_lines: Optional[Callable[[], list[str]]] = None,
+                 adopt_orphans: bool = False,
                  timeout_s: float = STOP_TIMEOUT_S,
                  sleep: Callable[[float], None] = time.sleep) -> StopResult:
     """Stop this session's browser and CONFIRM it is gone.
@@ -120,9 +121,17 @@ def stop_browser(*, port: Optional[int], recorded_pid: Optional[int], user_data_
     recorded pid is frequently a launcher that has already exited while the real browser lives on
     (the 2026-07-23 case). Then it **verifies the CDP port went dark** and reports honestly if it
     did not, so a caller can never mark a session `stopped` on a browser that is still serving.
+
+    `adopt_orphans` widens the kill from "a browser on our recorded port" to "whatever is holding
+    our profile dir, on any port". Needed because the recorded port is exactly what is unreliable:
+    session 18 claimed port 9322 while the browser genuinely holding its profile answered on 9328,
+    so a port-matched stop skipped the only process that mattered and reported success. The caller
+    passes True only when no OTHER session is live on this profile — otherwise stopping one
+    session would kill another's browser.
     """
-    holders = [p for p in find_chromes(user_data_dir=user_data_dir, ps_lines=ps_lines)
-               if port is None or p.debug_port in (None, port)]
+    holders = find_chromes(user_data_dir=user_data_dir, ps_lines=ps_lines)
+    if not adopt_orphans and port is not None:
+        holders = [p for p in holders if p.debug_port in (None, port)]
     if not holders and not recorded_pid and not (port and cdp_reachable(port)):
         return StopResult(True, [], "no browser was running")
 
@@ -137,17 +146,30 @@ def stop_browser(*, port: Optional[int], recorded_pid: Optional[int], user_data_
             _terminate(proc.pid)
             killed.append(proc.pid)
 
-    if not port:
-        return StopResult(True, killed, f"terminated {len(killed)} process(es); no port to verify")
-
+    # VERIFY AGAINST THE PROFILE, NOT THE RECORDED PORT. The recorded port is precisely what is
+    # untrustworthy: session 18 claimed 9322, which was never alive, so a port-only check found it
+    # instantly "dark" and reported a successful stop while the real browser kept serving on 9328.
+    # What actually matters is whether the profile has been released, because that is what the next
+    # launch needs. Chrome takes a moment to exit after SIGTERM, so poll.
     deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if not cdp_reachable(port):
-            return StopResult(True, killed, f"port {port} went dark")
+    while True:
+        still_held = find_chromes(user_data_dir=user_data_dir, ps_lines=ps_lines)
+        if not adopt_orphans and port is not None:
+            still_held = [p for p in still_held if p.debug_port in (None, port)]
+        port_dark = not (port and cdp_reachable(port))
+        if not still_held and port_dark:
+            return StopResult(True, killed, f"profile released; {len(killed)} process(es) stopped")
+        if time.monotonic() >= deadline:
+            break
         sleep(_POLL_S)
+
+    who = ", ".join(f"pid {p.pid}" + (f" (port {p.debug_port})" if p.debug_port else "")
+                    for p in still_held) or f"port {port}"
     return StopResult(False, killed,
-                      f"port {port} is STILL answering after {timeout_s:.0f}s — the browser did "
-                      f"not stop, so this session must not be recorded as stopped")
+                      f"the browser did not stop after {timeout_s:.0f}s — {who} still holds "
+                      f"{user_data_dir}. This session must not be recorded as stopped: a live "
+                      f"browser keeps the profile locked and the next launch will silently attach "
+                      f"to it instead of starting fresh.")
 
 
 def profile_conflict(*, user_data_dir: str, exclude_port: Optional[int] = None,

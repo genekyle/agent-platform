@@ -362,7 +362,8 @@ def _launch_training_chrome(db: Session, session: TrainingSession) -> TrainingSe
     return session
 
 
-def _stop_training_chrome(session: TrainingSession) -> "browser_provisioning.StopResult":
+def _stop_training_chrome(session: TrainingSession,
+                          db: Optional[Session] = None) -> "browser_provisioning.StopResult":
     """Stop this session's browser and CONFIRM it went dark.
 
     Was: SIGTERM the recorded pid and return. That pid is often a launcher Chrome already replaced,
@@ -370,13 +371,32 @@ def _stop_training_chrome(session: TrainingSession) -> "browser_provisioning.Sto
     the profile locked, which is what broke the next launch (2026-07-23). Now it also kills
     whatever is genuinely holding the profile, then verifies, and the caller refuses to write
     `stopped` unless it is true.
+
+    We adopt ORPHANS — browsers holding our profile on a port we did not record — whenever no
+    other session is live on that profile. The recorded port is the unreliable part (session 18
+    claimed 9322 while its browser answered on 9328), so trusting it is what let the zombie
+    survive a "successful" stop.
     """
     import channel_browser
+
+    adopt = True
+    if db is not None and session.persistent_profile:
+        rivals = db.scalars(
+            select(TrainingSession).where(
+                TrainingSession.persistent_profile == session.persistent_profile,
+                TrainingSession.status.in_(["active", "starting"]),
+                TrainingSession.id != session.id,
+            )
+        ).all()
+        # Only a rival with a genuinely LIVE browser can lose one to us.
+        adopt = not any(channel_browser.cdp_reachable(r.chrome_debug_port) for r in rivals)
+
     return browser_provisioning.stop_browser(
         port=session.chrome_debug_port,
         recorded_pid=session.chrome_process_pid,
         user_data_dir=session.chrome_user_data_dir or "",
         cdp_reachable=channel_browser.cdp_reachable,
+        adopt_orphans=adopt,
     )
 
 
@@ -2255,7 +2275,7 @@ def stop_training_session(session_id: int, force: bool = False, db: Session = De
     allowed, reason = session_manager.may_touch(protected=session.protected, action="stop", force=force)
     if not allowed:
         raise HTTPException(status_code=409, detail=reason)
-    result = _stop_training_chrome(session)
+    result = _stop_training_chrome(session, db)
     if not result.stopped:
         # Refusing to lie is the whole point: a row saying `stopped` over a browser that is still
         # serving is what silently locked the profile and broke the next launch.
@@ -2292,7 +2312,7 @@ def delete_training_session(session_id: int, force: bool = False, db: Session = 
         raise HTTPException(status_code=409, detail=reason)
 
     # Stop Chrome before tearing down the DB row that holds its PID
-    _stop_training_chrome(session)
+    _stop_training_chrome(session, db)
 
     # Snapshot artifact filenames before the cascade-delete removes the rows
     artifact_filenames = [capture.artifact_filename for capture in session.captures]
@@ -2328,7 +2348,7 @@ def reset_training_data(db: Session = Depends(get_db)):
 
     artifact_filenames: list[str] = []
     for session in sessions:
-        _stop_training_chrome(session)
+        _stop_training_chrome(session, db)
         artifact_filenames.extend(capture.artifact_filename for capture in session.captures)
 
     session_count = len(sessions)
