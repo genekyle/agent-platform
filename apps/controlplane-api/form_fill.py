@@ -48,7 +48,10 @@ _FIELD_TO_KEY: tuple[tuple[str, str], ...] = (
     ("state", "state"),
     ("country", "country"),
     ("email", "email"),
-    ("how did you hear", "how_did_you_hear"),
+    # "How did you hear" is a PROMPT, not a text field — it renders as a textbox but a free-typed
+    # value is invalid (the bunch-fill left it red on 2026-07-24). It must be SELECTED via
+    # apply_prompt_select (source-aware), so it is deliberately not mapped for text fill here.
+    ("how did you hear", None),
     ("preferred name", None),
     ("when can you start", "availability_date"),
     ("available", "availability_date"),

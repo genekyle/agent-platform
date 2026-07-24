@@ -2025,7 +2025,7 @@ def test_apply_fill_plans_the_bunch_without_driving(monkeypatch):
     finally:
         _teardown()
     s = r["last_step"]["fill_summary"]
-    assert s["fillable"] == 3                         # First, Last, How-did-you-hear
+    assert s["fillable"] == 2                         # First, Last (How-did-you-hear is a prompt)
     assert "Address Line 1" in s["missing"] and "City" in s["missing"]
     assert "/execute" not in harness.paths()          # plan-only drives nothing
 
@@ -2048,10 +2048,10 @@ def test_apply_fill_executes_only_the_confident_fields(monkeypatch):
     finally:
         _teardown()
     names = [t[0] for t in typed]
-    assert names == ["First Name", "Last Name", "How Did You Hear About Us?"]
+    assert names == ["First Name", "Last Name"]       # prompt fields are not text-filled
     assert dict(typed)["First Name"] == "Gene"
-    assert dict(typed)["How Did You Hear About Us?"] == "Indeed"
     assert "Address Line 1" not in names              # never filled a blank
+    assert "How Did You Hear About Us?" not in names  # a prompt, handled by apply_prompt_select
     assert "Still need you for" in r["last_step"]["detail"]
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert any(m.rung == "form_fill" for m in step.minis)
@@ -2072,3 +2072,98 @@ def test_apply_fill_never_invents_a_missing_address(monkeypatch):
     finally:
         _teardown()
     assert "Address Line 1" not in typed and "City" not in typed
+
+
+# --- prompt select: reuse /select_prompt, source-aware, Other fallback ------------------------
+def test_prompt_select_source_picks_indeed_when_offered(monkeypatch):
+    """The reuse: source=indeed tries 'Indeed' first; /select_prompt clicks it and we stop."""
+    calls = []
+
+    def _select(payload):
+        calls.append(payload["value"])
+        return {"outcome": "ok"} if payload["value"] == "Indeed" else {"outcome": "no_option"}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+                        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_prompt_select",
+                        json={"field_name": "How Did You Hear About Us?", "use_source": True}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["picked"] == "Indeed"
+    assert calls == ["Indeed"]                       # stopped at the first hit
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.OK
+
+
+def test_prompt_select_falls_back_to_other_when_source_not_offered(monkeypatch):
+    """The operator's rule: Indeed isn't always an option; Other is acceptable. It tries Indeed,
+    SimplyHired, then Other — and records that it fell back."""
+    def _select(payload):
+        return {"outcome": "ok"} if payload["value"] == "Other" else {"outcome": "no_option"}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+                        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_prompt_select",
+                        json={"field_name": "How Did You Hear About Us?", "use_source": True}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["picked"] == "Other"
+    assert r["last_step"]["tried"] == ["Indeed", "SimplyHired", "Other"]
+    assert "truthful" in r["last_step"]["detail"]
+
+
+def test_prompt_select_stops_on_a_real_error_not_no_option(monkeypatch):
+    """not_opened is a stale-session error — don't hammer every candidate against a shut prompt."""
+    calls = []
+
+    def _select(payload):
+        calls.append(payload["value"])
+        return {"outcome": "not_opened", "detail": "popup never opened"}
+
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+             blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_prompt_select",
+                        json={"field_name": "How Did You Hear About Us?", "use_source": True}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is False
+    assert calls == ["Indeed"]                       # stopped at the first, did not try the rest
+
+
+def test_prompt_select_explicit_value_for_a_dropdown(monkeypatch):
+    """The same mechanism drives an ordinary dropdown: State = New Hampshire, one explicit value."""
+    def _select(payload):
+        return {"outcome": "ok"} if payload["value"] == "New Hampshire" else {"outcome": "no_option"}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt": _select},
+                        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_prompt_select",
+                        json={"field_name": "State", "value": "New Hampshire"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["picked"] == "New Hampshire"
+
+
+def test_prompt_select_needs_a_value_or_source(monkeypatch):
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_prompt_select",
+                        json={"field_name": "State"})
+    finally:
+        _teardown()
+    assert r.status_code == 422

@@ -948,6 +948,101 @@ def _save_queue(bb: Any, queue: aps.Queue) -> None:
     bb.world["apply_queue"] = queue.as_dict()
 
 
+class ApplyPromptBody(BaseModel):
+    field_name: str                 # the prompt field, e.g. "How Did You Hear About Us?" / "State"
+    value: Optional[str] = None     # an explicit single value (State = "New Hampshire")
+    use_source: bool = False        # resolve candidates from the apply SOURCE (how did you hear)
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/apply_prompt_select")
+async def apply_prompt_select(session_id: int, body: ApplyPromptBody,
+                              db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Select a value in a Workday hierarchical prompt / dropdown, reusing `/select_prompt`.
+
+    Two ways to say what to pick, one mechanism underneath:
+      * `value` — an explicit single choice (State = "New Hampshire", Phone Device Type = "Mobile").
+      * `use_source` — resolve candidates from where the application came FROM (`apply_source`),
+        for "How did you hear about us?". This came from Indeed, so we try "Indeed", then its
+        sibling "SimplyHired", then "Other" — because those are not always the offered options and
+        "Other" is a truthful floor. The live prompt decides which exists; `/select_prompt` returns
+        NO_OPTION when a candidate is not listed, which is exactly our signal to try the next.
+
+    This is the reuse the operator asked for: the Workday prompt driver is old, proven tech; the
+    only new thing is choosing WHICH value to feed it, by context. That context-resolution is what
+    generalises to LinkedIn and the domains after it.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409, detail="No open application.")
+
+    if body.use_source:
+        import apply_source
+        source = apply_source.source_from_job_id(step.job_id)
+        candidates = apply_source.source_candidates(source)
+    elif body.value:
+        candidates = [body.value]
+    else:
+        raise HTTPException(status_code=422,
+                            detail="Give an explicit value, or use_source for 'how did you hear'.")
+
+    obs = await _observe(browser_url, bb.search_state.query)
+    tab_id = _apply_tab(bb, obs).get("tab_id", "")
+    tried: list[str] = []
+    picked: Optional[str] = None
+    last_detail = ""
+    for value in candidates:
+        tried.append(value)
+        res = await _capture_post("/select_prompt", {
+            "browser_url": browser_url, "tab_id": tab_id,
+            "field_name": body.field_name, "value": value})
+        outcome = res.get("outcome")
+        last_detail = res.get("detail", "")
+        if outcome in ("ok", "committed_unconfirmed"):
+            picked = value
+            break
+        if outcome not in ("no_option",):
+            # not_opened / not_found are real errors (stale session, wrong field) — stop, don't
+            # keep hammering candidates against a prompt that is not even open.
+            break
+        await asyncio.sleep(1.0)
+
+    rung = f"prompt:{form_fill_slug(body.field_name)}"
+    if picked is not None:
+        fell_back = body.use_source and picked == apply_source.FALLBACK
+        step.record(rung, aps.OK,
+                    f"selected {picked!r} in {body.field_name!r}"
+                    + (f" (source not offered, used Other after trying {tried[:-1]})"
+                       if fell_back else ""),
+                    initiator=body.initiator)
+        detail = (f"Selected {picked!r} in {body.field_name!r}."
+                  + (" The exact source was not an option, so Other — a truthful answer."
+                     if fell_back else ""))
+        ok = True
+    else:
+        step.record(rung, aps.UNKNOWN,
+                    f"none of {tried} selectable in {body.field_name!r}: {last_detail}"[:200],
+                    initiator=body.initiator)
+        detail = (f"Could not select any of {tried} in {body.field_name!r} ({last_detail}). "
+                  "Check the prompt in the window.")
+        ok = False
+
+    _save_queue(bb, queue)
+    _persist(bb, ledger)
+    obs2 = await _observe(browser_url, bb.search_state.query)
+    return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
+                 last={"ok": ok, "action": "apply_prompt_select", "queue": queue.summary(),
+                       "picked": picked, "tried": tried, "detail": detail})
+
+
+def form_fill_slug(name: str) -> str:
+    return "_".join("".join(c if c.isalnum() else " " for c in (name or "").lower()).split())[:40]
+
+
 def _identity_defaults() -> dict[str, str]:
     """Account-derived values that fill identity fields without a stored answer, plus the apply
     source. `how_did_you_hear` is Indeed with high confidence — the application literally arrived

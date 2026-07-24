@@ -24,7 +24,8 @@ def test_identity_fields_fill_from_the_account():
     rows = {r["field"]: r for r in ff.plan(_FIELDS, answers={}, identity=_IDENTITY)}
     assert rows["First Name"]["value"] == "Gene" and rows["First Name"]["source"] == ff.SRC_IDENTITY
     assert rows["Last Name"]["value"] == "Magsipoc"
-    assert rows["How Did You Hear About Us?"]["value"] == "Indeed"
+    # "How Did You Hear" is a prompt, not a text fill — it is not planned here at all
+    assert "How Did You Hear About Us?" not in rows
 
 
 def test_missing_data_is_flagged_never_guessed():
@@ -76,6 +77,6 @@ def test_phone_device_type_wins_over_phone():
 def test_summary_counts_and_lists_the_missing():
     rows = ff.plan(_FIELDS, answers={}, identity=_IDENTITY)
     s = ff.summarise(rows)
-    assert s["fillable"] == 3                        # first, last, how-did-you-hear
+    assert s["fillable"] == 2                        # first, last (how-did-you-hear is a prompt now)
     assert "Address Line 1" in s["missing"] and "City" in s["missing"]
-    assert s["by_source"][ff.SRC_IDENTITY] == 3
+    assert s["by_source"][ff.SRC_IDENTITY] == 2

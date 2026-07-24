@@ -172,6 +172,7 @@
   "POST /api/session_control/{session_id}/apply_decide",
   "POST /api/session_control/{session_id}/apply_fill",
   "POST /api/session_control/{session_id}/apply_flag",
+  "POST /api/session_control/{session_id}/apply_prompt_select",
   "POST /api/session_control/{session_id}/apply_propose",
   "POST /api/session_control/{session_id}/apply_step",
   "POST /api/session_control/{session_id}/apply_teach",
