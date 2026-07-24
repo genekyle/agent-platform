@@ -1484,3 +1484,31 @@ def test_the_view_surfaces_the_observed_apply_type(monkeypatch):
     finally:
         _teardown()
     assert r["open_pane"]["apply_type"] == "company_site"
+
+
+def test_classify_finds_the_apply_tab_rather_than_the_last_one(monkeypatch):
+    """Found live 2026-07-24 before it could bite: when the operator approves an Apply through the
+    teach path, the new tab opens without apply_step ever seeing it — so `apply_tab` is unset and
+    "the last tab" is the Indeed search. That would have classified Indeed as the ATS of a Workday
+    application."""
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world.pop("apply_tab", None)          # exactly the teach-path case
+    _, saved = _install(
+        monkeypatch,
+        # the Workday tab FIRST, the search tab last — the ordering that broke the guess
+        {"/list_tabs": _tabs("https://mfs.wd1.myworkdayjobs.com/en-US/MFS-Careers/job/x", SEARCH_URL),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "workday"
+    assert step.minis[-1].outcome == aps.OK
+    assert "myworkdayjobs" in step.minis[-1].detail
+    assert "driven before" in r["last_step"]["detail"]

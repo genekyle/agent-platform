@@ -848,8 +848,11 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                              if new else "No new tab; step again to classify where we are."))
 
     else:  # classify — the discovery point
-        apply_tab = (bb.world or {}).get("apply_tab") or {}
-        url = apply_tab.get("url") or ((obs.get("tabs") or [{}])[-1]).get("url", "")
+        # FIND the apply tab rather than guessing its position. The recorded one is only set when
+        # `enter_apply` ran through this endpoint — a teach-driven Apply (propose -> Go) opens the
+        # tab without going through here, so falling back to "the last tab" picked the SEARCH tab
+        # and would have classified Indeed as the ATS. The apply tab is the one that is not ours.
+        url = _apply_tab_url(bb, obs)
         disc = aps.classify_landing(url)
         step.platform = disc.platform
         step.record("classify", disc.outcome, f"{url[:120]} -> {disc.detail}",
@@ -1073,6 +1076,28 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
                                    "landed_state": res.get("landed_state"),
                                    "verified": res.get("verified")}
     return view
+
+
+def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
+    """The URL of the tab the application is on — identified, never positional.
+
+    Prefers a tab we explicitly recorded when we opened it; otherwise the first tab that is NOT
+    the Indeed search results. "The last tab in the list" was the earlier guess and it is wrong the
+    moment the operator approves an Apply through the teach path, which opens a tab without this
+    endpoint ever seeing it.
+    """
+    recorded = (bb.world or {}).get("apply_tab") or {}
+    if recorded.get("url"):
+        return recorded["url"]
+    search = (obs.get("search_tab") or {}).get("tab_id")
+    for t in obs.get("tabs") or []:
+        url = t.get("url", "") or ""
+        if t.get("tab_id") == search or not url or url.startswith("about:"):
+            continue
+        if "indeed.com/jobs" in url:      # another results view is still not the application
+            continue
+        return url
+    return ""
 
 
 def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool, detail: str,
