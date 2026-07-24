@@ -473,7 +473,18 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
     active = apply_tabs[0] if apply_tabs else (tabs[0] if tabs else None)
     prev_state = bb.world.get("page_state")
     prev_authed = bb.world.get("authed")
+    # PRESERVE what this reconcile does not own. `world` is a shared dict: reconcile writes the
+    # OBSERVATION (tabs, page_state, role, block, authed), but the session control panel stores
+    # its own facts here too — the apply queue, the open pane, a pending proposal, the radius.
+    # Replacing the whole dict wiped an operator's 11-step apply queue when they opened the Apply
+    # State tab (which calls reconcile) mid-drive (found live 2026-07-24). reconcile owns a fixed
+    # set of keys; everything else in world belongs to another writer and is carried forward
+    # untouched. This is the same two-writers-one-memory hazard as the sweep/ledger and
+    # teach/journal seams — here it cost real work, so the fix is to never clobber, only update.
+    _RECONCILE_OWNS = {"tabs", "active_tab_index", "page_state", "role", "block", "authed"}
+    preserved = {k: v for k, v in (bb.world or {}).items() if k not in _RECONCILE_OWNS}
     bb.world = {
+        **preserved,
         "tabs": tabs,
         "active_tab_index": tabs.index(active) if active in tabs else None,
         "page_state": active.get("state") if active else None,

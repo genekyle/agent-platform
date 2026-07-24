@@ -705,6 +705,55 @@ async def login_action(session_id: int, body: LoginActionBody,
 
 
 # --- the apply queue: one step per pick -------------------------------------------------------
+class RebuildQueueBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/rebuild_queue")
+async def rebuild_queue(session_id: int, body: RebuildQueueBody,
+                        db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Reconstruct the apply queue from the approved picks when the queue itself is gone.
+
+    A safety net, not a normal step. The approved job_ids live on `search_state.approved` — a
+    different field than the queue — and every picked job keeps its ObservedJob row, so the queue
+    is rebuildable from durable data even after something clobbers `world`. Only rebuilds what is
+    MISSING: a job already in the queue keeps its recorded progress, so running this never erases a
+    half-driven application. It exists because the queue was lost once (reconcile replacing `world`
+    wholesale, 2026-07-24) and "your work is unrecoverable" should never be the answer when the
+    work plainly survived somewhere.
+    """
+    _check_initiator(body.initiator)
+    from models import ObservedJob
+    session, bb, ledger = _load(session_id, db)
+    approved = list(bb.search_state.approved or [])
+    if not approved:
+        raise HTTPException(status_code=409,
+                            detail="Nothing to rebuild from — this session has no approved picks.")
+
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    queue.page = queue.page or (bb.search_state.page or 1)
+    have = {s.job_id for s in queue.steps}
+    picks = []
+    for jid in approved:
+        if jid in have:
+            continue
+        row = db.get(ObservedJob, jid)
+        picks.append({"job_id": jid, "title": row.title if row else "",
+                      "company": row.company if row else ""})
+    added = queue.enqueue(picks)
+
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.log("rebuild", f"restored {added} step(s) from {len(approved)} approved picks")
+    _persist(bb, ledger)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                 last={"ok": True, "action": "rebuild_queue", "queue": queue.summary(),
+                       "detail": f"Rebuilt the queue: {added} application(s) restored from your "
+                                 f"approved picks. Progress on any already-driven step was kept."})
+
+
+
 #: Names that mean "start the application", most-specific first. Indeed labels this differently
 #: depending on where the application actually goes, and the label is our first hint at the
 #: platform — "Apply on company site" is telling us we are about to leave.

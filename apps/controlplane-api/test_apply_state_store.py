@@ -400,3 +400,28 @@ def test_unexpected_state_is_logged_once_per_occurrence():
     store.reconcile(bb, tabs=[_apply_tab(store.UNKNOWN_STATE)])
     store.reconcile(bb, tabs=[_apply_tab(store.UNKNOWN_STATE)])
     assert [e.kind for e in bb.events].count("unexpected_state") == 1
+
+
+def test_reconcile_preserves_world_keys_it_does_not_own():
+    """Found live 2026-07-24: an operator lost an 11-step apply queue by opening the Apply State
+    tab mid-drive. `world` is a SHARED dict — reconcile writes the observation, the session control
+    panel writes the apply queue / open pane / proposal into the same dict — and reconcile replaced
+    the whole thing. It owns a fixed set of keys; everything else belongs to another writer and
+    must survive untouched."""
+    bb = store.new_blackboard(99, query="reporting analyst")
+    bb.world["apply_queue"] = {"page": 1, "steps": [{"job_id": "indeed:a1", "title": "One",
+                                                     "status": "open", "minis": []}]}
+    bb.world["open_pane"] = {"title": "One", "apply_type": "company_site"}
+    bb.world["apply_proposal"] = {"intent": "click", "rationale": "because"}
+    bb.world["radius_miles"] = 50
+
+    store.reconcile(bb, tabs=[{"url": "https://indeed.com/jobs", "state": "indeed_search_results",
+                               "role": "search"}], form_fields=None, block=None)
+
+    # reconcile's own observation is written...
+    assert bb.world["page_state"] == "indeed_search_results"
+    # ...and the panel's facts are STILL THERE
+    assert bb.world["apply_queue"]["steps"][0]["job_id"] == "indeed:a1"
+    assert bb.world["open_pane"]["apply_type"] == "company_site"
+    assert bb.world["apply_proposal"]["intent"] == "click"
+    assert bb.world["radius_miles"] == 50

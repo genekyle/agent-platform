@@ -34,13 +34,19 @@ class _FakeSession:
 class _FakeDB:
     """Enough SQLAlchemy Session for the panel: TrainingSession lookup, ObservedJob get/add."""
 
-    def __init__(self):
+    def __init__(self, observed=None):
         self.rows = {}
         self.added = []
+        self.observed = observed or {}      # job_id -> (title, company) for ObservedJob.get
 
     def get(self, model, key):
         if model is main.TrainingSession:
             return _FakeSession()
+        if key in self.observed:
+            title, company = self.observed[key]
+            row = type("_Row", (), {})()
+            row.title, row.company = title, company
+            return row
         return self.rows.get(key)
 
     def add(self, row):
@@ -66,7 +72,7 @@ class _Harness:
         return [p for p, _ in self.calls]
 
 
-def _install(monkeypatch, responses, *, blackboard=None, frames=None):
+def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None):
     """Wire the seams, an in-memory blackboard, and the DB override. Returns the harness plus a
     one-element list holding the persisted blackboard so tests can read the ledger back.
 
@@ -96,7 +102,7 @@ def _install(monkeypatch, responses, *, blackboard=None, frames=None):
     monkeypatch.setattr(sc.asyncio, "sleep", _nosleep)
 
     def _override_db():
-        yield _FakeDB()
+        yield _FakeDB(observed=observed)
     main.app.dependency_overrides[get_db] = _override_db
     return harness, saved
 
@@ -1512,3 +1518,48 @@ def test_classify_finds_the_apply_tab_rather_than_the_last_one(monkeypatch):
     assert step.minis[-1].outcome == aps.OK
     assert "myworkdayjobs" in step.minis[-1].detail
     assert "driven before" in r["last_step"]["detail"]
+
+
+def test_rebuild_queue_restores_steps_from_approved_picks(monkeypatch):
+    """The recovery path. The queue was lost (reconcile clobbered world), but the approved picks
+    survived on a different field and every job kept its ObservedJob row."""
+    bb = _at_start_line()
+    bb.search_state.approved = ["indeed:a1", "indeed:a2", "indeed:a3"]
+    bb.world.pop("apply_queue", None)                 # the loss
+
+    rows = {"indeed:a1": ("Compliance Analyst", "Acme"), "indeed:a2": ("BI Analyst", "Acme"),
+            "indeed:a3": ("Data Analyst", "Acme")}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb, observed=rows)
+    try:
+        r = client.post("/api/session_control/1/rebuild_queue", json={}).json()
+    finally:
+        _teardown()
+    steps = r["queue"]["steps"]
+    assert [s["job_id"] for s in steps] == ["indeed:a1", "indeed:a2", "indeed:a3"]
+    assert steps[0]["title"] == "Compliance Analyst"
+    assert "3 application(s) restored" in r["last_step"]["detail"]
+
+
+def test_rebuild_keeps_progress_on_a_half_driven_step(monkeypatch):
+    """Rebuild fills only what is MISSING — a step already part-way through is not reset."""
+    bb = _at_start_line()
+    bb.search_state.approved = ["indeed:a1", "indeed:a2"]
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:a1", "title": "One"}])
+    q.steps[0].record("open_pane", aps.OK)
+    q.steps[0].record("verify_identity", aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb, observed={"indeed:a2": ("Two", "Beta")})
+    try:
+        r = client.post("/api/session_control/1/rebuild_queue", json={}).json()
+    finally:
+        _teardown()
+    steps = {s["job_id"]: s for s in r["queue"]["steps"]}
+    assert len(steps["indeed:a1"]["minis"]) == 2          # progress kept
+    assert steps["indeed:a2"]["title"] == "Two"           # the missing one added
+    assert "1 application(s) restored" in r["last_step"]["detail"]
