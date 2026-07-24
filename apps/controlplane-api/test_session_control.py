@@ -1760,7 +1760,7 @@ def test_account_handoff_surfaces_credentials_and_never_drives(monkeypatch):
                                "/auth_state": {"ok": True, "logged_in": True}},
                               blackboard=_wd_at_wall())
     try:
-        r = client.post("/api/session_control/1/apply_account", json={}).json()
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "handoff"}).json()
     finally:
         _teardown()
     acct = r["last_step"]["account"]
@@ -1782,7 +1782,7 @@ def test_the_password_is_never_written_to_the_event_log(monkeypatch):
                          "/auth_state": {"ok": True, "logged_in": True}},
                         blackboard=_wd_at_wall())
     try:
-        r = client.post("/api/session_control/1/apply_account", json={}).json()
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "handoff"}).json()
     finally:
         _teardown()
     pw = r["last_step"]["account"].get("suggested_password")
@@ -1800,7 +1800,7 @@ def test_account_handoff_is_a_resume_not_a_terminal_park(monkeypatch):
                          "/auth_state": {"ok": True, "logged_in": True}},
                         blackboard=bb)
     try:
-        client.post("/api/session_control/1/apply_account", json={})            # handoff
+        client.post("/api/session_control/1/apply_account", json={"mode": "handoff"})  # handoff
         r = client.post("/api/session_control/1/apply_account",
                         json={"mark_created": True}).json()                     # operator made it
     finally:
@@ -1832,7 +1832,7 @@ def test_account_handoff_persists_on_the_view_so_a_reload_keeps_it(monkeypatch):
                          "/auth_state": {"ok": True, "logged_in": True}},
                         blackboard=bb)
     try:
-        client.post("/api/session_control/1/apply_account", json={})   # surface the handoff
+        client.post("/api/session_control/1/apply_account", json={"mode": "handoff"})
         g = client.get("/api/session_control/1").json()                # a fresh read (no last_step)
     finally:
         _teardown()
@@ -1849,10 +1849,151 @@ def test_parking_clears_a_lingering_handoff(monkeypatch):
                          "/auth_state": {"ok": True, "logged_in": True}},
                         blackboard=bb)
     try:
-        client.post("/api/session_control/1/apply_account", json={})
+        client.post("/api/session_control/1/apply_account", json={"mode": "handoff"})
         client.post("/api/session_control/1/apply_flag",
                     json={"job_id": "indeed:a1", "flag": "parked:account_wall"})
         g = client.get("/api/session_control/1").json()
     finally:
         _teardown()
     assert g["account_handoff"] is None
+
+
+# --- automated account creation (the operator's own local task) -------------------------------
+def test_account_creation_is_automated_by_default(monkeypatch):
+    """The operator's correction: their own account for their own job search is a generalizable
+    local task and should be automated, not gated behind a manual handoff every time. The system
+    fills AND submits the create-account form."""
+    typed = []
+
+    def _execute(payload):
+        if payload.get("action_id") == "type":
+            typed.append(payload["target_name"])
+        return {"outcome": "ok"}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/execute": _execute,
+         "/ax_scan": {"ok": True, "page_text": "My Information", "candidates": []}},  # landed past signup
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    # it filled the three real fields, by exact name — and never the honeypot
+    assert typed == ["Email Address", "Password", "Verify New Password"]
+    assert r["last_step"]["ok"] is True and "automatically" in r["last_step"]["detail"]
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any(m.rung == "account_create" and m.outcome == aps.OK for m in step.minis)
+
+
+def test_the_password_value_never_reaches_a_log_or_a_mini_step(monkeypatch):
+    """Credential-safe: the value goes only into /execute (which logs the target name, not the
+    value). It must never appear in an event or a recorded mini-step detail."""
+    import ats_accounts
+    pw = ats_accounts.derive_password("MFS Investment Management")
+    _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/execute": {"outcome": "ok"},
+         "/ax_scan": {"ok": True, "page_text": "My Information", "candidates": []}},
+        blackboard=_wd_at_wall())
+    saved_bb = {}
+    import apply_state_store as store
+    monkeypatch.setattr(store, "save", lambda bb: saved_bb.update(bb=bb))
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "auto"})
+    finally:
+        _teardown()
+    if pw:
+        bb = saved_bb["bb"]
+        for e in bb.events:
+            assert pw not in e.detail
+        for s in aps.Queue.from_dict(bb.world["apply_queue"]).steps:
+            for m in s.minis:
+                assert pw not in m.detail
+
+
+def test_fill_mode_stops_before_the_outward_facing_submit(monkeypatch):
+    """'fill' fills the form but leaves the Create Account click to the operator — for when they
+    want to eyeball an outward-facing account creation before it happens."""
+    clicked = []
+
+    def _execute(payload):
+        if payload.get("action_id") == "click":
+            clicked.append(payload["target_name"])
+        return {"outcome": "ok"}
+
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}, "/execute": _execute},
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "fill"}).json()
+    finally:
+        _teardown()
+    assert "Create Account" not in clicked          # did NOT submit
+    assert r["awaiting"] == "operator_account"
+    assert "confirm" in r["last_step"]["detail"].lower()
+
+
+def test_a_captcha_on_signup_escalates_and_never_auto_solves(monkeypatch):
+    """The real gate, not the manual boundary: a challenge on the signup form escalates, and no
+    field is filled underneath it."""
+    typed = []
+
+    def _execute(payload):
+        typed.append(payload.get("action_id"))
+        return {"outcome": "ok"}
+
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}, "/execute": _execute,
+         "/challenge_visibility": {"ok": True, "blocking": True}},
+        frames=[{"type": "iframe", "url": "https://www.google.com/recaptcha/api2/bframe?k=x"}],
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_challenge"
+    assert "never auto-solve" in r["last_step"]["detail"]
+    assert typed == []                              # nothing filled under the challenge
+
+
+def test_an_email_verification_wall_escalates_after_submit(monkeypatch):
+    """Submitting can lead to an email/2FA code prompt — a real gate we do not fabricate. It
+    escalates (and points at the Gmail errand as the next automation)."""
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}, "/execute": {"outcome": "ok"},
+         "/ax_scan": {"ok": True, "page_text": "Please enter the verification code we sent",
+                      "candidates": []}},
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "operator_verify"
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any(m.rung == "account_verify" and m.outcome == aps.HUMAN_REQUIRED for m in step.minis)
+
+
+def test_handoff_mode_still_available_for_a_manual_creation(monkeypatch):
+    """The manual handoff is not deleted — it is one mode among several, for when the operator
+    prefers to type it themselves."""
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+                          blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "handoff"}).json()
+    finally:
+        _teardown()
+    assert r["account_handoff"]["button"] == "Create Account"
+    assert "/execute" not in harness.paths()        # handoff drives nothing

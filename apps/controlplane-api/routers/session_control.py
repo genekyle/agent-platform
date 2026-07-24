@@ -709,7 +709,73 @@ async def login_action(session_id: int, body: LoginActionBody,
 # --- the apply queue: one step per pick -------------------------------------------------------
 class ApplyAccountBody(BaseModel):
     initiator: str = "operator"
-    mark_created: bool = False     # True once the operator has created the account on the site
+    # How to handle the account wall:
+    #   "auto"    — the system fills AND submits the create-account form (the default: this is the
+    #               operator's own account for their own job search, a generalizable local task
+    #               that should be automated, not gated behind a manual handoff every time)
+    #   "fill"    — fill the form but stop before the outward-facing Create Account click
+    #   "handoff" — surface the credentials for the operator to type themselves
+    mode: str = "auto"
+    mark_created: bool = False     # completes the "handoff" leg once the operator has made it
+
+
+#: The genuinely-hard gates inside account creation. These are NOT the manual-handoff boundary —
+#: they are real external gates that no automation may cross: a CAPTCHA cannot be auto-solved
+#: (the project's standing rule), and an email/2FA verification code is not ours to fabricate. When
+#: one appears the step escalates to the operator; everything ELSE about making the account is
+#: automated.
+_ACCOUNT_VERIFY_MARKERS = ("verification code", "verify your email", "check your email",
+                           "enter the code", "one-time", "two-step", "two-factor", "authenticator")
+
+
+async def _drive_create_account(browser_url: str, tab_id: str, creds: dict, *,
+                                submit: bool) -> dict[str, Any]:
+    """Fill (and optionally submit) a Workday-style create-account form.
+
+    Credential-safe by construction: fields are addressed by their exact accessible name, so the
+    honeypot ("Enter website. This input is for robots only") is never touched; the password value
+    flows only into /execute, which logs the target NAME, never the value; and nothing here writes
+    the password to an event or a mini-step. Human-paced even in auto mode — speed is not what makes
+    an account legitimate, and the captcha rule is unchanged.
+    """
+    username = creds.get("username") or ""
+    password = creds.get("suggested_password") or ""
+    if not username or not password:
+        return {"ok": False, "reason": "no_credentials",
+                "detail": "No username or generated password available (is ATS_ACCOUNT_PW_SUFFIX "
+                          "configured?). Cannot fill the form."}
+
+    style = xs.pick_style()
+
+    async def _type(name: str, value: str) -> dict:
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
+            "target_bbox": {}, "target_role": "textbox", "target_name": name,
+            "value": value, "driver": "humanized"})
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        return res
+
+    for name, value in (("Email Address", username), ("Password", password),
+                        ("Verify New Password", password)):
+        r = await _type(name, value)
+        if r.get("outcome") not in ("ok", "committed_unconfirmed"):
+            return {"ok": False, "reason": "fill_failed",
+                    "detail": f"Could not fill {name!r} ({r.get('outcome') or r.get('detail')})."}
+
+    if not submit:
+        return {"ok": True, "submitted": False,
+                "detail": "Filled the create-account form. Confirm to click Create Account."}
+
+    click = await _capture_post("/execute", {
+        "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+        "target_bbox": {}, "target_role": "button", "target_name": "Create Account",
+        "driver": "humanized"})
+    await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+    if click.get("outcome") not in ("ok", "committed_unconfirmed"):
+        return {"ok": False, "reason": "submit_failed",
+                "detail": f"Filled the form but could not click Create Account "
+                          f"({click.get('outcome') or click.get('detail')})."}
+    return {"ok": True, "submitted": True, "detail": "Submitted the create-account form."}
 
 
 @router.post("/api/session_control/{session_id}/apply_account")
@@ -733,6 +799,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     _check_initiator(body.initiator)
     import ats_accounts
     session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
     step = queue.current()
     if step is None:
@@ -762,14 +829,86 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                            "detail": f"{company} account marked created. The application can "
                                      f"continue — orient, then work the next rung."})
 
-    # Surface the handoff. ensure_account registers the record; next_account_action decides the leg
-    # (create vs sign-in) and returns the credentials the OPERATOR types.
+    # Register the account record; next_account_action decides the leg (create vs sign-in) and
+    # derives the credentials.
     ensure = ats_accounts.ensure_account(company, step.platform,
                                          login_url=(bb.world or {}).get("orient", {}).get("url", ""))
     if not ensure.get("ok"):
         raise HTTPException(status_code=409, detail=ensure.get("detail", "could not open account"))
     action = ats_accounts.next_account_action(company, step.platform)
     creds = action.get("credentials") or {}
+
+    # AUTOMATED PATH — the default. The system fills (and, in "auto", submits) the create-account
+    # form itself. A CAPTCHA or an email/2FA verification prompt still escalates: those are real
+    # external gates, not the manual-handoff boundary, and they hold regardless of mode.
+    if body.mode in ("auto", "fill") and action.get("leg") == "create_account":
+        obs = await _observe(browser_url, bb.search_state.query)
+        block = obs.get("block")
+        if block and block.get("strength") == "active":
+            step.record("account_create", aps.BLOCKED, f"active {block.get('provider')} on signup",
+                        initiator=body.initiator)
+            _save_queue(bb, queue); _persist(bb, ledger)
+            return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                         awaiting="operator_challenge",
+                         last={"ok": False, "action": "apply_account", "queue": queue.summary(),
+                               "detail": "A challenge is up on the signup form — clear it yourself. "
+                                         "We never auto-solve, on any form."})
+        tab_id = (bb.world.get("apply_tab") or {}).get("tab_id") \
+            or next((t.get("tab_id") for t in (obs.get("tabs") or [])
+                     if t.get("url") == _apply_tab_url(bb, obs)), "")
+        drive = await _drive_create_account(browser_url, tab_id, creds,
+                                            submit=(body.mode == "auto"))
+        if not drive.get("ok"):
+            step.record("account_create", aps.FAILED, drive.get("detail", "")[:200],
+                        initiator=body.initiator)
+            _save_queue(bb, queue); _persist(bb, ledger)
+            obs2 = await _observe(browser_url, bb.search_state.query)
+            return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
+                         last={"ok": False, "action": "apply_account", "queue": queue.summary(),
+                               "detail": drive.get("detail")})
+
+        if not drive.get("submitted"):
+            step.record("account_create", aps.OK, "filled the create-account form (not submitted)",
+                        initiator=body.initiator)
+            _save_queue(bb, queue); _persist(bb, ledger)
+            obs2 = await _observe(browser_url, bb.search_state.query)
+            return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
+                         awaiting="operator_account",
+                         last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                               "detail": "Filled the create-account form with your generated "
+                                         "credentials. Review it in the window, then confirm to "
+                                         "click Create Account."})
+
+        # Submitted. Did it land — or is there an email/2FA verification wall (a real gate)?
+        after = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                    timeout=20.0)
+        text = (str(after.get("page_text") or "")
+                + " ".join(c.get("name", "") for c in (after.get("candidates") or []))).lower()
+        if any(m in text for m in _ACCOUNT_VERIFY_MARKERS):
+            step.record("account_verify", aps.HUMAN_REQUIRED,
+                        "signup needs an email/2FA verification code — a real gate, escalated",
+                        initiator=body.initiator)
+            _save_queue(bb, queue); _persist(bb, ledger)
+            obs2 = await _observe(browser_url, bb.search_state.query)
+            return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
+                         awaiting="operator_verify",
+                         last={"ok": False, "action": "apply_account", "queue": queue.summary(),
+                               "detail": "Account submitted, but the signup wants an email/2FA "
+                                         "verification code. That is a real gate — grab the code "
+                                         "(a Gmail errand we can automate next), then continue."})
+
+        ats_accounts.mark_created(company, step.platform)
+        step.record("account_create", aps.OK,
+                    f"created the {company} {step.platform} account automatically", initiator="auto")
+        bb.world.pop("account_handoff", None)
+        _save_queue(bb, queue)
+        bb.log("account_create", f"{company} {step.platform}: account created automatically")
+        _persist(bb, ledger)
+        obs2 = await _observe(browser_url, bb.search_state.query)
+        return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
+                     last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                           "detail": f"Created the {company} account automatically. The "
+                                     f"application can continue — orient, then the form."})
 
     step.record("account_handoff", aps.HUMAN_REQUIRED,
                 f"{action.get('leg')} {company} {step.platform}: operator creates it "

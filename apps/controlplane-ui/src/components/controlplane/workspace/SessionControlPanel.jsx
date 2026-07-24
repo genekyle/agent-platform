@@ -520,7 +520,9 @@ export function SessionControlPanel({ domain }) {
                                 {accountHandoff.button} — {accountHandoff.company} ({accountHandoff.ats})
                               </div>
                               <p className="sc-account__boundary">
-                                <AppIcon name="shield" size={13} /> {accountHandoff.boundary}
+                                <AppIcon name="shield" size={13} /> Your account, your call. The
+                                system can create it for you — a captcha or an email verification
+                                code still stops for you, and the honeypot is never touched.
                               </p>
                               <dl className="sc-account__creds">
                                 <dt>Username</dt>
@@ -538,12 +540,23 @@ export function SessionControlPanel({ domain }) {
                               </dl>
                               <div className="cv-actions">
                                 <button className="btn btn-sm btn-primary" disabled={busy}
+                                        title="The system fills the form with these credentials and clicks Create Account. A captcha or email code still stops for you."
+                                        onClick={() => call("/apply_account", { mode: "auto", initiator: "operator" })}>
+                                  Create it automatically
+                                </button>
+                                <button className="btn btn-sm" disabled={busy}
+                                        title="Fill the form but leave the Create Account click to you"
+                                        onClick={() => call("/apply_account", { mode: "fill", initiator: "operator" })}>
+                                  Fill, I'll submit
+                                </button>
+                                <button className="btn btn-sm" disabled={busy}
+                                        title="You typed it yourself — mark done and continue"
                                         onClick={() => call("/apply_account", { mark_created: true, initiator: "operator" })}>
-                                  I created it — continue
+                                  I created it
                                 </button>
                                 <button className="btn btn-sm btn-ghost" disabled={busy}
                                         onClick={() => flagStep(s.job_id, "parked:account_wall", "operator chose not to create the account")}>
-                                  Don't create — park it
+                                  Park it
                                 </button>
                               </div>
                             </div>
