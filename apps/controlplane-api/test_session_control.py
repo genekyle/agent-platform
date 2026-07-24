@@ -34,10 +34,15 @@ class _FakeSession:
 class _FakeDB:
     """Enough SQLAlchemy Session for the panel: TrainingSession lookup, ObservedJob get/add."""
 
-    def __init__(self, observed=None):
+    def __init__(self, observed=None, answers=None):
         self.rows = {}
         self.added = []
         self.observed = observed or {}      # job_id -> (title, company) for ObservedJob.get
+        self._answers = answers or []       # ApplicationAnswer-like rows for scalars()
+
+    def scalars(self, _stmt):
+        rows = self._answers
+        return type("_R", (), {"all": lambda self: rows})()
 
     def get(self, model, key):
         if model is main.TrainingSession:
@@ -72,7 +77,7 @@ class _Harness:
         return [p for p, _ in self.calls]
 
 
-def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None):
+def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None, answers=None):
     """Wire the seams, an in-memory blackboard, and the DB override. Returns the harness plus a
     one-element list holding the persisted blackboard so tests can read the ledger back.
 
@@ -102,7 +107,7 @@ def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=N
     monkeypatch.setattr(sc.asyncio, "sleep", _nosleep)
 
     def _override_db():
-        yield _FakeDB(observed=observed)
+        yield _FakeDB(observed=observed, answers=answers)
     main.app.dependency_overrides[get_db] = _override_db
     return harness, saved
 
@@ -1997,3 +2002,73 @@ def test_handoff_mode_still_available_for_a_manual_creation(monkeypatch):
         _teardown()
     assert r["account_handoff"]["button"] == "Create Account"
     assert "/execute" not in harness.paths()        # handoff drives nothing
+
+
+# --- bunch fill: the whole step at once, honestly ---------------------------------------------
+_MYINFO_SCAN = {"ok": True, "page_text": "", "candidates": [
+    {"role": "textbox", "name": "First Name"},
+    {"role": "textbox", "name": "Last Name"},
+    {"role": "textbox", "name": "Address Line 1"},
+    {"role": "textbox", "name": "City"},
+    {"role": "textbox", "name": "How Did You Hear About Us?"},
+    {"role": "button", "name": "Save and Continue"},
+]}
+
+
+def test_apply_fill_plans_the_bunch_without_driving(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                           "/auth_state": {"ok": True, "logged_in": True}, "/ax_scan": _MYINFO_SCAN},
+                          blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_fill", json={"execute": False}).json()
+    finally:
+        _teardown()
+    s = r["last_step"]["fill_summary"]
+    assert s["fillable"] == 3                         # First, Last, How-did-you-hear
+    assert "Address Line 1" in s["missing"] and "City" in s["missing"]
+    assert "/execute" not in harness.paths()          # plan-only drives nothing
+
+
+def test_apply_fill_executes_only_the_confident_fields(monkeypatch):
+    typed = []
+
+    def _execute(payload):
+        if payload.get("action_id") == "type":
+            typed.append((payload["target_name"], payload["value"]))
+        return {"outcome": "ok"}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/ax_scan": _MYINFO_SCAN, "/execute": _execute},
+                        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_fill", json={"execute": True}).json()
+    finally:
+        _teardown()
+    names = [t[0] for t in typed]
+    assert names == ["First Name", "Last Name", "How Did You Hear About Us?"]
+    assert dict(typed)["First Name"] == "Gene"
+    assert dict(typed)["How Did You Hear About Us?"] == "Indeed"
+    assert "Address Line 1" not in names              # never filled a blank
+    assert "Still need you for" in r["last_step"]["detail"]
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any(m.rung == "form_fill" for m in step.minis)
+
+
+def test_apply_fill_never_invents_a_missing_address(monkeypatch):
+    """The load-bearing guarantee: a field with no data is never typed into."""
+    typed = []
+    monkeypatch_execute = lambda payload: (typed.append(payload.get("target_name"))
+                                           if payload.get("action_id") == "type" else None) or {"outcome": "ok"}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/ax_scan": _MYINFO_SCAN, "/execute": monkeypatch_execute},
+             blackboard=_wd_step())
+    try:
+        client.post("/api/session_control/1/apply_fill", json={"execute": True})
+    finally:
+        _teardown()
+    assert "Address Line 1" not in typed and "City" not in typed

@@ -43,13 +43,20 @@ class QuestionMatchRequest(BaseModel):
 
 
 def _answer_dict(a: ApplicationAnswer) -> dict[str, Any]:
-    return {
+    import working_variables as wv
+    d = {
         "answer_key": a.answer_key, "display_name": a.display_name, "category": a.category,
         "value": a.value, "question_patterns": a.question_patterns or [],
         "input_hint": a.input_hint, "options": a.options or [], "notes": a.notes,
         "source": a.source, "status": a.status,
         "updated_at": a.updated_at.isoformat() if a.updated_at else None,
     }
+    # A working variable is COMPUTED, not stored — show the operator that it is dynamic and what it
+    # resolves to right now, so a stale stored string never masquerades as the answer.
+    meta = wv.describe(a.answer_key)
+    if meta is not None:
+        d.update(meta)
+    return d
 
 
 @router.get("/api/application-answers")

@@ -170,6 +170,7 @@
   "POST /api/select/trajectory",
   "POST /api/session_control/{session_id}/apply_account",
   "POST /api/session_control/{session_id}/apply_decide",
+  "POST /api/session_control/{session_id}/apply_fill",
   "POST /api/session_control/{session_id}/apply_flag",
   "POST /api/session_control/{session_id}/apply_propose",
   "POST /api/session_control/{session_id}/apply_step",

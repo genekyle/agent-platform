@@ -853,9 +853,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                          last={"ok": False, "action": "apply_account", "queue": queue.summary(),
                                "detail": "A challenge is up on the signup form — clear it yourself. "
                                          "We never auto-solve, on any form."})
-        tab_id = (bb.world.get("apply_tab") or {}).get("tab_id") \
-            or next((t.get("tab_id") for t in (obs.get("tabs") or [])
-                     if t.get("url") == _apply_tab_url(bb, obs)), "")
+        tab_id = _apply_tab(bb, obs).get("tab_id", "")
         drive = await _drive_create_account(browser_url, tab_id, creds,
                                             submit=(body.mode == "auto"))
         if not drive.get("ok"):
@@ -948,6 +946,110 @@ def _ats_platform_ids() -> list[dict[str, Any]]:
 def _save_queue(bb: Any, queue: aps.Queue) -> None:
     bb.world = dict(bb.world or {})
     bb.world["apply_queue"] = queue.as_dict()
+
+
+def _identity_defaults() -> dict[str, str]:
+    """Account-derived values that fill identity fields without a stored answer, plus the apply
+    source. `how_did_you_hear` is Indeed with high confidence — the application literally arrived
+    from Indeed."""
+    import ats_accounts
+    return {
+        "first_name": ats_accounts.default_first_name(),
+        "last_name": ats_accounts.default_last_name(),
+        "email": ats_accounts.default_username(),
+        "how_did_you_hear": "Indeed",
+    }
+
+
+async def _scan_form_fields(browser_url: str, tab_id: str) -> list[dict[str, Any]]:
+    scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                               timeout=25.0)
+    return [{"role": c.get("role"), "name": c.get("name")}
+            for c in (scan.get("candidates") or []) if c.get("name")]
+
+
+def _fill_plan_for(bb: Any, fields: list[dict[str, Any]], db: Session) -> list[dict[str, Any]]:
+    import form_fill
+    from models import ApplicationAnswer
+    from sqlalchemy import select as _select
+    rows = db.scalars(_select(ApplicationAnswer).where(ApplicationAnswer.status == "active")).all()
+    answers = {r.answer_key: r.value for r in rows}
+    return form_fill.plan(fields, answers=answers, identity=_identity_defaults())
+
+
+class ApplyFillBody(BaseModel):
+    initiator: str = "operator"
+    execute: bool = False          # False = plan only (see the bunch); True = fill the fillable ones
+
+
+@router.post("/api/session_control/{session_id}/apply_fill")
+async def apply_fill(session_id: int, body: ApplyFillBody,
+                     db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Plan (and optionally fill) a whole form step in one bunch.
+
+    `execute=False` returns the plan — every recognised field, the value we would fill it with, and
+    which fields we cannot because we hold no data. `execute=True` fills the fillable TEXT fields
+    (dropdowns and the fields with no data are left for a targeted rung / the operator). This is the
+    "more automatic" pass: it does the easy, confident fills at once and stops honestly at anything
+    it cannot speak to — an address we do not have is a flagged blank, never an invented street.
+    """
+    import form_fill
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        raise HTTPException(status_code=409, detail="No open application to fill.")
+
+    obs = await _observe(browser_url, bb.search_state.query)
+    block = obs.get("block")
+    if block and block.get("strength") == "active":
+        return _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
+                                    detail="A challenge is up — clear it yourself before filling.")
+    tab_id = _apply_tab(bb, obs).get("tab_id", "")
+    fields = await _scan_form_fields(browser_url, tab_id)
+    rows = _fill_plan_for(bb, fields, db)
+    summary = form_fill.summarise(rows)
+
+    if not body.execute:
+        return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                     last={"ok": True, "action": "apply_fill", "queue": queue.summary(),
+                           "fill_plan": rows, "fill_summary": summary,
+                           "detail": f"Planned {summary['fillable']} of {summary['total']} fields. "
+                                     + (f"Need your data for: {', '.join(summary['missing'])}."
+                                        if summary["missing"] else "Every field has a value.")})
+
+    style = xs.pick_style()
+    filled, failed = [], []
+    for r in rows:
+        if not r["fillable"] or r["widget"] != "text":     # this pass does text fields only
+            continue
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
+            "target_bbox": {}, "target_role": "textbox", "target_name": r["field"],
+            "value": r["value"], "driver": "humanized"})
+        (filled if res.get("outcome") in ("ok", "committed_unconfirmed") else failed).append(r["field"])
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    step.record("form_fill", aps.OK if filled and not failed else
+                (aps.FAILED if failed else aps.OK),
+                f"bunch-filled {len(filled)} field(s)"
+                + (f"; {len(failed)} failed: {', '.join(failed)}" if failed else "")
+                + (f"; need operator for: {', '.join(summary['missing'])}"
+                   if summary["missing"] else ""),
+                initiator=body.initiator)
+    _save_queue(bb, queue)
+    _persist(bb, ledger)
+    obs2 = await _observe(browser_url, bb.search_state.query)
+    return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
+                 last={"ok": not failed, "action": "apply_fill", "queue": queue.summary(),
+                       "fill_plan": rows, "fill_summary": summary, "pace": xs.describe(style),
+                       "detail": f"Filled {len(filled)} field(s) at {style.name} pace."
+                                 + (f" {len(failed)} would not take: {', '.join(failed)}."
+                                    if failed else "")
+                                 + (f" Still need you for: {', '.join(summary['missing'])}."
+                                    if summary["missing"] else "")})
 
 
 class OrientStepBody(BaseModel):
@@ -1576,26 +1678,36 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
     return view
 
 
-def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
-    """The URL of the tab the application is on — identified, never positional.
+def _apply_tab(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
+    """The LIVE tab the application is on — {tab_id, url} — identified, never positional and never
+    from a stale record.
 
-    Prefers a tab we explicitly recorded when we opened it; otherwise the first tab that is NOT
-    the Indeed search results. "The last tab in the list" was the earlier guess and it is wrong the
-    moment the operator approves an Apply through the teach path, which opens a tab without this
-    endpoint ever seeing it.
-    """
-    recorded = (bb.world or {}).get("apply_tab") or {}
-    if recorded.get("url"):
-        return recorded["url"]
+    The recorded apply_tab is only a hint, and a treacherous one: it may carry a URL that has since
+    navigated (Workday's create-account tab becomes the app tab, same tab, new URL) or a tab_id
+    with no URL. So we resolve against the LIVE tab list every time: prefer the recorded tab_id if
+    it is still open (taking its CURRENT url), otherwise the live tab that is neither the Indeed
+    search nor blank. Exact-URL matching against the record was the bug — it found nothing the
+    moment the page moved (2026-07-24, the My Information bunch-fill scanned an empty tab_id)."""
+    tabs = obs.get("tabs") or []
+    recorded_id = ((bb.world or {}).get("apply_tab") or {}).get("tab_id")
+    if recorded_id:
+        live = next((t for t in tabs if t.get("tab_id") == recorded_id), None)
+        if live:
+            return {"tab_id": live.get("tab_id"), "url": live.get("url", "")}
     search = (obs.get("search_tab") or {}).get("tab_id")
-    for t in obs.get("tabs") or []:
+    for t in tabs:
         url = t.get("url", "") or ""
         if t.get("tab_id") == search or not url or url.startswith("about:"):
             continue
         if "indeed.com/jobs" in url:      # another results view is still not the application
             continue
-        return url
-    return ""
+        return {"tab_id": t.get("tab_id"), "url": url}
+    return {"tab_id": "", "url": ""}
+
+
+def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
+    """The live application tab's current URL (thin wrapper over `_apply_tab`)."""
+    return _apply_tab(bb, obs).get("url", "")
 
 
 def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool, detail: str,
