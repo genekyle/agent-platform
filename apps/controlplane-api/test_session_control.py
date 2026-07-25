@@ -418,6 +418,76 @@ def test_logged_out_hands_the_credential_wall_to_the_operator(monkeypatch):
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
 
 
+#: The other tab a real apply session has open: an ATS application, on a different origin. Indeed's
+#: login JS finds none of its markers here and honestly reports logged_in=false — which is the
+#: right answer about THIS page and the wrong answer about the session.
+_WORKDAY_APPLY_URL = ("https://mfs.wd1.myworkdayjobs.com/en-US/MFS-Careers/job/Boston/"
+                      "Compliance-Reporting-Associate_MFS-231810-1/apply/applyManually")
+
+
+def test_auth_is_probed_on_the_indeed_tab_not_whichever_tab_is_in_front(monkeypatch):
+    """Found live 2026-07-25 on a session left open two days. `/auth_state` with no tab hint
+    resolves whatever target CDP lists first — the Workday application — so a signed-in session
+    read as REGRESSED and the panel's next move was to sign in again."""
+    bb = _at_start_line()
+    per_tab = {"t0": {"ok": True, "logged_in": False},   # the Workday tab, listed first
+               "t1": {"ok": True, "logged_in": True}}    # the Indeed results tab
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(_WORKDAY_APPLY_URL, SEARCH_URL),
+         "/auth_state": lambda p: per_tab.get(p.get("tab_id"), {"ok": True, "logged_in": False})},
+        blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    auth_calls = [p for path, p in harness.calls if path == "/auth_state"]
+    assert [c.get("tab_id") for c in auth_calls] == ["t1"], "must pin the probe to the Indeed tab"
+    rung = next(x for x in r["ladder"] if x["id"] == "authenticated")
+    assert rung["observed"] is True and rung["status"] == "held"
+    assert r["next"]["checkpoint_id"] != "authenticated"
+
+
+def test_no_indeed_tab_leaves_auth_unknown_rather_than_calling_it_signed_out(monkeypatch):
+    """An unknown must never read as a regression — the rule `session_checkpoints` enforces for
+    the ladder, applied to the probe that feeds it. With no Indeed tab we did not look at Indeed."""
+    bb = _at_start_line()
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(_WORKDAY_APPLY_URL),
+                               "/auth_state": {"ok": True, "logged_in": False}},
+                              blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert "/auth_state" not in harness.paths(), "nothing to probe — do not probe the wrong page"
+    rung = next(x for x in r["ladder"] if x["id"] == "authenticated")
+    assert rung["observed"] is None and rung["status"] == "held"
+
+
+def test_auth_probe_on_an_unknown_asks_for_indeed_instead_of_releasing_the_rung(monkeypatch):
+    """The step-level half: `auth_probe` must not turn 'we could not see' into 'signed out' and
+    run a login survey against whatever page is in front."""
+    bb = store.new_blackboard(1, query="reporting analyst")
+    led = cps.Ledger()
+    led.mark("provisioned", evidence="test")   # so the crank lands on `authenticated`
+    bb.checkpoints = led.as_dict()
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(_WORKDAY_APPLY_URL),
+                               "/auth_state": {"ok": True, "logged_in": False}},
+                              blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["action"] == "auth_probe"
+    assert r["awaiting"] == "operator_open_indeed"
+    # The survey reads the page in front of it. Run here it would classify a Workday application
+    # as an Indeed login screen and offer "ways in" that lead somewhere else entirely.
+    assert "/ax_scan" not in harness.paths()
+    assert "/auth_state" not in harness.paths()
+
+
 #: A live reCAPTCHA as CDP actually reports it: an IFRAME target, never a page. /list_tabs filters
 #: to type == "page", so a block check fed that list could not see this — the 2026-07-23 bug.
 _RECAPTCHA_FRAME = {"type": "iframe", "url": "https://www.google.com/recaptcha/api2/bframe?k=x"}

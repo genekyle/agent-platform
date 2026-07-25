@@ -119,17 +119,43 @@ async def _observe(browser_url: str, query: str) -> dict[str, Any]:
         return {"observed": observed, "tabs": tabs, "search_tab": None, "block": None,
                 "reachable": reachable}
 
-    auth = await _capture_post("/auth_state", {"browser_url": browser_url}, timeout=8.0)
-    observed["authenticated"] = bool(auth.get("ok") and auth.get("logged_in"))
-
     search_tab = _find_search_tab(tabs, query)
     # The query rung is only observable as "are we looking at results for OUR query". Absent a
     # results tab we say False (the effect is gone -> RECOVER), never "re-run it".
     observed["query_entered"] = search_tab is not None
 
+    # THE AUTH PROBE HAS TO LOOK AT AN INDEED TAB. Found live 2026-07-25 on a session left open
+    # two days: with no tab hint `/auth_state` resolves whatever target CDP lists first — here a
+    # Workday application open in the other tab — and the Indeed login JS, finding no Indeed
+    # markers on a Workday page, returned logged_in=false. `authenticated` read REGRESSED and the
+    # panel's next move was "sign in again" on a session that never signed out. Same shape as
+    # 069eb61 (classify taking the last tab instead of the apply tab): probe the tab the rung is
+    # ABOUT, not whichever one we are handed.
+    auth_tab = search_tab or _find_indeed_tab(tabs)
+    if auth_tab is None:
+        # No Indeed tab open, so Indeed auth is UNKNOWN — not false. False here would be a
+        # regression we never observed, and this rung's reason to exist (logged-out data is
+        # provenance-invalid) only bites while gathering FROM Indeed, which needs such a tab.
+        observed["authenticated"] = None
+    else:
+        auth = await _capture_post("/auth_state",
+                                   {"browser_url": browser_url, "tab_id": auth_tab.get("tab_id")},
+                                   timeout=8.0)
+        observed["authenticated"] = bool(auth.get("ok") and auth.get("logged_in"))
+
     block = await _detect_block(browser_url, [t.get("url", "") for t in tabs])
     return {"observed": observed, "tabs": tabs, "search_tab": search_tab, "block": block,
             "reachable": True}
+
+
+def _find_indeed_tab(tabs: list[dict]) -> Optional[dict]:
+    """Any Indeed tab — the fallback the auth probe uses when no results tab matches this
+    session's query. Auth is a property of the SITE, not of the query, so a job-detail or home
+    tab answers it just as well as a results page."""
+    for t in tabs:
+        if "indeed.com" in (t.get("url", "") or ""):
+            return t
+    return None
 
 
 def _find_search_tab(tabs: list[dict], query: str) -> Optional[dict]:
@@ -425,6 +451,17 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                         initiator=initiator)
             bb.log("checkpoint", "authenticated — signed in to Indeed")
             return {"ok": True, "action": action, "detail": "Signed in."}
+
+        # UNKNOWN IS NOT SIGNED-OUT. With no Indeed tab open we did not look at Indeed at all, so
+        # releasing the rung here would invent a regression and send the operator to a login
+        # survey run against whatever page happens to be in front — the same "an unknown must
+        # never read as a regression" rule `session_checkpoints` enforces one layer up.
+        if obs["observed"].get("authenticated") is None:
+            bb.log("handoff", "auth unknown — no Indeed tab open to probe")
+            return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
+                    "detail": "No Indeed tab is open, so this session's sign-in could not be "
+                              "checked. Open Indeed in this window and probe again — the rung is "
+                              "left as it was rather than guessed."}
 
         # NOT SIGNED IN IS A STEP, NOT A DEAD END. The boundary is that we never type a password or
         # clear a 2FA challenge — it was never that we refuse to open the login page. Reporting
