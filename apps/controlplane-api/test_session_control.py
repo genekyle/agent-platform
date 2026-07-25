@@ -659,8 +659,14 @@ def test_run_query_marks_the_rung_only_on_proof(monkeypatch):
     assert "q='reporting analyst'" in led.reached["query_entered"].evidence
     # driven through the AX layer by the names DISCOVERED on the page, not assumed ones
     execs = [p for p in harness.calls if p[0] == "/execute"]
-    assert [e[1]["target_name"] for e in execs] == [
-        "search: Job title, keywords, or company", "Edit location", "Search"]
+    assert [(e[1]["action_id"], e[1]["target_name"]) for e in execs] == [
+        # each field is CLEARED before it is typed — `type` inserts at the caret, it does not
+        # replace, so a populated box would otherwise be appended to.
+        ("clear", "search: Job title, keywords, or company"),
+        ("type", "search: Job title, keywords, or company"),
+        ("clear", "Edit location"),
+        ("type", "Edit location"),
+        ("click", "Search")]
     assert all(e[1].get("driver") == "humanized" for e in execs)
     # ExecuteRequest requires target_bbox even on the act-by-name path; omitting it is a 422
     assert all("target_bbox" in e[1] for e in execs)
@@ -683,6 +689,89 @@ def test_unproven_query_submission_is_left_unmarked(monkeypatch):
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
 
 
+def test_a_submit_swallowed_by_the_location_widget_is_clicked_again(monkeypatch):
+    """Measured live 2026-07-25 on session 20: both fields held their typed values, Search was the
+    hit-test target at its own centre, the trusted click dispatched — and the page did not move.
+    Typing into the location combobox stages a suggestion popup, and the first click is spent
+    dismissing it. The second one submits."""
+    calls = {"n": 0}
+
+    def _list_tabs(_payload):
+        calls["n"] += 1
+        # 1 observe, 2 pre-click, 3 post-click (STILL the home page — the click was swallowed by
+        # the location widget, nothing moved), 4 pre-retry, 5 post-retry: results at last.
+        return _tabs(SEARCH_URL) if calls["n"] >= 5 else _tabs("https://www.indeed.com/")
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs,
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
+                               "/execute": {"outcome": "ok"}},
+                              blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+    clicks = [p for path, p in harness.calls
+              if path == "/execute" and p["action_id"] == "click"]
+    assert len(clicks) == 2, "one click to commit the widget, one to submit"
+
+
+def test_a_submit_whose_confirmation_raced_the_navigation_is_never_clicked_twice(monkeypatch):
+    """THE ONE THAT BIT US LIVE, 2026-07-25. The click submitted, the tab re-read raced the
+    navigation and still showed the old URL, so the retry fired — onto the freshly-loaded results
+    page, whose search box is empty. That second click submitted `q=` from the SERP.
+
+    Here the window HAS moved (a results page, just not one carrying our query). The retry must
+    not fire on that: a page that moved means the click did something."""
+    seen = {"n": 0}
+
+    def _list_tabs(_payload):
+        seen["n"] += 1
+        # probe, then pre-click, then a results page for the WRONG query (the race's outcome).
+        if seen["n"] <= 2:
+            return _tabs("https://www.indeed.com/")
+        return _tabs("https://www.indeed.com/jobs?q=&l=Lowell%2C+MA&from=searchOnDesktopSerp")
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs,
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
+                               "/execute": {"outcome": "ok"}},
+                              blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    clicks = [p for path, p in harness.calls
+              if path == "/execute" and p["action_id"] == "click"]
+    assert len(clicks) == 1, "the page moved — the click did something; never click again"
+    assert r["awaiting"] == "operator_verify"
+    assert "NOT retried" in r["last_step"]["detail"]
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+
+
+def test_a_submit_that_landed_is_never_clicked_twice(monkeypatch):
+    """The retry is verified, never blind. A search that DID land changes the URL, so the second
+    click must not happen — double-spending the query is the one thing this rung cannot do."""
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(SEARCH_URL),
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
+                               "/execute": {"outcome": "ok"}},
+                              blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    clicks = [p for path, p in harness.calls
+              if path == "/execute" and p["action_id"] == "click"]
+    assert len(clicks) == 1, "the query landed on the first click — never submit it again"
+
+
 def test_missing_search_box_asks_the_operator_rather_than_flailing(monkeypatch):
     harness, _ = _install(monkeypatch,
                           {"/list_tabs": _tabs("https://www.indeed.com/"),
@@ -695,7 +784,9 @@ def test_missing_search_box_asks_the_operator_rather_than_flailing(monkeypatch):
     finally:
         _teardown()
     assert r["awaiting"] == "operator_search_box"
-    assert len([p for p in harness.paths() if p == "/execute"]) == 1  # stopped, didn't keep typing
+    # Stopped at the first field — never went on to the location box or the Search button.
+    touched = {p["target_name"] for path, p in harness.calls if path == "/execute"}
+    assert touched == {"search: Job title, keywords, or company"}
 
 
 # --- the recover branch: the whole point ------------------------------------------------------
@@ -1129,7 +1220,8 @@ def test_a_validation_error_from_execute_is_not_a_successful_action(monkeypatch)
     assert "no outcome back" in r["last_step"]["detail"]
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
     # and it stopped at the first failure rather than blindly typing the location and submitting
-    assert len([p for p in harness.paths() if p == "/execute"]) == 1
+    touched = {p["target_name"] for path, p in harness.calls if path == "/execute"}
+    assert touched == {"search: Job title, keywords, or company"}
 
 
 def test_a_failed_submit_click_does_not_claim_the_query_ran(monkeypatch):

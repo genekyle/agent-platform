@@ -600,23 +600,81 @@ async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict
     # signature, and were scattered rather than expressed as a pace.
     style = xs.pick_style()
 
-    acted, why = await _act("type", controls["query"], value=query)
+    async def _fill(ctrl: dict, value: str) -> tuple[bool, str]:
+        """Clear, then type. `type` is `Input.insertText`, which inserts AT THE CARET and does not
+        replace — so typing into a box that already holds text appends to it. That box is not
+        hypothetical: a run that submitted and did not land leaves both fields populated, and this
+        rung's whole retry story is "step again". Without the clear, the second attempt would
+        search 'data warehousedata warehouse' and spend the session's one query on it."""
+        await _act("clear", ctrl)
+        return await _act("type", ctrl, value=value)
+
+    acted, why = await _fill(controls["query"], query)
     if not acted:
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
                 "detail": f"Could not enter the query — {why}."}
     await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
     if location and "location" in controls:
-        await _act("type", controls["location"], value=location)
+        await _fill(controls["location"], location)
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
-    acted, why = await _act("click", controls["submit"])
-    if not acted:
+    async def _tab_urls() -> list[str]:
+        res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+        return [t.get("url", "") for t in (res.get("tabs") or [])]
+
+    async def _submit_and_confirm() -> tuple[bool, Optional[dict], bool, str]:
+        """Click Search, then ask the PAGE whether it took.
+
+        Returns (clicked, results_tab, page_moved, why). `page_moved` is the half that matters for
+        deciding whether a retry is even allowed: `/execute` is a tier-1 primitive and says so in
+        its own docstring — its `ok` means the node resolved and CDP dispatched without throwing,
+        NOT that the page accepted the action. Confirming is this tier-2 caller's job.
+        """
+        before = await _tab_urls()
+        ok, detail = await _act("click", controls["submit"])
+        if not ok:
+            return False, None, False, detail
+        await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+        res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+        tabs_after = res.get("tabs") or []
+        moved = [t.get("url", "") for t in tabs_after] != before
+        return True, _find_search_tab(tabs_after, query), moved, ""
+
+    clicked, tab, moved, why = await _submit_and_confirm()
+    if not clicked:
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
                 "detail": f"Typed the query but could not submit it — {why}."}
-    await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
 
-    # PROOF, not assumption: re-read the tabs and require a results URL carrying our query.
-    after = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
-    tab = _find_search_tab(after.get("tabs") or [], query)
+    if tab is None and not moved:
+        # THE FIRST CLICK COMMITS THE WIDGET, THE SECOND SUBMITS THE FORM. Measured live
+        # 2026-07-25 on session 20: both fields held their typed values, the Search button was the
+        # hit-test target at its own centre, the click dispatched trusted — and the page did not
+        # move at all. Typing into the location combobox stages a suggestion popup, and the click
+        # that looks like "press Search" is spent dismissing it. The widget protocol (stage ->
+        # commit -> act) showing up in the search box, same shape as the distance pill: AX finds
+        # the ELEMENT, but the element sits inside a widget with a protocol.
+        #
+        # `not moved` IS THE WHOLE SAFETY PROPERTY, and the first version of this retry did not
+        # have it. It retried whenever no results tab matched our query — which on 2026-07-25
+        # included the case where the click HAD submitted and the tab re-read simply raced the
+        # navigation. The second click then landed on the freshly-loaded results page, whose
+        # search box is empty, and submitted `q=` from the SERP. A verification that can race the
+        # thing it verifies is not a verification, and a retry behind it is blind. So: click again
+        # only when NOTHING in the window changed. If the page moved anywhere at all, the click
+        # did something, and doing it twice is exactly the double-spend this rung forbids.
+        bb.log("run_query", "the window did not change after the submit — the click committed the "
+                            "location widget; clicking Search once more")
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        clicked, tab, moved, why = await _submit_and_confirm()
+
+    if tab is None and moved:
+        # Something happened, just not what we asked for. Never click again into an unknown.
+        bb.log("run_query", f"submitted {query!r}; the page moved but not to results for it")
+        return {"ok": False, "action": "run_query", "awaiting": "operator_verify",
+                "detail": f"Submitted {query!r} and the page moved, but not to a results page "
+                          f"carrying that query. Left unmarked, and NOT retried — the click did "
+                          f"something and repeating it could spend the query twice. Check the "
+                          f"browser."}
+
     if tab is None:
         bb.log("run_query", f"submitted {query!r} but no results tab carries it — left unmarked")
         return {"ok": False, "action": "run_query", "awaiting": "operator_verify",
