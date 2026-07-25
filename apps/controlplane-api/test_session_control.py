@@ -465,15 +465,53 @@ def test_no_indeed_tab_leaves_auth_unknown_rather_than_calling_it_signed_out(mon
     assert rung["observed"] is None and rung["status"] == "held"
 
 
-def test_auth_probe_on_an_unknown_asks_for_indeed_instead_of_releasing_the_rung(monkeypatch):
-    """The step-level half: `auth_probe` must not turn 'we could not see' into 'signed out' and
-    run a login survey against whatever page is in front."""
-    bb = store.new_blackboard(1, query="reporting analyst")
+def _auth_rung_next(query="reporting analyst"):
+    """A blackboard whose crank lands on `authenticated`."""
+    bb = store.new_blackboard(1, query=query)
     led = cps.Ledger()
-    led.mark("provisioned", evidence="test")   # so the crank lands on `authenticated`
+    led.mark("provisioned", evidence="test")
     bb.checkpoints = led.as_dict()
+    return bb
+
+
+def test_a_fresh_session_opens_indeed_itself_instead_of_asking_the_operator_to(monkeypatch):
+    """Found live 2026-07-25 provisioning session 20 — the first fresh session the panel ever
+    started. The window is one about:blank tab, so nothing could be probed and nothing could be
+    searched, and both rungs handed back 'open Indeed'. Initialize is specified to reach the start
+    line; opening the HOME page is the first move, and it was missing."""
+    bb = _auth_rung_next()
+    tabs = {"n": 0}
+
+    def _list_tabs(_payload):
+        # about:blank until we navigate; the Indeed home page afterwards.
+        return _tabs("about:blank") if tabs["n"] == 0 else _tabs("https://www.indeed.com/")
+
+    def _navigate(_payload):
+        tabs["n"] = 1
+        return {"ok": True, "landed_url": "https://www.indeed.com/"}
+
     harness, saved = _install(monkeypatch,
-                              {"/list_tabs": _tabs(_WORKDAY_APPLY_URL),
+                              {"/list_tabs": _list_tabs,
+                               "/navigate": _navigate,
+                               "/auth_state": {"ok": True, "logged_in": True}},
+                              blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    nav = [p for path, p in harness.calls if path == "/navigate"]
+    assert len(nav) == 1 and nav[0]["url"] == sc.INDEED_HOME, "the HOME page, never a deep URL"
+    assert r["last_step"]["ok"] is True
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
+
+
+def test_auth_probe_that_cannot_open_indeed_leaves_the_rung_alone(monkeypatch):
+    """`auth_probe` must not turn 'we could not see' into 'signed out' and run a login survey
+    against whatever page is in front."""
+    bb = _auth_rung_next()
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs("about:blank"),
+                               "/navigate": {"ok": False, "detail": "ConnectError"},
                                "/auth_state": {"ok": True, "logged_in": False}},
                               blackboard=bb)
     try:
@@ -482,10 +520,36 @@ def test_auth_probe_on_an_unknown_asks_for_indeed_instead_of_releasing_the_rung(
         _teardown()
     assert r["last_step"]["action"] == "auth_probe"
     assert r["awaiting"] == "operator_open_indeed"
-    # The survey reads the page in front of it. Run here it would classify a Workday application
-    # as an Indeed login screen and offer "ways in" that lead somewhere else entirely.
+    # The survey reads the page in front of it. Run here it would classify about:blank — or a
+    # Workday application — as an Indeed login screen and offer "ways in" that lead elsewhere.
     assert "/ax_scan" not in harness.paths()
-    assert "/auth_state" not in harness.paths()
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
+
+
+def test_an_ats_tab_is_never_mistaken_for_a_missing_indeed_tab(monkeypatch):
+    """The two fixes meet here: a Workday tab is not an Indeed tab, so auth is unknown — but the
+    remedy is to open Indeed, not to survey the Workday page for a way in."""
+    bb = _auth_rung_next()
+    urls = {"list": [_WORKDAY_APPLY_URL]}
+
+    def _list_tabs(_payload):
+        return _tabs(*urls["list"])
+
+    def _navigate(_payload):
+        urls["list"] = [_WORKDAY_APPLY_URL, "https://www.indeed.com/"]
+        return {"ok": True, "landed_url": "https://www.indeed.com/"}
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs, "/navigate": _navigate,
+                               "/auth_state": lambda p: {"ok": True,
+                                                         "logged_in": p.get("tab_id") == "t1"}},
+                              blackboard=bb)
+    try:
+        client.post("/api/session_control/1/step", json={})
+    finally:
+        _teardown()
+    assert [p for path, p in harness.calls if path == "/navigate"], "should open Indeed"
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
 
 
 #: A live reCAPTCHA as CDP actually reports it: an IFRAME target, never a page. /list_tabs filters

@@ -46,6 +46,9 @@ router = APIRouter()
 
 INITIATORS = ("operator", "auto", "teacher")
 
+#: The front door. A session opens the HOME page and clicks on from there — never a deep URL.
+INDEED_HOME = "https://www.indeed.com/"
+
 
 # --- seams ------------------------------------------------------------------------------------
 async def _capture_post(path: str, payload: dict, timeout: float = 30.0) -> dict:
@@ -446,22 +449,49 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                 "detail": f"Session Chrome is up with a clean window ({len(tabs)} tab)."}
 
     if action == "auth_probe":
+        # NOBODY EVER OPENED THE FRONT DOOR. A freshly provisioned session is one about:blank tab,
+        # so there was no Indeed page to probe and none to search from: `auth_probe` handed back
+        # "open Indeed", `run_query` handed back "open Indeed's job search, then step again", and
+        # the ladder could not climb from a clean browser at all (found live 2026-07-25 on session
+        # 20, the first fresh session the panel ever provisioned). Initialize was specified to
+        # "reach the start line" (PLAN §2.1) and nothing implemented the first move.
+        #
+        # Opening a site's HOME PAGE is not the URL-forcing §3 warns about. That rule is about
+        # jumping into a DEEP state we should have clicked our way to — a job detail, a results
+        # page, an application. There is nothing to click on about:blank, and typing indeed.com is
+        # exactly what a person does first. Every deep state after this is still reached by
+        # clicking.
+        if obs["observed"].get("authenticated") is None:
+            style = xs.pick_style()
+            nav = await _capture_post("/navigate", {
+                "browser_url": browser_url, "url": INDEED_HOME,
+                "tab_id": ((obs.get("tabs") or [{}])[0]).get("tab_id", ""),
+                "settle_seconds": 3.0})
+            await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+            if not nav.get("ok"):
+                bb.log("handoff", f"could not open Indeed — {str(nav.get('detail'))[:90]}")
+                return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
+                        "detail": f"No Indeed tab was open and this session could not open one "
+                                  f"({str(nav.get('detail') or 'no detail')[:120]}). The rung is "
+                                  f"left as it was rather than guessed."}
+            bb.log("nav", f"opened Indeed's home page to probe sign-in ({style.name} pace)")
+            obs = await _observe(browser_url, bb.search_state.query)
+
         if obs["observed"].get("authenticated"):
             ledger.mark("authenticated", evidence="/auth_state reported logged_in",
                         initiator=initiator)
             bb.log("checkpoint", "authenticated — signed in to Indeed")
             return {"ok": True, "action": action, "detail": "Signed in."}
 
-        # UNKNOWN IS NOT SIGNED-OUT. With no Indeed tab open we did not look at Indeed at all, so
-        # releasing the rung here would invent a regression and send the operator to a login
-        # survey run against whatever page happens to be in front — the same "an unknown must
-        # never read as a regression" rule `session_checkpoints` enforces one layer up.
+        # STILL UNKNOWN AFTER OPENING THE DOOR — we navigated but no Indeed tab came back, so we
+        # never looked at Indeed. Releasing the rung here would invent a regression, and the login
+        # survey below would run against whatever page happens to be in front. Same rule
+        # `session_checkpoints` enforces one layer up: an unknown is not a regression.
         if obs["observed"].get("authenticated") is None:
-            bb.log("handoff", "auth unknown — no Indeed tab open to probe")
+            bb.log("handoff", "auth unknown — no Indeed tab to probe after navigating")
             return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
-                    "detail": "No Indeed tab is open, so this session's sign-in could not be "
-                              "checked. Open Indeed in this window and probe again — the rung is "
-                              "left as it was rather than guessed."}
+                    "detail": "Opened Indeed but no Indeed tab came back, so sign-in could not be "
+                              "checked. The rung is left as it was rather than guessed."}
 
         # NOT SIGNED IN IS A STEP, NOT A DEAD END. The boundary is that we never type a password or
         # clear a 2FA challenge — it was never that we refuse to open the login page. Reporting
