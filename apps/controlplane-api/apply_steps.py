@@ -38,6 +38,9 @@ BLOCKED = "blocked"              # captcha / challenge — escalate, never solve
 HUMAN_REQUIRED = "human_required"  # a branch only a person may take (2FA, AI recruiter, password)
 UNKNOWN = "unknown"              # WE DO NOT RECOGNISE THIS. Not a failure — an admission.
 FAILED = "failed"                # tried, did not work, and we know why
+SKIPPED = "skipped"              # NOT NEEDED HERE, and that is a real answer. Greenhouse takes an
+                                 # application without an account, so `account` is skipped rather
+                                 # than left undone — an unwalked rung stalls the ladder forever.
 
 #: Flags that mean the step cannot proceed on its own. `UNKNOWN` is here deliberately: not
 #: recognising a screen is a reason to stop and ask, never a reason to press on hopefully.
@@ -97,6 +100,12 @@ PREFIX: tuple[MiniRung, ...] = (
     MiniRung("classify", "Work out where we landed",
              "THE DISCOVERY POINT. Indeed in-app, a known ATS, or somewhere new — the rungs after "
              "this one do not exist until this is answered."),
+    MiniRung("account", "Get past the account wall",
+             "Most ATS want an identity before they will take an application — an email, then a "
+             "profile. It was happening OFF the ladder: an account handoff appeared beside the "
+             "queue and the step itself showed nothing between 'we landed' and 'submit', so the "
+             "one part with a credential in it was the one part that left no trace. Skipped "
+             "cleanly on platforms that need no account (Greenhouse)."),
 )
 
 #: The last rung of every apply, whatever the middle turned out to be. Never automatic.
@@ -152,10 +161,15 @@ class ApplyStep:
         return not self.done and self.last_flag in NEEDS_OPERATOR
 
     def next_rung(self) -> Optional[MiniRung]:
-        """The next prefix rung, or None once the prefix is walked (the tail is discovered)."""
-        reached = {m.rung for m in self.minis if m.outcome == OK}
+        """The next prefix rung, or None once the prefix is walked (the tail is discovered).
+
+        A rung is also considered walked when it was explicitly SKIPPED — `account` on a platform
+        that needs no account is not an omission, and a ladder that kept asking for it would stall
+        every Greenhouse application forever.
+        """
+        settled = {m.rung for m in self.minis if m.outcome in (OK, SKIPPED)}
         for rung in PREFIX:
-            if rung.id not in reached:
+            if rung.id not in settled:
                 return rung
         return None
 

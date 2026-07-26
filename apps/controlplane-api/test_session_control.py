@@ -2812,3 +2812,74 @@ def test_the_click_addresses_the_role_the_matcher_actually_found(monkeypatch):
     ex = next(p for path, p in harness.calls if path == "/execute")
     assert ex["target_role"] == "link", "must address the role the matcher found"
     assert ex["target_name"] == "Apply on company site"
+
+
+# --- the account rung: the wall most ATS put in front of an application ------------------
+# Operator, 2026-07-26: "we'll also need a group for icims accounts, and surfacing the account
+# creation step in our new step through in the controller." It was happening OFF the ladder — a
+# handoff appeared beside the queue while the step itself showed nothing between "we landed" and
+# "submit", so the one part with a credential in it was the one part that left no trace.
+def _classified_step(platform, company="Joslin Diabetes Center"):
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "Healthcare Data Analyst",
+                    "company": company}])
+    step = queue.steps[0]
+    for r in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        step.record(r, aps.OK, "done")
+    step.platform = platform
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    return bb
+
+
+def test_the_account_step_is_on_the_ladder_after_classify():
+    step = aps.ApplyStep(job_id="x", title="t")
+    for r in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        step.record(r, aps.OK)
+    assert step.next_rung().id == "account", "the credential step must be a rung, not a side note"
+
+
+def test_a_platform_that_needs_no_account_skips_the_rung_cleanly(monkeypatch):
+    """Greenhouse takes an application without an identity. SKIPPED is a real answer — an
+    unwalked rung would stall the ladder forever."""
+    bb = _classified_step("greenhouse")
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}}, blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    mini = r["queue"]["steps"][0]["minis"][-1]
+    assert mini["rung"] == "account" and mini["outcome"] == "skipped"
+
+
+def test_an_ats_that_wants_an_account_surfaces_it_and_waits(monkeypatch):
+    """Allowed to create one (operator directive 2026-07-24) — but it is a real identity on
+    somebody's ATS, so it is surfaced and confirmed rather than done in passing."""
+    bb = _classified_step("icims")
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}}, blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    mini = r["queue"]["steps"][0]["minis"][-1]
+    assert mini["rung"] == "account"
+    assert mini["outcome"] == "human_required", "a credential is never created in passing"
+    handoff = r["account_handoff"]
+    assert handoff["ats_id"] == "icims"
+    assert handoff["company"] == "Joslin Diabetes Center"
+    assert handoff["leg"] == "create_account"
+
+
+def test_an_unnamed_company_gets_no_credentials_anywhere(monkeypatch):
+    bb = _classified_step("icims", company="")
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}}, blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    mini = r["queue"]["steps"][0]["minis"][-1]
+    assert mini["outcome"] == "unknown" and "no company" in mini["detail"]

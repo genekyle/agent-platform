@@ -1613,6 +1613,10 @@ async def rebuild_queue(session_id: int, body: RebuildQueueBody,
 #: platform — "Apply on company site" is telling us we are about to leave.
 _APPLY_HINTS = ("apply now", "easily apply", "apply on company site", "apply with indeed", "apply")
 
+#: Platforms that take an application without an identity. `account` is SKIPPED on these — a real
+#: answer, not an omission, and the difference matters: an unwalked rung stalls the ladder forever.
+_NO_ACCOUNT_PLATFORMS = frozenset({"greenhouse", "indeed", "indeed_quick_apply"})
+
 
 #: Names that belong to the RESULTS LIST or the filter bar, never to the open pane's apply
 #: button. Each is a control that contains an apply word and would otherwise be clicked:
@@ -1869,7 +1873,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                               + ("It opened a new tab — step again to find out where we landed."
                                  if new else "No new tab; step again to classify where we are."))
 
-    else:  # classify — the discovery point
+    elif rung.id == "classify":  # the discovery point
         # FIND the apply tab rather than guessing its position. The recorded one is only set when
         # `enter_apply` ran through this endpoint — a teach-driven Apply (propose -> Go) opens the
         # tab without going through here, so falling back to "the last tab" picked the SEARCH tab
@@ -1885,10 +1889,66 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                     frames=content.get("frames") or [])
         step.platform = disc.platform
         step.landing_state = disc.state
-        step.record("classify", disc.outcome,
+        # CLASSIFY'S JOB IS TO SAY WHERE WE ARE, and it has done that the moment the landing has a
+        # name. Recording the platform's undriven-ness as classify's OWN outcome left the rung
+        # unsettled, so `next_rung` returned classify forever and the ladder could never reach the
+        # account wall in front of it (found live on iCIMS, 2026-07-26). "We do not have a recipe"
+        # is still reported — in the detail, and by the step staying needs_operator — it just is
+        # not allowed to masquerade as "we do not know where we are".
+        named = disc.kind not in ("", "unknown", "unreadable")
+        step.record("classify", aps.OK if named else disc.outcome,
                     f"{disc.state or 'unclassified'} · {url[:90]} -> {disc.detail}",
                     initiator=body.initiator)
         detail = disc.detail
+
+    else:  # account — the wall most ATS put in front of an application
+        import ats_accounts
+
+        platform = step.platform or ""
+        company = step.company or ""
+        if platform in _NO_ACCOUNT_PLATFORMS:
+            step.record("account", aps.SKIPPED,
+                        f"{platform} takes an application without one", initiator=body.initiator)
+            detail = f"No account needed on {platform} — skipped, not skipped over."
+        elif not company:
+            step.record("account", aps.UNKNOWN,
+                        "no company on the step, so no account can be identified",
+                        initiator=body.initiator)
+            detail = ("I cannot tell whose account this would be — the step has no company. "
+                      "Name it before creating credentials anywhere.")
+        else:
+            # ensure_account REGISTERS the company-ATS pair (idempotent); next_account_action
+            # reads back which leg is due from its lifecycle state.
+            ats_accounts.ensure_account(company, platform, login_url=_apply_tab_url(bb, obs))
+            action = ats_accounts.next_account_action(company, platform)
+            bb.world = dict(bb.world or {})
+            # The handoff record the panel already renders, now ALSO a rung on the step, so the
+            # one part of an application that involves a credential stops being the one part that
+            # left no trace on the ladder.
+            bb.world["account_handoff"] = {
+                "job_id": step.job_id, "company": company, "ats_id": platform,
+                "leg": action["leg"], "state": action["state"],
+                "account_status": action["account_status"],
+                "button": action["button"], "account_id": action["account_id"],
+                "has_recipe": bool(action.get("recipe")),
+            }
+            if action["account_status"] == "active":
+                step.record("account", aps.OK,
+                            f"{action['account_id']} already exists — sign in",
+                            initiator=body.initiator)
+                detail = f"An account for {company} on {platform} exists. Signing in is the next move."
+            else:
+                # NOT a failure and NOT automatic. Creating an account is allowed (operator
+                # directive 2026-07-24) but it is a real-world identity on somebody's ATS, so it
+                # is surfaced and confirmed rather than done in passing.
+                step.record("account", aps.HUMAN_REQUIRED,
+                            f"{platform} wants an account for {company} "
+                            f"({action['account_id']}, status={action['account_status']})",
+                            initiator=body.initiator)
+                detail = (f"{platform} needs an account for {company} before it will take an "
+                          f"application. Credentials are staged as {action['account_id']} — "
+                          f"confirm to create it.")
+
 
     return _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style)

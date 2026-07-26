@@ -116,3 +116,21 @@ def test_a_zero_size_frame_is_a_tracker_not_the_content():
     text, source = al.pick_content("wrapper chrome", [
         {"id": "a2a_sm_ifr", "readable": True, "text": "x" * 5000, "width": 0, "height": 0}])
     assert source == "top"
+
+
+def test_a_sparse_content_frame_still_beats_a_chatty_wrapper():
+    """iCIMS's email gate is three lines, deliberately. A volume threshold excluded exactly the
+    state we had just driven to and fell back to the wrapper's boilerplate — the frame's size on
+    screen is the structural signal, not how much it says."""
+    text, source = al.pick_content(_JOSLIN_TOP, [
+        {"id": "icims_content_iframe", "readable": True, "width": 1249, "height": 1654,
+         "text": "Welcome page\nEnter Your Information\nEmail\nApplication FAQs\n"
+                 "Software Powered by ICIMS\nProtected by hCaptcha"}])
+    assert source == "icims_content_iframe"
+    assert al.classify_kind(text, source=source).kind == al.ACCOUNT_GATE
+
+
+def test_a_frame_that_rendered_nothing_is_not_the_content():
+    text, source = al.pick_content("real wrapper text", [
+        {"id": "empty", "readable": True, "width": 1249, "height": 1654, "text": "  "}])
+    assert source == "top"

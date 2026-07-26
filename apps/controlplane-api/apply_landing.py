@@ -70,6 +70,10 @@ MARKERS: dict[str, tuple[str, ...]] = {
     ACCOUNT_GATE: (
         "create an account", "sign in to continue", "returning candidate", "log back in",
         "already have an account", "create your profile", "sign up to apply",
+        # The IDENTITY-FIRST shape, met live on iCIMS: before any form, the ATS asks for an email
+        # to start or resume an application. It is the account wall wearing a friendlier label.
+        "enter your information", "email address", "start your application",
+        "resume your application",
     ),
     JOB_POSTING: (
         "job description", "overview", "responsibilities", "qualifications", "job id",
@@ -96,6 +100,21 @@ DECISIVE = (CONFIRMATION, GONE)
 WEIGHED = (APPLICATION_FORM, ACCOUNT_GATE, JOB_POSTING, JOB_LIST)
 
 ORDER = DECISIVE + WEIGHED
+
+#: Phrases that are worth TWO ordinary markers because they are unambiguous on their own. A page
+#: saying "Enter your information" above an email box is an identity step and nothing else — but
+#: it is a THREE-LINE page, so a flat two-marker minimum called it unknown and the drive stalled
+#: (live, iCIMS's email gate, 2026-07-26). Weighting beats lowering the minimum, which would let
+#: a stray "overview" carry a whole classification.
+STRONG: frozenset = frozenset({
+    "enter your information", "returning candidate", "create an account", "log back in",
+    "start your application", "resume your application", "already have an account",
+    "upload your resume", "* indicates a required", "apply for this job",
+})
+
+
+def _weight(hits: tuple) -> int:
+    return sum(2 if h in STRONG else 1 for h in hits)
 
 
 @dataclass(frozen=True)
@@ -129,7 +148,13 @@ def pick_content(top_text: str = "", frames: Optional[list[dict]] = None) -> tup
         if not f.get("readable"):
             continue
         t = f.get("text") or ""
-        if len(t.strip()) < 200:
+        # A SPARSE PAGE IS STILL THE CONTENT. This was `< 200` and it excluded exactly the state we
+        # had just driven to: iCIMS's email gate is three lines ("Enter Your Information / Email"),
+        # deliberately, and the classifier fell back to 691 characters of hospital wrapper and
+        # called the whole thing unknown. Volume was never the signal — the frame's SIZE ON SCREEN
+        # is, and that already excludes the 0x0 trackers. Keep only a floor low enough to reject a
+        # frame that has genuinely rendered nothing.
+        if len(t.strip()) < 20:
             continue
         # An offscreen or zero-size frame is a tracker/pixel, never the content. `0` is falsy, so
         # `if w and w < 200` skipped exactly the 0x0 case it was written for — test caught it.
@@ -162,8 +187,9 @@ def classify_kind(text: str, *, source: str = "top") -> Landing:
     scored = []
     for kind in WEIGHED:
         hits = tuple(m for m in MARKERS[kind] if m in body)
-        if len(hits) >= 2:
-            scored.append((len(hits), -WEIGHED.index(kind), kind, hits))
+        w = _weight(hits)
+        if w >= 2:
+            scored.append((w, -WEIGHED.index(kind), kind, hits))
     if scored:
         _, _, kind, hits = max(scored)
         return Landing(kind, hits[:4], source, len(body))
