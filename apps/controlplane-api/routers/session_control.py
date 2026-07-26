@@ -243,7 +243,9 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "location": ss.location,
         "radius_miles": (bb.world or {}).get("radius_miles"),
         "page": page,
-        "ladder": cps.status_rows(ledger, observed, page=page),
+        "ladder": cps.status_rows(ledger, observed, page=page,
+                                  has_results=bool(results if results is not None
+                                                   else (bb.world or {}).get("page_results"))),
         "next": cps.next_step(ledger, observed, page=page).as_dict(),
         "progress": cps.progress(ledger, observed, page=page),
         "observed": observed,
@@ -2172,10 +2174,15 @@ async def clean_start(session_id: int, body: CleanStartBody,
 
 # --- the operator's choice ------------------------------------------------------------------------
 class ChooseBody(BaseModel):
-    picks: list[str] = []          # job_ids the operator wants to act on
+    picks: list[str] = []          # job_ids to act on, IN THE ORDER they should be applied to
     note: str = ""
     advance: bool = True           # page forward once the page is decided
     initiator: str = "operator"
+    #: WHO chose. `operator` today, always. The field exists now so that a `classifier:<name>` or
+    #: `rule:<name>` can take this same step later without the step changing shape — and so every
+    #: selection already on the record says who made it. A shortlist with no decider cannot be
+    #: audited and cannot train the thing meant to inherit the job.
+    decided_by: str = cps.DECIDER_OPERATOR
 
 
 @router.post("/api/session_control/{session_id}/choose")
@@ -2190,6 +2197,10 @@ async def choose(session_id: int, body: ChooseBody,
     meaning "nothing on this page", and the page still counts as reviewed.
     """
     _check_initiator(body.initiator)
+    if not cps.valid_decider(body.decided_by):
+        raise HTTPException(status_code=422,
+                            detail=f"decided_by must be 'operator' or start with "
+                                   f"'classifier:' / 'rule:' — got {body.decided_by!r}")
     session, bb, ledger = _load(session_id, db)
     browser_url = _session_browser_url(session)
     obs = await _observe(browser_url, bb.search_state.query)
@@ -2223,8 +2234,16 @@ async def choose(session_id: int, body: ChooseBody,
     added = queue.enqueue([by_id.get(j) or {"job_id": j} for j in body.picks])
     bb.world = dict(bb.world or {})
     bb.world["apply_queue"] = queue.as_dict()
+    # THE SELECTION IS A STEP, and this is where it lands on the ladder. Marked STANDING, so
+    # adding to your picks later re-marks it rather than being refused — choosing costs nothing.
+    # The evidence line is the audit: how many of how many, and who decided.
+    ledger.mark(cps.select_rung(page).id,
+                evidence=f"{len(body.picks)} of {len(known)} picked by {body.decided_by}"
+                         + (f" — {body.note}" if body.note else ""),
+                initiator=body.initiator)
     bb.log("choose", f"page {page}: picked {len(body.picks)} of {len(known)} "
-                     f"({added} queued to apply)" + (f" — {body.note}" if body.note else ""))
+                     f"by {body.decided_by} ({added} queued to apply)"
+                     + (f" — {body.note}" if body.note else ""))
 
     if queue.blocks_page():
         summary = queue.summary()

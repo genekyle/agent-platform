@@ -2555,3 +2555,117 @@ def test_a_half_filled_form_does_hold_unsaved_work(monkeypatch):
         _teardown()
     assert r["staleness"]["verdict"] == "continue"
     assert "withheld" in r["staleness"]["why"]
+
+
+# --- the selection is a STEP ------------------------------------------------------------
+# Operator, 2026-07-26: "it feels like it's not an actual step." It was not: reviewing a page was
+# a rung and working an application was a rung, but the choice between them — the only part a
+# human actually makes — was an `awaiting` flag and a log line.
+def test_the_selection_appears_on_the_ladder_as_its_own_step(monkeypatch):
+    bb = _at_start_line()
+    bb.world = dict(bb.world or {})
+    bb.world["page_results"] = [{"job_id": "indeed:aaa", "title": "A Job"},
+                                {"job_id": "indeed:bbb", "title": "B Job"}]
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    row = next(x for x in r["ladder"] if x["id"] == "select:1")
+    assert row["label"] == "Page 1 picks made"
+    assert row["status"] == "next", "the cards are read — the choice is the operator's move"
+    assert row["kind"] == "standing", "choosing again costs nothing; it must not read as spent"
+
+
+def test_the_selection_step_is_pending_until_the_page_is_read(monkeypatch):
+    """A choice between fifteen jobs nobody has looked at is not a step to invite."""
+    bb = _at_start_line()
+    bb.world = dict(bb.world or {})
+    bb.world["page_results"] = []
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert next(x for x in r["ladder"] if x["id"] == "select:1")["status"] == "pending"
+
+
+def test_choosing_marks_the_step_with_who_decided_and_what_they_picked(monkeypatch):
+    bb = _at_start_line()
+    bb.world = dict(bb.world or {})
+    bb.world["page_results"] = [{"job_id": f"indeed:{c}", "title": f"{c} Job"} for c in "abc"]
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:a", "indeed:c"], "advance": False,
+                              "initiator": "operator"}).json()
+    finally:
+        _teardown()
+    row = next(x for x in r["ladder"] if x["id"] == "select:1")
+    assert row["status"] == "held"
+    assert "2 of 3 picked by operator" in row["reached"]["evidence"]
+
+
+def test_re_choosing_is_allowed_because_a_selection_spends_nothing(monkeypatch):
+    """The difference between this rung and the query it sits under. Adding to your picks must
+    never be refused the way re-running a search is."""
+    bb = _at_start_line()
+    bb.world = dict(bb.world or {})
+    bb.world["page_results"] = [{"job_id": f"indeed:{c}", "title": f"{c} Job"} for c in "abc"]
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(SEARCH_URL),
+                               "/auth_state": {"ok": True, "logged_in": True}},
+                              blackboard=bb)
+    try:
+        client.post("/api/session_control/1/choose",
+                    json={"picks": ["indeed:a"], "advance": False})
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:b"], "advance": False}).json()
+    finally:
+        _teardown()
+    row = next(x for x in r["ladder"] if x["id"] == "select:1")
+    assert row["status"] == "held"
+    assert "1 of 3 picked by operator" in row["reached"]["evidence"]
+    assert set(r["picks"]) == {"indeed:a", "indeed:b"}, "both rounds of picks are kept"
+
+
+def test_a_classifier_may_take_the_step_later_without_it_changing_shape(monkeypatch):
+    """The seam. Today it is always the operator; the decider is named so the row already says
+    who chose when something else starts choosing."""
+    bb = _at_start_line()
+    bb.world = dict(bb.world or {})
+    bb.world["page_results"] = [{"job_id": "indeed:a", "title": "A Job"}]
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:a"], "advance": False,
+                              "decided_by": "classifier:fit_v1"}).json()
+    finally:
+        _teardown()
+    row = next(x for x in r["ladder"] if x["id"] == "select:1")
+    assert "picked by classifier:fit_v1" in row["reached"]["evidence"]
+
+
+def test_an_unnamed_decider_is_refused(monkeypatch):
+    """A shortlist with no decider cannot be audited and cannot train the thing meant to inherit
+    the job, so the vocabulary is closed."""
+    bb = _at_start_line()
+    bb.world = dict(bb.world or {})
+    bb.world["page_results"] = [{"job_id": "indeed:a", "title": "A Job"}]
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:a"], "decided_by": "somebody"})
+    finally:
+        _teardown()
+    assert r.status_code == 422 and "decided_by" in r.json()["detail"]

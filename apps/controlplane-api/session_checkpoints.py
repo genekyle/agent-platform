@@ -129,6 +129,53 @@ def page_rung(page: int) -> Checkpoint:
     )
 
 
+SELECT_PREFIX = "select:"
+
+#: WHO (or what) chose which jobs to apply to. The selection is a real decision with a real
+#: decider, and the decider is part of the recipe — today it is always the operator, and the
+#: point of naming it is that a classifier can take the same rung later WITHOUT the step changing
+#: shape. A row that does not say who chose cannot train anything, and cannot be audited either.
+DECIDER_OPERATOR = "operator"
+DECIDER_PREFIXES = ("classifier:", "rule:")
+
+
+def valid_decider(decided_by: str) -> bool:
+    return decided_by == DECIDER_OPERATOR or decided_by.startswith(DECIDER_PREFIXES)
+
+
+def select_rung(page: int) -> Checkpoint:
+    """'We have decided what to apply to on page N.'
+
+    STANDING, not consuming: choosing again costs nothing and spends nothing — it is a decision
+    held in our own records, not traffic against Indeed. That is the whole difference between
+    this rung and the page rung it sits beside, and it is why adding to your picks is safe while
+    re-running the query is not.
+
+    It exists because the decision was previously INVISIBLE. Reviewing a page was a rung and
+    working an application was a rung, but the choice between them — the one part a human
+    actually makes — was an `awaiting` flag and a log line. Operator, 2026-07-26: *"it feels like
+    it's not an actual step."* It was not.
+    """
+    return Checkpoint(
+        id=f"{SELECT_PREFIX}{page}",
+        label=f"Page {page} picks made",
+        kind=STANDING,
+        why="Choosing what to apply to is a decision with a decider, and both belong on the "
+            "record. Re-choosing is free — this rung spends nothing, unlike the page it sits on.",
+        action="select_page",
+    )
+
+
+def select_of(checkpoint_id: str) -> Optional[int]:
+    """The page number in a selection rung id, or None if it isn't one."""
+    if not checkpoint_id.startswith(SELECT_PREFIX):
+        return None
+    try:
+        return int(checkpoint_id[len(SELECT_PREFIX):])
+    except ValueError:
+        return None
+
+
 def page_of(checkpoint_id: str) -> Optional[int]:
     """The page number in a rolling rung id, or None if it isn't one."""
     if not checkpoint_id.startswith(PAGE_PREFIX):
@@ -286,9 +333,14 @@ def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1) -> Nex
 
 
 def status_rows(ledger: Ledger, observed: dict[str, Any], *,
-                page: int = 1) -> list[dict[str, Any]]:
+                page: int = 1, has_results: bool = False) -> list[dict[str, Any]]:
     """The ladder as the panel renders it: every preamble rung plus the page rungs walked so
-    far, each with its status and provenance. Read-only view over `next_step`."""
+    far, each with its status and provenance. Read-only view over `next_step`.
+
+    `has_results` says whether this page's cards have actually been read, which is what decides
+    whether the SELECTION rung is the operator's next move or still pending. Without it the panel
+    would invite a choice between fifteen jobs nobody has looked at yet.
+    """
     nxt = next_step(ledger, observed, page=page)
     rows: list[dict[str, Any]] = []
     for cp in PREAMBLE:
@@ -317,6 +369,19 @@ def status_rows(ledger: Ledger, observed: dict[str, Any], *,
         rows.append({"id": nxt.checkpoint.id, "label": nxt.checkpoint.label,
                      "kind": nxt.checkpoint.kind, "status": NEXT,
                      "why": nxt.checkpoint.why, "observed": None})
+
+        # THE SELECTION, as its own step. It sits under the page it belongs to and is only
+        # actionable once the cards have been read — otherwise it is a choice between jobs nobody
+        # has seen. HELD carries who decided and what they picked, so the ladder can be read back
+        # as "6 of 15, by operator" long after the fact.
+        sel = select_rung(page)
+        held = ledger.holds(sel.id)
+        row = {"id": sel.id, "label": sel.label, "kind": sel.kind,
+               "status": HELD if held else (NEXT if has_results else PENDING),
+               "why": sel.why, "observed": None}
+        if held:
+            row["reached"] = ledger.reached[sel.id].as_dict()
+        rows.append(row)
     return rows
 
 

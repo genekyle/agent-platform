@@ -1675,3 +1675,9 @@ textarea:focus-visible {
   font-style: normal; font-weight: 500; opacity: 0.85;
   padding-left: 6px; margin-left: 2px; border-left: 1px solid currentColor;
 }
+
+/* Picks are client-side until "Take" posts them — say so, because a reload silently loses them. */
+.sc-picks__unsaved {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px; font-weight: 600; color: var(--warning);
+}

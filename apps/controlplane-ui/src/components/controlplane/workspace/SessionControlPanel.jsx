@@ -76,6 +76,7 @@ const ACTION_COPY = {
   recover: "needs recovery",
   choose: "recorded your picks",
   pre_gate: "stopped at a challenge",
+  select_page: "recorded your picks",
 };
 
 // --- staleness: how old is what we are looking at ------------------------------------------
@@ -542,6 +543,14 @@ export function SessionControlPanel({ domain }) {
                         ? `${picks.length} picked · click a number to pick it up and swap`
                         : "Click a circle to make it #1. They run in this order."}
                   </span>
+                  {/* PICKS ARE NOT SAVED UNTIL TAKEN. They live in this component until the
+                      button below posts them, so a reload loses them — which is exactly what
+                      happened: six selected, nothing on the server, and no sign of it. */}
+                  {picks.length > 0 && (
+                    <span className="sc-picks__unsaved" title="Nothing is recorded until you press Take">
+                      <AppIcon name="alert" size={12} /> not saved yet
+                    </span>
+                  )}
                   {picks.length > 0 && (
                     <button type="button" className="btn btn-sm" disabled={busy}
                             onClick={clearPicks} title="Clear every pick and its number">
