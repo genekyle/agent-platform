@@ -1875,9 +1875,18 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # tab without going through here, so falling back to "the last tab" picked the SEARCH tab
         # and would have classified Indeed as the ATS. The apply tab is the one that is not ours.
         url = _apply_tab_url(bb, obs)
-        disc = aps.classify_landing(url)
+        # READ THE FRAMES, not just the top document. A branded ATS wrapper keeps a header and a
+        # footer and delegates the whole job — description, apply control, account affordances —
+        # to one large same-origin iframe. Classifying the wrapper called a real iCIMS job landing
+        # a hospital marketing page (live 2026-07-26); `/page_content` returns both.
+        content = await _capture_post("/page_content",
+                                      {"browser_url": browser_url, "tab_url": url}, timeout=15.0)
+        disc = aps.classify_landing(url, page_text=content.get("text") or "",
+                                    frames=content.get("frames") or [])
         step.platform = disc.platform
-        step.record("classify", disc.outcome, f"{url[:120]} -> {disc.detail}",
+        step.landing_state = disc.state
+        step.record("classify", disc.outcome,
+                    f"{disc.state or 'unclassified'} · {url[:90]} -> {disc.detail}",
                     initiator=body.initiator)
         detail = disc.detail
 

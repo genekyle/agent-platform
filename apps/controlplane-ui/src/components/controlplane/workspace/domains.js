@@ -18,7 +18,7 @@ export const DOMAIN_CATALOG = [
     label: "Career Search",
     short: "Career Search",
     kind: "group",
-    children: ["indeed_jobs", "linkedin", "workday", "greenhouse"],
+    children: ["indeed_jobs", "linkedin", "workday", "greenhouse", "icims"],
     responsibility: "Search + apply across job engines (Indeed, LinkedIn, ZipRecruiter) and their ATS (Workday, iCIMS, Taleo, …); the shared application accounts live here.",
     blurb: "Job engines + ATS — search, apply, accounts.",
     tabs: [
@@ -98,6 +98,27 @@ export const DOMAIN_CATALOG = [
     tabUrl: "greenhouse.io",
     responsibility: "Complete Greenhouse applications — embedded job_app forms, no account required.",
     blurb: "Cross-site apply target — no account wall.",
+    tabs: [
+      { id: "overview", label: "Overview" },
+      { id: "accounts", label: "Accounts" },
+    ],
+  },
+  {
+    // iCIMS — met live 2026-07-26 on the first Joslin Diabetes Center application, reached from
+    // Indeed's "Apply on company site". Its shape is the reason `apply_landing` exists: iCIMS
+    // serves the employer's OWN branded page (jobs-<tenant>.icims.com) whose top document is that
+    // employer's site chrome — nav, footer, copyright — and puts the job, the description and the
+    // whole apply flow inside `#icims_content_iframe`. Any probe reading the top document sees a
+    // corporate homepage and nothing else, which is exactly what stopped the first landing.
+    id: "icims",
+    label: "iCIMS",
+    short: "iCIMS",
+    kind: "coming_soon",
+    parent: "career_search",
+    host: "icims",
+    tabUrl: "icims.com",
+    responsibility: "Complete iCIMS applications — content lives in an embedded frame on the employer's branded page; account-gated at submit.",
+    blurb: "Cross-site apply target — framed content, account wall.",
     tabs: [
       { id: "overview", label: "Overview" },
       { id: "accounts", label: "Accounts" },

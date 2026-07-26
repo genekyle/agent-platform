@@ -679,6 +679,14 @@ export function SessionControlPanel({ domain }) {
                         <span className="sc-step__title">{s.title || s.job_id}</span>
                         {s.company && <span className="rung__meta">{s.company}</span>}
                         {s.platform && <span className="badge badge--muted">{s.platform}</span>}
+                        {/* WHERE we landed, not just whose software it is. A re-orientation
+                            after leaving Indeed is normal, and the state is what makes it
+                            reportable rather than a shrug. */}
+                        {s.landing_state && (
+                          <span className="badge badge--accent" title="Where this application landed — platform + page kind, read from the page content">
+                            {s.landing_state.replace(/_/g, " ")}
+                          </span>
+                        )}
                       </div>
                       {s.terminal_detail && <div className="rung__meta">{s.terminal_detail}</div>}
 

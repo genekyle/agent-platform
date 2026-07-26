@@ -1,0 +1,118 @@
+"""Landing classification — the re-orientation step for leaving Indeed.
+
+The fixtures are REAL text measured on live landings, not invented prose. That matters more here
+than usual: the whole module exists because the page we assumed we were reading was not the page
+the content was on.
+"""
+
+import apply_landing as al
+
+#: The top document of the first real iCIMS landing (jobs-joslin.icims.com, 2026-07-26): 691
+#: characters of the hospital's own homepage. The job is nowhere in it.
+_JOSLIN_TOP = """Skip Branding Skip to main content Global Menu FIND AN EXPERT MAKE AN APPOINTMENT
+DONATE NOW Main navigation PATIENT CARE RESEARCH PROFESSIONAL EDUCATION ABOUT SUPPORT JOSLIN
+SEARCH HOME ABOUT CAREERS Stay informed with the latest in Diabetes Care, Research, and
+Development. Joslin Diabetes Center, Inc. One Joslin Place Boston, MA 02215 HARVARD MEDICAL
+SCHOOL AFFILIATE © 2019 JOSLIN DIABETES CENTER PRIVACY POLICY TERMS OF USE SITEMAP"""
+
+#: ...and what was actually inside #icims_content_iframe.
+_JOSLIN_FRAME = """Skip to Main Content Welcome page Returning Candidate? Log back in!
+Healthcare Data Analyst (Clinic Administration) Location US-MA-Boston Job ID N3915-26
+# Positions 1 Category Clinic Pos. Type Full Time Overview The Healthcare Data Analyst will join
+a collaborative team at Joslin Diabetes Center. Responsibilities include reporting and analysis.
+Qualifications Bachelor's degree required. Apply for this job online"""
+
+
+def test_the_content_frame_wins_over_the_wrapper():
+    """The finding that made this module necessary: the top document is branding and the job is in
+    a frame. Classifying the wrapper would call a real job landing a marketing page."""
+    text, source = al.pick_content(_JOSLIN_TOP, [
+        {"id": "icims_content_iframe", "readable": True, "text": _JOSLIN_FRAME,
+         "width": 1249, "height": 1654},
+        {"id": "a2a_sm_ifr", "readable": False, "text": None, "width": 0, "height": 0},
+    ])
+    assert source == "icims_content_iframe"
+    assert "Healthcare Data Analyst" in text
+
+
+def test_an_unreadable_frame_is_skipped_not_preferred():
+    text, source = al.pick_content("some real text here", [
+        {"id": "x", "readable": False, "text": None, "width": 1249, "height": 1654}])
+    assert source == "top" and text == "some real text here"
+
+
+def test_no_frames_means_the_top_document_is_all_there_is():
+    text, source = al.pick_content("plain ats page", [])
+    assert source == "top" and text == "plain ats page"
+
+
+def test_the_live_icims_landing_is_a_job_posting():
+    text, source = al.pick_content(_JOSLIN_TOP, [
+        {"id": "icims_content_iframe", "readable": True, "text": _JOSLIN_FRAME,
+         "width": 1249, "height": 1654}])
+    landing = al.classify_kind(text, source=source)
+    assert landing.kind == al.JOB_POSTING
+    assert landing.evidence, "a classification must say what it saw"
+
+
+def test_the_wrapper_alone_classifies_as_nothing_useful():
+    """Proving the failure this module prevents: fed only the top document, there is no honest
+    call to make — and `unknown` is the honest one."""
+    assert al.classify_kind(_JOSLIN_TOP).kind == al.UNKNOWN
+
+
+def test_empty_is_unreadable_not_unknown():
+    """"Nothing to read" and "read it and could not tell" are different, and lead to different
+    next moves — one needs a better probe, the other needs a human."""
+    assert al.classify_kind("").kind == al.UNREADABLE
+
+
+# --- precedence: a page trips several kinds at once ----------------------------------
+def test_a_confirmation_is_never_read_as_a_posting():
+    text = "Thank you for applying. Job description. Overview. Responsibilities."
+    assert al.classify_kind(text).kind == al.CONFIRMATION
+
+
+def test_a_closed_requisition_outranks_its_own_description():
+    text = "Overview responsibilities qualifications. This job is no longer available."
+    assert al.classify_kind(text).kind == al.GONE
+
+
+def test_an_account_gate_is_not_a_form_the_agent_may_fill():
+    text = "Returning candidate? Log back in! Create an account to continue."
+    assert al.classify_kind(text).kind == al.ACCOUNT_GATE
+
+
+def test_a_careers_listing_is_not_the_job_we_came_for():
+    text = "Search jobs. Current openings. Filter by location. Sort by date."
+    assert al.classify_kind(text).kind == al.JOB_LIST
+
+
+def test_a_single_common_word_is_not_enough_evidence():
+    """'Overview' appears on half the pages on the internet. One marker cannot carry a broad
+    kind — only the decisive ones (a confirmation, a dead requisition) get to win on one."""
+    assert al.classify_kind("Overview").kind == al.UNKNOWN
+
+
+# --- the state id --------------------------------------------------------------------
+def test_the_state_joins_platform_and_kind():
+    assert al.landing_state("icims", al.JOB_POSTING) == "icims_job_posting"
+    assert al.landing_state("company_site", al.JOB_LIST) == "company_site_job_list"
+
+
+def test_an_employers_own_page_gets_the_same_kinds_as_a_named_ats():
+    """The reason the axes are split. A company careers page cannot be recognised by host — every
+    employer has a different one — so the platform axis gives up and the content axis still works.
+    """
+    text = "Job description. Overview. Responsibilities. Qualifications. Apply now."
+    kind = al.classify_kind(text).kind
+    assert kind == al.JOB_POSTING
+    assert al.landing_state("company_site", kind) == "company_site_job_posting"
+
+
+def test_a_zero_size_frame_is_a_tracker_not_the_content():
+    """The frame beside the real one on the live page was 0x0 — a share/analytics pixel. Size is
+    the structural tell: a wrapper delegates its BODY to one large frame."""
+    text, source = al.pick_content("wrapper chrome", [
+        {"id": "a2a_sm_ifr", "readable": True, "text": "x" * 5000, "width": 0, "height": 0}])
+    assert source == "top"

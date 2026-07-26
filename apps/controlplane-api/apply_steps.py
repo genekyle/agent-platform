@@ -131,6 +131,10 @@ class ApplyStep:
     company: str = ""
     status: str = STATUS_QUEUED
     platform: Optional[str] = None      # None until `classify` answers it
+    #: WHERE we landed, as `platform_kind` (`icims_job_posting`). The platform says whose software
+    #: it is; this says what was on the screen. Kept on the step so a re-orientation is recorded
+    #: rather than re-derived, and so the corpus gets a state name per landing.
+    landing_state: Optional[str] = None
     terminal: Optional[str] = None      # one of TERMINAL_FLAGS once done
     terminal_detail: str = ""
     minis: list[MiniStep] = field(default_factory=list)
@@ -172,7 +176,8 @@ class ApplyStep:
 
     def as_dict(self) -> dict[str, Any]:
         return {"job_id": self.job_id, "title": self.title, "company": self.company,
-                "status": self.status, "platform": self.platform, "terminal": self.terminal,
+                "status": self.status, "platform": self.platform,
+                "landing_state": self.landing_state, "terminal": self.terminal,
                 "terminal_detail": self.terminal_detail, "done": self.done,
                 "needs_operator": self.needs_operator(),
                 "next_rung": (nr.id if (nr := self.next_rung()) else None),
@@ -182,6 +187,7 @@ class ApplyStep:
     def from_dict(cls, d: dict[str, Any]) -> "ApplyStep":
         step = cls(job_id=d["job_id"], title=d.get("title", ""), company=d.get("company", ""),
                    status=d.get("status", STATUS_QUEUED), platform=d.get("platform"),
+                   landing_state=d.get("landing_state"),
                    terminal=d.get("terminal"), terminal_detail=d.get("terminal_detail", ""))
         step.minis = [MiniStep(**m) for m in d.get("minis", [])]
         return step
@@ -305,10 +311,19 @@ class Discovery:
     known: bool          # is there a recipe for this platform?
     outcome: str         # OK when we can proceed; UNKNOWN when a human must teach it
     detail: str
+    #: WHAT KIND of page, read from the CONTENT rather than the URL, and the state id the two
+    #: compose into (`icims_job_posting`). The platform axis alone could name the vendor and say
+    #: nothing about the screen — which is exactly where a real landing stopped, 2026-07-26.
+    kind: str = ""
+    state: str = ""
+    evidence: tuple = ()
+    source: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {"platform": self.platform, "known": self.known,
-                "outcome": self.outcome, "detail": self.detail}
+                "outcome": self.outcome, "detail": self.detail,
+                "kind": self.kind, "state": self.state,
+                "evidence": list(self.evidence), "source": self.source}
 
 
 #: Platforms we have actually driven end to end. Anything else is uncharted, and says so.
@@ -318,7 +333,8 @@ class Discovery:
 DRIVEN_PLATFORMS = frozenset({"indeed", "workday", "greenhouse"})
 
 
-def classify_landing(url: str, page_text: str = "") -> Discovery:
+def classify_landing(url: str, page_text: str = "",
+                     frames: Optional[list[dict]] = None) -> Discovery:
     """Answer the discovery rung: what kind of apply did we land in?
 
     Delegates identification to `ats_registry` (one source of truth for "which ATS is this") and
@@ -327,18 +343,38 @@ def classify_landing(url: str, page_text: str = "") -> Discovery:
     teaches it live, rather than a generic form-filler guessing its way through somebody's real
     job application.
     """
+    import apply_landing as al
     from ats_registry import classify_ats
 
     platform = classify_ats(url) or "unknown"
+
+    # WHERE ARE WE, not just whose software is it. Read from the content — and from the FRAME that
+    # holds it, because a branded ATS wrapper puts the job somewhere the top document never
+    # mentions (iCIMS, live 2026-07-26). The kind is attached to every verdict below, so even a
+    # halt says what it was looking at rather than only which vendor it belonged to.
+    text, source = al.pick_content(page_text, frames)
+    landing = al.classify_kind(text, source=source)
+    state = al.landing_state(platform, landing.kind)
+
+    def _d(known: bool, outcome: str, detail: str, *, as_platform: str = "") -> Discovery:
+        # `as_platform` keeps smartapply reported as plain "indeed": classify_ats calls it
+        # `indeed_quick_apply`, and the caller-facing name has always been the shorter one.
+        p = as_platform or platform
+        return Discovery(p, known, outcome, detail, kind=landing.kind,
+                         state=al.landing_state(p, landing.kind),
+                         evidence=landing.evidence, source=landing.source)
+    where = f" We are on a {landing.kind.replace('_', ' ')} ({state})." if landing.kind not in (
+        al.UNKNOWN, al.UNREADABLE) else ""
+
     if "smartapply.indeed.com" in (url or "") or platform == "indeed":
-        return Discovery("indeed", True, OK,
-                         "Indeed's in-app application (smartapply) — the recipe we know best.")
+        return _d(True, OK, "Indeed's in-app application (smartapply) — the recipe we know best."
+                            + where, as_platform="indeed")
     if platform in DRIVEN_PLATFORMS:
-        return Discovery(platform, True, OK, f"{platform}: a platform we have driven before.")
+        return _d(True, OK, f"{platform}: a platform we have driven before." + where)
     if platform in ("company_site", "unknown", ""):
-        return Discovery(platform or "unknown", False, UNKNOWN,
-                         "This does not match any ATS we recognise. Halting so it can be driven "
-                         "and captured rather than guessed at.")
-    return Discovery(platform, False, UNKNOWN,
-                     f"{platform} is recognised by the registry but has never been driven end to "
-                     f"end here. Naming a platform is not knowing how to finish it.")
+        return _d(False, UNKNOWN,
+                  "This does not match any ATS we recognise. Halting so it can be driven and "
+                  "captured rather than guessed at." + where)
+    return _d(False, UNKNOWN,
+              f"{platform} is recognised by the registry but has never been driven end to end "
+              f"here. Naming a platform is not knowing how to finish it." + where)

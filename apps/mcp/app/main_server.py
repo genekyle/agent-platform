@@ -2358,6 +2358,59 @@ async def auth_state(body: ScreenshotRequest):
         return {"ok": False, "detail": str(exc)}
 
 
+_FRAME_TEXT_JS = r"""
+(() => {
+  // Same-origin frames only: a cross-origin contentDocument throws, and we swallow it rather
+  // than fail — an unreadable frame is reported as unreadable, never as empty.
+  const out = [];
+  document.querySelectorAll('iframe').forEach((f) => {
+    const r = f.getBoundingClientRect();
+    let text = null, readable = false;
+    try {
+      const doc = f.contentDocument;
+      if (doc && doc.body) { text = (doc.body.innerText || '').slice(0, 12000); readable = true; }
+    } catch (e) { /* cross-origin */ }
+    out.push({ id: f.id || null, name: f.name || null, src: (f.src || '').slice(0, 200),
+               width: Math.round(r.width), height: Math.round(r.height),
+               readable, text });
+  });
+  return { url: location.href, title: document.title,
+           text: (document.body ? document.body.innerText : '').slice(0, 12000), frames: out };
+})()
+"""
+
+
+@app.post("/page_content")
+async def page_content(body: ScreenshotRequest):
+    """The page's text INCLUDING its same-origin frames.
+
+    Every other text probe reads the top document only, and on a whole class of ATS that is the
+    wrong document. iCIMS renders the job and its entire apply flow inside `#icims_content_iframe`
+    on the employer's branded wrapper, so `/auth_state` came back with 691 characters of hospital
+    homepage — patient care, donate, a 2019 copyright — and nothing about the job we had just
+    clicked through to (measured live 2026-07-26, jobs-joslin.icims.com).
+
+    Anything classifying a landing by page text needs the frame that HAS the content, so this
+    returns both and says which frames it could read. A cross-origin frame is reported
+    `readable: false` with `text: null` — unreadable, never silently empty, because "no text" and
+    "not allowed to look" lead to different next moves.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate",
+                                 {"expression": _FRAME_TEXT_JS, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {}
+        data["ok"] = True
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("page_content failed: %s", exc)
+        return {"ok": False, "detail": str(exc), "text": "", "frames": []}
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "mcp-capture-server"}
