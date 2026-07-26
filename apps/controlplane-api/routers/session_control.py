@@ -1646,7 +1646,12 @@ def _find_apply_control(candidates: list[dict], *, apply_type: str = "",
 
     def usable(c: dict) -> bool:
         name = (c.get("name") or "").lower()
-        if (c.get("role") or "").lower() != "button":
+        # A LINK IS AS GOOD AS A BUTTON. Indeed's own apply control is an <a role="link"> with
+        # data-testid="viewjob-apply"; requiring role == "button" meant the real control was
+        # invisible to this matcher and the only "apply" BUTTONS on the page were the result
+        # cards. That is both why the first version clicked a card and why the fixed version then
+        # found nothing at all among 196 elements (live, 2026-07-26 — the Joslin step).
+        if (c.get("role") or "").lower() not in ("button", "link"):
             return False
         if any(bad in name for bad in _NOT_THE_PANE):
             return False
@@ -1657,9 +1662,21 @@ def _find_apply_control(candidates: list[dict], *, apply_type: str = "",
             return False
         return True
 
+    def norm(s: str) -> str:
+        return " ".join((s or "").lower().replace(",", " ").split())
+
+    # EXACT FIRST. The pane's control is named precisely "Apply on company site"; a result card is
+    # a long concatenation ("Easily apply, New, View full details of X at Y, Boston, MA"). Matching
+    # on `contains` alone cannot tell them apart — "analyst" appears in both our job title and half
+    # the cards — so an exact name is the strongest evidence available and is tried before any
+    # substring. This is the same shape as the pane reader's priority list: order beats document
+    # position, and precision beats proximity.
     for hint in want:
-        hit = next((c for c in candidates if usable(c) and hint in (c.get("name") or "").lower()),
-                   None)
+        hit = next((c for c in candidates if usable(c) and norm(c.get("name")) == hint), None)
+        if hit:
+            return hit
+    for hint in want:
+        hit = next((c for c in candidates if usable(c) and hint in norm(c.get("name"))), None)
         if hit:
             return hit
     return None
@@ -1804,7 +1821,12 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             before = {t.get("tab_id") for t in (obs.get("tabs") or [])}
             res = await _capture_post("/execute", {
                 "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
-                "target_bbox": {}, "target_role": "button",
+                "target_bbox": {},
+                # ADDRESS IT BY THE ROLE WE ACTUALLY FOUND. This was hard-coded to "button", so
+                # `/execute` re-resolved by (button, "Apply on company site") and got NOT_FOUND —
+                # the control is a link. The matcher had just done the work of finding the right
+                # element and the dispatch threw half of its answer away.
+                "target_role": ctrl.get("role") or "button",
                 "target_name": ctrl.get("name"), "driver": "humanized"})
             await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
             if res.get("outcome") not in ("ok", "committed_unconfirmed"):

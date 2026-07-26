@@ -2741,3 +2741,74 @@ def test_a_click_that_stays_on_indeed_is_not_a_successful_enter(monkeypatch):
     assert last["rung"] == "enter_apply"
     assert last["outcome"] == "failed", "staying on Indeed is not entering an application"
     assert "not this job's apply control" in last["detail"]
+
+
+#: The real AX of Indeed's results page, measured live 2026-07-26 on the Joslin step. Two things
+#: this pins: the pane's own apply control is a LINK (data-testid=viewjob-apply), and every card
+#: also says "easily apply" as BOTH a link and a button.
+_LIVE_SERP_AX = [
+    {"role": "button", "name": "Encouraged to apply filter"},
+    {"role": "link", "name": "Apply on company site"},
+    {"role": "link", "name": "Easily apply, New, View full details of Enterprise Applications "
+                             "Analyst at Beacon Communities, Boston, MA"},
+    {"role": "button", "name": "Easily apply, New, View full details of Enterprise Applications "
+                               "Analyst at Beacon Communities, Boston, MA"},
+    {"role": "button", "name": "Easily apply, View full details of LIMS Business Analyst at "
+                               "ALTEN Technology USA, Waltham, MA"},
+]
+
+
+def test_the_apply_control_may_be_a_link_not_a_button():
+    """Indeed's own control is an <a role=link>. Requiring a button made it invisible — which is
+    why the matcher first clicked a card, and then (once cards were excluded) found nothing at all
+    among 196 elements."""
+    ctrl = sc._find_apply_control(_LIVE_SERP_AX, apply_type="company_site",
+                                  job_title="Healthcare Data Analyst (Clinic Administration)")
+    assert ctrl is not None, "the pane's apply link must be findable"
+    assert ctrl["name"] == "Apply on company site"
+    assert ctrl["role"] == "link"
+
+
+def test_an_exact_name_beats_a_card_that_merely_contains_the_word():
+    """'analyst' appears in our job title AND in half the cards, so `contains` cannot separate
+    them. The pane's control is named exactly; a card never is."""
+    ctrl = sc._find_apply_control(_LIVE_SERP_AX, apply_type="",
+                                  job_title="Healthcare Data Analyst (Clinic Administration)")
+    assert ctrl["name"] == "Apply on company site"
+
+
+def test_a_quick_apply_pane_still_prefers_its_own_control():
+    cands = [{"role": "link", "name": "Easily apply, View full details of Other Job at Acme"},
+             {"role": "button", "name": "Apply now"}]
+    assert sc._find_apply_control(cands, apply_type="quick_apply",
+                                  job_title="Some Analyst")["name"] == "Apply now"
+
+
+def test_the_click_addresses_the_role_the_matcher_actually_found(monkeypatch):
+    """`target_role` was hard-coded to "button", so /execute re-resolved (button, "Apply on
+    company site") and returned NOT_FOUND — the control is a link. The matcher had just done the
+    work of identifying the right element and the dispatch discarded half its answer."""
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "Healthcare Data Analyst"}])
+    step = queue.steps[0]
+    step.record("open_pane", aps.OK, "pane switched")
+    step.record("verify_identity", aps.OK, "matches")
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.world["open_pane"] = {"title": "Healthcare Data Analyst", "apply_type": "company_site"}
+    harness, _ = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://boards.greenhouse.io/acme/jobs/1"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "candidates": [
+             {"role": "link", "name": "Apply on company site"}]},
+         "/execute": {"outcome": "ok"}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_step", json={})
+    finally:
+        _teardown()
+    ex = next(p for path, p in harness.calls if path == "/execute")
+    assert ex["target_role"] == "link", "must address the role the matcher found"
+    assert ex["target_name"] == "Apply on company site"
