@@ -34,6 +34,23 @@ context-dependent and one of the responses is destructive:
     HANDOFF  : we cannot SEE the page well enough to judge. Never guess a remedy from a blind
                reading — that is how a refresh lands on a page nobody looked at.
 
+**THE VERDICT COMES FROM THE LOUDEST SIGNAL, NOT FROM THE LEVEL.** Corrected on the first live
+test (2026-07-26), which is the whole reason to test a prototype against a real stale session
+rather than a fixture: a results page left 14.5 hours — still authenticated, still answering with
+210 controls — scored RED on age and proposed RENEW. That would have destroyed a working session
+to fix out-of-date search results. Two different kinds of bad were being collapsed into one:
+
+    the CONTENT is old      -> REFRESH. A reload is exactly the cure.
+    the SESSION is gone     -> RENEW.   A reload lands on a login wall.
+
+So every signal carries its own `remedy` and the loudest one decides. Level says *how suspect*;
+remedy says *what to do about it*. Age can reach RED and still only ever ask for a reload.
+
+And the signal that outranks all the clock-based ones: `responsive` — did the page just answer.
+Every other signal INFERS staleness from elapsed time; that one reads it directly. It cannot raise
+the level (a responsive page can still be showing yesterday's results) but it is the evidence the
+time signals are a proxy for, and it is recorded as such.
+
 **A REFRESH IS DESTRUCTIVE WHEN THE PAGE HOLDS UNSAVED WORK.** A half-filled Workday application
 is exactly the case: reloading it throws away typed answers that cost real effort, and the
 staleness that prompted the reload was never worth that. So `holds_unsaved_work` downgrades
@@ -111,16 +128,26 @@ RULES_VERSION = "staleness/proto-1"
 
 @dataclass(frozen=True)
 class Signal:
-    """One reading and what it means. `value` is kept raw so calibration can re-derive `level`
-    from journaled rows under different thresholds."""
+    """One reading, what it means, and WHAT WOULD FIX IT. `value` is kept raw so calibration can
+    re-derive `level` from journaled rows under different thresholds.
+
+    `remedy` is the correction that came out of the first live test (2026-07-26). The verdict used
+    to be read off the overall LEVEL alone, which conflated two different kinds of bad: a view
+    whose CONTENT is old, and a session that is GONE. Age is precisely what a reload cures, so a
+    14-hour-old results page — still authenticated, still answering with 210 controls — scored RED
+    and proposed RENEW, which would have thrown away a working session to fix stale search results.
+    Each signal now names its own cure and the loudest one decides.
+    """
 
     name: str
     level: str
     value: Optional[float] = None
     why: str = ""
+    remedy: str = ""          # the verdict THIS signal implies when it is the loudest
 
     def as_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "level": self.level, "value": self.value, "why": self.why}
+        return {"name": self.name, "level": self.level, "value": self.value, "why": self.why,
+                "remedy": self.remedy}
 
 
 @dataclass(frozen=True)
@@ -135,6 +162,9 @@ class Evidence:
     last_action_at: Optional[float] = None
     last_nav_at: Optional[float] = None
     cookie_expires_at: Optional[float] = None
+    #: Did the page just ANSWER — probes returned, controls present? Direct evidence, where every
+    #: other signal is a clock-based proxy for it. None when nobody checked.
+    responsive: Optional[bool] = None
     #: Typed answers / staged widget input that a reload would throw away.
     holds_unsaved_work: bool = False
 
@@ -208,39 +238,63 @@ def assess(ev: Evidence) -> Staleness:
                          f"cannot observe the page — {ev.blind_reason}", (sig,),
                          unmeasured=("all — the observation itself failed",))
 
-    # --- logged out: a reload lands on a login wall, so this is RENEW, never REFRESH.
+    # --- logged out: a reload lands on a login wall. Only a new session cures this.
     if ev.logged_in is False:
-        signals.append(Signal("logged_in", RED, 0.0, "the session is signed out"))
+        signals.append(Signal("logged_in", RED, 0.0, "the session is signed out", remedy=RENEW))
     elif ev.logged_in is None:
         unmeasured.append("logged_in")
 
+    # --- AGE SIGNALS. Their remedy is REFRESH at every level, because a reload is exactly what
+    # cures old content. Level says how suspect, `remedy` says what to do about it — conflating
+    # the two is what made a healthy 14-hour session propose RENEW on its first live test.
     idle = None if ev.last_action_at is None else max(0.0, ev.now - ev.last_action_at)
     if idle is None:
         unmeasured.append("idle_s")
     signals.append(Signal("idle_s", _age_level("idle_s", idle), idle,
-                          "time since this drive last acted"))
+                          "time since this drive last acted", remedy=REFRESH))
 
     age = None if ev.last_nav_at is None else max(0.0, ev.now - ev.last_nav_at)
     if age is None:
         unmeasured.append("page_age_s")
     signals.append(Signal("page_age_s", _age_level("page_age_s", age), age,
-                          "time since the tab last navigated"))
+                          "time since the tab last navigated", remedy=REFRESH))
 
+    # --- a dying cookie is NOT cured by reloading: the credential itself is expiring.
     ttl = None if ev.cookie_expires_at is None else max(0.0, ev.cookie_expires_at - ev.now)
     if ttl is None:
         unmeasured.append("cookie_ttl_s")
     signals.append(Signal("cookie_ttl_s", _ttl_level("cookie_ttl_s", ttl), ttl,
-                          "time left on the soonest-expiring session cookie"))
+                          "time left on the soonest-expiring session cookie", remedy=RENEW))
+
+    # --- LIVENESS IS EVIDENCE; AGE IS ONLY A PRIOR. Everything above infers staleness from the
+    # clock. This one is a direct reading of the thing we actually care about — did the page just
+    # answer, and are we still who we were. It cannot raise the level (a responsive page can still
+    # be showing yesterday's results), but it is recorded because it is the strongest thing we
+    # know and it is what the time signals are a proxy FOR.
+    if ev.responsive is not None:
+        signals.append(Signal("responsive", FRESH if ev.responsive else RED,
+                              1.0 if ev.responsive else 0.0,
+                              "the page answered our probes" if ev.responsive
+                              else "the page did not answer",
+                              remedy=CONTINUE if ev.responsive else HANDOFF))
+    else:
+        unmeasured.append("responsive")
 
     level = worst(s.level for s in signals)
+    # The LOUDEST signal picks the remedy — not the overall level. Ties go to the earliest
+    # signal listed, which puts session-death (logged_in) ahead of mere age by construction.
     loudest = max(signals, key=lambda s: ORDER.index(s.level))
 
     if level in (FRESH, YELLOW):
-        verdict, why = CONTINUE, f"{level}: the page is operable ({loudest.why})"
-    elif level == ORANGE:
-        verdict, why = REFRESH, f"orange: reload before acting ({loudest.why})"
+        verdict = CONTINUE
+        why = f"{level}: the page is operable ({loudest.why})"
     else:
-        verdict, why = RENEW, f"red: this view cannot be repaired by reloading ({loudest.why})"
+        verdict = loudest.remedy or REFRESH
+        why = f"{level}: {loudest.why}"
+        if verdict == REFRESH:
+            why += " — a reload cures this"
+        elif verdict == RENEW:
+            why += " — reloading cannot repair it"
 
     # --- WORK OUTRANKS FRESHNESS. Both remedies throw away typed input, and the staleness that
     # prompted them is a suspicion, not a fault. Downgrade rather than destroy: keep going while

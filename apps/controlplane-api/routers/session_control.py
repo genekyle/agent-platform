@@ -27,6 +27,8 @@ Testability: every browser/capture-server call goes through the `_capture_post` 
 from __future__ import annotations
 
 import asyncio
+import time
+from datetime import datetime
 from typing import Any, Optional
 
 import httpx
@@ -265,7 +267,73 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "awaiting": awaiting,
         "last_step": last,
         "events": [{"ts": e.ts, "kind": e.kind, "detail": e.detail} for e in bb.events[-12:]],
+        # How old is what we are looking at (perception/staleness.py — PROTOTYPE). Advisory: the
+        # panel shows it and the operator decides. Nothing here acts on it.
+        "staleness": _staleness_for(bb, obs),
     }
+
+
+def _staleness_for(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
+    """Assess this session's freshness from what the panel already observed.
+
+    The panel does not run the controller loop, so it cannot use `LiveActuator`'s bookkeeping —
+    but it has the same facts in a different shape. The drive's last action is the last event on
+    the blackboard, which is a better measure here than anything in memory: it SURVIVES a restart,
+    so a session picked up the morning after reports its real age instead of looking brand new
+    because the process is (this is the case that motivated the detector).
+    """
+    from perception import staleness as st
+
+    observed = obs.get("observed", {})
+    tabs = obs.get("tabs") or []
+
+    last_at = None
+    for e in reversed(bb.events or ()):
+        try:
+            last_at = datetime.fromisoformat(e.ts).timestamp()
+            break
+        except (TypeError, ValueError):
+            continue
+
+    reachable = bool(obs.get("reachable"))
+    return st.assess(st.Evidence(
+        now=time.time(),
+        logged_in=observed.get("authenticated"),
+        blind_reason="" if reachable else "the session's browser is not answering",
+        last_action_at=last_at,
+        # The panel has no per-tab navigation clock. UNMEASURED, not zero — an unknown must not
+        # read as freshly loaded any more than it may read as a regression.
+        last_nav_at=None,
+        responsive=bool(reachable and tabs),
+        # A queued application that has been opened but not ended is work in progress; reloading
+        # under it is the destructive case the module refuses to propose.
+        holds_unsaved_work=_queue_in_progress(bb),
+    )).as_dict()
+
+
+#: Apply rungs that only LOOK. A step that has done nothing but these has staged no input, so a
+#: reload costs it nothing — it re-opens the pane and carries on.
+_READ_ONLY_RUNGS = frozenset({"open_pane", "verify_identity", "classify", "orient"})
+
+
+def _queue_in_progress(bb: Any) -> bool:
+    """Is an application holding input a reload would throw away?
+
+    NOT simply "has started" — that was the first version and it was too broad: session 21 had
+    opened a pane and confirmed the job's identity, which stages nothing, and the panel duly
+    suppressed a refresh it should have offered. Withholding the remedy is as much a failure as
+    proposing a destructive one; it just fails quietly. A step counts only once it has run a rung
+    that puts something INTO the page.
+    """
+    try:
+        queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+        return any(
+            not s.done and any((m.get("rung") if isinstance(m, dict) else getattr(m, "rung", ""))
+                               not in _READ_ONLY_RUNGS for m in (s.minis or ()))
+            for s in (queue.steps or ())
+        )
+    except Exception:  # noqa: BLE001 — a malformed queue must not break the panel's read model
+        return False
 
 
 # --- initialize ---------------------------------------------------------------------------------

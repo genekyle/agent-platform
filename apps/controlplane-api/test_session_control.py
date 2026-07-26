@@ -2438,3 +2438,120 @@ def test_prompt_select_unconfirmed_is_not_reported_as_success(monkeypatch):
     assert r["last_step"]["ok"] is False
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert step.minis[-1].outcome == aps.HUMAN_REQUIRED
+
+
+# --- staleness: the panel's freshness datapoint -----------------------------------------
+# PROTOTYPE (perception/staleness.py). Advisory only — the panel shows it, the operator decides.
+def test_panel_staleness_is_read_from_the_blackboard_clock(monkeypatch):
+    """The last EVENT is the drive's last action, and it survives a process restart — which is
+    the whole point: a session picked up the next morning must report its real age instead of
+    looking brand new because the API was restarted."""
+    import time as _t
+    from datetime import datetime, timezone
+
+    bb = _at_start_line()
+    bb.events.clear()
+    bb.log("review", "page 1: 15 results")
+    bb.events[-1].ts = datetime.fromtimestamp(_t.time() - 14.5 * 3600,
+                                              tz=timezone.utc).isoformat()
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+
+    s = r["staleness"]
+    assert s["level"] == "red", "14.5 hours idle is not fresh"
+    # ...but the page is alive and signed in, so a RELOAD is the cure — never a new session.
+    assert s["verdict"] == "refresh"
+    by = {sig["name"]: sig for sig in s["signals"]}
+    assert by["idle_s"]["value"] > 14 * 3600
+    assert by["responsive"]["level"] == "fresh"
+
+
+def test_a_working_session_reads_fresh_and_operable(monkeypatch):
+    bb = _at_start_line()
+    bb.events.clear()
+    bb.log("review", "page 1: 15 results")     # just now
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["staleness"]["level"] == "fresh"
+    assert r["staleness"]["verdict"] == "continue"
+
+
+def test_an_unreachable_browser_is_a_handoff_not_a_reload(monkeypatch):
+    bb = _at_start_line()
+    _install(monkeypatch, {"/list_tabs": {"ok": False, "detail": "ConnectError", "tabs": []},
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["staleness"]["verdict"] == "handoff"
+
+
+def test_looking_at_a_job_is_not_unsaved_work(monkeypatch):
+    """Opening a pane and confirming the job's identity stages NOTHING — a reload re-opens it and
+    carries on. Counting that as work suppressed a refresh the panel should have offered (found
+    on session 21, 2026-07-26). Withholding a remedy fails as surely as proposing a bad one; it
+    just fails quietly."""
+    import time as _t
+    from datetime import datetime, timezone
+
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "A Job"}])
+    step = queue.steps[0]
+    step.record("open_pane", aps.OK, "pane switched")
+    step.record("verify_identity", aps.OK, "title matches")
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.events.clear()
+    bb.log("review", "page 1")
+    bb.events[-1].ts = datetime.fromtimestamp(_t.time() - 14.5 * 3600,
+                                              tz=timezone.utc).isoformat()
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["staleness"]["verdict"] == "refresh", "nothing was typed — the reload is free"
+    assert "withheld" not in r["staleness"]["why"]
+
+
+def test_a_half_filled_form_does_hold_unsaved_work(monkeypatch):
+    """Once a rung has put something INTO the page, the reload is no longer free."""
+    import time as _t
+    from datetime import datetime, timezone
+
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "A Job"}])
+    step = queue.steps[0]
+    step.record("open_pane", aps.OK, "pane switched")
+    step.record("fill_form", aps.OK, "typed first_name")
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.events.clear()
+    bb.log("review", "page 1")
+    bb.events[-1].ts = datetime.fromtimestamp(_t.time() - 14.5 * 3600,
+                                              tz=timezone.utc).isoformat()
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["staleness"]["verdict"] == "continue"
+    assert "withheld" in r["staleness"]["why"]

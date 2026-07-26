@@ -120,3 +120,60 @@ def test_the_row_round_trips_through_json():
     import json
     s = st.assess(_ev(logged_in=True, last_action_at=NOW - 1))
     assert json.loads(json.dumps(s.as_dict()))["verdict"] == st.CONTINUE
+
+
+# --- the verdict comes from the loudest SIGNAL, not the level -----------------------
+# Corrected on the first live test: a results page left 14.5 hours — still authenticated, still
+# answering with 210 controls — scored RED on age and proposed RENEW, which would have destroyed a
+# working session to fix out-of-date search results.
+def test_age_alone_asks_for_a_reload_however_red_it_gets():
+    """Age is precisely what a reload cures. It may reach RED; it must never ask for a new
+    session."""
+    r = st.THRESHOLDS["idle_s"][2]
+    s = st.assess(_ev(logged_in=True, last_action_at=NOW - r * 10, last_nav_at=NOW - r * 10))
+    assert s.level == st.RED
+    assert s.verdict == st.REFRESH, "old content is cured by reloading, not by a new session"
+    assert "reload cures" in s.why
+
+
+def test_a_dead_session_outranks_mere_age():
+    """Both are RED; only one of them is cured by reloading, and that one must not win."""
+    r = st.THRESHOLDS["idle_s"][2]
+    s = st.assess(_ev(logged_in=False, last_action_at=NOW - r * 10))
+    assert s.verdict == st.RENEW
+    assert "reloading cannot repair" in s.why
+
+
+def test_an_expiring_cookie_wants_a_new_session_not_a_reload():
+    s = st.assess(_ev(logged_in=True, last_action_at=NOW - 5,
+                      cookie_expires_at=NOW + st.THRESHOLDS["cookie_ttl_s"][2]))
+    assert s.level == st.RED and s.verdict == st.RENEW
+
+
+def test_a_responsive_page_is_recorded_as_direct_evidence():
+    """Every other signal infers staleness from the clock; this one reads it. It cannot lower the
+    level — a responsive page can still show yesterday's results — but it is what the time
+    signals are a proxy for, so it is on the record."""
+    s = st.assess(_ev(logged_in=True, last_action_at=NOW - 5, responsive=True))
+    by = {sig.name: sig for sig in s.signals}
+    assert by["responsive"].level == st.FRESH
+    assert by["responsive"].value == 1.0
+    assert "responsive" not in s.unmeasured
+
+
+def test_an_unresponsive_page_is_a_handoff_not_a_remedy():
+    s = st.assess(_ev(logged_in=True, last_action_at=NOW - 5, responsive=False))
+    assert s.level == st.RED and s.verdict == st.HANDOFF
+
+
+def test_responsiveness_is_unmeasured_when_nobody_checked():
+    s = st.assess(_ev(logged_in=True, last_action_at=NOW - 5))
+    assert "responsive" in s.unmeasured
+
+
+def test_every_signal_names_its_own_cure():
+    """The invariant behind the fix: a signal that cannot say what would fix it cannot pick a
+    verdict, and the level alone must never be asked to."""
+    s = st.assess(_ev(logged_in=True, last_action_at=NOW - 5, last_nav_at=NOW - 5,
+                      cookie_expires_at=NOW + 9999, responsive=True))
+    assert all(sig.remedy for sig in s.signals), [sig.name for sig in s.signals if not sig.remedy]

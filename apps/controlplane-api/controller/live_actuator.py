@@ -281,6 +281,10 @@ class LiveActuator:
             blind_reason=self._blind_reason(auth, scan, ax),
             last_action_at=self._last_action_at,
             last_nav_at=self._last_nav_at,
+            # DIRECT evidence, where the clock signals are only proxies: the probes we just made
+            # came back and the page named controls. Cheap — it is a reading of what we already
+            # fetched, not another round trip.
+            responsive=bool(auth.get("ok") is not False and candidates),
             holds_unsaved_work=self._unsaved_work,
         ))
 

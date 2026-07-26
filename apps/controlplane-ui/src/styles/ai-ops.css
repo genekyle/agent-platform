@@ -1226,6 +1226,7 @@ textarea:focus-visible {
 .status-healthy,
 .badge--ready { color: var(--success); background: var(--success-soft); }
 .health-badge.bad,
+.badge--danger,
 .status-down { color: var(--danger); background: var(--danger-soft); }
 .status-degraded,
 .badge--warn,
@@ -1666,3 +1667,11 @@ textarea:focus-visible {
 .sc-account__creds dt { color: var(--text-muted); font-size: 12px; align-self: center; }
 .sc-account__creds dd { margin: 0; }
 .sc-account__creds code { font-size: 12.5px; padding: 2px 7px; border-radius: 4px; background: rgba(127,127,127,0.15); user-select: all; }
+
+/* Staleness chip — the freshness datapoint on the session header. Level and remedy read as two
+   things because they ARE two things: how suspect the view is, and what would fix it. */
+.sc-stale { display: inline-flex; align-items: center; gap: 5px; }
+.sc-stale__verdict {
+  font-style: normal; font-weight: 500; opacity: 0.85;
+  padding-left: 6px; margin-left: 2px; border-left: 1px solid currentColor;
+}

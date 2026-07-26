@@ -50,6 +50,33 @@ every level, always. Freshness is never worth more than work, and the operator �
 commits or navigates rather than staging, and counting it would suppress the refresh remedy on
 every page we ever touch.
 
+## 1a. What the first live test corrected (2026-07-26)
+
+The operator deliberately left a session sitting and asked what the detector made of it. It had
+been idle **14.5 hours** — and was still signed in, still answering with **210 AX controls**, on
+an intact results page. The detector said **RED / RENEW**: throw away a working session to fix
+out-of-date search results.
+
+Two different kinds of bad were being collapsed into one, because the verdict was read off the
+overall LEVEL:
+
+    the CONTENT is old   -> REFRESH. A reload is exactly the cure.
+    the SESSION is gone  -> RENEW.   A reload lands on a login wall.
+
+**Every signal now carries its own `remedy` and the loudest signal decides.** Level says *how
+suspect*; remedy says *what to do*. Age can reach RED and still only ever ask for a reload. Same
+session now reads **RED / REFRESH**, which is right.
+
+A signal was added at the same time: **`responsive`** — did the page just answer. Every other
+signal infers staleness from the clock; that one reads it directly, and it is what the time
+signals are a proxy FOR. It cannot lower the level (a responsive page can still show yesterday's
+results) but it is recorded as the strongest evidence available.
+
+Also tightened: `holds_unsaved_work` counted any *started* application. Opening a pane and
+confirming a job's identity stages nothing, so the panel suppressed a refresh it should have
+offered. **Withholding a remedy fails as surely as proposing a destructive one — it just fails
+quietly.** Only rungs that put something INTO the page count now.
+
 ## 2. Signals (prototype)
 
 | signal | direction | today |
@@ -100,6 +127,7 @@ of a guess and makes every row journaled before it incomparable.
 - **No site-specific priors.** Workday, Greenhouse and Indeed almost certainly have different
   session lifetimes; the table is global. Per-ATS thresholds are the obvious next refinement once
   there is enough data to fit even one curve.
-- **Nothing consumes the verdict yet.** The session-control panel and the controller loop both
-  observe without reading `staleness`. Wiring a consumer is easy and deliberately deferred: a
-  remedy driven by a guessed threshold is worse than no remedy.
+- **Nothing ACTS on the verdict yet — by design.** It is surfaced in the session-control panel as
+  a chip on the session header (level + remedy, with the raw ages in the hover) and journaled on
+  every decision, but no code branches on it. A remedy driven by a guessed threshold is worse than
+  no remedy; the operator is the consumer until the thresholds are measured.

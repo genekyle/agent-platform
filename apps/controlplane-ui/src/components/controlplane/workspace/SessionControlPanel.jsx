@@ -78,6 +78,58 @@ const ACTION_COPY = {
   pre_gate: "stopped at a challenge",
 };
 
+// --- staleness: how old is what we are looking at ------------------------------------------
+// PROTOTYPE (perception/staleness.py). ADVISORY: it reports, the operator decides — nothing in
+// the panel acts on it, because the thresholds behind the level are still guesses.
+//
+// The level and the remedy are shown as SEPARATE things on purpose. They came apart on the first
+// live test: a session left 14.5 hours was red on age while still signed in and answering with
+// 210 controls, so the honest reading is "very suspect, and a reload fixes it" — not "red,
+// panic". Collapsing them is what made the detector propose destroying a working session.
+const STALE_TONE = { fresh: "ready", yellow: "warn", orange: "warn", red: "danger" };
+const STALE_VERDICT_COPY = {
+  continue: "operable — carry on",
+  refresh: "reload this page before acting",
+  renew: "reloading will not fix this — needs a fresh state",
+  handoff: "cannot see the page well enough to judge",
+};
+
+// Signals whose name ends in `_s` carry SECONDS; the rest carry a flag. Formatting everything as
+// an age rendered `responsive: 1s`, which reads as "answered a second ago" and means "yes".
+function _signalValue(name, value) {
+  if (value === null || value === undefined) return "not measured";
+  if (!String(name).endsWith("_s")) return value ? "yes" : "no";
+  if (value < 90) return `${Math.round(value)}s`;
+  if (value < 5400) return `${Math.round(value / 60)}m`;
+  return `${(value / 3600).toFixed(1)}h`;
+}
+
+function StalenessChip({ stale }) {
+  if (!stale) return null;
+  const tone = STALE_TONE[stale.level] || "muted";
+  // The hover carries the EVIDENCE, not a restatement of the verdict — the raw ages are what
+  // will eventually calibrate the thresholds, so they should be visible to the person who can
+  // tell us the level was wrong.
+  const detail = [
+    stale.why,
+    "",
+    ...(stale.signals || []).map((s) => `${s.name}: ${_signalValue(s.name, s.value)} · ${s.level}`),
+    ...(stale.unmeasured?.length ? ["", `not measured: ${stale.unmeasured.join(", ")}`] : []),
+    "",
+    `rules: ${stale.rules_version} (provisional — thresholds not yet measured)`,
+  ].join("\n");
+
+  return (
+    <span className={`badge badge--${tone} sc-stale`} title={detail}>
+      <AppIcon name={stale.level === "fresh" ? "check" : "alert"} size={12} />
+      <span>{stale.level === "fresh" ? "fresh" : `${stale.level} · stale`}</span>
+      {stale.verdict !== "continue" && (
+        <em className="sc-stale__verdict">{STALE_VERDICT_COPY[stale.verdict] || stale.verdict}</em>
+      )}
+    </span>
+  );
+}
+
 function Rung({ rung }) {
   // "spent" means the cost was actually PAID — i.e. the rung is reached. A consuming rung that
   // is merely next has not been spent, and labelling it so would misreport what this session
@@ -343,6 +395,7 @@ export function SessionControlPanel({ domain }) {
             </span>
             <span className="badge badge--muted">page {p.page ?? 1}</span>
             {p.tab_count ? <span className="badge badge--muted">{p.tab_count} tabs</span> : null}
+            <StalenessChip stale={p.staleness} />
           </div>
 
           <p className="live-detail__why">
