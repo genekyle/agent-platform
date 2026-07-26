@@ -2669,3 +2669,75 @@ def test_an_unnamed_decider_is_refused(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 422 and "decided_by" in r.json()["detail"]
+
+
+# --- enter_apply must click THIS pane's Apply, and prove it left ------------------------
+# Driven live 2026-07-26: one rung after verify_identity confirmed the pane was BIDMC,
+# enter_apply clicked 'Easily apply, New, View full details of Enterprise Applications Analyst'
+# — a different company's card in the results list — and recorded it as OK.
+_SERP_APPLY_AX = {"ok": True, "candidates": [
+    {"role": "button", "name": "Encouraged to apply filter"},
+    {"role": "button", "name": "Easily apply, New, View full details of Enterprise "
+                               "Applications Analyst - Boston, MA"},
+    {"role": "button", "name": "Apply on company site"},          # the pane's own, LAST
+]}
+
+
+def test_enter_apply_ignores_result_cards_and_filter_chips():
+    ctrl = sc._find_apply_control(_SERP_APPLY_AX["candidates"],
+                                  apply_type="company_site",
+                                  job_title="Healthcare Data Analyst – BIDMC, OBGYN Quality")
+    assert ctrl["name"] == "Apply on company site"
+
+
+def test_the_pane_s_own_apply_type_orders_the_search():
+    """`open_pane` already observed which kind of apply this is. Using it beats the generic hint
+    order, which put 'easily apply' ahead of 'apply on company site' and so could never reach a
+    company_site posting's real button."""
+    quick = [{"role": "button", "name": "Apply now"},
+             {"role": "button", "name": "Apply on company site"}]
+    assert sc._find_apply_control(quick, apply_type="quick_apply")["name"] == "Apply now"
+    assert sc._find_apply_control(quick, apply_type="company_site")["name"] \
+        == "Apply on company site"
+
+
+def test_a_control_naming_a_different_job_is_never_the_apply_button():
+    cands = [{"role": "button", "name": "Easily apply to Warehouse Supervisor at Acme Logistics"}]
+    assert sc._find_apply_control(cands, apply_type="quick_apply",
+                                  job_title="Healthcare Data Analyst BIDMC OBGYN") is None
+
+
+def test_no_apply_control_is_honest_rather_than_a_wrong_click():
+    assert sc._find_apply_control([{"role": "button", "name": "Encouraged to apply filter"}],
+                                  apply_type="company_site", job_title="Anything") is None
+
+
+def test_a_click_that_stays_on_indeed_is_not_a_successful_enter(monkeypatch):
+    """The verification half. Tier-1 `ok` means the click dispatched, not that it entered an
+    application — recording OK on that alone journaled an application we never entered."""
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "Healthcare Data Analyst"}])
+    step = queue.steps[0]
+    step.record("open_pane", aps.OK, "pane switched")
+    step.record("verify_identity", aps.OK, "matches")
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.world["open_pane"] = {"title": "Healthcare Data Analyst", "apply_type": "quick_apply"}
+    strayed = "https://www.indeed.com/viewjob?jk=someoneelse"
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(strayed),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "candidates": [{"role": "button", "name": "Apply now"}]},
+         "/execute": {"outcome": "ok"}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    minis = (r["queue"]["steps"][0]["minis"])
+    last = minis[-1]
+    assert last["rung"] == "enter_apply"
+    assert last["outcome"] == "failed", "staying on Indeed is not entering an application"
+    assert "not this job's apply control" in last["detail"]

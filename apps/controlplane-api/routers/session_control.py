@@ -1614,6 +1614,57 @@ async def rebuild_queue(session_id: int, body: RebuildQueueBody,
 _APPLY_HINTS = ("apply now", "easily apply", "apply on company site", "apply with indeed", "apply")
 
 
+#: Names that belong to the RESULTS LIST or the filter bar, never to the open pane's apply
+#: button. Each is a control that contains an apply word and would otherwise be clicked:
+#:   "…View full details of X"  — a result card's link (this is the one that fired)
+#:   "Encouraged to apply filter" — a filter chip on the search bar
+#: Matched on the accessible NAME because that is all the flat AX scan gives us; the real fix is a
+#: pane-scoped scan, and this is the guard until the capture server can scope one.
+_NOT_THE_PANE = ("view full details", "filter", "encouraged to apply")
+
+
+def _find_apply_control(candidates: list[dict], *, apply_type: str = "",
+                        job_title: str = "") -> Optional[dict]:
+    """The open pane's apply button, or None.
+
+    Ordered by what the pane ALREADY TOLD US it is (`open_pane.apply_type`), because that is
+    observed rather than guessed: a `company_site` posting leaves through "Apply on company site"
+    and a `quick_apply` one through "Apply now"/"Easily apply". Falling back to the generic order
+    only when the pane said nothing.
+
+    Anything that names another job, or that is plainly list/filter furniture, is refused outright
+    — a control whose name carries a DIFFERENT job's title cannot be the button for this one.
+    """
+    want = list(_APPLY_HINTS)
+    if apply_type == "company_site":
+        want = ["apply on company site", "apply on employer site"] + want
+    elif apply_type == "quick_apply":
+        want = ["apply now", "easily apply", "apply with indeed"] + want
+
+    title_words = {w for w in "".join(c if c.isalnum() else " " for c in job_title.lower()).split()
+                   if len(w) > 3}
+
+    def usable(c: dict) -> bool:
+        name = (c.get("name") or "").lower()
+        if (c.get("role") or "").lower() != "button":
+            return False
+        if any(bad in name for bad in _NOT_THE_PANE):
+            return False
+        # A control naming a job that is NOT ours is a card, whatever else it says.
+        other = {w for w in "".join(ch if ch.isalnum() else " " for ch in name).split()
+                 if len(w) > 3}
+        if title_words and len(other) > 4 and not (title_words & other):
+            return False
+        return True
+
+    for hint in want:
+        hit = next((c for c in candidates if usable(c) and hint in (c.get("name") or "").lower()),
+                   None)
+        if hit:
+            return hit
+    return None
+
+
 def _title_matches(expected: str, seen: str) -> bool:
     """Is the open pane the job we picked? Deliberately loose on punctuation and case, strict on
     content: Indeed renders a card title and a pane title that differ in whitespace and suffixes
@@ -1728,13 +1779,22 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     elif rung.id == "enter_apply":
         scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
                                    timeout=25.0)
-        ctrl = None
-        for hint in _APPLY_HINTS:
-            ctrl = next((c for c in (scan.get("candidates") or [])
-                         if (c.get("role") or "").lower() == "button"
-                         and hint in (c.get("name") or "").lower()), None)
-            if ctrl:
-                break
+        # THE APPLY BUTTON IS THE PANE'S, NOT THE PAGE'S. This used to take the first control in
+        # DOCUMENT ORDER whose name contained an apply word, which on a results page is never the
+        # right one: the left-hand list carries an "Easily apply" badge on every card, and the
+        # filter bar carries "Encouraged to apply". Driven live 2026-07-26 it clicked
+        # 'Easily apply, New, View full details of Enterprise Applications Analyst' — a different
+        # company's job — one rung after verify_identity had confirmed the pane was BIDMC.
+        #
+        # Worse, the hint ORDER guaranteed it for exactly the jobs we care about: a company_site
+        # posting's real button says "Apply on company site", which sat THIRD, so a card's "easily
+        # apply" always matched first. The bug needed no staleness and no bad luck.
+        #
+        # Same lesson `_JOB_DESC_JS` already carries in the capture server ("NOT the first match in
+        # document order"), unlearned in a second place.
+        apply_type = ((bb.world or {}).get("open_pane") or {}).get("apply_type") or ""
+        ctrl = _find_apply_control(scan.get("candidates") or [], apply_type=apply_type,
+                                   job_title=step.title or "")
         if ctrl is None:
             step.record("enter_apply", aps.UNKNOWN,
                         f"no apply control found among {len(scan.get('candidates') or [])} elements",
@@ -1754,16 +1814,38 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                 detail = f"Could not click {ctrl.get('name')!r}."
             else:
                 after = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
-                new = [t for t in (after.get("tabs") or []) if t.get("tab_id") not in before]
+                tabs_after = after.get("tabs") or []
+                new = [t for t in tabs_after if t.get("tab_id") not in before]
                 bb.world = dict(bb.world or {})
                 bb.world["apply_tab"] = new[0] if new else None
-                step.record("enter_apply", aps.OK,
-                            f"clicked {ctrl.get('name')!r}"
-                            + (f"; opened a new tab" if new else "; stayed in this tab"),
-                            initiator=body.initiator)
-                detail = (f"Clicked {ctrl.get('name')!r}. "
-                          + (f"It opened a new tab — step again to find out where we landed."
-                             if new else "No new tab; step again to classify where we are."))
+
+                # DID WE LEAVE, AND DID WE LEAVE FOR THE RIGHT JOB? `/execute` returning ok means
+                # the click dispatched — the same tier-1 contract that has bitten this codebase
+                # twice already. Recording OK on that alone is what let a click onto another
+                # company's posting be journaled as "entered the application for BIDMC"
+                # (2026-07-26). A corpus row that says we entered an application we never entered
+                # is worse than a failure: it trains the wrong thing and reads as success.
+                landed = (new[0] if new else
+                          next((t for t in tabs_after if t.get("tab_id") == tab_id), {}))
+                landed_url = (landed or {}).get("url", "")
+                strayed = "indeed.com/viewjob" in landed_url or "indeed.com/jobs" in landed_url
+                if strayed and not new:
+                    step.record("enter_apply", aps.FAILED,
+                                f"clicked {ctrl.get('name')!r} and stayed on Indeed "
+                                f"({landed_url[:80]}) — that was not this job's apply control",
+                                initiator=body.initiator)
+                    detail = (f"That click did not enter an application — we are still on Indeed. "
+                              f"It matched {ctrl.get('name')!r}, which is not this posting's Apply "
+                              f"button. Nothing was recorded as entered.")
+                else:
+                    step.record("enter_apply", aps.OK,
+                                f"clicked {ctrl.get('name')!r}"
+                                + (f"; opened a new tab -> {landed_url[:70]}" if new
+                                   else "; stayed in this tab"),
+                                initiator=body.initiator)
+                    detail = (f"Clicked {ctrl.get('name')!r}. "
+                              + ("It opened a new tab — step again to find out where we landed."
+                                 if new else "No new tab; step again to classify where we are."))
 
     else:  # classify — the discovery point
         # FIND the apply tab rather than guessing its position. The recorded one is only set when

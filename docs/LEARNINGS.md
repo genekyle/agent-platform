@@ -2454,3 +2454,51 @@ sprinkle the stamp across four sites.
 **Asserting a choke point does not create one.** The comment was confident, wrong, and would have
 been load-bearing documentation for the next reader. Grep for the constructor before claiming
 everything funnels through a helper.
+
+## 2026-07-26 (2) — "First match in document order" cost us a click on the wrong company
+
+The operator picked six jobs, worked the first (Beth Israel, `company_site`), and landed on
+**Enterprise Applications Analyst at a different company** — one rung after `verify_identity` had
+confirmed the open pane was the right job. Their question was whether staleness caused it. It did
+not; the cause was deterministic and would have fired on a freshly loaded page.
+
+### The bug
+
+`enter_apply` scanned the whole page and took the FIRST control whose accessible name contained an
+apply word:
+
+```python
+for hint in _APPLY_HINTS:          # ("apply now", "easily apply", "apply on company site", …)
+    ctrl = next(c for c in candidates if hint in c["name"].lower())
+```
+
+On a results page that is never the right control. The left-hand list carries an "Easily apply"
+badge on every card, and the filter bar carries "Encouraged to apply". Worse, the hint ORDER
+guaranteed the failure for exactly the postings we care about: a `company_site` job's real button
+says **"Apply on company site"**, which sat third, so a card's "easily apply" always matched first.
+A live scan on the recovered page picked `'Encouraged to apply filter'` — a filter chip.
+
+**This is the same lesson `_JOB_DESC_JS` already carries, unlearned in a second module.** That one
+says it outright: *"NOT `querySelector('a, b, h1')`, which returns the first match in DOCUMENT
+order regardless of list position."* Writing a lesson down where it bit does not stop it recurring
+somewhere else — a flat AX scan over a page that contains a LIST is the general trap, and every
+matcher over one needs to say which region it means.
+
+### And the reason nothing caught it
+
+The rung recorded `enter_apply ok` because `/execute` returned `ok`. Third time this exact contract
+has bitten: **tier-1 `ok` means the click dispatched, not that the page accepted it.** So a click
+onto another company's posting was journaled as "entered the application for BIDMC" — a corpus row
+that reads as success and trains the wrong thing, which is worse than a failure.
+
+Fixed both halves: the control is chosen using the apply_type the pane ALREADY REPORTED (observed,
+not guessed), list/filter furniture is refused by name, a control naming a different job is refused
+outright, and the rung now verifies it actually LEFT Indeed before recording OK.
+
+### What it says about the staleness work
+
+Nothing here was a freshness fault, and it is worth being precise about that rather than letting a
+new detector absorb the blame for an old bug. But recovering the page did surface an adjacent gap
+the detector does not cover: after a back-navigation the pane was **present but empty** (title a
+bare `&nbsp;`, 16 cards, no apply control anywhere). "Is the region I am about to act on actually
+loaded" is a readiness question, not a session-age question, and `staleness` measures the latter.
