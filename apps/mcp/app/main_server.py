@@ -799,8 +799,17 @@ _JOB_DESC_JS = r"""
   // present only on the SERP; on the standalone /viewjob page there is no wrapper and the whole
   // document IS the one job, so root falls back to document there. `#jobDescriptionText` is a
   // unique id (safe either way), but title/company/salary MUST be pane-scoped.
+  //
+  // INDEED REDESIGNED THE PANE (met live 2026-07-25). The old wrapper was addressed by a
+  // data-testid; the redesign ships it as an ID with different casing —
+  // `#jobsearch-ViewjobPaneWrapper` (lowercase j) — so this selector missed and `root` silently
+  // fell back to `document`. Nothing errored: the reader just returned '' for every field, and
+  // /open_job_card, which calls a job open only when it can read a description back, reported
+  // "no pane" about a pane that was fully rendered and correct. Both spellings stay: the old
+  // DOM is still served on some routes.
   const root = document.querySelector(
-    '[data-testid=jobsearch-ViewJobPaneWrapper], .jobsearch-RightPane, .jobsearch-JobComponent'
+    '#jobsearch-ViewjobPaneWrapper, #rnvjContainerDesktop,'
+    + '[data-testid=jobsearch-ViewJobPaneWrapper], .jobsearch-RightPane, .jobsearch-JobComponent'
   ) || document;
 
   // Try selectors in PRIORITY order — NOT `querySelector('a, b, h1')`, which returns the first
@@ -812,14 +821,49 @@ _JOB_DESC_JS = r"""
     return '';
   };
 
-  const description = pick(root, ['#jobDescriptionText', '[id*=jobDescription]',
-                                  '.jobsearch-JobComponent-description']);
-  const salary = pick(root, ['#salaryInfoAndJobType', '[id*=salaryInfo]', '[class*=salary]']);
+  // The redesign kept almost NO ids inside the pane (one, `rnvjContainerDesktop`) and moved to
+  // `vj-*` data-testids. Old selectors stay FIRST so the un-redesigned DOM keeps its exact
+  // behaviour; the new ones are appended as fallbacks.
+  let description = pick(root, ['#jobDescriptionText', '[id*=jobDescription]',
+                                '.jobsearch-JobComponent-description']);
+  if (!description) {
+    // The redesign exposes only a HEADING testid ("Full job description", ~20 chars). The body is
+    // its parent — so walk up until a node actually holds the description, and take the smallest
+    // such node rather than the first: the outer wrappers include the header, salary and the
+    // Apply button, and swallowing those makes every job's description look alike to the corpus.
+    // The posting's HTML arrives with a <style> block (`@layer htmlContent { ... }`) inside the
+    // description container, and innerText renders it as text — 2.7k of CSS at the head of every
+    // description, identical across jobs. Read from a CLONE with style/script stripped so the
+    // corpus stores the posting, not Indeed's stylesheet.
+    const clean = (el) => {
+      const c = el.cloneNode(true);
+      c.querySelectorAll('style, script, noscript').forEach(s => s.remove());
+      return (c.innerText || c.textContent || '').replace(/^\s*Full job description\s*/i, '').trim();
+    };
+    let n = root.querySelector('[data-testid=vj-job-description-heading]');
+    for (let i = 0; i < 4 && n; i++) {
+      n = n.parentElement;
+      const txt = n ? clean(n) : '';
+      if (txt.length > 200) { description = txt; break; }
+    }
+  }
+
+  const header = pick(root, ['[data-testid=desktop-job-header]']);
+  let salary = pick(root, ['#salaryInfoAndJobType', '[id*=salaryInfo]', '[class*=salary]']);
+  if (!salary && header) {
+    // No salary node survives the redesign; the header line carries it as text.
+    const m = header.match(/\$[\d,.]+(?:\s*-\s*\$[\d,.]+)?\s*(?:an hour|a year|a month|a week|per hour|per year)/i)
+           || header.match(/(?:from|up to)\s+\$[\d,.]+\s*(?:an hour|a year)/i);
+    if (m) salary = m[0].trim();
+  }
   const title = pick(root, ['#vjs-jobtitle', '[data-testid="jobsearch-JobInfoHeader-title"]',
-                            'h2.jobsearch-JobInfoHeader-title', 'h1', 'h2']);
+                            'h2.jobsearch-JobInfoHeader-title',
+                            '[data-testid=vj-job-title]', '[data-testid=vj-job-title-compact]',
+                            'h1', 'h2']);
   const company = pick(root, ['[data-testid=inlineHeader-companyName]',
                               '[data-testid=jobsearch-CompanyInfoContainer] a',
-                              '[data-company-name]', '.jobsearch-CompanyInfoWithoutHeaderImage a']);
+                              '[data-company-name]', '.jobsearch-CompanyInfoWithoutHeaderImage a',
+                              'a[href*="/cmp/"]']);
 
   // apply_type drives the routing: 'company_site' → cross-site ATS (Workday/...), 'quick_apply' →
   // Indeed-native (smartapply, end-to-end driveable). "Apply with Indeed" is quick-apply too. Read
