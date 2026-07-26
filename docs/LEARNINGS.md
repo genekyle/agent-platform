@@ -2502,3 +2502,59 @@ new detector absorb the blame for an old bug. But recovering the page did surfac
 the detector does not cover: after a back-navigation the pane was **present but empty** (title a
 bare `&nbsp;`, 16 cards, no apply control anywhere). "Is the region I am about to act on actually
 loaded" is a readiness question, not a session-age question, and `staleness` measures the latter.
+
+## 2026-07-26 (3) — Driving a new ATS: iCIMS, and the wrapper/frame trap three times over
+
+First teacher drive into iCIMS (Joslin Diabetes Center, from Indeed's "Apply on company site").
+Three separate bugs, all the same shape, and the shape is worth naming once:
+
+**A branded ATS wrapper is TWO documents, and every layer we own assumed one.**
+
+    the employer's page   = nav, footer, newsletter signup, copyright
+    #icims_content_iframe = the job, the apply control, the whole application
+
+1. **Reading.** `/auth_state` returned 691 characters of hospital homepage. The job was 4512
+   characters inside the frame. A classifier fed the top document calls a live job landing a
+   marketing page with complete confidence. Fixed with `/page_content` (top + same-origin frames).
+2. **Clicking.** `getBoundingClientRect` is relative to the node's own document; a trusted
+   `Input.dispatchMouseEvent` takes top-document viewport coordinates. The apply link sat at
+   (1079,126) in its frame, the frame at (110,-802) in the page — so the real target was
+   (1189,-676), off-screen, and the untranslated point landed on the IFRAME ELEMENT. Click
+   dispatched, nothing happened, `ok` returned. **The entire class of branded-wrapper ATS was
+   unclickable and nothing said so.**
+3. **Targeting.** The operator's auto-create typed their email into Joslin's NEWSLETTER box,
+   because an unscoped "find the email input" takes the first in document order:
+
+       WRAPPER  input[type=email] "Enter your email address here"   <- newsletter
+       FRAME    input[type=email] "css_loginName"                   <- the real one
+
+Three layers, one assumption. When a page embeds an application, **say which document you mean**
+— reading it, measuring it, or matching in it.
+
+### The other blocker: an undriven platform could never advance
+
+`classify` recorded "this platform has no recipe" as its OWN outcome, so the rung never settled,
+`next_rung` returned classify forever, and the ladder could not reach the account wall in front of
+it. That meant **the platforms worth driving were exactly the ones the ladder could not walk.**
+Classify's job is to say WHERE WE ARE; it has done that the moment the landing has a name. "No
+recipe" is still reported — in the detail, and by the step staying needs_operator.
+
+### iCIMS's own shape, recorded because it is the recipe skeleton
+
+    job_posting -> email gate -> Basic Information (1/4) -> Candidate Profile (2/4)
+                -> EEO (3/4) -> Portal Specific Forms (4/4)
+
+Step 1 is account creation AND application in one: resume file (required), first/last name, email,
+login, **password + re-enter**, and an hCaptcha response field, behind one "Submit Profile" button.
+So on iCIMS the account wall is not a separate page to get past — it is the first form, which is
+why a generic "create the account, then apply" recipe would not have fitted it.
+
+### Two classifier corrections the live pages forced
+
+* **A sparse page is still the content.** `pick_content` required 200 characters and skipped the
+  three-line email gate, falling back to the wrapper. Volume was never the signal; the frame's size
+  on screen is.
+* **A header link is not a wall.** Strict precedence read the job posting as an account gate
+  because iCIMS puts "Returning Candidate? / Log back in!" in its header. Decisive phrases
+  (confirmation, gone) still win alone; everything else is weighed, and STRONG phrases count double
+  so a three-line page can still be classified.
