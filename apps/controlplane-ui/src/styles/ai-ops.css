@@ -935,6 +935,203 @@ body {
   color: var(--text-muted);
 }
 
+/* Interaction-state compatibility -------------------------------------------------
+   Several feature tables and inspectors still inherit hover rules from the retired
+   light theme in App.css. Keep those feature components behaviorally intact while
+   making their resting, hover, and keyboard-focus states belong to the AI Ops theme. */
+.runs-table th {
+  color: var(--text-subtle);
+  background: transparent;
+  border-color: var(--line);
+}
+
+.runs-table td {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.runs-table tbody tr {
+  background: transparent;
+  transition: background-color 140ms ease;
+}
+
+.runs-table tbody tr:hover,
+.runs-table tbody tr:focus-within {
+  background: var(--surface-hover);
+}
+
+.runs-table tbody tr:hover td,
+.runs-table tbody tr:focus-within td {
+  border-bottom-color: var(--line-strong);
+}
+
+.accounts-url a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-decoration-color: rgba(192, 206, 157, 0.35);
+  text-underline-offset: 2px;
+}
+
+.accounts-url a:hover {
+  color: var(--text);
+  text-decoration-color: currentColor;
+}
+
+.accounts-cred {
+  color: var(--text);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+/* Dataset browser: keep the hierarchy quiet without falling back to white cards. */
+.ds-scenario,
+.ds-scenario-header,
+.ds-session-header,
+.ds-stage-header,
+.ds-objective-header,
+.ds-group-header,
+.ds-statelevel-header {
+  background: var(--surface-1);
+  border-color: var(--line);
+}
+
+.ds-session,
+.ds-stage,
+.ds-objective { border-color: var(--line); }
+
+.ds-folder-name,
+.ds-capture-title { color: var(--text); }
+.ds-folder-meta,
+.ds-session-task,
+.ds-group-name,
+.ds-statelevel-header .ds-group-name,
+.ds-capture-date { color: var(--text-muted); }
+.ds-stage-header.stage-unauthenticated .ds-folder-name { color: var(--warning); }
+.ds-stage-header.stage-authenticated .ds-folder-name,
+.ds-reviewed { color: var(--success); }
+
+.ds-groupby {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.ds-groupby-btn {
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-right-color: var(--line);
+}
+
+.ds-groupby-btn.active {
+  color: #141712;
+  background: var(--accent);
+}
+
+.ds-mini-badge {
+  color: var(--text-muted);
+  border-color: var(--line-strong);
+}
+
+/* Learning registry: these panels predate the dark shell and previously rendered
+   white containers with inherited light text. */
+.domain-list-sidebar,
+.domain-workspace-panel,
+.registry-card,
+.page-state-card {
+  color: var(--text);
+  background: var(--surface-1);
+  border-color: var(--line);
+}
+
+.domain-count-badge,
+.domain-workspace-stats span,
+.tab-count,
+.scope-badge {
+  color: var(--text-muted);
+  background: var(--surface-3);
+  border-color: var(--line);
+}
+
+.domain-list-name,
+.domain-workspace-title h2,
+.registry-card-name { color: var(--text); }
+
+.domain-list-meta,
+.domain-workspace-id,
+.registry-card-id,
+.registry-card-desc,
+.registry-meta-item { color: var(--text-muted); }
+
+.domain-list-item.active { background: var(--accent-soft); }
+.domain-list-item.active .domain-list-name,
+.domain-tab.active,
+.domain-tab.active .tab-count { color: var(--accent-strong); }
+.domain-tab-bar { border-color: var(--line); }
+.domain-tab { color: var(--text-muted); }
+.domain-tab.active { border-bottom-color: var(--accent-strong); }
+.domain-tab.active .tab-count { background: var(--accent-soft); }
+.registry-meta-item.success-item { color: var(--success); }
+.element-type-badge { color: var(--accent-strong); background: var(--accent-soft); }
+.steps-badge { color: var(--warning); background: var(--warning-soft); }
+.once-badge { color: var(--danger); background: var(--danger-soft); }
+.page-state-add-card { background: var(--surface-2); }
+.page-state-card-header { background: var(--surface-2); border-color: var(--line); }
+.shot-type-option,
+.field-label { color: var(--text-muted); }
+
+.recent-capture-item:hover,
+.obs-artifact-item:hover,
+.obs-candidate-item:hover,
+.dd-link-row:hover,
+.dd-source-pill:hover,
+.dd-action-type-btn:hover,
+.dd-state-chip:hover,
+.dd-state-step:hover,
+.dd-state-folder:hover,
+.ds-scenario-header:hover,
+.ds-session-header:hover,
+.ds-stage-header:hover,
+.ds-objective-header:hover,
+.ds-group-header:hover,
+.ds-statelevel-header:hover,
+.ds-groupby-btn:hover,
+.ds-capture:hover,
+.dd-tab:hover,
+.domain-list-item:hover,
+.domain-tab:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
+}
+
+.ds-mini-action:hover { color: var(--text); }
+.registry-card:hover { border-color: var(--line-strong); }
+
+.session-delete-btn:hover,
+.danger-btn:hover,
+.btn-danger:hover:not(:disabled),
+.table-delete-btn:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(212, 124, 110, 0.52);
+  transform: none;
+}
+
+.obs-label-btn.approve:hover,
+.obs-label-btn.approve.active {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(143, 178, 138, 0.52);
+}
+
+.obs-label-btn.reject:hover,
+.obs-label-btn.reject.active {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(212, 124, 110, 0.52);
+}
+
 .stat-card,
 .domain-tile { transition: background 150ms ease, border-color 150ms ease, transform 150ms ease; }
 .domain-tile:not(:disabled):hover,
@@ -982,7 +1179,14 @@ textarea:focus-visible {
 }
 
 .primary-btn:hover,
-.btn-primary:hover { color: #10120f; background: var(--accent-strong); border-color: var(--accent-strong); }
+.primary-btn:hover:not(:disabled),
+.btn-primary:hover,
+.btn-primary:hover:not(:disabled) {
+  color: #10120f;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  transform: none;
+}
 
 .ghost-btn,
 .secondary-btn,
@@ -995,9 +1199,13 @@ textarea:focus-visible {
 }
 
 .ghost-btn:hover,
+.ghost-btn:hover:not(:disabled),
 .secondary-btn:hover,
+.secondary-btn:hover:not(:disabled),
 .btn:hover,
-.btn-sm:hover {
+.btn:hover:not(:disabled),
+.btn-sm:hover,
+.btn-sm:hover:not(:disabled) {
   color: var(--text);
   background: var(--surface-3);
   border-color: var(--line-strong);
@@ -1011,6 +1219,9 @@ textarea:focus-visible {
 .badge,
 .chip { box-shadow: none; }
 
+.chip { color: var(--text-muted); background: var(--surface-3); }
+.chip.strong { color: #141712; background: var(--accent); }
+
 .health-badge.ok,
 .status-healthy,
 .badge--ready { color: var(--success); background: var(--success-soft); }
@@ -1022,6 +1233,13 @@ textarea:focus-visible {
 .badge--accent { color: var(--accent-strong); background: var(--accent-soft); }
 .badge--muted,
 .chip.muted { color: var(--text-muted); background: var(--surface-3); }
+
+.error-banner,
+.form-error-banner {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(212, 124, 110, 0.45);
+}
 
 .workspace-tabs {
   display: flex;
@@ -1043,7 +1261,8 @@ textarea:focus-visible {
   border-radius: 7px;
 }
 
-.workspace-tab:hover { color: var(--text); background: var(--surface-2); }
+.workspace-tab:hover,
+.workspace-tab:hover:not(.is-active) { color: var(--text); background: var(--surface-2); }
 .workspace-tab.is-active {
   color: var(--accent-strong);
   background: var(--accent-soft);
@@ -1069,6 +1288,7 @@ textarea:focus-visible {
 
 .drive-lock-banner__hint { color: var(--text-muted); font-style: normal; }
 .drive-lock-banner__release { margin-left: auto; color: var(--warning); background: transparent; border-color: rgba(210, 164, 94, 0.5); }
+.drive-lock-banner__release:hover { color: var(--warning); background: rgba(210, 164, 94, 0.12); border-color: rgba(210, 164, 94, 0.65); }
 
 .spin { animation: ai-spin 900ms linear infinite; }
 @keyframes ai-spin { to { transform: rotate(360deg); } }

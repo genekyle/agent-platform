@@ -114,6 +114,18 @@ Owned by:
 - Source audits found no `Extended_Pictographic` emoji in `apps/controlplane-ui/src` and no remaining values from the retired blue/cyan palette list.
 - A follow-up contrast sweep corrected legacy light attention cards and dark System text that bypassed the new tokens. Automated checks across Overview, Marketplace, Activity, Learning overview, Learning labeler, and System found no remaining visible-text WCAG AA failures in the sampled routes.
 
+## Interaction-state correction
+
+Date: 2026-07-24
+
+- Corrected the legacy light row hover that made Application Profile answers and Career Search account rows unreadable against the dark theme.
+- Standardized shared table headers, dividers, row hover, and keyboard `focus-within` states with the graphite surface tokens; text color no longer changes implicitly with a background.
+- Added explicit dark-theme hover guards for the remaining legacy learning and inspector rows that still referenced light fills.
+- A route-level background audit also corrected white Dataset grouping controls, Learning Registry panels, count chips, and registry cards that inherited light-theme surfaces.
+- Kept destructive hover states coral and approve/reject controls success/coral, with color reinforced by the existing labels and control meaning.
+- Styled account URLs and generated-credential code as deliberate interactive/data elements instead of letting them blend into table copy.
+- Rule for future feature work: every interactive background state must set a compatible foreground and border in the same scoped rule, and must use tokens from `tokens.css` rather than raw light-theme values.
+
 ## Known follow-up debt
 
 - `App.jsx` still coordinates a large amount of legacy feature state. Route-owned feature controllers should continue reducing it.
