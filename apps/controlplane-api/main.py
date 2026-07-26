@@ -5138,8 +5138,13 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Control Plane API", version="0.0.1")
     app.add_middleware(
         CORSMiddleware,
-        # Any localhost port — the Vite dev server (5173) plus preview/test servers on other ports.
-        allow_origin_regex=r"http://localhost:\d+",
+        # Any loopback port — the Vite dev server (5173) plus preview/test servers on other ports.
+        # BOTH SPELLINGS. `localhost` and `127.0.0.1` are the same machine, but they are different
+        # ORIGINS to a browser, and only one was allowed: opening the cockpit on 127.0.0.1 got
+        # every request blocked and the panel reported "System connection interrupted — check
+        # connection", which reads as the API being down rather than as a spelling the CORS rule
+        # does not accept (2026-07-25). ::1 is the IPv6 loopback the same resolution can hand back.
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1|\[::1\]):\d+",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
