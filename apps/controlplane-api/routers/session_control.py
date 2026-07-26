@@ -1210,6 +1210,14 @@ def _title_matches(expected: str, seen: str) -> bool:
 
 class ApplyStepBody(BaseModel):
     initiator: str = "operator"
+    #: Optional ASSERTION of which application the caller believes it is working. The queue is
+    #: sequential — `queue.current()` decides, not the caller — but a caller that names a job and
+    #: is silently handed a different one is the wrong-job failure waiting to happen. Passing
+    #: `job_id` used to be accepted and dropped on the floor (pydantic ignores unknown fields), so
+    #: two calls naming two different jobs both worked the same step and read as if they had
+    #: worked each (found 2026-07-25, driving session 21). Name it and we check it; omit it and
+    #: the queue decides as before.
+    job_id: Optional[str] = None
 
 
 @router.post("/api/session_control/{session_id}/apply_step")
@@ -1229,6 +1237,13 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     if step is None:
         raise HTTPException(status_code=409,
                             detail="Nothing to work — every application from this page has ended.")
+    if body.job_id and body.job_id != step.job_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This session is working {step.job_id} ({step.title or 'untitled'}), not "
+                   f"{body.job_id}. The queue is sequential — finish or flag the current "
+                   f"application before another one is worked. Omit job_id to work whatever is "
+                   f"current.")
 
     obs = await _observe(browser_url, bb.search_state.query)
     block = obs.get("block")

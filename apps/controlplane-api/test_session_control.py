@@ -689,6 +689,31 @@ def test_unproven_query_submission_is_left_unmarked(monkeypatch):
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
 
 
+def test_naming_a_job_the_queue_is_not_working_is_refused_not_ignored(monkeypatch):
+    """Found driving session 21: `job_id` was not a field, so pydantic dropped it and two calls
+    naming two DIFFERENT jobs both worked the same step — and read as if each had worked its own.
+    The queue is sequential and stays that way; naming the wrong job is now an error, not a
+    silently different action."""
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "First Job"},
+                   {"job_id": "indeed:bbb", "title": "Second Job"}])
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+                          blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step",
+                        json={"job_id": "indeed:bbb", "initiator": "operator"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    assert "indeed:aaa" in r.json()["detail"] and "indeed:bbb" in r.json()["detail"]
+    assert "/open_job_card" not in harness.paths(), "nothing was driven for the wrong job"
+
+
 def test_a_submit_swallowed_by_the_location_widget_is_clicked_again(monkeypatch):
     """Measured live 2026-07-25 on session 20: both fields held their typed values, Search was the
     hit-test target at its own centre, the trusted click dispatched — and the page did not move.
