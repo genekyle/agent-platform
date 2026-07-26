@@ -1316,6 +1316,55 @@ textarea:focus-visible {
 .sc-results td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .sc-results tr.is-picked td { background: var(--accent-soft); }
 .sc-results td:first-child, .sc-results th:first-child { width: 26px; }
+.sc-results__ord { width: 34px; text-align: center; padding-right: 4px; }
+
+/* --- Ordered picks: a checkbox that also says WHEN ---------------------------------------
+   The number is the position in the apply queue, so it has to read as a value rather than a
+   tick — tabular figures keep 1 and 10 the same width so the column does not jitter as picks
+   are added. See OrderedPicks.jsx for the gestures. */
+.pick-orb {
+  width: 24px; height: 24px; border-radius: 999px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid var(--line-strong, var(--line));
+  background: transparent; color: var(--text-subtle);
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  cursor: pointer; transition: background 120ms ease, border-color 120ms ease,
+                              color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+.pick-orb:hover { border-color: var(--accent); color: var(--accent); }
+.pick-orb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pick-orb.is-picked {
+  background: var(--accent); border-color: var(--accent);
+  color: #141712;                      /* the same on-accent ink .btn-primary uses */
+}
+/* ARMED — picked up, waiting for the number it should swap with. It has to be obvious that the
+   next click means something different from every other click on this page. */
+.pick-orb.is-armed {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 4.5px var(--accent);
+  animation: pick-orb-pulse 1.4s ease-in-out infinite;
+}
+@keyframes pick-orb-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 4.5px var(--accent); }
+  50%      { box-shadow: 0 0 0 5px var(--accent-soft), 0 0 0 6px var(--accent); }
+}
+/* A pulsing ring is motion for its own sake to anyone who has asked for less of it; the ring
+   itself still marks the armed pick, so nothing is lost by holding it still. */
+@media (prefers-reduced-motion: reduce) {
+  .pick-orb.is-armed { animation: none; }
+  .pick-orb { transition: none; }
+}
+
+.sc-picks__head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 0 2px;
+}
+.sc-picks__title {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 650; color: var(--text);
+}
+.sc-picks__hint { font-size: 12px; color: var(--text-subtle); flex: 1 1 auto; }
+.sc-picks__head .btn { flex: 0 0 auto; }
 
 /* The inherited window at provisioning. Listed in full, never cleared silently — a restored
    persistent profile can hold somebody's half-finished application. */
