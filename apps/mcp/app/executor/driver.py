@@ -148,11 +148,31 @@ class TrajectoryDriver(ABC):
 
         # Scroll into view + measure the node's own centre (CSS px). A fresh per-node measurement is
         # more accurate than any pre-recorded bbox, so the human motion lands on the real element.
+        #
+        # IN PAGE COORDINATES, NOT FRAME COORDINATES. `getBoundingClientRect` is relative to the
+        # node's OWN document, and a trusted `Input.dispatchMouseEvent` takes viewport coordinates
+        # of the top document — so for anything inside an iframe the two disagree by the frame's
+        # offset, silently. Measured live on iCIMS (2026-07-26): the apply link sat at (1079, 126)
+        # in its frame, the frame itself at (110, -802) in the page, so the real target was
+        # (1189, -676) — off-screen — and the untranslated coordinates landed on the IFRAME
+        # ELEMENT. The click dispatched, hit the frame's chrome, changed nothing, and /execute
+        # reported ok. Whole classes of ATS (iCIMS, branded Greenhouse/Workday wrappers) put their
+        # entire apply flow in exactly such a frame.
+        #
+        # Walking `frameElement` up the chain also lets each ancestor scroll the frame itself into
+        # view, which is what makes the final coordinates land inside the viewport at all.
         center = await cdp.send("Runtime.callFunctionOn", {
             "objectId": object_id, "returnByValue": True,
             "functionDeclaration": ("function(){ this.scrollIntoView({block:'center',inline:'center'});"
                                     " const r=this.getBoundingClientRect();"
-                                    " return {x:r.x+r.width/2, y:r.y+r.height/2}; }")})
+                                    " let x=r.x+r.width/2, y=r.y+r.height/2;"
+                                    " let win=this.ownerDocument.defaultView, hops=0;"
+                                    " while(win && win.frameElement && hops++ < 5){"
+                                    "   const fe=win.frameElement;"
+                                    "   fe.scrollIntoView({block:'center',inline:'center'});"
+                                    "   const fr=fe.getBoundingClientRect();"
+                                    "   x+=fr.x; y+=fr.y; win=fe.ownerDocument.defaultView; }"
+                                    " return {x:x, y:y, framed:hops>0}; }")})
         pt = (center.get("result") or {}).get("value") or {}
         if "x" in pt and "y" in pt:
             await self._approach(cdp, float(pt["x"]), float(pt["y"]), start)

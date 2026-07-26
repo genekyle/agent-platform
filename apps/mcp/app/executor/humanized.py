@@ -82,6 +82,17 @@ class HumanizedDriver(DirectDriver):
         x, y = pt.get("x"), pt.get("y")
         if x is None or y is None:
             return await super()._element_click(cdp, object_id, pt)
+        # A POINT OUTSIDE THE VIEWPORT CANNOT BE PRESSED. `_element_act` translates frame-local
+        # coordinates into page space and scrolls each ancestor frame into view, but a frame taller
+        # than the window (iCIMS's is 1654px) can still leave its target off-screen — and a trusted
+        # press at a negative y silently hits nothing while reporting success, which is exactly the
+        # failure this whole path exists to avoid. Fall back to the native click there: it is less
+        # human, and it is honest, which matters more. Only reachable for framed content.
+        vp = await cdp.send("Runtime.evaluate", {"returnByValue": True,
+                                                 "expression": "({w: innerWidth, h: innerHeight})"})
+        v = (vp.get("result") or {}).get("value") or {}
+        if not (0 <= float(x) <= float(v.get("w") or 0) and 0 <= float(y) <= float(v.get("h") or 0)):
+            return await super()._element_click(cdp, object_id, pt)
         jx, jy = float(x) + self._rng.uniform(-2.0, 2.0), float(y) + self._rng.uniform(-2.0, 2.0)
         await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": jx, "y": jy})
         await asyncio.sleep(self._rng.uniform(0.04, 0.12))   # settle before pressing
