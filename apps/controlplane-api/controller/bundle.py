@@ -81,6 +81,7 @@ def build_bundle(
     ax_candidates: Optional[list[dict]] = None,
     belief: Optional[dict] = None,
     window: Optional[dict] = None,
+    staleness: Optional[dict] = None,
 ) -> Bundle:
     """Assemble the controller's input for ONE tab. Pure — no IO, no network.
 
@@ -100,6 +101,9 @@ def build_bundle(
             Passed IN rather than computed here on purpose: this function is pure, and the
             observer needs a screenshot off the wire. None is the normal case until a witness is
             fitted, and it must stay a real answer (PLAN_perception_v1 §3.3).
+        staleness: a serialized `perception.staleness.Staleness` — how old this view is and
+            what that costs. Pure passthrough, like `belief`: assessed by the caller, which
+            is the only place that knows when we last acted. None when nobody assessed it.
     """
     ats = ats or ats_registry.classify_ats(url)
     desc = apply_recipe.describe_for_ats(ats, url, page_text)
@@ -130,4 +134,5 @@ def build_bundle(
         ax_identities=identities_from_ax(ax_candidates),
         belief=belief,
         window=window,
+        staleness=staleness,
     )

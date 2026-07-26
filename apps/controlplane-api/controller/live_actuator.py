@@ -39,6 +39,7 @@ import apply_fields
 from controller import window as window_mod
 from controller.bundle import build_bundle
 from perception import live as perception_live
+from perception import staleness
 from controller.loop import ActOutcome
 from interaction import decision_journal
 from interaction.contract import Intent, Outcome
@@ -55,6 +56,15 @@ Transport = Callable[[str, dict], dict]
 _READ_INTENTS = frozenset({
     Intent.OBSERVE.value, Intent.SCAN_REQUIRED.value, Intent.DESCRIBE.value,
     Intent.PROBE.value, Intent.RESOLVE_ANSWER.value,
+})
+
+#: Intents that put something INTO the page a reload would throw away. Used only by the staleness
+#: datapoint, to answer "would refreshing this view destroy work?" — CLICK is not here on purpose:
+#: it usually navigates or commits rather than staging, and treating every click as unsaved work
+#: would suppress the refresh remedy on every page we ever touched.
+_WRITE_INTENTS = frozenset({
+    Intent.SET_TEXT.value, Intent.SELECT_OPTION.value, Intent.SET_DATE.value,
+    Intent.CHECK_GROUP.value, Intent.UPLOAD.value,
 })
 
 #: Native single-choice controls the tier-2 endpoints CANNOT drive (found live 2026-07-18):
@@ -167,6 +177,16 @@ class LiveActuator:
         self._ats: str = ""
         self._last_state: Optional[str] = None
 
+        # --- staleness inputs. Only this object knows WHEN we last acted and when the view it is
+        # holding first appeared, so it is the only place that can measure the age of what
+        # observe() is about to hand to decide(). Both start unset, and unset means NOT MEASURED
+        # (which never scores as fresh) rather than "just now".
+        self._last_action_at: Optional[float] = None
+        self._last_nav_at: Optional[float] = None
+        #: Has this drive typed anything into the current view that a reload would discard? Set on
+        #: a successful write, cleared when the url changes. Gates the destructive remedies.
+        self._unsaved_work: bool = False
+
     # --- transport (never raises into the loop) --------------------------------------
     def _addr(self) -> dict:
         # tab_id only: stable across navigation. A stale tab_url would mis-address after a
@@ -211,6 +231,15 @@ class LiveActuator:
         page_text = str(auth.get("page_text") or "")
         raw = scan.get("unanswered") or []
         self._last_scan = raw
+
+        # A URL CHANGE IS A NEW VIEW. It restarts the page's age and discards the unsaved-work
+        # flag: whatever we typed belonged to the page we just left, and carrying the flag
+        # forward would suppress a legitimate refresh on every page after the first form.
+        if url != self._last_url:
+            self._last_nav_at = time.time()
+            self._unsaved_work = False
+        elif self._last_nav_at is None:
+            self._last_nav_at = time.time()      # first sighting of this view
         self._last_url = url
 
         tail = decision_journal.read_rows(limit=5)
@@ -241,10 +270,25 @@ class LiveActuator:
         # nothing and behaves exactly as the controller did before it could see the window.
         window = self._survey_window()
 
+        # --- staleness: how old is this view, and does that cost us anything. Costs nothing —
+        # every input is material this method already holds — which is what stops it being
+        # skipped on exactly the turns it matters (the same discipline as `reach.probe`).
+        # PROTOTYPE: it rides along as a datapoint and gates nothing. Its job right now is to
+        # journal the raw ages so the thresholds can be fitted from our own drives.
+        stale = staleness.assess(staleness.Evidence(
+            now=time.time(),
+            logged_in=auth.get("logged_in") if auth.get("ok") is not False else None,
+            blind_reason=self._blind_reason(auth, scan, ax),
+            last_action_at=self._last_action_at,
+            last_nav_at=self._last_nav_at,
+            holds_unsaved_work=self._unsaved_work,
+        ))
+
         bundle = build_bundle(self._task, url, page_text, goal_text=self._goal,
                               scan=raw, journal_tail=tail,
                               ax_candidates=candidates, belief=belief,
-                              window=window.as_dict() if window else None)
+                              window=window.as_dict() if window else None,
+                              staleness=stale.as_dict())
         self._ats = bundle.ats or ats_registry.classify_ats(url)
         self._last_state = bundle.state
 
@@ -288,9 +332,26 @@ class LiveActuator:
 
     # --- ACT -------------------------------------------------------------------------
     def act(self, decision: Decision) -> ActOutcome:
-        """Drive ONE Decision through the Interaction API. Returns an ActOutcome the loop verifies.
-        SUBMIT is refused (the gate holds it); an unaddressable field or unknown intent is an
-        honest NOT_FOUND that the loop escalates rather than a guess."""
+        """Drive ONE Decision through the Interaction API, and record what it cost the view.
+
+        A thin wrapper so the staleness bookkeeping has ONE place to live. `_dispatch` has a dozen
+        returns and four separate `ActOutcome(...)` sites, so "stamp it on the way out" was wrong
+        the first time I wrote it: `_out` looked like the choke point and is only one of four.
+        Wrapping is the honest version — every path in and out passes through here.
+        """
+        self._last_action_at = time.time()          # every call is drive activity, however it ends
+        outcome = self._dispatch(decision)
+        # A landed WRITE means this view now holds input a reload would discard. The staleness
+        # datapoint reads this to withhold its destructive remedies (perception/staleness.py:
+        # "freshness is not worth more than work"). Cleared on navigation, in observe().
+        if outcome.outcome == Outcome.OK.value and decision.intent in _WRITE_INTENTS:
+            self._unsaved_work = True
+        return outcome
+
+    def _dispatch(self, decision: Decision) -> ActOutcome:
+        """The dispatch table itself. SUBMIT is refused (the gate holds it); an unaddressable
+        field or unknown intent is an honest NOT_FOUND that the loop escalates rather than a
+        guess."""
         intent = decision.intent
         p = dict(decision.params or {})
 

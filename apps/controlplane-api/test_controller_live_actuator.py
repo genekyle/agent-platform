@@ -516,3 +516,88 @@ def test_an_authorised_submit_still_refuses_to_guess_which_button_ends_the_appli
                                    rationale="operator-authorised submit"))
     assert out.outcome == "not_found"
     assert not [p for p, _ in calls if p == "/execute"]
+
+
+# --- staleness: the datapoint that rides with every observation -------------------------
+# PROTOTYPE (2026-07-26). These pin the WIRING and the safety gate, not the thresholds — the
+# thresholds are guesses and `test_staleness.py` owns their shape. What must hold here is that no
+# observation can leave without the datapoint, and that a drive holding typed work never has a
+# destructive remedy proposed for it.
+def test_every_observation_carries_a_staleness_datapoint():
+    fake = FakeTransport(url=_INDEED)
+    bundle = _actuator(fake).observe()
+
+    assert bundle.staleness is not None, "staleness must ride along with every observation"
+    assert bundle.staleness["level"] in ("fresh", "yellow", "orange", "red")
+    assert bundle.staleness["verdict"] in ("continue", "refresh", "renew", "handoff")
+    # The raw ages are the point of the prototype — the level is today's guess, the seconds are
+    # what will fit tomorrow's thresholds.
+    names = {s["name"] for s in bundle.staleness["signals"]}
+    assert {"idle_s", "page_age_s"} <= names
+    assert bundle.staleness["rules_version"]
+
+
+def test_a_fresh_drive_is_operable_and_says_what_it_could_not_measure():
+    fake = FakeTransport(url=_INDEED)
+    bundle = _actuator(fake).observe()
+
+    assert bundle.staleness["verdict"] == "continue"
+    # Nothing has acted yet and no cookie read exists, so those are UNMEASURED — named, not
+    # silently scored as fresh.
+    assert "idle_s" in bundle.staleness["unmeasured"]
+    assert "cookie_ttl_s" in bundle.staleness["unmeasured"]
+
+
+def test_a_blind_observation_asks_for_a_human_not_a_refresh():
+    """The AX stale-tab signature. Refreshing a page nobody could observe is guessing with a
+    page load, so the remedy must be a handoff."""
+    fake = FakeTransport(url=_INDEED, ax_candidates=[], ax_errors=["target closed"])
+    bundle = _actuator(fake).observe()
+
+    assert bundle.staleness["level"] == "red"
+    assert bundle.staleness["verdict"] == "handoff"
+
+
+def test_a_logged_out_tab_wants_a_fresh_state_not_a_reload():
+    fake = FakeTransport(url=_INDEED, logged_in=False)
+    bundle = _actuator(fake).observe()
+
+    assert bundle.staleness["verdict"] == "renew"
+
+
+def test_typing_marks_the_view_as_holding_unsaved_work():
+    """A successful write means a reload would discard real effort — the flag the destructive
+    remedies are gated on."""
+    raw = [{"field": "first_name", "selector": "#fn", "kind": "text"}]
+    fake = FakeTransport(url=_GREENHOUSE, unanswered=raw)
+    act = _actuator(fake, task="greenhouse_apply")
+    act.observe()
+    assert act._unsaved_work is False
+
+    act.act(Decision(intent="set_text", params={"field": "first_name", "value": "Gene"},
+                     confidence=0.9, rung="recipe", rationale="staleness wiring test"))
+    assert act._unsaved_work is True, "a landed write leaves work on the page"
+
+
+def test_navigating_clears_the_unsaved_work_flag():
+    """The work belonged to the page we left. Carrying the flag forward would suppress a
+    legitimate refresh on every page after the first form."""
+    fake = FakeTransport(url=_GREENHOUSE,
+                         unanswered=[{"field": "first_name", "selector": "#fn", "kind": "text"}])
+    act = _actuator(fake, task="greenhouse_apply")
+    act.observe()
+    act.act(Decision(intent="set_text", params={"field": "first_name", "value": "Gene"},
+                     confidence=0.9, rung="recipe", rationale="staleness wiring test"))
+    assert act._unsaved_work is True
+
+    fake._url = _GREENHOUSE + "/review"      # the drive moved on
+    act.observe()
+    assert act._unsaved_work is False
+
+
+def test_a_read_intent_does_not_count_as_unsaved_work():
+    fake = FakeTransport(url=_INDEED)
+    act = _actuator(fake)
+    act.observe()
+    act.act(Decision(intent="scan_required", params={}, confidence=0.9, rung="recipe", rationale="staleness wiring test"))
+    assert act._unsaved_work is False

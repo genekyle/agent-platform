@@ -228,6 +228,22 @@ class Bundle:
     #: only, never a url per tab — this rides in a prompt and into every journaled row.
     window: Optional[dict] = None
 
+    #: --- staleness: "is what we are looking at still true, and what does that cost us"
+    #: `perception.staleness.Staleness.as_dict()`, or None when nothing assessed it.
+    #:
+    #: The axis none of the others cover. Perception says WHERE we are, `reach` says whether we
+    #: can touch it, `unexpected` says whether it is where we expected — and a drive can pass all
+    #: three on a view that went stale twenty minutes ago.
+    #:
+    #: PROTOTYPE (2026-07-26): the thresholds behind `level` are guesses, and the field exists
+    #: mostly to JOURNAL THE RAW SIGNAL VALUES so they can be fitted from our own history. So it
+    #: follows `belief`, not `window`: appended last, defaulted, and DELIBERATELY NOT RENDERED by
+    #: `bundle_to_prompt`. Putting an unmeasured level in front of the reasoner would change the
+    #: feature contract on the strength of a guess, and every row journaled before it would stop
+    #: being comparable. It goes into the prompt, if ever, in one deliberate version-bumped change
+    #: once the thresholds are measured — not as a side effect of wiring it up.
+    staleness: Optional[dict] = None
+
 
 # --- the Decision: what the controller EMITS ----------------------------------------
 @dataclass(frozen=True)
@@ -361,6 +377,20 @@ class DecisionRecord:
     session_id: Optional[str] = None
     duration_ms: int = 0
     cost_usd: float = 0.0
+
+    #: --- staleness (PROTOTYPE 2026-07-26): how old the view was when this decision was made.
+    #: The RAW AGES are the point, not the level. The thresholds behind `staleness_level` are
+    #: unmeasured guesses, so journaling only the level would bake today's guess into the corpus
+    #: and leave nothing to fit. With the seconds here, the calibration question — "at what value
+    #: does the next action's failure rate rise?" — is answerable from rows we are already
+    #: writing, against `outcome` and `verified` in this same row.
+    #: `staleness_rules` stamps which guess produced the level, so rows written under different
+    #: thresholds are never pooled into one fit.
+    staleness_level: Optional[str] = None         # fresh | yellow | orange | red
+    staleness_verdict: Optional[str] = None       # continue | refresh | renew | handoff
+    staleness_rules: Optional[str] = None
+    staleness_idle_s: Optional[float] = None
+    staleness_page_age_s: Optional[float] = None
 
 
 # --- the frozen serialization: prompt today, feature set tomorrow -------------------

@@ -84,6 +84,19 @@ def _redact_params(params: Optional[dict]) -> dict:
     return out
 
 
+def _staleness_signal(stale: Optional[dict], name: str) -> Optional[float]:
+    """One raw signal value off a serialized Staleness, or None. Defensive for the same reason
+    `_belief_axis` is: the dict crosses a JSON boundary and a malformed one must not take the
+    journal down — a decision that was made is worth recording without its staleness."""
+    if not isinstance(stale, dict):
+        return None
+    for sig in stale.get("signals") or ():
+        if isinstance(sig, dict) and sig.get("name") == name:
+            v = sig.get("value")
+            return float(v) if isinstance(v, (int, float)) else None
+    return None
+
+
 def _belief_axis(belief: Optional[dict], axis: str) -> Optional[float]:
     """One uncertainty axis off a serialized BeliefState, or None. Defensive because `belief` is
     a plain dict crossing a JSON boundary: an axis nobody assessed is absent, not zero, and
@@ -164,6 +177,14 @@ def record_for(
         # Perception, flattened off the Bundle at the same single choke point every other
         # cross-cutting field is copied at — so no seam can journal a decision and forget who
         # said where it was made (PLAN_perception_v1 §3.3).
+        # Staleness, flattened at the same choke point for the same reason: a seam must not be
+        # able to journal a decision without recording how old the view was when it was made.
+        # PROTOTYPE — the raw ages are what will fit the thresholds; the level is today's guess.
+        staleness_level=(bundle.staleness or {}).get("level") if bundle.staleness else None,
+        staleness_verdict=(bundle.staleness or {}).get("verdict") if bundle.staleness else None,
+        staleness_rules=(bundle.staleness or {}).get("rules_version") if bundle.staleness else None,
+        staleness_idle_s=_staleness_signal(bundle.staleness, "idle_s"),
+        staleness_page_age_s=_staleness_signal(bundle.staleness, "page_age_s"),
         belief_state=(bundle.belief or {}).get("state") if bundle.belief else None,
         belief_agreement=(bundle.belief or {}).get("agreement") if bundle.belief else None,
         belief_novelty=_belief_axis(bundle.belief, "novelty"),
