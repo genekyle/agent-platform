@@ -2407,3 +2407,50 @@ worktree convention only isolates the sessions that use it.
 The ladder, again. Four faults on the consuming rung and it never once recorded a query it had not
 proven — every failure left `query_entered` unmarked and said why. The design's own principle kept
 catching its author, which is the third session running that this has been the honest summary.
+
+## 2026-07-26 — Staleness became a datapoint, and the choke point I asserted was one of four
+
+The operator named an axis the system had never measured: *"one of the states should be … a
+datapoint that should always be attached … staleness could probably be a datapoint that remains
+like 'safe' or 'normal'."* Built as `perception/staleness.py` and hung on `Bundle.staleness`.
+
+### Why it is a fourth module and not a branch inside an existing one
+
+We already had three modules that each answer a different question about an observation —
+`perception` (where are we), `reach` (can we touch it), `unexpected` (is this where we expected) —
+and **a drive can pass all three on a view that went stale twenty minutes ago.** Every incident
+this week fits that description and none was a perception fault. Freshness is its own axis; giving
+it its own module is what makes that visible rather than a special case inside somebody else's.
+
+### The prototype's job is to produce evidence, not verdicts
+
+The thresholds are guesses and are labelled as such. What matters is that the journal takes the
+**raw ages** (`staleness_idle_s`, `staleness_page_age_s`) alongside the level and a
+`RULES_VERSION` stamp, against `outcome` in the same row. That turns the open question — *at what
+value does the next action's failure rate rise?* — into something answerable from drives we are
+already doing, instead of a second instrumentation pass later. **Journal the evidence, not the
+conclusion**, whenever the conclusion is a guess. A level alone would have baked today's guess
+into the corpus and left nothing to fit.
+
+Corollary, now written into the module: it **gates nothing**. A remedy driven by a guessed
+threshold is worse than no remedy.
+
+### Freshness is never worth more than work
+
+The one rule in there that is safety rather than heuristic. Both remedies (refresh, renew) destroy
+typed input, and the staleness that prompts them is a *suspicion*. So unsaved work downgrades
+REFRESH to CONTINUE and RENEW to HANDOFF — the operator decides whether to abandon a half-filled
+application, and the detector never does. The same instinct as the consuming-rung rule: the
+expensive, irreversible thing does not get to happen on the strength of an inference.
+
+### And the mistake worth keeping
+
+I stamped the unsaved-work flag inside `_out()` and wrote a comment calling it *"the single choke
+point every outcome passes through"*. It is one of **four** `ActOutcome(...)` sites in that file;
+the write path is not one of them, so the flag never set and a test caught it immediately. The fix
+was to *make* a choke point — `act()` is now a thin wrapper around `_dispatch()` — rather than
+sprinkle the stamp across four sites.
+
+**Asserting a choke point does not create one.** The comment was confident, wrong, and would have
+been load-bearing documentation for the next reader. Grep for the constructor before claiming
+everything funnels through a helper.
