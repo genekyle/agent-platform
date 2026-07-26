@@ -2320,3 +2320,90 @@ reached the corpus. The MFS account is `status=active`; the decision journal has
 account_create failures (the only account row is the Apply click, ok). `apply_account` records
 operational mini-steps on the blackboard, it does not write training data — so a retry that failed
 then succeeded is honest local history, not a poisoned example.
+
+## 2026-07-25 — A stale session is a test fixture: the first fresh-session climb, and four faults
+
+The operator's framing, and it earned itself in the first ten minutes: *"maybe having these stale
+sessions is the best thing for us because it allows us to always test the literal inner layers."*
+A session left open two days is not mess to clear before the real work — it is the only cheap
+source of the states our fixtures never produce.
+
+### The stale session paid for itself immediately
+
+Session 19 had been open since 07-23 with two tabs: Indeed results, and a Workday application
+mid-form. The panel read `authenticated: REGRESSED` and offered "sign in again" on a session that
+had never signed out. `_observe` called `/auth_state` with **no tab hint**, so `_discover_target`
+resolved whatever target CDP listed first — the Workday tab — and Indeed's login JS, finding no
+Indeed markers on a Workday page, honestly answered `logged_in: false`. Probed directly, the Indeed
+tab answered `true`.
+
+This is the third time this exact shape has been fixed in a different place (`069eb61`, classify
+taking the last tab rather than the apply tab). **A single-tab assumption survives every test whose
+fixture has one tab, and an apply session never has one tab.** The rule LEARNINGS already drew on
+07-24 — *verify the thing the next step needs, not the thing you happen to have* — restated: probe
+the tab the rung is ABOUT.
+
+Second half of the same fix: with no Indeed tab at all, `authenticated` is now `None`, not `False`.
+`session_checkpoints` has always refused to read an unknown as a regression; the probe feeding it
+did not, and neither did `auth_probe`, which released the rung and ran its login survey against
+whatever page was in front.
+
+### Nobody had ever opened the front door
+
+Provisioning session 20 — **the first fresh session the panel has ever started** — produced one
+`about:blank` tab, and from there the ladder could not move at all:
+
+    auth_probe  -> "No Indeed tab is open"
+    run_query   -> "Open Indeed's job search, then step again"
+
+Both rungs handed the *first move* back to the operator. PLAN §2.1 specifies initialize as "reach
+the start line" and nothing ever implemented step one. Every live drive to date began on a browser
+a human had already pointed at Indeed, so the gap was invisible — the same way session 19's tabs
+hid the auth bug. Opening a site's **home page** is not the URL-forcing §3 warns about: that rule
+is about jumping into a deep state we should have clicked our way to, and there is nothing to click
+on `about:blank`.
+
+### Then the search submit, which took three passes
+
+The query rung is the CONSUMING one, so each of these was a chance to spend the session's one query
+on nonsense. None of them did, because the rung marks only on a results URL carrying our query.
+
+1. **The click that commits the widget.** Both fields held their typed values, Search was the
+   hit-test target at its own centre, the trusted click dispatched, `/execute` returned `ok` — and
+   the page did not move. Typing into the location combobox stages a suggestion popup, and the
+   click that looks like "press Search" is spent dismissing it. The **widget protocol in the search
+   box**: AX finds the element, but the element sits inside a widget with a protocol. `/execute`'s
+   docstring already says its `ok` means *the mechanism completed*, not that the page accepted it,
+   and names the fix — a caller that needs "did it take?" must confirm at tier 2. We were reading
+   tier-1 `ok` as "acted".
+2. **`type` is `Input.insertText`, which inserts at the caret.** It does not replace. A submit that
+   did not land leaves both boxes populated, and this rung's retry story is "step again" — so the
+   second attempt would have searched `data warehousedata warehouse`. Clear before typing.
+3. **The retry added for (1) was itself blind.** It fired whenever no results tab carried our
+   query — which live included the case where the click HAD submitted and the tab re-read simply
+   **raced the navigation**. The second click landed on the freshly-loaded results page, whose
+   search box is empty, and submitted `q=` from the SERP (`from=searchOnDesktopSerp` was the tell).
+
+**A verification that can race the thing it verifies is not a verification, and a retry behind it
+is blind no matter what it is called.** The guard is now `not moved` — click again only when
+*nothing in the window changed*. If the page moved anywhere at all, the click did something, and
+repeating it is the double-spend the rung exists to prevent.
+
+### The one that was not our bug, and the one that was
+
+`POST /training/sessions/19/stop` **refused to record a stop** — correctly, per the 07-24 fix: it
+verifies the *profile* is released, not that a port went quiet. But underneath, the stop had killed
+the recorded pid and macOS relaunched Chrome windowless (reparented to launchd, same profile, same
+port), so it destroyed the session's tabs *without* releasing the lock. The guard turned a silent
+corruption into an honest error. The stop itself still needs to handle the respawn.
+
+And the shared checkout was on another session's branch (`codex/fix-ui-hover-backgrounds`), not
+`main` — so `git merge --ff-only main` would have pulled this work into someone else's active
+branch. It refused. **Check `git branch --show-current` before merging in a shared tree**; the
+worktree convention only isolates the sessions that use it.
+
+### What held up
+
+The ladder, again. Four faults on the consuming rung and it never once recorded a query it had not
+proven — every failure left `query_entered` unmarked and said why. The design's own principle kept
+catching its author, which is the third session running that this has been the honest summary.

@@ -767,9 +767,39 @@ _INDEED_JOBS_JS = r"""
     const titleEl = a.querySelector('span[title]') || a;
     const title = (titleEl.getAttribute && titleEl.getAttribute('title') || titleEl.innerText || '').trim();
     const card = a.closest('li') || a.closest('.cardOutline') || a.closest('[class*=card]') || a.parentElement;
+    let company = '', location = '', salary = '';
+
+    // ASK THE CARD, DON'T INFER FROM LINE ORDER. Indeed labels these fields, and the labels are
+    // unambiguous where the heuristic below is a guess about what a line "looks like". The guess
+    // swaps them whenever a COMPANY name trips isLoc — the location test runs first, so such a
+    // company is taken as the location, and the real location then falls through to the company
+    // slot. Seen live 2026-07-25: "Equipment & Inventory Assistant" came back with company
+    // "Hybrid work in Williamstown, MA" and location "Bella Baby Photography". Company names
+    // containing ", XX" or "United States" are not rare, and neither field is checkable by eye
+    // once it is in the corpus.
+    const txt = (n) => n ? (n.innerText || '').trim() : '';
+    if (card) {
+      company = txt(card.querySelector('[data-testid="company-name"]'));
+      const locEl = card.querySelector('[data-testid="text-location"]');
+      if (locEl) {
+        // The location node swallows the commute snippet ("75 min · Hybrid work in Boston, MA").
+        // Read a clone with the commute removed rather than string-surgery on the result.
+        const c = locEl.cloneNode(true);
+        c.querySelectorAll('[data-testid="jcs-commute-snippet"]').forEach((e) => e.remove());
+        // The commute node goes, but the "·" that separated it is a bare text node beside it, so
+        // innerText joins it straight onto the location ("·Hybrid work in Boston, MA"). Strip any
+        // leading separator after picking the line.
+        location = ((c.innerText || '').split('\n').map(s => s.trim())
+                     .filter(s => s && s !== '·' && !/^\d+\s*min/i.test(s)).pop() || '')
+                   .replace(/^[·•\-\s]+/, '').trim();
+      }
+      salary = txt(card.querySelector('[data-testid*="salary-snippet"]'));
+    }
+
+    // The line scan stays as the FALLBACK — the labelled DOM is a redesign, and the old markup is
+    // still served on some routes. Only fields the labels did not answer are guessed at.
     const lines = (card ? card.innerText : '').split('\n').map(s => s.trim()).filter(Boolean);
     const ti = Math.max(0, lines.findIndex(l => l && title.startsWith(l.slice(0, 12))));
-    let company = '', location = '', salary = '';
     for (let i = ti + 1; i < lines.length; i++) {
       const l = lines[i];
       if (noise(l)) continue;
@@ -975,8 +1005,17 @@ _JOB_DESC_JS = r"""
   // present only on the SERP; on the standalone /viewjob page there is no wrapper and the whole
   // document IS the one job, so root falls back to document there. `#jobDescriptionText` is a
   // unique id (safe either way), but title/company/salary MUST be pane-scoped.
+  //
+  // INDEED REDESIGNED THE PANE (met live 2026-07-25). The old wrapper was addressed by a
+  // data-testid; the redesign ships it as an ID with different casing —
+  // `#jobsearch-ViewjobPaneWrapper` (lowercase j) — so this selector missed and `root` silently
+  // fell back to `document`. Nothing errored: the reader just returned '' for every field, and
+  // /open_job_card, which calls a job open only when it can read a description back, reported
+  // "no pane" about a pane that was fully rendered and correct. Both spellings stay: the old
+  // DOM is still served on some routes.
   const root = document.querySelector(
-    '[data-testid=jobsearch-ViewJobPaneWrapper], .jobsearch-RightPane, .jobsearch-JobComponent'
+    '#jobsearch-ViewjobPaneWrapper, #rnvjContainerDesktop,'
+    + '[data-testid=jobsearch-ViewJobPaneWrapper], .jobsearch-RightPane, .jobsearch-JobComponent'
   ) || document;
 
   // Try selectors in PRIORITY order — NOT `querySelector('a, b, h1')`, which returns the first
@@ -988,14 +1027,49 @@ _JOB_DESC_JS = r"""
     return '';
   };
 
-  const description = pick(root, ['#jobDescriptionText', '[id*=jobDescription]',
-                                  '.jobsearch-JobComponent-description']);
-  const salary = pick(root, ['#salaryInfoAndJobType', '[id*=salaryInfo]', '[class*=salary]']);
+  // The redesign kept almost NO ids inside the pane (one, `rnvjContainerDesktop`) and moved to
+  // `vj-*` data-testids. Old selectors stay FIRST so the un-redesigned DOM keeps its exact
+  // behaviour; the new ones are appended as fallbacks.
+  let description = pick(root, ['#jobDescriptionText', '[id*=jobDescription]',
+                                '.jobsearch-JobComponent-description']);
+  if (!description) {
+    // The redesign exposes only a HEADING testid ("Full job description", ~20 chars). The body is
+    // its parent — so walk up until a node actually holds the description, and take the smallest
+    // such node rather than the first: the outer wrappers include the header, salary and the
+    // Apply button, and swallowing those makes every job's description look alike to the corpus.
+    // The posting's HTML arrives with a <style> block (`@layer htmlContent { ... }`) inside the
+    // description container, and innerText renders it as text — 2.7k of CSS at the head of every
+    // description, identical across jobs. Read from a CLONE with style/script stripped so the
+    // corpus stores the posting, not Indeed's stylesheet.
+    const clean = (el) => {
+      const c = el.cloneNode(true);
+      c.querySelectorAll('style, script, noscript').forEach(s => s.remove());
+      return (c.innerText || c.textContent || '').replace(/^\s*Full job description\s*/i, '').trim();
+    };
+    let n = root.querySelector('[data-testid=vj-job-description-heading]');
+    for (let i = 0; i < 4 && n; i++) {
+      n = n.parentElement;
+      const txt = n ? clean(n) : '';
+      if (txt.length > 200) { description = txt; break; }
+    }
+  }
+
+  const header = pick(root, ['[data-testid=desktop-job-header]']);
+  let salary = pick(root, ['#salaryInfoAndJobType', '[id*=salaryInfo]', '[class*=salary]']);
+  if (!salary && header) {
+    // No salary node survives the redesign; the header line carries it as text.
+    const m = header.match(/\$[\d,.]+(?:\s*-\s*\$[\d,.]+)?\s*(?:an hour|a year|a month|a week|per hour|per year)/i)
+           || header.match(/(?:from|up to)\s+\$[\d,.]+\s*(?:an hour|a year)/i);
+    if (m) salary = m[0].trim();
+  }
   const title = pick(root, ['#vjs-jobtitle', '[data-testid="jobsearch-JobInfoHeader-title"]',
-                            'h2.jobsearch-JobInfoHeader-title', 'h1', 'h2']);
+                            'h2.jobsearch-JobInfoHeader-title',
+                            '[data-testid=vj-job-title]', '[data-testid=vj-job-title-compact]',
+                            'h1', 'h2']);
   const company = pick(root, ['[data-testid=inlineHeader-companyName]',
                               '[data-testid=jobsearch-CompanyInfoContainer] a',
-                              '[data-company-name]', '.jobsearch-CompanyInfoWithoutHeaderImage a']);
+                              '[data-company-name]', '.jobsearch-CompanyInfoWithoutHeaderImage a',
+                              'a[href*="/cmp/"]']);
 
   // apply_type drives the routing: 'company_site' → cross-site ATS (Workday/...), 'quick_apply' →
   // Indeed-native (smartapply, end-to-end driveable). "Apply with Indeed" is quick-apply too. Read

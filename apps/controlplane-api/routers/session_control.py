@@ -46,6 +46,9 @@ router = APIRouter()
 
 INITIATORS = ("operator", "auto", "teacher")
 
+#: The front door. A session opens the HOME page and clicks on from there — never a deep URL.
+INDEED_HOME = "https://www.indeed.com/"
+
 
 # --- seams ------------------------------------------------------------------------------------
 async def _capture_post(path: str, payload: dict, timeout: float = 30.0) -> dict:
@@ -119,17 +122,43 @@ async def _observe(browser_url: str, query: str) -> dict[str, Any]:
         return {"observed": observed, "tabs": tabs, "search_tab": None, "block": None,
                 "reachable": reachable}
 
-    auth = await _capture_post("/auth_state", {"browser_url": browser_url}, timeout=8.0)
-    observed["authenticated"] = bool(auth.get("ok") and auth.get("logged_in"))
-
     search_tab = _find_search_tab(tabs, query)
     # The query rung is only observable as "are we looking at results for OUR query". Absent a
     # results tab we say False (the effect is gone -> RECOVER), never "re-run it".
     observed["query_entered"] = search_tab is not None
 
+    # THE AUTH PROBE HAS TO LOOK AT AN INDEED TAB. Found live 2026-07-25 on a session left open
+    # two days: with no tab hint `/auth_state` resolves whatever target CDP lists first — here a
+    # Workday application open in the other tab — and the Indeed login JS, finding no Indeed
+    # markers on a Workday page, returned logged_in=false. `authenticated` read REGRESSED and the
+    # panel's next move was "sign in again" on a session that never signed out. Same shape as
+    # 069eb61 (classify taking the last tab instead of the apply tab): probe the tab the rung is
+    # ABOUT, not whichever one we are handed.
+    auth_tab = search_tab or _find_indeed_tab(tabs)
+    if auth_tab is None:
+        # No Indeed tab open, so Indeed auth is UNKNOWN — not false. False here would be a
+        # regression we never observed, and this rung's reason to exist (logged-out data is
+        # provenance-invalid) only bites while gathering FROM Indeed, which needs such a tab.
+        observed["authenticated"] = None
+    else:
+        auth = await _capture_post("/auth_state",
+                                   {"browser_url": browser_url, "tab_id": auth_tab.get("tab_id")},
+                                   timeout=8.0)
+        observed["authenticated"] = bool(auth.get("ok") and auth.get("logged_in"))
+
     block = await _detect_block(browser_url, [t.get("url", "") for t in tabs])
     return {"observed": observed, "tabs": tabs, "search_tab": search_tab, "block": block,
             "reachable": True}
+
+
+def _find_indeed_tab(tabs: list[dict]) -> Optional[dict]:
+    """Any Indeed tab — the fallback the auth probe uses when no results tab matches this
+    session's query. Auth is a property of the SITE, not of the query, so a job-detail or home
+    tab answers it just as well as a results page."""
+    for t in tabs:
+        if "indeed.com" in (t.get("url", "") or ""):
+            return t
+    return None
 
 
 def _find_search_tab(tabs: list[dict], query: str) -> Optional[dict]:
@@ -420,11 +449,49 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                 "detail": f"Session Chrome is up with a clean window ({len(tabs)} tab)."}
 
     if action == "auth_probe":
+        # NOBODY EVER OPENED THE FRONT DOOR. A freshly provisioned session is one about:blank tab,
+        # so there was no Indeed page to probe and none to search from: `auth_probe` handed back
+        # "open Indeed", `run_query` handed back "open Indeed's job search, then step again", and
+        # the ladder could not climb from a clean browser at all (found live 2026-07-25 on session
+        # 20, the first fresh session the panel ever provisioned). Initialize was specified to
+        # "reach the start line" (PLAN §2.1) and nothing implemented the first move.
+        #
+        # Opening a site's HOME PAGE is not the URL-forcing §3 warns about. That rule is about
+        # jumping into a DEEP state we should have clicked our way to — a job detail, a results
+        # page, an application. There is nothing to click on about:blank, and typing indeed.com is
+        # exactly what a person does first. Every deep state after this is still reached by
+        # clicking.
+        if obs["observed"].get("authenticated") is None:
+            style = xs.pick_style()
+            nav = await _capture_post("/navigate", {
+                "browser_url": browser_url, "url": INDEED_HOME,
+                "tab_id": ((obs.get("tabs") or [{}])[0]).get("tab_id", ""),
+                "settle_seconds": 3.0})
+            await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+            if not nav.get("ok"):
+                bb.log("handoff", f"could not open Indeed — {str(nav.get('detail'))[:90]}")
+                return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
+                        "detail": f"No Indeed tab was open and this session could not open one "
+                                  f"({str(nav.get('detail') or 'no detail')[:120]}). The rung is "
+                                  f"left as it was rather than guessed."}
+            bb.log("nav", f"opened Indeed's home page to probe sign-in ({style.name} pace)")
+            obs = await _observe(browser_url, bb.search_state.query)
+
         if obs["observed"].get("authenticated"):
             ledger.mark("authenticated", evidence="/auth_state reported logged_in",
                         initiator=initiator)
             bb.log("checkpoint", "authenticated — signed in to Indeed")
             return {"ok": True, "action": action, "detail": "Signed in."}
+
+        # STILL UNKNOWN AFTER OPENING THE DOOR — we navigated but no Indeed tab came back, so we
+        # never looked at Indeed. Releasing the rung here would invent a regression, and the login
+        # survey below would run against whatever page happens to be in front. Same rule
+        # `session_checkpoints` enforces one layer up: an unknown is not a regression.
+        if obs["observed"].get("authenticated") is None:
+            bb.log("handoff", "auth unknown — no Indeed tab to probe after navigating")
+            return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
+                    "detail": "Opened Indeed but no Indeed tab came back, so sign-in could not be "
+                              "checked. The rung is left as it was rather than guessed."}
 
         # NOT SIGNED IN IS A STEP, NOT A DEAD END. The boundary is that we never type a password or
         # clear a 2FA challenge — it was never that we refuse to open the login page. Reporting
@@ -533,23 +600,81 @@ async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict
     # signature, and were scattered rather than expressed as a pace.
     style = xs.pick_style()
 
-    acted, why = await _act("type", controls["query"], value=query)
+    async def _fill(ctrl: dict, value: str) -> tuple[bool, str]:
+        """Clear, then type. `type` is `Input.insertText`, which inserts AT THE CARET and does not
+        replace — so typing into a box that already holds text appends to it. That box is not
+        hypothetical: a run that submitted and did not land leaves both fields populated, and this
+        rung's whole retry story is "step again". Without the clear, the second attempt would
+        search 'data warehousedata warehouse' and spend the session's one query on it."""
+        await _act("clear", ctrl)
+        return await _act("type", ctrl, value=value)
+
+    acted, why = await _fill(controls["query"], query)
     if not acted:
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
                 "detail": f"Could not enter the query — {why}."}
     await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
     if location and "location" in controls:
-        await _act("type", controls["location"], value=location)
+        await _fill(controls["location"], location)
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
-    acted, why = await _act("click", controls["submit"])
-    if not acted:
+    async def _tab_urls() -> list[str]:
+        res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+        return [t.get("url", "") for t in (res.get("tabs") or [])]
+
+    async def _submit_and_confirm() -> tuple[bool, Optional[dict], bool, str]:
+        """Click Search, then ask the PAGE whether it took.
+
+        Returns (clicked, results_tab, page_moved, why). `page_moved` is the half that matters for
+        deciding whether a retry is even allowed: `/execute` is a tier-1 primitive and says so in
+        its own docstring — its `ok` means the node resolved and CDP dispatched without throwing,
+        NOT that the page accepted the action. Confirming is this tier-2 caller's job.
+        """
+        before = await _tab_urls()
+        ok, detail = await _act("click", controls["submit"])
+        if not ok:
+            return False, None, False, detail
+        await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+        res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+        tabs_after = res.get("tabs") or []
+        moved = [t.get("url", "") for t in tabs_after] != before
+        return True, _find_search_tab(tabs_after, query), moved, ""
+
+    clicked, tab, moved, why = await _submit_and_confirm()
+    if not clicked:
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
                 "detail": f"Typed the query but could not submit it — {why}."}
-    await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
 
-    # PROOF, not assumption: re-read the tabs and require a results URL carrying our query.
-    after = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
-    tab = _find_search_tab(after.get("tabs") or [], query)
+    if tab is None and not moved:
+        # THE FIRST CLICK COMMITS THE WIDGET, THE SECOND SUBMITS THE FORM. Measured live
+        # 2026-07-25 on session 20: both fields held their typed values, the Search button was the
+        # hit-test target at its own centre, the click dispatched trusted — and the page did not
+        # move at all. Typing into the location combobox stages a suggestion popup, and the click
+        # that looks like "press Search" is spent dismissing it. The widget protocol (stage ->
+        # commit -> act) showing up in the search box, same shape as the distance pill: AX finds
+        # the ELEMENT, but the element sits inside a widget with a protocol.
+        #
+        # `not moved` IS THE WHOLE SAFETY PROPERTY, and the first version of this retry did not
+        # have it. It retried whenever no results tab matched our query — which on 2026-07-25
+        # included the case where the click HAD submitted and the tab re-read simply raced the
+        # navigation. The second click then landed on the freshly-loaded results page, whose
+        # search box is empty, and submitted `q=` from the SERP. A verification that can race the
+        # thing it verifies is not a verification, and a retry behind it is blind. So: click again
+        # only when NOTHING in the window changed. If the page moved anywhere at all, the click
+        # did something, and doing it twice is exactly the double-spend this rung forbids.
+        bb.log("run_query", "the window did not change after the submit — the click committed the "
+                            "location widget; clicking Search once more")
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        clicked, tab, moved, why = await _submit_and_confirm()
+
+    if tab is None and moved:
+        # Something happened, just not what we asked for. Never click again into an unknown.
+        bb.log("run_query", f"submitted {query!r}; the page moved but not to results for it")
+        return {"ok": False, "action": "run_query", "awaiting": "operator_verify",
+                "detail": f"Submitted {query!r} and the page moved, but not to a results page "
+                          f"carrying that query. Left unmarked, and NOT retried — the click did "
+                          f"something and repeating it could spend the query twice. Check the "
+                          f"browser."}
+
     if tab is None:
         bb.log("run_query", f"submitted {query!r} but no results tab carries it — left unmarked")
         return {"ok": False, "action": "run_query", "awaiting": "operator_verify",
@@ -1434,6 +1559,14 @@ def _title_matches(expected: str, seen: str) -> bool:
 
 class ApplyStepBody(BaseModel):
     initiator: str = "operator"
+    #: Optional ASSERTION of which application the caller believes it is working. The queue is
+    #: sequential — `queue.current()` decides, not the caller — but a caller that names a job and
+    #: is silently handed a different one is the wrong-job failure waiting to happen. Passing
+    #: `job_id` used to be accepted and dropped on the floor (pydantic ignores unknown fields), so
+    #: two calls naming two different jobs both worked the same step and read as if they had
+    #: worked each (found 2026-07-25, driving session 21). Name it and we check it; omit it and
+    #: the queue decides as before.
+    job_id: Optional[str] = None
 
 
 @router.post("/api/session_control/{session_id}/apply_step")
@@ -1453,6 +1586,13 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     if step is None:
         raise HTTPException(status_code=409,
                             detail="Nothing to work — every application from this page has ended.")
+    if body.job_id and body.job_id != step.job_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This session is working {step.job_id} ({step.title or 'untitled'}), not "
+                   f"{body.job_id}. The queue is sequential — finish or flag the current "
+                   f"application before another one is worked. Omit job_id to work whatever is "
+                   f"current.")
 
     obs = await _observe(browser_url, bb.search_state.query)
     block = obs.get("block")

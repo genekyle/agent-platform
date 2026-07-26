@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, postJSON, fmtTime } from "./api";
 import { AppIcon } from "../../../ui/Icon";
+import { PickOrb } from "./OrderedPicks";
+import { useOrderedPicks } from "./useOrderedPicks";
 
 // The Session Control Panel — the one place the local side turns the loop.
 //
@@ -113,7 +115,8 @@ export function SessionControlPanel({ domain }) {
   const [sessionId, setSessionId] = useState(null);
   const [panel, setPanel] = useState(null);
   const [form, setForm] = useState({ query: "", location: "", radius_miles: 50 });
-  const [picks, setPicks] = useState([]);
+  // Picks carry an ORDER, not just a tick — that order is the order the applications run.
+  const { picks, armed, pick, clear: clearPicks, retain: retainPicks } = useOrderedPicks();
   const [note, setNote] = useState("");
   const [correcting, setCorrecting] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -162,6 +165,16 @@ export function SessionControlPanel({ domain }) {
     return () => clearInterval(t);
   }, [load]);
 
+  // Drop picks for jobs that are no longer on the page. The results list is re-read every ping,
+  // and a pick for a vanished job would ride into /choose and come back 422 ("Not on the page
+  // under review") — an error the operator did nothing to cause, on a control that gives no sign
+  // it has gone stale. Sits up here with the other hooks, ABOVE the no-session early return:
+  // below it, the hook only runs on some renders, which is a Rules-of-Hooks violation React
+  // catches at runtime rather than a subtle bug (met while building this, 2026-07-25).
+  useEffect(() => {
+    retainPicks((panel?.results || []).map((r) => r.job_id));
+  }, [panel, retainPicks]);
+
   const call = async (path, body) => {
     setBusy(true);
     setError("");
@@ -200,8 +213,6 @@ export function SessionControlPanel({ domain }) {
   const last = p.last_step;
   const awaiting = p.awaiting;
 
-  const toggle = (jobId) =>
-    setPicks((prev) => (prev.includes(jobId) ? prev.filter((x) => x !== jobId) : [...prev, jobId]));
 
   const queue = p.queue?.steps || [];
   const qs = p.queue_summary || { total: 0, done: 0, submitted: 0, blocks_page: false };
@@ -234,9 +245,11 @@ export function SessionControlPanel({ domain }) {
     decide({ action: "correct", intent: correcting.intent, params, rationale: correcting.rationale });
   };
 
+  // `picks` goes over the wire IN ORDER — /choose enqueues in the order it receives, and the
+  // queue is sequential, so element 0 is the application that runs first.
   const doChoose = async (advance) => {
     const d = await call("/choose", { picks, note, advance, initiator: "operator" });
-    if (d) { setPicks([]); setNote(""); }
+    if (d) { clearPicks(); setNote(""); }
   };
 
   return (
@@ -451,6 +464,89 @@ export function SessionControlPanel({ domain }) {
             </div>
           )}
 
+          {/* --- THE CHOICE, and it goes FIRST -------------------------------------
+              This used to sit at the very bottom, under the apply queue. At the start line the
+              choice IS the work — everything below is the consequence of it — so the operator
+              had to scroll past the outcome to reach the decision. Operator, 2026-07-25:
+              "selecting jobs is top priority when we get to this point." */}
+          <div className="live-detail__body">
+            {results.length === 0 ? (
+              <div className="empty-hint">
+                {atLine
+                  ? "Step to read this page's results."
+                  : "Results appear once the session reaches the start line."}
+              </div>
+            ) : (
+              <>
+                <div className="sc-picks__head">
+                  <span className="sc-picks__title">
+                    <AppIcon name="listTree" size={14} /> Pick in the order you want them applied
+                  </span>
+                  <span className="sc-picks__hint">
+                    {armed
+                      ? "Now click another number to swap the two — or click the same one again to remove it."
+                      : picks.length
+                        ? `${picks.length} picked · click a number to pick it up and swap`
+                        : "Click a circle to make it #1. They run in this order."}
+                  </span>
+                  {picks.length > 0 && (
+                    <button type="button" className="btn btn-sm" disabled={busy}
+                            onClick={clearPicks} title="Clear every pick and its number">
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <table className="sc-results">
+                  <thead>
+                    <tr><th className="sc-results__ord">#</th><th>Role</th><th>Company</th><th>Where</th><th>Pay</th></tr>
+                  </thead>
+                  <tbody>
+                    {results.map((r) => (
+                      <tr key={r.job_id} className={picks.includes(r.job_id) ? "is-picked" : ""}>
+                        <td className="sc-results__ord">
+                          <PickOrb jobId={r.job_id} label={r.title}
+                                   picks={picks} armed={armed} onPick={pick} />
+                        </td>
+                        <td>{r.title}</td>
+                        <td>{r.company}</td>
+                        <td>{r.location}</td>
+                        <td>{r.salary || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="live-detail__foot">
+                  <textarea
+                    className="cv-note-in"
+                    rows={2}
+                    placeholder="Why these (or why none) — rides into the page's record."
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                  />
+                  <div className="cv-actions">
+                    {/* Not disabled at 0 picks: "nothing on this page" is a real answer, and the
+                        page still counts as reviewed. Taking that away would strand a page of
+                        nothing-for-me behind a button that refuses to move. */}
+                    <button className="btn btn-sm btn-primary" disabled={busy}
+                            onClick={() => doChoose(true)}>
+                      {busy ? "…" : picks.length
+                        ? `Take ${picks.length} · next page`
+                        : "Nothing here · next page"}
+                    </button>
+                    <button className="btn btn-sm" disabled={busy} onClick={() => doChoose(false)}>
+                      Take {picks.length} · stay
+                    </button>
+                  </div>
+                  <p className="cv-blocked">
+                    Picking a job is approval to enter its application. Nothing is submitted without
+                    a separate confirmation.
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+
           {/* --- the apply queue: N picks, N steps, the page waits ------------------ */}
           {queue.length > 0 && (
             <div className="sc-queue">
@@ -662,63 +758,6 @@ export function SessionControlPanel({ domain }) {
             </div>
           )}
 
-          {/* --- the page's results, and the choice ------------------------------- */}
-          <div className="live-detail__body">
-            {results.length === 0 ? (
-              <div className="empty-hint">
-                {atLine
-                  ? "Step to read this page's results."
-                  : "Results appear once the session reaches the start line."}
-              </div>
-            ) : (
-              <>
-                <table className="sc-results">
-                  <thead>
-                    <tr><th /><th>Role</th><th>Company</th><th>Where</th><th>Pay</th></tr>
-                  </thead>
-                  <tbody>
-                    {results.map((r) => (
-                      <tr key={r.job_id} className={picks.includes(r.job_id) ? "is-picked" : ""}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={picks.includes(r.job_id)}
-                            onChange={() => toggle(r.job_id)}
-                          />
-                        </td>
-                        <td>{r.title}</td>
-                        <td>{r.company}</td>
-                        <td>{r.location}</td>
-                        <td>{r.salary || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div className="live-detail__foot">
-                  <textarea
-                    className="cv-note-in"
-                    rows={2}
-                    placeholder="Why these (or why none) — rides into the page's record."
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                  />
-                  <div className="cv-actions">
-                    <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => doChoose(true)}>
-                      {busy ? "…" : `Take ${picks.length} · next page`}
-                    </button>
-                    <button className="btn btn-sm" disabled={busy} onClick={() => doChoose(false)}>
-                      Take {picks.length} · stay
-                    </button>
-                  </div>
-                  <p className="cv-blocked">
-                    Picking a job is approval to enter its application. Nothing is submitted without
-                    a separate confirmation.
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
 
           {p.picks?.length ? (
             <p className="mode-hint">Approved so far this session: {p.picks.length}</p>

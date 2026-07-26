@@ -423,6 +423,140 @@ def test_logged_out_hands_the_credential_wall_to_the_operator(monkeypatch):
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
 
 
+#: The other tab a real apply session has open: an ATS application, on a different origin. Indeed's
+#: login JS finds none of its markers here and honestly reports logged_in=false — which is the
+#: right answer about THIS page and the wrong answer about the session.
+_WORKDAY_APPLY_URL = ("https://mfs.wd1.myworkdayjobs.com/en-US/MFS-Careers/job/Boston/"
+                      "Compliance-Reporting-Associate_MFS-231810-1/apply/applyManually")
+
+
+def test_auth_is_probed_on_the_indeed_tab_not_whichever_tab_is_in_front(monkeypatch):
+    """Found live 2026-07-25 on a session left open two days. `/auth_state` with no tab hint
+    resolves whatever target CDP lists first — the Workday application — so a signed-in session
+    read as REGRESSED and the panel's next move was to sign in again."""
+    bb = _at_start_line()
+    per_tab = {"t0": {"ok": True, "logged_in": False},   # the Workday tab, listed first
+               "t1": {"ok": True, "logged_in": True}}    # the Indeed results tab
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(_WORKDAY_APPLY_URL, SEARCH_URL),
+         "/auth_state": lambda p: per_tab.get(p.get("tab_id"), {"ok": True, "logged_in": False})},
+        blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    auth_calls = [p for path, p in harness.calls if path == "/auth_state"]
+    assert [c.get("tab_id") for c in auth_calls] == ["t1"], "must pin the probe to the Indeed tab"
+    rung = next(x for x in r["ladder"] if x["id"] == "authenticated")
+    assert rung["observed"] is True and rung["status"] == "held"
+    assert r["next"]["checkpoint_id"] != "authenticated"
+
+
+def test_no_indeed_tab_leaves_auth_unknown_rather_than_calling_it_signed_out(monkeypatch):
+    """An unknown must never read as a regression — the rule `session_checkpoints` enforces for
+    the ladder, applied to the probe that feeds it. With no Indeed tab we did not look at Indeed."""
+    bb = _at_start_line()
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(_WORKDAY_APPLY_URL),
+                               "/auth_state": {"ok": True, "logged_in": False}},
+                              blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert "/auth_state" not in harness.paths(), "nothing to probe — do not probe the wrong page"
+    rung = next(x for x in r["ladder"] if x["id"] == "authenticated")
+    assert rung["observed"] is None and rung["status"] == "held"
+
+
+def _auth_rung_next(query="reporting analyst"):
+    """A blackboard whose crank lands on `authenticated`."""
+    bb = store.new_blackboard(1, query=query)
+    led = cps.Ledger()
+    led.mark("provisioned", evidence="test")
+    bb.checkpoints = led.as_dict()
+    return bb
+
+
+def test_a_fresh_session_opens_indeed_itself_instead_of_asking_the_operator_to(monkeypatch):
+    """Found live 2026-07-25 provisioning session 20 — the first fresh session the panel ever
+    started. The window is one about:blank tab, so nothing could be probed and nothing could be
+    searched, and both rungs handed back 'open Indeed'. Initialize is specified to reach the start
+    line; opening the HOME page is the first move, and it was missing."""
+    bb = _auth_rung_next()
+    tabs = {"n": 0}
+
+    def _list_tabs(_payload):
+        # about:blank until we navigate; the Indeed home page afterwards.
+        return _tabs("about:blank") if tabs["n"] == 0 else _tabs("https://www.indeed.com/")
+
+    def _navigate(_payload):
+        tabs["n"] = 1
+        return {"ok": True, "landed_url": "https://www.indeed.com/"}
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs,
+                               "/navigate": _navigate,
+                               "/auth_state": {"ok": True, "logged_in": True}},
+                              blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    nav = [p for path, p in harness.calls if path == "/navigate"]
+    assert len(nav) == 1 and nav[0]["url"] == sc.INDEED_HOME, "the HOME page, never a deep URL"
+    assert r["last_step"]["ok"] is True
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
+
+
+def test_auth_probe_that_cannot_open_indeed_leaves_the_rung_alone(monkeypatch):
+    """`auth_probe` must not turn 'we could not see' into 'signed out' and run a login survey
+    against whatever page is in front."""
+    bb = _auth_rung_next()
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs("about:blank"),
+                               "/navigate": {"ok": False, "detail": "ConnectError"},
+                               "/auth_state": {"ok": True, "logged_in": False}},
+                              blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["action"] == "auth_probe"
+    assert r["awaiting"] == "operator_open_indeed"
+    # The survey reads the page in front of it. Run here it would classify about:blank — or a
+    # Workday application — as an Indeed login screen and offer "ways in" that lead elsewhere.
+    assert "/ax_scan" not in harness.paths()
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
+
+
+def test_an_ats_tab_is_never_mistaken_for_a_missing_indeed_tab(monkeypatch):
+    """The two fixes meet here: a Workday tab is not an Indeed tab, so auth is unknown — but the
+    remedy is to open Indeed, not to survey the Workday page for a way in."""
+    bb = _auth_rung_next()
+    urls = {"list": [_WORKDAY_APPLY_URL]}
+
+    def _list_tabs(_payload):
+        return _tabs(*urls["list"])
+
+    def _navigate(_payload):
+        urls["list"] = [_WORKDAY_APPLY_URL, "https://www.indeed.com/"]
+        return {"ok": True, "landed_url": "https://www.indeed.com/"}
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs, "/navigate": _navigate,
+                               "/auth_state": lambda p: {"ok": True,
+                                                         "logged_in": p.get("tab_id") == "t1"}},
+                              blackboard=bb)
+    try:
+        client.post("/api/session_control/1/step", json={})
+    finally:
+        _teardown()
+    assert [p for path, p in harness.calls if path == "/navigate"], "should open Indeed"
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
+
+
 #: A live reCAPTCHA as CDP actually reports it: an IFRAME target, never a page. /list_tabs filters
 #: to type == "page", so a block check fed that list could not see this — the 2026-07-23 bug.
 _RECAPTCHA_FRAME = {"type": "iframe", "url": "https://www.google.com/recaptcha/api2/bframe?k=x"}
@@ -530,8 +664,14 @@ def test_run_query_marks_the_rung_only_on_proof(monkeypatch):
     assert "q='reporting analyst'" in led.reached["query_entered"].evidence
     # driven through the AX layer by the names DISCOVERED on the page, not assumed ones
     execs = [p for p in harness.calls if p[0] == "/execute"]
-    assert [e[1]["target_name"] for e in execs] == [
-        "search: Job title, keywords, or company", "Edit location", "Search"]
+    assert [(e[1]["action_id"], e[1]["target_name"]) for e in execs] == [
+        # each field is CLEARED before it is typed — `type` inserts at the caret, it does not
+        # replace, so a populated box would otherwise be appended to.
+        ("clear", "search: Job title, keywords, or company"),
+        ("type", "search: Job title, keywords, or company"),
+        ("clear", "Edit location"),
+        ("type", "Edit location"),
+        ("click", "Search")]
     assert all(e[1].get("driver") == "humanized" for e in execs)
     # ExecuteRequest requires target_bbox even on the act-by-name path; omitting it is a 422
     assert all("target_bbox" in e[1] for e in execs)
@@ -554,6 +694,114 @@ def test_unproven_query_submission_is_left_unmarked(monkeypatch):
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
 
 
+def test_naming_a_job_the_queue_is_not_working_is_refused_not_ignored(monkeypatch):
+    """Found driving session 21: `job_id` was not a field, so pydantic dropped it and two calls
+    naming two DIFFERENT jobs both worked the same step — and read as if each had worked its own.
+    The queue is sequential and stays that way; naming the wrong job is now an error, not a
+    silently different action."""
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "First Job"},
+                   {"job_id": "indeed:bbb", "title": "Second Job"}])
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+                          blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step",
+                        json={"job_id": "indeed:bbb", "initiator": "operator"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    assert "indeed:aaa" in r.json()["detail"] and "indeed:bbb" in r.json()["detail"]
+    assert "/open_job_card" not in harness.paths(), "nothing was driven for the wrong job"
+
+
+def test_a_submit_swallowed_by_the_location_widget_is_clicked_again(monkeypatch):
+    """Measured live 2026-07-25 on session 20: both fields held their typed values, Search was the
+    hit-test target at its own centre, the trusted click dispatched — and the page did not move.
+    Typing into the location combobox stages a suggestion popup, and the first click is spent
+    dismissing it. The second one submits."""
+    calls = {"n": 0}
+
+    def _list_tabs(_payload):
+        calls["n"] += 1
+        # 1 observe, 2 pre-click, 3 post-click (STILL the home page — the click was swallowed by
+        # the location widget, nothing moved), 4 pre-retry, 5 post-retry: results at last.
+        return _tabs(SEARCH_URL) if calls["n"] >= 5 else _tabs("https://www.indeed.com/")
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs,
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
+                               "/execute": {"outcome": "ok"}},
+                              blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+    clicks = [p for path, p in harness.calls
+              if path == "/execute" and p["action_id"] == "click"]
+    assert len(clicks) == 2, "one click to commit the widget, one to submit"
+
+
+def test_a_submit_whose_confirmation_raced_the_navigation_is_never_clicked_twice(monkeypatch):
+    """THE ONE THAT BIT US LIVE, 2026-07-25. The click submitted, the tab re-read raced the
+    navigation and still showed the old URL, so the retry fired — onto the freshly-loaded results
+    page, whose search box is empty. That second click submitted `q=` from the SERP.
+
+    Here the window HAS moved (a results page, just not one carrying our query). The retry must
+    not fire on that: a page that moved means the click did something."""
+    seen = {"n": 0}
+
+    def _list_tabs(_payload):
+        seen["n"] += 1
+        # probe, then pre-click, then a results page for the WRONG query (the race's outcome).
+        if seen["n"] <= 2:
+            return _tabs("https://www.indeed.com/")
+        return _tabs("https://www.indeed.com/jobs?q=&l=Lowell%2C+MA&from=searchOnDesktopSerp")
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs,
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
+                               "/execute": {"outcome": "ok"}},
+                              blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    clicks = [p for path, p in harness.calls
+              if path == "/execute" and p["action_id"] == "click"]
+    assert len(clicks) == 1, "the page moved — the click did something; never click again"
+    assert r["awaiting"] == "operator_verify"
+    assert "NOT retried" in r["last_step"]["detail"]
+    assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+
+
+def test_a_submit_that_landed_is_never_clicked_twice(monkeypatch):
+    """The retry is verified, never blind. A search that DID land changes the URL, so the second
+    click must not happen — double-spending the query is the one thing this rung cannot do."""
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _tabs(SEARCH_URL),
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
+                               "/execute": {"outcome": "ok"}},
+                              blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    clicks = [p for path, p in harness.calls
+              if path == "/execute" and p["action_id"] == "click"]
+    assert len(clicks) == 1, "the query landed on the first click — never submit it again"
+
+
 def test_missing_search_box_asks_the_operator_rather_than_flailing(monkeypatch):
     harness, _ = _install(monkeypatch,
                           {"/list_tabs": _tabs("https://www.indeed.com/"),
@@ -566,7 +814,9 @@ def test_missing_search_box_asks_the_operator_rather_than_flailing(monkeypatch):
     finally:
         _teardown()
     assert r["awaiting"] == "operator_search_box"
-    assert len([p for p in harness.paths() if p == "/execute"]) == 1  # stopped, didn't keep typing
+    # Stopped at the first field — never went on to the location box or the Search button.
+    touched = {p["target_name"] for path, p in harness.calls if path == "/execute"}
+    assert touched == {"search: Job title, keywords, or company"}
 
 
 # --- the recover branch: the whole point ------------------------------------------------------
@@ -1000,7 +1250,8 @@ def test_a_validation_error_from_execute_is_not_a_successful_action(monkeypatch)
     assert "no outcome back" in r["last_step"]["detail"]
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
     # and it stopped at the first failure rather than blindly typing the location and submitting
-    assert len([p for p in harness.paths() if p == "/execute"]) == 1
+    touched = {p["target_name"] for path, p in harness.calls if path == "/execute"}
+    assert touched == {"search: Job title, keywords, or company"}
 
 
 def test_a_failed_submit_click_does_not_claim_the_query_ran(monkeypatch):

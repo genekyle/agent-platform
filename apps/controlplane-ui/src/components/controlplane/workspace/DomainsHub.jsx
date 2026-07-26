@@ -67,7 +67,33 @@ export function DomainsHub({ onOpenDomain, tilesById, compact = false }) {
     return () => clearInterval(timer);
   }, [load]);
 
-  const byId = tilesById || fetched;
+  const rawById = tilesById || fetched;
+
+  // A GROUP CARD HAS NO TILE OF ITS OWN. The backend deliberately keeps its rollup small and
+  // emits one tile per real workspace (`indeed_jobs`), while parent/child nesting is a UI-catalog
+  // concern — so "Career Search" matched nothing and rendered the empty-state defaults: "0 active
+  // items · Idle", while a live session underneath it had a two-application queue mid-flight
+  // (2026-07-25). A card that says Idle over running work is the exact stale surface the cockpit
+  // exists to remove. Roll the children up into the parent instead.
+  const byId = { ...rawById };
+  for (const domain of DOMAIN_CATALOG) {
+    if (domain.kind !== "group" || byId[domain.id]) continue;
+    const kids = (domain.children || []).map((id) => rawById[id]).filter(Boolean);
+    if (!kids.length) continue;
+    // Worst status wins: a group is only Idle when every surface under it is.
+    const status = kids.some((k) => k.status === "attention") ? "attention"
+                 : kids.some((k) => k.status === "ready") ? "ready" : "idle";
+    const lead = kids.find((k) => k.primary?.value) || kids[0];
+    byId[domain.id] = {
+      ...lead,
+      id: domain.id,
+      status,
+      attention_count: kids.reduce((n, k) => n + (k.attention_count || 0), 0),
+      training: { to_label: kids.reduce((n, k) => n + (k.training?.to_label || 0), 0),
+                  labeled: kids.reduce((n, k) => n + (k.training?.labeled || 0), 0) },
+    };
+  }
+
   const live = DOMAIN_CATALOG.filter((domain) => !domain.provider && !domain.parent && domain.kind !== "coming_soon");
   const planned = DOMAIN_CATALOG.filter((domain) => !domain.provider && !domain.parent && domain.kind === "coming_soon");
   const grouped = PROVIDER_GROUPS.map((group) => ({
