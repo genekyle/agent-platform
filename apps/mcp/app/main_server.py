@@ -591,9 +591,39 @@ _INDEED_JOBS_JS = r"""
     const titleEl = a.querySelector('span[title]') || a;
     const title = (titleEl.getAttribute && titleEl.getAttribute('title') || titleEl.innerText || '').trim();
     const card = a.closest('li') || a.closest('.cardOutline') || a.closest('[class*=card]') || a.parentElement;
+    let company = '', location = '', salary = '';
+
+    // ASK THE CARD, DON'T INFER FROM LINE ORDER. Indeed labels these fields, and the labels are
+    // unambiguous where the heuristic below is a guess about what a line "looks like". The guess
+    // swaps them whenever a COMPANY name trips isLoc — the location test runs first, so such a
+    // company is taken as the location, and the real location then falls through to the company
+    // slot. Seen live 2026-07-25: "Equipment & Inventory Assistant" came back with company
+    // "Hybrid work in Williamstown, MA" and location "Bella Baby Photography". Company names
+    // containing ", XX" or "United States" are not rare, and neither field is checkable by eye
+    // once it is in the corpus.
+    const txt = (n) => n ? (n.innerText || '').trim() : '';
+    if (card) {
+      company = txt(card.querySelector('[data-testid="company-name"]'));
+      const locEl = card.querySelector('[data-testid="text-location"]');
+      if (locEl) {
+        // The location node swallows the commute snippet ("75 min · Hybrid work in Boston, MA").
+        // Read a clone with the commute removed rather than string-surgery on the result.
+        const c = locEl.cloneNode(true);
+        c.querySelectorAll('[data-testid="jcs-commute-snippet"]').forEach((e) => e.remove());
+        // The commute node goes, but the "·" that separated it is a bare text node beside it, so
+        // innerText joins it straight onto the location ("·Hybrid work in Boston, MA"). Strip any
+        // leading separator after picking the line.
+        location = ((c.innerText || '').split('\n').map(s => s.trim())
+                     .filter(s => s && s !== '·' && !/^\d+\s*min/i.test(s)).pop() || '')
+                   .replace(/^[·•\-\s]+/, '').trim();
+      }
+      salary = txt(card.querySelector('[data-testid*="salary-snippet"]'));
+    }
+
+    // The line scan stays as the FALLBACK — the labelled DOM is a redesign, and the old markup is
+    // still served on some routes. Only fields the labels did not answer are guessed at.
     const lines = (card ? card.innerText : '').split('\n').map(s => s.trim()).filter(Boolean);
     const ti = Math.max(0, lines.findIndex(l => l && title.startsWith(l.slice(0, 12))));
-    let company = '', location = '', salary = '';
     for (let i = ti + 1; i < lines.length; i++) {
       const l = lines[i];
       if (noise(l)) continue;
