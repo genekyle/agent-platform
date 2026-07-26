@@ -169,7 +169,11 @@ export function SessionControlPanel({ domain }) {
   const [panel, setPanel] = useState(null);
   const [form, setForm] = useState({ query: "", location: "", radius_miles: 50 });
   // Picks carry an ORDER, not just a tick — that order is the order the applications run.
-  const { picks, armed, pick, clear: clearPicks, retain: retainPicks } = useOrderedPicks();
+  // Scoped to (session, page): the draft survives clicking out of the picker, and turning the
+  // page starts a fresh one rather than inheriting the last page's choices.
+  const [pickerOpen, setPickerOpen] = useState(null);   // null = follow the default
+  const { picks, armed, pick, clear: clearPicks, retain: retainPicks } =
+    useOrderedPicks(sessionId ? `${sessionId}.${panel?.page ?? 1}` : null);
   const [note, setNote] = useState("");
   const [correcting, setCorrecting] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -228,6 +232,12 @@ export function SessionControlPanel({ domain }) {
     retainPicks((panel?.results || []).map((r) => r.job_id));
   }, [panel, retainPicks]);
 
+  // A new page is a new decision: drop any collapse the operator set on the last one.
+  const pageSeen = useRef(panel?.page);
+  useEffect(() => {
+    if (pageSeen.current !== panel?.page) { pageSeen.current = panel?.page; setPickerOpen(null); }
+  }, [panel?.page]);
+
   const call = async (path, body) => {
     setBusy(true);
     setError("");
@@ -266,6 +276,21 @@ export function SessionControlPanel({ domain }) {
   const last = p.last_step;
   const awaiting = p.awaiting;
 
+
+  // WHEN THE PICKER SHOULD BE OPEN. It is a tool for one moment — deciding this page — and
+  // afterwards it is a fifteen-row table sitting on top of the work it created. Operator,
+  // 2026-07-26: "after its initial use the menu stays at the top getting in the way of what we
+  // need to see."
+  //
+  // Default, not a rule: open while the choice is still to be made, collapsed once the page's
+  // selection rung is held. `pickerOpen` overrides it either way, so the operator can always
+  // reopen and add to the page's picks — which the STANDING select rung allows by design.
+  const selectionMade = (p.ladder || []).some((r) => r.id?.startsWith("select:") && r.status === "held");
+  // An UNSUBMITTED draft keeps it open, whatever the selection rung says. A closed picker sitting
+  // on picks nobody has taken is the "click out and lose them" anxiety with a lid on it — the
+  // draft survives now, but hiding a pending decision is still the wrong default.
+  const pickerDefaultOpen = results.length > 0 && (!selectionMade || picks.length > 0);
+  const showPicker = pickerOpen === null ? pickerDefaultOpen : pickerOpen;
 
   const queue = p.queue?.steps || [];
   const qs = p.queue_summary || { total: 0, done: 0, submitted: 0, blocks_page: false };
@@ -533,16 +558,30 @@ export function SessionControlPanel({ domain }) {
             ) : (
               <>
                 <div className="sc-picks__head">
-                  <span className="sc-picks__title">
-                    <AppIcon name="listTree" size={14} /> Pick in the order you want them applied
-                  </span>
-                  <span className="sc-picks__hint">
+                  {/* THE HEADER IS THE TOGGLE. One obvious, always-present place to open and
+                      close the picker, rather than a control that appears somewhere else — and
+                      it keeps saying how many are picked while collapsed, so a closed picker
+                      never hides a pending decision. */}
+                  <button type="button" className="sc-picks__toggle"
+                          aria-expanded={showPicker}
+                          onClick={() => setPickerOpen(!showPicker)}
+                          title={showPicker ? "Hide the picker" : "Open the picker"}>
+                    <AppIcon name={showPicker ? "chevronDown" : "chevronRight"} size={14} />
+                    <span className="sc-picks__title">
+                      Pick in the order you want them applied
+                    </span>
+                    <span className="badge badge--muted">{results.length} on this page</span>
+                    {picks.length > 0 && (
+                      <span className="badge badge--accent">{picks.length} picked</span>
+                    )}
+                  </button>
+                  {showPicker && <span className="sc-picks__hint">
                     {armed
                       ? "Now click another number to swap the two — or click the same one again to remove it."
                       : picks.length
                         ? `${picks.length} picked · click a number to pick it up and swap`
                         : "Click a circle to make it #1. They run in this order."}
-                  </span>
+                  </span>}
                   {/* PICKS ARE NOT SAVED UNTIL TAKEN. They live in this component until the
                       button below posts them, so a reload loses them — which is exactly what
                       happened: six selected, nothing on the server, and no sign of it. */}
@@ -551,14 +590,14 @@ export function SessionControlPanel({ domain }) {
                       <AppIcon name="alert" size={12} /> not saved yet
                     </span>
                   )}
-                  {picks.length > 0 && (
+                  {showPicker && picks.length > 0 && (
                     <button type="button" className="btn btn-sm" disabled={busy}
                             onClick={clearPicks} title="Clear every pick and its number">
                       Clear
                     </button>
                   )}
                 </div>
-                <table className="sc-results">
+                {showPicker && (<><table className="sc-results">
                   <thead>
                     <tr><th className="sc-results__ord">#</th><th>Role</th><th>Company</th><th>Where</th><th>Pay</th></tr>
                   </thead>
@@ -604,7 +643,7 @@ export function SessionControlPanel({ domain }) {
                     Picking a job is approval to enter its application. Nothing is submitted without
                     a separate confirmation.
                   </p>
-                </div>
+                </div></>)}
               </>
             )}
           </div>

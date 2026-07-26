@@ -1681,3 +1681,15 @@ textarea:focus-visible {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11.5px; font-weight: 600; color: var(--warning);
 }
+
+/* The picker's header doubles as its open/close control — one obvious place, always present, and
+   it keeps reporting the pick count while collapsed so a closed picker never hides a decision. */
+.sc-picks__toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: none; border: 0; padding: 2px 0; margin: 0;
+  color: var(--text); cursor: pointer; text-align: left; flex: 1 1 auto;
+}
+.sc-picks__toggle:hover { color: var(--accent-strong); }
+.sc-picks__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+.sc-picks__toggle svg { flex-shrink: 0; transition: transform 120ms ease; }
+@media (prefers-reduced-motion: reduce) { .sc-picks__toggle svg { transition: none; } }

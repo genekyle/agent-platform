@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 // Ordered picking — a checkbox that also says WHEN. The STATE half; the click target it
 // drives lives in OrderedPicks.jsx (split so Fast Refresh keeps working — a module that
@@ -42,6 +42,9 @@ function reduce(state, action) {
 
   if (action.type === "clear") return { picks: [], armed: null };
 
+  // Swap in a draft read back from storage (a scope change — turning the page).
+  if (action.type === "load") return action.state;
+
   if (action.type === "retain") {
     const live = new Set(action.jobIds);
     const kept = picks.filter((x) => live.has(x));
@@ -69,8 +72,52 @@ function reduce(state, action) {
   return { picks: next, armed: null };
 }
 
-export function useOrderedPicks() {
-  const [state, dispatch] = useReducer(reduce, { picks: [], armed: null });
+// THE DRAFT SURVIVES THE PANEL. Picks used to live only in component state, so clicking out of
+// the picker — another tab, a stray click, an unmount — silently threw away a selection the
+// operator had spent real attention on. Operator, 2026-07-26: "that menu is our selector for that
+// particular page so whatever we select needs to persist."
+//
+// Scoped to (session, page) because that is exactly what a selection IS: page 2's picks are not
+// page 1's, and reopening page 1 must show page 1's draft rather than whatever was chosen last.
+//
+// localStorage, not the server, and the line is deliberate: an unsubmitted draft is not a
+// decision yet. It becomes one — journaled, with a decider, on the `select:N` rung — the moment
+// "Take" is pressed. Persisting a draft server-side would put half-made choices in the record.
+const KEY = (scope) => `sc.picks.${scope || "none"}`;
+
+function load(scope) {
+  try {
+    const raw = window.localStorage.getItem(KEY(scope));
+    const picks = raw ? JSON.parse(raw) : [];
+    return { picks: Array.isArray(picks) ? picks.filter((x) => typeof x === "string") : [],
+             armed: null };
+  } catch {
+    return { picks: [], armed: null };   // a corrupt draft is an empty one, never a crash
+  }
+}
+
+export function useOrderedPicks(scope) {
+  const [state, dispatch] = useReducer(reduce, scope, load);
+
+  // Re-read when the scope changes — turning to page 2 must not inherit page 1's draft.
+  const seen = useRef(scope);
+  useEffect(() => {
+    if (seen.current !== scope) {
+      seen.current = scope;
+      dispatch({ type: "load", state: load(scope) });
+    }
+  }, [scope]);
+
+  // Write through on every change. Cheap (a short array of ids) and it is the whole point.
+  useEffect(() => {
+    try {
+      if (state.picks.length) {
+        window.localStorage.setItem(KEY(scope), JSON.stringify(state.picks));
+      } else {
+        window.localStorage.removeItem(KEY(scope));
+      }
+    } catch { /* a browser refusing storage must not break picking */ }
+  }, [scope, state.picks]);
 
   // `dispatch` is stable, so these never go stale and never re-make themselves.
   const pick = useCallback((jobId) => dispatch({ type: "pick", jobId }), []);
