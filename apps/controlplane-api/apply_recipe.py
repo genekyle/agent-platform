@@ -440,6 +440,65 @@ APPVAULT_ACCOUNT_LOOP = {
 APPVAULT_APPLY_RECIPE: list[dict[str, Any]] = []
 
 
+# --- iCIMS (Joslin Diabetes Center et al.) ---------------------------------------------------------
+# Mapped live 2026-07-26 on jobs-joslin.icims.com, reached from Indeed's "Apply on company site".
+# Per-employer subdomain (jobs-<tenant>.icims.com / careers-<tenant>.icims.com), often behind the
+# employer's own branded wrapper.
+#
+# THE ONE THING TO KNOW ABOUT iCIMS: THE PAGE IS TWO DOCUMENTS. The employer's wrapper carries the
+# nav, the footer and a newsletter box; `#icims_content_iframe` carries the job and the ENTIRE apply
+# flow. Same-origin, so role+name addressing crosses it — but anything that reads, measures or
+# matches on the TOP document alone is looking at the hospital's homepage (this cost us three
+# separate bugs on the first drive; see docs/LEARNINGS.md 2026-07-26).
+#
+# AND: THE ACCOUNT IS NOT A SEPARATE WALL. Step 1 of 4 creates the profile and starts the
+# application on one form, behind one "Submit Profile" — so a generic "get past the account gate,
+# then begin the application" shape does not fit iCIMS at all.
+ICIMS_CREATE_PROFILE_RECIPE = [
+    {"step": 0, "state": "icims_email_gate",
+     "action": "the job's Apply asks for an email address first; submitting it issues an `eem` "
+               "token and lands on Basic Information (URL gains ?from=login&eem=...).",
+     "expect": ["icims_create_account"]},
+    {"step": 1, "state": "icims_create_account",
+     "action": "Basic Information (step 1 of 4) — fill First Name, Last Name, Email, Login "
+               "(same address as Email), Password and Password (Re-enter), then Submit Profile. "
+               "The resume upload and the social-SSO buttons are ALTERNATIVE profile PREFILLS, not "
+               "required fields — none of them is starred. hCaptcha sits on this form: check it "
+               "before submitting and escalate if it is live. NEVER auto-solve.",
+     "fields": "apply_fields.ICIMS_FIELDS (addressed by role+name — a selector cannot reach into "
+               "#icims_content_iframe)",
+     "password_rules": "min 8 chars, ≥1 alphabetic, ≥1 lower, ≥1 upper, ≥1 numeric, ≥1 special",
+     "submit": {"role": "button", "name": "Submit Profile"},
+     "expect": ["icims_candidate_profile", "icims_create_account", "icims_verify_email"]},
+]
+
+#: The application's own spine, from the stepper read live. Steps 2-4 are UNDRIVEN — the shape is
+#: recorded (it is what the stepper says), the contents are not yet observed. Seed each one from the
+#: first capture that reaches it rather than guessing its fields now.
+ICIMS_APPLY_RECIPE = [
+    {"step": 1, "state": "icims_create_account", "action": "Basic Information — see "
+     "ICIMS_CREATE_PROFILE_RECIPE (account + application, one form)"},
+    {"step": 2, "state": "icims_candidate_profile", "action": "Candidate Profile (2 of 4) — UNDRIVEN"},
+    {"step": 3, "state": "icims_eeo", "action": "EEO (3 of 4) — UNDRIVEN. Operator preference: "
+     "decline demographics/EEO."},
+    {"step": 4, "state": "icims_portal_forms", "action": "Portal Specific Forms (4 of 4) — UNDRIVEN. "
+     "The application's real Submit lives at the end of this step; operator confirms it."},
+]
+
+ICIMS_ACCOUNT_LOOP = {
+    "needs_creation": {"state": "icims_create_account", "recipe": "ICIMS_CREATE_PROFILE_RECIPE",
+                       "button": "Submit Profile"},
+    "created": {"state": "icims_login", "recipe": None,
+                "button": "Log back in!",
+                "note": "the returning-candidate link sits in the FRAME's header on every page of "
+                        "the flow — its presence is NOT evidence of an account wall (it read as "
+                        "one to a strict-precedence classifier)"},
+    "then": "continue the same form's flow: Candidate Profile → EEO → Portal Specific Forms",
+    "runs_as": "the apply ladder's `account` rung, automated by default (mode=auto); a captcha or "
+               "an email/2FA prompt escalates",
+}
+
+
 
 # --- GREENHOUSE (KKR et al.) -----------------------------------------------------------------------
 # The second ATS we drive, and the FIRST with NO ACCOUNT WALL — a Greenhouse application is one
@@ -770,6 +829,12 @@ def recipe_spec() -> dict[str, Any]:
                          "detect": "apply-destination host matches *apply.appvault.com, reached via a "
                                    "careers front (careerswithus.com) 'APPLY NOW' link; record the "
                                    "company→appvault mapping from the applystart feed"},
+            "icims": {"recipe": ICIMS_APPLY_RECIPE,
+                      "account_loop": ICIMS_ACCOUNT_LOOP,
+                      "create_account_recipe": ICIMS_CREATE_PROFILE_RECIPE,
+                      "detect": "host matches jobs-/careers-<tenant>.icims.com, OR an employer "
+                                "wrapper embedding #icims_content_iframe. READ THE FRAME, not the "
+                                "top document — the wrapper is the employer's marketing site"},
         },
         "teachable": "states = page_state_registry indeed_apply_* ; transitions = the "
                      "state_transition model learns from captured observed->post_action data. "

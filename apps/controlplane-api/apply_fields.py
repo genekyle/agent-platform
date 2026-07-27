@@ -201,10 +201,67 @@ INDEED_FIELDS: dict[str, dict[str, Any]] = {
                         "be confirmed from inside the page — confirm from the URL."),
 }
 
+# --- iCIMS --------------------------------------------------------------------------
+# Transcribed from the live AX scan of jobs-joslin.icims.com 2026-07-26 ("Basic Information",
+# step 1 of 4). Two properties make iCIMS unlike every ATS above, and both are load-bearing:
+#
+#  * THE FORM LIVES INSIDE `#icims_content_iframe` on the employer's branded wrapper. Role+name
+#    addressing crosses that frame (the AX scan flattens frames); a CSS selector does NOT
+#    (`_resolve_node_by_selector` runs `DOM.querySelector` on the top document alone). So every
+#    entry here is addressed by role+name — deliberately, not by preference. An unscoped selector
+#    or a loose name match reaches the WRAPPER first: the hospital's newsletter box is also a
+#    `textbox` and its name is "Enter your email address here", which is why the field below is
+#    the exact name "Email" and nothing looser.
+#  * STEP 1 IS THE ACCOUNT AND THE APPLICATION AT ONCE. There is no separate create-account page:
+#    name, email, login, password and the resume sit on one form behind one "Submit Profile".
+#    `create_account_submit` is therefore also the application's first commit — which is why the
+#    account rung on iCIMS cannot be "get past the wall, then start the form".
+#
+# The password fields carry the site's own rule in their accessible name (min 8, 1 alphabetic,
+# 1 lower, 1 upper, 1 numeric, 1 special). Kept verbatim: it is the exact-match target AND the
+# constraint any generated credential must satisfy.
+_ICIMS_PW_RULE = ("Minimum 8 characters, 1 alphabetic, 1 lowercase, 1 uppercase, 1 numeric, "
+                  "1 special character(s)")
+
+ICIMS_FIELDS: dict[str, dict[str, Any]] = {
+    "first_name": _f(ats="icims", role="textbox", name="First Name",
+                     widget_type=WidgetType.TEXT, answer_key="first_name"),
+    "last_name": _f(ats="icims", role="textbox", name="Last Name",
+                    widget_type=WidgetType.TEXT, answer_key="last_name"),
+    "email": _f(ats="icims", role="textbox", name="Email", widget_type=WidgetType.TEXT,
+                answer_key="email",
+                note="EXACT name. The branded wrapper's newsletter box ('Enter your email address "
+                     "here') is the first email textbox in document order — a substring match on "
+                     "'email' typed the operator's address into the hospital mailing list."),
+    # iCIMS wants a username SEPARATE from the email. We put the same address in both: one
+    # credential to remember, and the account convention is already "one shared address".
+    "login": _f(ats="icims", role="textbox", name="Login", widget_type=WidgetType.TEXT,
+                answer_key="email", note="the account's USERNAME, distinct from the email field"),
+    "password": _f(ats="icims", role="textbox", name=f"Password: {_ICIMS_PW_RULE}",
+                   widget_type=WidgetType.TEXT),
+    "verify_password": _f(ats="icims", role="textbox",
+                          name=f"Password (Re-enter): {_ICIMS_PW_RULE}",
+                          widget_type=WidgetType.TEXT),
+    "resume": _f(ats="icims", role="button",
+                 name="My Computer (Opens new window) Or please select your resume from one of "
+                      "the following:",
+                 widget_type=WidgetType.FILE, optional=True,
+                 note="NOT starred on the form — the resume is a profile PREFILL alternative to "
+                      "the social-SSO buttons, not a required field of step 1. The control is a "
+                      "button parked off-screen (x=-3833) fronting a file input; treat it as FILE "
+                      "and set files on the input rather than clicking (a click opens an OS "
+                      "dialog CDP cannot drive)."),
+    "create_account_submit": _f(ats="icims", role="button", name="Submit Profile",
+                                widget_type=WidgetType.UNKNOWN,
+                                note="creates the account AND commits step 1 of 4. Not the "
+                                     "application's final Submit — that is step 4."),
+}
+
 _BY_ATS: dict[str, dict[str, dict[str, Any]]] = {
     "greenhouse": GREENHOUSE_FIELDS,
     "workday": WORKDAY_FIELDS,
     "indeed": INDEED_FIELDS,
+    "icims": ICIMS_FIELDS,
 }
 
 

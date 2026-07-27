@@ -135,7 +135,17 @@ def next_account_action(company: str, ats_id: str) -> dict[str, Any]:
     recipes = {"workday": {"create_account": "WORKDAY_CREATE_ACCOUNT_RECIPE",
                            "sign_in": "WORKDAY_SIGN_IN_RECIPE"},
                "appvault": {"create_account": "APPVAULT_CREATE_ACCOUNT_RECIPE",
-                            "sign_in": "APPVAULT_SIGN_IN_RECIPE"}}
+                            "sign_in": "APPVAULT_SIGN_IN_RECIPE"},
+               # iCIMS has no sign-in RECIPE yet — the returning-candidate leg has not been
+               # driven. Absent rather than pointed at the create recipe: a leg we have not
+               # walked should read as unknown, not as covered.
+               "icims": {"create_account": "ICIMS_CREATE_PROFILE_RECIPE"}}
+    # The BUTTON is the ATS's own words, and a wrong label here becomes a wrong instruction in the
+    # operator's handoff card. iCIMS says "Submit Profile" (it creates the account and commits step
+    # 1 of the application at once) and "Log back in!"; the Workday-flavoured pair is the default
+    # only because it is the most common, not because it is generic.
+    buttons = {"icims": ("Submit Profile", "Log back in!")}
+    create_button, signin_button = buttons.get(ats_id, ("Create Account", "Sign In"))
     return {
         "company": company,
         "ats_id": ats_id,
@@ -144,7 +154,7 @@ def next_account_action(company: str, ats_id: str) -> dict[str, Any]:
         "leg": leg,                                  # create_account | sign_in
         "state": f"{ats_id}_{leg}",
         "recipe": recipes.get(ats_id, {}).get(leg),  # None if this ATS has no recipe yet
-        "button": "Sign In" if created else "Create Account",
+        "button": signin_button if created else create_button,
         "credentials": suggested_credentials(company, ats_id),
         "next": "hand to the apply spine (e.g. WORKDAY_APPLY_RECIPE) once authenticated",
         "note": "One loop, run by the operator/Account Manager — the agent never enters the creds.",

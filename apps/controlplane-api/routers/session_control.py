@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+import apply_fields
 import apply_steps as aps
 import execution_style as xs
 import session_checkpoints as cps
@@ -923,16 +924,46 @@ _ACCOUNT_VERIFY_MARKERS = ("verification code", "verify your email", "check your
                            "enter the code", "one-time", "two-step", "two-factor", "authenticator")
 
 
+#: WHICH fields a create-account form has, per ATS, and where each value comes from. The
+#: ADDRESSING is not here — it is in `apply_fields`, resolved by (ats, field), because a second
+#: place that says where a field lives is a second place that can be wrong about it.
+#:
+#: This table exists because the driver below used to BE Workday: three hardcoded accessible names
+#: and a "Create Account" button. iCIMS wants six fields, calls the button "Submit Profile", and
+#: puts a username field beside the email — so the first genuinely different ATS could not be
+#: driven at all, which is the reverse of what a recipe system is for.
+_CREATE_ACCOUNT_FORM: dict[str, dict[str, Any]] = {
+    "workday": {
+        "fields": (("email", "username"), ("password", "password"),
+                   ("verify_password", "password")),
+        "submit": "create_account_submit",
+    },
+    "icims": {
+        # Step 1 of 4 IS the account form: identity and credential on one page (see ICIMS_FIELDS).
+        "fields": (("first_name", "first_name"), ("last_name", "last_name"),
+                   ("email", "username"), ("login", "username"),
+                   ("password", "password"), ("verify_password", "password")),
+        "submit": "create_account_submit",
+    },
+}
+
+
 async def _drive_create_account(browser_url: str, tab_id: str, creds: dict, *,
-                                submit: bool) -> dict[str, Any]:
-    """Fill (and optionally submit) a Workday-style create-account form.
+                                ats: str, submit: bool) -> dict[str, Any]:
+    """Fill (and optionally submit) this ATS's create-account form.
 
     Credential-safe by construction: fields are addressed by their exact accessible name, so the
     honeypot ("Enter website. This input is for robots only") is never touched; the password value
     flows only into /execute, which logs the target NAME, never the value; and nothing here writes
     the password to an event or a mini-step. Human-paced even in auto mode — speed is not what makes
     an account legitimate, and the captcha rule is unchanged.
+
+    An ATS with no entry in `_CREATE_ACCOUNT_FORM` is refused BY NAME rather than driven on
+    Workday's field names and left to fail as "could not fill 'Email Address'" — an unmapped
+    platform and a moved field are different problems and only one of them is a stale recipe.
     """
+    import ats_accounts
+
     username = creds.get("username") or ""
     password = creds.get("suggested_password") or ""
     if not username or not password:
@@ -940,56 +971,85 @@ async def _drive_create_account(browser_url: str, tab_id: str, creds: dict, *,
                 "detail": "No username or generated password available (is ATS_ACCOUNT_PW_SUFFIX "
                           "configured?). Cannot fill the form."}
 
+    form = _CREATE_ACCOUNT_FORM.get((ats or "").strip().lower())
+    if form is None:
+        return {"ok": False, "reason": "no_form_recipe",
+                "detail": f"No create-account form mapped for {ats!r} (mapped: "
+                          f"{', '.join(sorted(_CREATE_ACCOUNT_FORM))}). Scan the form and add it to "
+                          f"apply_fields + _CREATE_ACCOUNT_FORM — do not drive it blind."}
+
+    values = {"username": username, "password": password,
+              "first_name": ats_accounts.default_first_name(),
+              "last_name": ats_accounts.default_last_name()}
+
     style = xs.pick_style()
 
-    async def _type(name: str, value: str) -> dict:
-        res = await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
-            "target_bbox": {}, "target_role": "textbox", "target_name": name,
-            "value": value, "driver": "humanized"})
+    async def _fill(field: str, value: str) -> dict:
+        addr = apply_fields.addressing_for(ats, field)
+        payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
+                   "target_bbox": {}, "value": value, "driver": "humanized"}
+        if addr["addressed_by"] == apply_fields.ADDRESSED_BY_SELECTOR:
+            payload["selector"] = addr["selector"]
+        else:
+            payload["target_role"], payload["target_name"] = addr["role"], addr["name"]
+        res = await _capture_post("/execute", payload)
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         return res
 
-    for name, value in (("Email Address", username), ("Password", password),
-                        ("Verify New Password", password)):
-        r = await _type(name, value)
+    for field, source in form["fields"]:
+        value = values.get(source) or ""
+        if not value:
+            # A blank identity is a missing .env value, not a field to leave empty on a real
+            # application — say which one, and stop before submitting a half-formed profile.
+            return {"ok": False, "reason": "no_value",
+                    "detail": f"No value for {field!r} (source {source!r}) — set "
+                              f"ATS_ACCOUNT_{source.upper()} in .env. Nothing was submitted."}
+        r = await _fill(field, value)
         if r.get("outcome") not in ("ok", "committed_unconfirmed"):
             return {"ok": False, "reason": "fill_failed",
-                    "detail": f"Could not fill {name!r} ({r.get('outcome') or r.get('detail')})."}
+                    "detail": f"Could not fill {field!r} ({r.get('outcome') or r.get('detail')})."}
 
+    submit_addr = apply_fields.addressing_for(ats, form["submit"])
+    button = submit_addr["name"] or submit_addr["selector"]
     if not submit:
-        return {"ok": True, "submitted": False,
-                "detail": "Filled the create-account form. Confirm to click Create Account."}
+        return {"ok": True, "submitted": False, "button": button,
+                "detail": f"Filled the create-account form. Confirm to click {button!r}."}
 
-    click = await _capture_post("/execute", {
-        "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
-        "target_bbox": {}, "target_role": "button", "target_name": "Create Account",
-        "driver": "humanized"})
+    click_payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+                     "target_bbox": {}, "driver": "humanized"}
+    if submit_addr["addressed_by"] == apply_fields.ADDRESSED_BY_SELECTOR:
+        click_payload["selector"] = submit_addr["selector"]
+    else:
+        click_payload["target_role"] = submit_addr["role"]
+        click_payload["target_name"] = submit_addr["name"]
+    click = await _capture_post("/execute", click_payload)
     await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
     if click.get("outcome") not in ("ok", "committed_unconfirmed"):
         return {"ok": False, "reason": "submit_failed",
-                "detail": f"Filled the form but could not click Create Account "
+                "detail": f"Filled the form but could not click {button!r} "
                           f"({click.get('outcome') or click.get('detail')})."}
-    return {"ok": True, "submitted": True, "detail": "Submitted the create-account form."}
+    return {"ok": True, "submitted": True, "button": button,
+            "detail": f"Submitted the create-account form ({button!r})."}
 
 
 @router.post("/api/session_control/{session_id}/apply_account")
 async def apply_account(session_id: int, body: ApplyAccountBody,
                         db: Session = Depends(get_db)) -> dict[str, Any]:
-    """The account-creation HANDOFF — the wall predicted for a no-account Workday apply.
+    """The account rung — get past the ATS's identity wall so the application can continue.
 
-    THE BOUNDARY IS ABSOLUTE AND IT IS THE WHOLE POINT OF THIS ENDPOINT. The agent never types a
-    password, never fills the create-account form, never clicks Create Account. What it does is
-    everything AROUND that: register the company↔ATS account record, derive the credentials the
-    operator should use, and hand them over — then the operator types them and creates the account
-    themselves. This is the pause-at-creation pattern the accounts system was built for
-    (`ats_accounts`, which states in its own code that the agent does not enter the creds).
+    THE DEFAULT IS AUTOMATED (`mode="auto"`, operator's call 2026-07-24). This is the operator's
+    own account, for their own job search, on their own machine: a generalizable local task, and
+    gating it behind a manual handoff every time was MY caution hardcoded as their architecture.
+    What still stops the machine are the REAL gates, and only those — a CAPTCHA (never auto-solved,
+    on any form) and an email/2FA verification code (not ours to fabricate). `mode="fill"` fills but
+    leaves the outward-facing click to the operator; `mode="handoff"` types nothing and surfaces the
+    credentials instead. Whatever the mode, the password value flows only into /execute, which
+    records the target NAME and never the value.
 
-    Account creation is NOT a terminal park here — it is a handoff that RESUMES. The step stays
-    open, marked human_required, until the operator has made the account; then `mark_created=True`
-    flips it active and the application continues to My Information. (Parking is still available via
-    apply_flag for a company the operator does not want an account with — this is the other leg:
-    "help me make it and keep going".)
+    Account creation is NOT a terminal park here — it RESUMES. The step stays open until the account
+    exists (marked human_required while it waits on the operator in the handoff mode); then the
+    application continues into the ATS's own first step. (Parking is still available via apply_flag
+    for a company the operator does not want an account with.)
     """
     _check_initiator(body.initiator)
     import ats_accounts
@@ -1049,7 +1109,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                "detail": "A challenge is up on the signup form — clear it yourself. "
                                          "We never auto-solve, on any form."})
         tab_id = _apply_tab(bb, obs).get("tab_id", "")
-        drive = await _drive_create_account(browser_url, tab_id, creds,
+        drive = await _drive_create_account(browser_url, tab_id, creds, ats=step.platform,
                                             submit=(body.mode == "auto"))
         if not drive.get("ok"):
             step.record("account_create", aps.FAILED, drive.get("detail", "")[:200],
