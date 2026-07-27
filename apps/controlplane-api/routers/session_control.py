@@ -915,6 +915,16 @@ class ApplyAccountBody(BaseModel):
     mark_created: bool = False     # completes the "handoff" leg once the operator has made it
 
 
+#: THE RUNG THIS ENDPOINT WALKS. It must be the ladder's own id (`apply_steps.PREFIX`), because a
+#: rung is settled by NAME: `next_rung` looks for a mini-step whose `rung` is one of the prefix ids.
+#: This endpoint used to record its legs under their own names — account_create, account_handoff,
+#: account_created, account_verify — none of which is `account`, so the ladder asked for the account
+#: rung again after the account had been made, forever. That is the same failure classify had
+#: (5b596c2): a rung that reports its OUTCOME instead of ANSWERING ITSELF never settles, and the
+#: platforms worth driving are exactly the ones that get stuck on it. The leg now lives in the
+#: detail, where it is still legible and no longer load-bearing.
+_ACCOUNT_RUNG = "account"
+
 #: The genuinely-hard gates inside account creation. These are NOT the manual-handoff boundary —
 #: they are real external gates that no automation may cross: a CAPTCHA cannot be auto-solved
 #: (the project's standing rule), and an email/2FA verification code is not ours to fabricate. When
@@ -1072,8 +1082,8 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         res = ats_accounts.mark_created(company, step.platform)
         if not res.get("ok"):
             raise HTTPException(status_code=409, detail=res.get("detail", "could not mark created"))
-        step.record("account_created", aps.OK,
-                    f"{company} {step.platform} account created by the operator",
+        step.record(_ACCOUNT_RUNG, aps.OK,
+                    f"handoff leg: {company} {step.platform} account created by the operator",
                     initiator=body.initiator)
         _save_queue(bb, queue)
         bb.world.pop("account_handoff", None)   # the handoff is resolved
@@ -1100,7 +1110,8 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         obs = await _observe(browser_url, bb.search_state.query)
         block = obs.get("block")
         if block and block.get("strength") == "active":
-            step.record("account_create", aps.BLOCKED, f"active {block.get('provider')} on signup",
+            step.record(_ACCOUNT_RUNG, aps.BLOCKED,
+                        f"create leg: active {block.get('provider')} on signup",
                         initiator=body.initiator)
             _save_queue(bb, queue); _persist(bb, ledger)
             return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
@@ -1112,7 +1123,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         drive = await _drive_create_account(browser_url, tab_id, creds, ats=step.platform,
                                             submit=(body.mode == "auto"))
         if not drive.get("ok"):
-            step.record("account_create", aps.FAILED, drive.get("detail", "")[:200],
+            step.record(_ACCOUNT_RUNG, aps.FAILED, f"create leg: {drive.get('detail', '')}"[:200],
                         initiator=body.initiator)
             _save_queue(bb, queue); _persist(bb, ledger)
             obs2 = await _observe(browser_url, bb.search_state.query)
@@ -1121,7 +1132,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                "detail": drive.get("detail")})
 
         if not drive.get("submitted"):
-            step.record("account_create", aps.OK, "filled the create-account form (not submitted)",
+            step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
+                        f"create leg: filled the form, awaiting the operator's "
+                        f"{drive.get('button') or 'submit'!r} click",
                         initiator=body.initiator)
             _save_queue(bb, queue); _persist(bb, ledger)
             obs2 = await _observe(browser_url, bb.search_state.query)
@@ -1138,8 +1151,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         text = (str(after.get("page_text") or "")
                 + " ".join(c.get("name", "") for c in (after.get("candidates") or []))).lower()
         if any(m in text for m in _ACCOUNT_VERIFY_MARKERS):
-            step.record("account_verify", aps.HUMAN_REQUIRED,
-                        "signup needs an email/2FA verification code — a real gate, escalated",
+            step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
+                        "verify leg: signup needs an email/2FA verification code — a real gate, "
+                        "escalated",
                         initiator=body.initiator)
             _save_queue(bb, queue); _persist(bb, ledger)
             obs2 = await _observe(browser_url, bb.search_state.query)
@@ -1151,8 +1165,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                          "(a Gmail errand we can automate next), then continue."})
 
         ats_accounts.mark_created(company, step.platform)
-        step.record("account_create", aps.OK,
-                    f"created the {company} {step.platform} account automatically", initiator="auto")
+        step.record(_ACCOUNT_RUNG, aps.OK,
+                    f"create leg: created the {company} {step.platform} account automatically",
+                    initiator="auto")
         bb.world.pop("account_handoff", None)
         _save_queue(bb, queue)
         bb.log("account_create", f"{company} {step.platform}: account created automatically")
@@ -1163,8 +1178,8 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                            "detail": f"Created the {company} account automatically. The "
                                      f"application can continue — orient, then the form."})
 
-    step.record("account_handoff", aps.HUMAN_REQUIRED,
-                f"{action.get('leg')} {company} {step.platform}: operator creates it "
+    step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
+                f"{action.get('leg')} leg: {company} {step.platform}, operator creates it "
                 f"(button {action.get('button')!r})",
                 initiator=body.initiator)
     _save_queue(bb, queue)

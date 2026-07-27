@@ -2008,6 +2008,13 @@ def _wd_at_wall():
     return bb
 
 
+
+def _settled(step) -> set:
+    """The rungs this step counts as walked — mirroring `ApplyStep.next_rung`'s own rule. Asserting
+    on this rather than on `next_rung()` keeps these tests about the ACCOUNT rung: a fixture that
+    never walked `classify` would otherwise make every one of them pass for the wrong reason."""
+    return {m.rung for m in step.minis if m.outcome in (aps.OK, aps.SKIPPED)}
+
 def test_account_handoff_surfaces_credentials_and_never_drives(monkeypatch):
     """THE boundary. The agent registers the account and hands the operator the credentials to
     type; it never enters a password or creates the account. No /execute, ever."""
@@ -2026,7 +2033,10 @@ def test_account_handoff_surfaces_credentials_and_never_drives(monkeypatch):
     assert r["awaiting"] == "operator_account"
     assert "/execute" not in harness.paths()     # nothing was driven
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
-    assert step.minis[-1].rung == "account_handoff"
+    # The rung is the LADDER's id, always — the leg lives in the detail. A leg name here would
+    # leave `account` unsettled forever (see _ACCOUNT_RUNG).
+    assert step.minis[-1].rung == "account"
+    assert "create_account leg" in step.minis[-1].detail
     assert step.minis[-1].outcome == aps.HUMAN_REQUIRED
     assert step.needs_operator() is True         # paused for the operator
 
@@ -2063,7 +2073,9 @@ def test_account_handoff_is_a_resume_not_a_terminal_park(monkeypatch):
         _teardown()
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert step.done is False                     # NOT terminated
-    assert any(m.rung == "account_created" and m.outcome == aps.OK for m in step.minis)
+    assert any(m.rung == "account" and m.outcome == aps.OK and "handoff leg" in m.detail
+               for m in step.minis)
+    assert _settled(step) >= {"account"}           # and the rung is SETTLED: the ladder moves on
     assert "continue" in r["last_step"]["detail"]
 
 
@@ -2141,7 +2153,9 @@ def test_account_creation_is_automated_by_default(monkeypatch):
     assert typed == ["Email Address", "Password", "Verify New Password"]
     assert r["last_step"]["ok"] is True and "automatically" in r["last_step"]["detail"]
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
-    assert any(m.rung == "account_create" and m.outcome == aps.OK for m in step.minis)
+    assert any(m.rung == "account" and m.outcome == aps.OK and "create leg" in m.detail
+               for m in step.minis)
+    assert _settled(step) >= {"account"}           # settled, so the ladder stops re-asking for it
 
 
 def test_the_password_value_never_reaches_a_log_or_a_mini_step(monkeypatch):
@@ -2237,7 +2251,9 @@ def test_an_email_verification_wall_escalates_after_submit(monkeypatch):
         _teardown()
     assert r["awaiting"] == "operator_verify"
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
-    assert any(m.rung == "account_verify" and m.outcome == aps.HUMAN_REQUIRED for m in step.minis)
+    assert any(m.rung == "account" and m.outcome == aps.HUMAN_REQUIRED and "verify leg" in m.detail
+               for m in step.minis)
+    assert "account" not in _settled(step)         # a real gate does NOT settle the rung
 
 
 def test_handoff_mode_still_available_for_a_manual_creation(monkeypatch):
