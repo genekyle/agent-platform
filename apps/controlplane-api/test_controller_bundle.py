@@ -148,3 +148,33 @@ def test_unknown_state_is_none_not_the_string_unknown():
     b = build_bundle("indeed_apply", "https://example.com/random")
     assert b.state is None
     assert "state: (unknown)" in bundle_to_prompt(b)
+
+
+def test_a_bundle_nobody_asked_about_applied_renders_identically():
+    """Silence is the normal case and must stay byte-for-byte silent, so every bundle journaled
+    before this field existed still produces the same prompt and the replay evals stay comparable."""
+    from interaction.decision import bundle_to_prompt
+    base = build_bundle("apply", "https://x.wd1.myworkdayjobs.com/job/1", "My Information")
+    asked_and_no = build_bundle("apply", "https://x.wd1.myworkdayjobs.com/job/1", "My Information",
+                                applied={"status": "not_applied", "matched_on": ""})
+    assert bundle_to_prompt(base) == bundle_to_prompt(asked_and_no)
+    assert "# APPLIED" not in bundle_to_prompt(base)
+
+
+def test_an_application_on_file_reaches_the_reasoner():
+    """Unlike staleness, this is a fact out of our own database, and it changes what the right
+    next action IS — there is no good next move on a job we have already applied to."""
+    from interaction.decision import bundle_to_prompt
+    b = build_bundle("apply", "https://x.wd1.myworkdayjobs.com/job/1", "My Information",
+                     applied={"status": "applied", "matched_on": "requisition",
+                              "applied_at": "2026-07-27T01:50:00+00:00"})
+    prompt = bundle_to_prompt(b)
+    assert "# APPLIED" in prompt
+    assert "ALREADY APPLIED (matched on requisition, 2026-07-27) — do not apply again" in prompt
+
+
+def test_a_fuzzy_match_reads_as_a_question_not_a_verdict():
+    from interaction.decision import bundle_to_prompt
+    b = build_bundle("apply", "https://x.wd1.myworkdayjobs.com/job/1", "My Information",
+                     applied={"status": "likely_applied", "matched_on": "company_title"})
+    assert "worth checking before applying" in bundle_to_prompt(b)

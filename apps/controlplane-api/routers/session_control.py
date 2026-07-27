@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
@@ -37,12 +37,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+import applied_index
 import apply_fields
 import apply_steps as aps
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
-from models import TrainingSession
+from models import ObservedJob, TrainingSession
 from settings import settings
 
 router = APIRouter()
@@ -319,6 +320,14 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # pane had plainly reported `company_site`. Fabricated evidence is worse than none: it
         # lands in the corpus looking exactly like the real thing.
         "open_pane": (bb.world or {}).get("open_pane"),
+        # What the WINDOW did since the last crank. The apply stage opens tabs on its own (an
+        # employer landing, then the ATS), so "nothing changed" has to be something the drive can
+        # actually see rather than assume.
+        "tab_drift": (bb.world or {}).get("tab_drift"),
+        # Whether the DATABASE already holds an application for the job in hand. Part of the
+        # context every proposal is made against: "have we been here before" is a question the
+        # reasoner should never have to spend a drive answering.
+        "applied_check": (bb.world or {}).get("applied_check"),
         "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
         "awaiting": awaiting,
         "last_step": last,
@@ -836,10 +845,20 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     new_count, dup_count = upsert_observed_jobs(db, cards, engine["platform"], bb.search_state.query)
     db.commit()
 
+    # THE APPLIED CHECK, AT SCAN TIME. One query for the whole page, so every card arrives already
+    # knowing whether the database has an application on file for it — by id, by requisition, or
+    # (as a warning only) by employer + role. Asking here is what stops a drive from rediscovering
+    # the answer six steps into an ATS, which is exactly how this page's own BIDMC pick was spent.
+    applied = applied_index.check_many(db, cards, platform=engine["platform"])
+
     results = [{"job_id": f"{engine['platform']}:{c.get('external_id')}", "external_id": c.get("external_id"),
                 "title": c.get("title"), "company": c.get("company"),
                 "location": c.get("location"), "salary": c.get("salary"),
-                "url": c.get("url")} for c in cards if c.get("external_id")]
+                "url": c.get("url"),
+                "applied": (applied.get(c.get("external_id")) or applied_index.AppliedVerdict()
+                            ).as_dict()} for c in cards if c.get("external_id")]
+    already = sum(1 for r in results if r["applied"]["status"] == applied_index.STATUS_APPLIED)
+    maybe = sum(1 for r in results if r["applied"]["status"] == applied_index.STATUS_LIKELY)
     bb.search_state.page = page
     bb.search_state.observed_count = (bb.search_state.observed_count or 0) + len(results)
     bb.world = dict(bb.world or {})
@@ -847,8 +866,12 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     bb.log("review", f"page {page}: {len(results)} results ({new_count} new, {dup_count} seen before)")
     return {"ok": True, "action": "review_page", "page": page, "results": results,
             "awaiting": "choose",
+            "applied_summary": {"applied": already, "likely": maybe},
             "detail": f"Page {page}: {len(results)} results — {new_count} new, "
-                      f"{dup_count} already seen. Choose what to do with them."}
+                      f"{dup_count} already seen"
+                      + (f", {already} ALREADY APPLIED" if already else "")
+                      + (f", {maybe} possibly applied (worth a look)" if maybe else "")
+                      + ". Choose what to do with them."}
 
 
 # --- login: a step the system owns, up to the secret ------------------------------------------
@@ -1001,25 +1024,38 @@ _ACCOUNT_VERIFY_MARKERS = ("verification code", "verify your email", "check your
 #: and a "Create Account" button. iCIMS wants six fields, calls the button "Submit Profile", and
 #: puts a username field beside the email — so the first genuinely different ATS could not be
 #: driven at all, which is the reverse of what a recipe system is for.
-_CREATE_ACCOUNT_FORM: dict[str, dict[str, Any]] = {
-    "workday": {
-        "fields": (("email", "username"), ("password", "password"),
-                   ("verify_password", "password")),
-        "submit": "create_account_submit",
+#: Keyed by LEG then ATS. Signing in was the missing half: the system could CREATE an account by
+#: typing a generated password and then could not USE it, because only the create leg was wired —
+#: so an ATS we already had an active account for still stopped at a manual handoff. Nothing about
+#: the operator's directive distinguishes the two (their account, their machine, their job search);
+#: the gates that hold are the same ones either way, a captcha or a verification code.
+_ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
+    "create_account": {
+        "workday": {
+            "fields": (("email", "username"), ("password", "password"),
+                       ("verify_password", "password")),
+            "submit": "create_account_submit",
+        },
+        "icims": {
+            # Step 1 of 4 IS the account form: identity and credential on one page (ICIMS_FIELDS).
+            "fields": (("first_name", "first_name"), ("last_name", "last_name"),
+                       ("email", "username"), ("login", "username"),
+                       ("password", "password"), ("verify_password", "password")),
+            "submit": "create_account_submit",
+        },
     },
-    "icims": {
-        # Step 1 of 4 IS the account form: identity and credential on one page (see ICIMS_FIELDS).
-        "fields": (("first_name", "first_name"), ("last_name", "last_name"),
-                   ("email", "username"), ("login", "username"),
-                   ("password", "password"), ("verify_password", "password")),
-        "submit": "create_account_submit",
+    "sign_in": {
+        "workday": {
+            "fields": (("email", "username"), ("password", "password")),
+            "submit": "sign_in_submit",
+        },
     },
 }
 
 
-async def _drive_create_account(browser_url: str, tab_id: str, creds: dict, *,
-                                ats: str, submit: bool) -> dict[str, Any]:
-    """Fill (and optionally submit) this ATS's create-account form.
+async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
+                              ats: str, leg: str, submit: bool) -> dict[str, Any]:
+    """Fill (and optionally submit) this ATS's account form for `leg` — create_account or sign_in.
 
     Credential-safe by construction: fields are addressed by their exact accessible name, so the
     honeypot ("Enter website. This input is for robots only") is never touched; the password value
@@ -1040,12 +1076,13 @@ async def _drive_create_account(browser_url: str, tab_id: str, creds: dict, *,
                 "detail": "No username or generated password available (is ATS_ACCOUNT_PW_SUFFIX "
                           "configured?). Cannot fill the form."}
 
-    form = _CREATE_ACCOUNT_FORM.get((ats or "").strip().lower())
+    by_ats = _ACCOUNT_FORMS.get((leg or "").strip().lower()) or {}
+    form = by_ats.get((ats or "").strip().lower())
     if form is None:
         return {"ok": False, "reason": "no_form_recipe",
-                "detail": f"No create-account form mapped for {ats!r} (mapped: "
-                          f"{', '.join(sorted(_CREATE_ACCOUNT_FORM))}). Scan the form and add it to "
-                          f"apply_fields + _CREATE_ACCOUNT_FORM — do not drive it blind."}
+                "detail": f"No {leg} form mapped for {ats!r} (mapped: "
+                          f"{', '.join(sorted(by_ats)) or 'none'}). Scan the form and add it to "
+                          f"apply_fields + _ACCOUNT_FORMS — do not drive it blind."}
 
     values = {"username": username, "password": password,
               "first_name": ats_accounts.default_first_name(),
@@ -1165,7 +1202,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     # AUTOMATED PATH — the default. The system fills (and, in "auto", submits) the create-account
     # form itself. A CAPTCHA or an email/2FA verification prompt still escalates: those are real
     # external gates, not the manual-handoff boundary, and they hold regardless of mode.
-    if body.mode in ("auto", "fill") and action.get("leg") == "create_account":
+    if body.mode in ("auto", "fill") and action.get("leg") in ("create_account", "sign_in"):
         obs = await _observe(browser_url, bb.search_state.query)
         block = obs.get("block")
         if block and block.get("strength") == "active":
@@ -1179,8 +1216,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                "detail": "A challenge is up on the signup form — clear it yourself. "
                                          "We never auto-solve, on any form."})
         tab_id = _apply_tab(bb, obs).get("tab_id", "")
-        drive = await _drive_create_account(browser_url, tab_id, creds, ats=step.platform,
-                                            submit=(body.mode == "auto"))
+        drive = await _drive_account_form(browser_url, tab_id, creds, ats=step.platform,
+                                          leg=action.get("leg") or "create_account",
+                                          submit=(body.mode == "auto"))
         if not drive.get("ok"):
             step.record(_ACCOUNT_RUNG, aps.FAILED, f"create leg: {drive.get('detail', '')}"[:200],
                         initiator=body.initiator)
@@ -1200,9 +1238,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
                          awaiting="operator_account",
                          last={"ok": True, "action": "apply_account", "queue": queue.summary(),
-                               "detail": "Filled the create-account form with your generated "
-                                         "credentials. Review it in the window, then confirm to "
-                                         "click Create Account."})
+                               "detail": f"Filled the {action.get('leg')} form with your stored "
+                                         f"credentials. Review it in the window, then confirm to "
+                                         f"click {drive.get('button') or action.get('button')!r}."})
 
         # Submitted. Did it land — or is there an email/2FA verification wall (a real gate)?
         after = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
@@ -1223,19 +1261,27 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                          "verification code. That is a real gate — grab the code "
                                          "(a Gmail errand we can automate next), then continue."})
 
-        ats_accounts.mark_created(company, step.platform)
+        signing_in = action.get("leg") == "sign_in"
+        if not signing_in:
+            # Only a CREATE makes the account exist. Signing in must not re-stamp that — the
+            # lifecycle flag is what tells the next session which leg is due.
+            ats_accounts.mark_created(company, step.platform)
         step.record(_ACCOUNT_RUNG, aps.OK,
-                    f"create leg: created the {company} {step.platform} account automatically",
+                    (f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
+                     f"create leg: created the {company} {step.platform} account automatically"),
                     initiator="auto")
         bb.world.pop("account_handoff", None)
         _save_queue(bb, queue)
-        bb.log("account_create", f"{company} {step.platform}: account created automatically")
+        bb.log("account_signin" if signing_in else "account_create",
+               f"{company} {step.platform}: "
+               + ("signed in automatically" if signing_in else "account created automatically"))
         _persist(bb, ledger)
         obs2 = await _observe(browser_url, bb.search_state.query)
         return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_account", "queue": queue.summary(),
-                           "detail": f"Created the {company} account automatically. The "
-                                     f"application can continue — orient, then the form."})
+                           "detail": (f"Signed in to {company} automatically. " if signing_in else
+                                      f"Created the {company} account automatically. ")
+                                     + "The application can continue — orient, then the form."})
 
     step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
                 f"{action.get('leg')} leg: {company} {step.platform}, operator creates it "
@@ -1537,7 +1583,20 @@ async def orient_step(session_id: int, body: OrientStepBody,
     names = " ".join((c.get("name") or "") for c in (scan.get("candidates") or []))
     text = f"{scan.get('page_text') or ''} {names}"
 
-    platform = step.platform or aps.classify_landing(url).platform
+    # THE LIVE TAB DECIDES WHICH PLATFORM WE ARE ON. `step.platform` is a memory of where classify
+    # last looked, and an apply can move between platforms after that: BILH's careers page is a
+    # branded wrapper, so classify saw `company_site` and the "Apply now" inside it handed off to
+    # bilh.wd1.myworkdayjobs.com. With the record shadowing the live URL, orient asked the GENERIC
+    # describer about a Workday page and called a state the recipe knows perfectly well "new
+    # territory" (live 2026-07-27). A recorded platform only holds until the page says otherwise.
+    live = aps.classify_landing(url)
+    platform = step.platform or live.platform
+    if live.known and live.platform and live.platform != step.platform:
+        step.record("classify", aps.OK,
+                    f"re-classified {step.platform or 'unclassified'} -> {live.platform}: the "
+                    f"apply moved to {url[:70]}", initiator=body.initiator)
+        step.platform = platform = live.platform
+        _save_queue(bb, queue)
     if platform == "workday":
         state = ar.map_workday_state(url, text)
         progress = ar.workday_progress(state)
@@ -1887,13 +1946,22 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                            "those are not built yet — drive it and flag the result.")
 
     tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
+    _note_tab_drift(bb, obs, step)      # recorded on the view; never acts on its own
     style = xs.pick_style()
     await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
     if rung.id == "open_pane":
         ext = step.job_id.split(":", 1)[-1]
+        # SAY WHICH TAB. Without one, `_discover_target` takes whatever CDP lists first — which,
+        # the moment a finished application is still open, is the ATS tab. The card was on the
+        # results page all along and this reported "card data-jk=… not found", which reads as a
+        # rotated listing rather than a misaddressed click (live 2026-07-27, with the submitted
+        # iCIMS tab still open). The search tab is the only document that HAS result cards.
+        search_tab = (obs.get("search_tab") or {})
         res = await _capture_post("/open_job_card",
-                                  {"browser_url": browser_url, "external_id": ext})
+                                  {"browser_url": browser_url, "external_id": ext,
+                                   "tab_id": search_tab.get("tab_id") or None,
+                                   "tab_url": None if search_tab.get("tab_id") else "indeed.com/jobs"})
         if not res.get("ok"):
             step.record("open_pane", aps.FAILED, res.get("detail") or "card did not open",
                         initiator=body.initiator)
@@ -1905,11 +1973,39 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             bb.world = dict(bb.world or {})
             bb.world["open_pane"] = {"title": res.get("title", ""),
                                      "apply_type": res.get("apply_type", "")}
+
+            # THE APPLIED CHECK, ON LANDING. Asked here — with the pane's own title, the richest
+            # description of this job we will hold before entering — and not after a drive has
+            # spent its way into an ATS to be told the same thing. `applied` HALTS the step;
+            # `likely_applied` only warns, because a fuzzy match that silently skipped a job the
+            # operator picked would be worse than the drive it saves.
+            verdict = applied_index.check(db, job_id=step.job_id,
+                                          title=res.get("title") or step.title,
+                                          company=step.company, url=res.get("url") or "")
+            bb.world["applied_check"] = verdict.as_dict()
+            if verdict.applied:
+                step.record("open_pane", aps.OK,
+                            f"pane switched to {res.get('title', '')!r} — but we have already "
+                            f"applied ({verdict.matched_on}: {'; '.join(verdict.evidence)})",
+                            initiator=body.initiator)
+                _save_queue(bb, queue); _persist(bb, ledger)
+                return _save_queue_and_view(
+                    session, bb, ledger, queue, obs, ok=False, pace=style,
+                    detail=(f"We have already applied to this job — matched on "
+                            f"{verdict.matched_on} ({'; '.join(verdict.evidence)}"
+                            + (f", applied {verdict.applied_at[:10]}" if verdict.applied_at else "")
+                            + "). Flag it rather than applying twice."))
+
             step.record("open_pane", aps.OK,
                         f"pane switched to {res.get('title', '')!r}"
-                        + (f" · apply_type={res.get('apply_type')}" if res.get("apply_type") else ""),
+                        + (f" · apply_type={res.get('apply_type')}" if res.get("apply_type") else "")
+                        + (f" · WARNING {verdict.status}: {'; '.join(verdict.evidence)}"
+                           if verdict.worth_asking else ""),
                         initiator=body.initiator)
-            detail = f"Opened {res.get('title') or step.job_id}."
+            detail = (f"Opened {res.get('title') or step.job_id}."
+                      + (f" NOTE: this looks like one we may have applied to already — "
+                         f"{'; '.join(verdict.evidence)}. Check before entering."
+                         if verdict.worth_asking else ""))
 
     elif rung.id == "verify_identity":
         seen = ((bb.world or {}).get("open_pane") or {}).get("title", "")
@@ -2313,11 +2409,30 @@ def _apply_tab(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
     it is still open (taking its CURRENT url), otherwise the live tab that is neither the Indeed
     search nor blank. Exact-URL matching against the record was the bug — it found nothing the
     moment the page moved (2026-07-24, the My Information bunch-fill scanned an empty tab_id)."""
+    from controller import window as window_mod
+
     tabs = obs.get("tabs") or []
     recorded_id = ((bb.world or {}).get("apply_tab") or {}).get("tab_id")
     if recorded_id:
         live = next((t for t in tabs if t.get("tab_id") == recorded_id), None)
         if live:
+            # THE FLOW MAY HAVE HOPPED PAST THE RECORDED TAB. The record was only ever wrong when
+            # its tab had closed or navigated — but an apply can also open a SECOND tab and leave
+            # the first one open and inert. BILH: Indeed -> jobs.bilh.org (recorded) -> "Apply now"
+            # -> bilh.wd1.myworkdayjobs.com, and the resolver kept handing back the spent landing,
+            # so `orient` read a job posting and called the Workday application "new territory"
+            # (live 2026-07-27). The stepping-stone is still open, so being open is not the test.
+            #
+            # The window manager already tells them apart — an ATS host is ROLE_APPLY, an employer
+            # careers page is ROLE_UNKNOWN — so prefer a real application tab over a recorded one
+            # that is not, rather than inventing an ordering rule about which tab is "newest".
+            if window_mod.classify_tab(live.get("url", "")) != window_mod.ROLE_APPLY:
+                hopped = next((t for t in tabs
+                               if t.get("tab_id") != recorded_id
+                               and window_mod.classify_tab(t.get("url", "")) == window_mod.ROLE_APPLY),
+                              None)
+                if hopped is not None:
+                    return {"tab_id": hopped.get("tab_id"), "url": hopped.get("url", "")}
             return {"tab_id": live.get("tab_id"), "url": live.get("url", "")}
     search = (obs.get("search_tab") or {}).get("tab_id")
     for t in tabs:
@@ -2394,19 +2509,191 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
         bb.world.pop("apply_proposal", None)
     bb.log("apply_flag", f"{body.job_id} -> {body.flag}"
                          + (f" ({body.detail})" if body.detail else ""))
+
+    # THE CLEANUP CREW RUNS ON EVERY TERMINAL, not just on success. An application abandoned at a
+    # wall leaves exactly the same orphan tab as one that was submitted, and the next prospect has
+    # to start from a window that means something.
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    # RECORD BEFORE CLOSE — the epilogue's own rule. A closed tab with no record is unrecoverable,
+    # and the record is what the NEXT session gets to ask (applied_index).
+    recorded = _record_outcome(db, step, ats_url=_apply_tab(bb, obs).get("url", ""))
+    cleanup = await _apply_cleanup(bb, obs, _session_browser_url(session), step)
+    bb.world.pop("apply_tab", None)          # the record dies with the tab it pointed at
     _persist(bb, ledger)
+    if cleanup["closed"]:
+        obs = await _observe(_session_browser_url(session), bb.search_state.query)
 
     summary = queue.summary()
     nxt = queue.current()
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    tidied = sum(1 for c in cleanup["closed"] if c["ok"])
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
                  awaiting="apply" if summary["blocks_page"] else "choose",
                  last={"ok": True, "action": "apply_flag", "queue": summary,
+                       "cleanup": cleanup, "recorded": recorded,
                        "detail": (f"{body.job_id} ended as {body.flag}. "
+                                  + (f"Closed {tidied} finished tab(s); back on the search. "
+                                     if tidied else "")
                                   + (f"Next up: {nxt.title or nxt.job_id}."
                                      if nxt else
                                      "Every application from this page is accounted for — "
                                      "choose again to advance the page."))})
+
+
+#: How a step's terminal flag lands in the DURABLE record. The queue is per-session state on the
+#: blackboard; `ObservedJob` is what survives the session and what the next drive asks.
+_TERMINAL_TO_STATUS = {
+    aps.SUBMITTED: "applied",
+    aps.ABANDONED_GONE: "rejected",
+    aps.ABANDONED_OPERATOR: "skipped",
+}
+
+
+def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "") -> dict[str, Any]:
+    """Write the step's terminal to `ObservedJob`, so the next session can ask the database.
+
+    APPLY_EPILOGUE always said RECORD before CLOSE, "because a closed tab with no record is
+    unrecoverable" — and `apply_flag` closed without recording. The Joslin application was
+    submitted and confirmed on 2026-07-27 and its row still read `seen`, `applied_at=None`. The
+    queue knew; the durable table did not; and a queue lives on one session's blackboard.
+
+    That is what made the operator's question unanswerable: *"see if we applied in the database or
+    not."* There was nothing in the database to see.
+
+    Only SUBMITTED stamps `applied_at` — the same rule the epilogue states. A parked step writes
+    nothing: parked means not now, and marking it would tell the next session a lie.
+    """
+    status = _TERMINAL_TO_STATUS.get(step.terminal or "")
+    if not status:
+        return {"recorded": False, "reason": f"{step.terminal} is not a durable outcome"}
+
+    row = db.get(ObservedJob, step.job_id)
+    if row is None:
+        platform, _, ext = step.job_id.partition(":")
+        row = ObservedJob(job_id=step.job_id, platform=platform or "indeed", external_id=ext,
+                          title=step.title or "", company=step.company or "")
+        db.add(row)
+    row.application_status = status
+    if step.platform:
+        row.application_platform = step.platform
+    # The ATS url carries the requisition id, and the requisition is how this job is recognised
+    # when it is met again through a different door (applied_index, tier 2). Worth keeping even
+    # when the row already has the Indeed url: that one shares no id with the ATS.
+    if ats_url:
+        row.url = ats_url[:1200]
+    if status == "applied" and row.applied_at is None:
+        row.applied_at = datetime.now(timezone.utc)
+    if step.terminal_detail:
+        row.notes = (step.terminal_detail or "")[:2000]
+    db.commit()
+    return {"recorded": True, "status": status, "job_id": step.job_id,
+            "applied_at": row.applied_at.isoformat() if row.applied_at else None}
+
+
+def _note_tab_drift(bb: Any, obs: dict[str, Any], step: aps.ApplyStep) -> dict[str, Any]:
+    """Which tabs have appeared or vanished since this step was last worked. Pure bookkeeping.
+
+    Operator, 2026-07-27: *"tab manager always needs to be weary especially in the beginning of the
+    apply company stage or probably throughout just to check if anything's changed."* The apply
+    stage is where the window changes UNDER us — Apply-on-company-site opens the employer landing
+    in a new tab, and an Apply inside that can open another — and until now nothing looked between
+    cranks. A drive that does not notice a new tab is a drive that can act on the wrong one, which
+    is exactly how `open_pane` came to hunt for result cards in a submitted application.
+
+    This only REPORTS. Closing during an application is how you lose live work; the cleanup runs at
+    the terminal, when the ladder says the work is finished.
+    """
+    census = dict((bb.world or {}).get("apply_tab_census") or {})
+    live = {t.get("tab_id"): (t.get("url") or "") for t in (obs.get("tabs") or []) if t.get("tab_id")}
+    known = census.get("tabs") or {}
+    same_step = census.get("job_id") == step.job_id
+
+    appeared = [{"tab_id": k, "url": v[:90]} for k, v in live.items() if same_step and k not in known]
+    vanished = [{"tab_id": k, "url": str(v)[:90]} for k, v in known.items() if k not in live] \
+        if same_step else []
+
+    # Tabs this STEP opened, accumulated across cranks. This is what lets the cleanup be thorough
+    # without being reckless: the window manager rightly refuses to close an UNKNOWN-role tab (it
+    # might be the operator's), but a tab we watched appear during our own application is ours to
+    # close. The BILH landing page — an employer careers site, role UNKNOWN — is exactly that: a
+    # doorway we opened, spent the moment its Apply handed off, and left behind.
+    opened = list(census.get("opened") or []) if same_step else []
+    opened.extend(a["tab_id"] for a in appeared if a["tab_id"] not in opened)
+
+    bb.world = dict(bb.world or {})
+    bb.world["apply_tab_census"] = {"job_id": step.job_id, "tabs": live, "opened": opened}
+
+    drift = {"appeared": appeared, "vanished": vanished, "count": len(live),
+             "baseline": bool(same_step), "opened_by_this_step": opened}
+    if appeared or vanished:
+        bb.log("tab_drift", f"{step.job_id}: +{len(appeared)} -{len(vanished)} tab(s) since the "
+                            f"last crank")
+    bb.world["tab_drift"] = drift
+    return drift
+
+
+async def _apply_cleanup(bb: Any, obs: dict[str, Any], browser_url: str,
+                         step: aps.ApplyStep) -> dict[str, Any]:
+    """Close the finished application's tab and hand the window back to the search.
+
+    THE APPLY STAGE SPAWNS TABS. Indeed's "Apply on company site" opens the employer landing in a
+    new tab, and the Apply inside THAT can open another — so an apply that nobody tidies leaves one
+    or two inert tabs per prospect, and they accumulate across a session. Operator, 2026-07-27:
+    *"the tab manager should've immediately been a part of the cleanup crew after submitting."*
+
+    It was already written down — APPLY_EPILOGUE calls itself "a REQUIRED step of the loop, not a
+    manual tidy-up" — and nothing on the path that ENDS a step ever called it. Prose in the recipe,
+    absent from the layer.
+
+    **The finished-ness comes from the LADDER, not from the URL.** A submitted iCIMS application
+    sits on `…icims.com/jobs/…/job?mode=submit_apply`, which `classify_tab` reads as ROLE_APPLY —
+    correctly, since it cannot know. The step reaching a terminal flag is the fact that makes the
+    tab inert, so this closes the apply tab BY IDENTITY and leaves the URL classifier alone. The
+    window manager then plans the rest (blanks, duplicates); nothing here invents its own rule
+    about what may be closed, and the search tab is never a candidate.
+    """
+    from controller import window as window_mod
+
+    tabs = obs.get("tabs") or []
+    search_url = (obs.get("search_tab") or {}).get("url") or "indeed.com/jobs"
+    apply_tab = _apply_tab(bb, obs)
+    closed: list[dict[str, Any]] = []
+
+    async def _close(tab_id: str, url: str, why: str) -> None:
+        res = await _capture_post("/close_tab", {"browser_url": browser_url, "tab_id": tab_id,
+                                                 "focus_tab_url": search_url})
+        closed.append({"tab_id": tab_id, "url": url[:90], "why": why,
+                       "ok": bool(res.get("ok")), "detail": res.get("detail", "")})
+
+    if apply_tab.get("tab_id") and apply_tab.get("tab_id") != (obs.get("search_tab") or {}).get("tab_id"):
+        await _close(apply_tab["tab_id"], apply_tab.get("url", ""),
+                     f"the application tab for {step.job_id}, now {step.terminal}")
+
+    # The doorways this step opened on its way in. An apply hops — Indeed -> the employer's careers
+    # page -> the ATS — and each hop strands the one before it. They are ours by provenance (we
+    # watched them appear during this step), which is the only warrant strong enough to close a tab
+    # the window manager would leave alone.
+    census = (bb.world or {}).get("apply_tab_census") or {}
+    if census.get("job_id") == step.job_id:
+        by_id = {t.get("tab_id"): t.get("url", "") for t in tabs}
+        for tid in census.get("opened") or []:
+            if tid in by_id and tid not in {c["tab_id"] for c in closed} \
+                    and tid != (obs.get("search_tab") or {}).get("tab_id"):
+                await _close(tid, by_id[tid], f"a doorway this step opened on the way to the ATS")
+        bb.world.pop("apply_tab_census", None)
+
+    # Whatever else the window manager would retire anyway — blanks, exact duplicates, orphaned
+    # duplicate apply flows. Its four rails (never the active tab, the last tab, an UNKNOWN role,
+    # or the only search tab) are the reason this is a survey rather than a loop over `tabs`.
+    remaining = [t for t in tabs if t.get("tab_id") not in {c["tab_id"] for c in closed}]
+    win = window_mod.survey(remaining, active_tab_id=(obs.get("search_tab") or {}).get("tab_id", ""))
+    for tab, why in zip(win.closable, win.reasons):
+        if tab.role == window_mod.ROLE_SEARCH:
+            continue
+        await _close(tab.tab_id, tab.url, why)
+
+    if closed:
+        bb.log("tab_cleanup", f"{step.job_id}: closed {len(closed)} tab(s) after {step.terminal}")
+    return {"closed": closed, "tabs_before": len(tabs), "search_focused": search_url[:90]}
 
 
 class ApplyReopenBody(BaseModel):

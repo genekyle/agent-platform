@@ -2733,3 +2733,127 @@ them from careful guesses into knowledge. `set_distance` for LinkedIn drives the
 trusted key events and confirms from `distance=` in the URL; like Indeed's it refuses to fall back
 to a URL rewrite, so if the widget has moved we will hear about it instead of getting a quiet
 radius. Capture + label on that first drive — see [[feedback_capture_label_is_the_work]].
+
+## 2026-07-27 (2) — The window is state, and nobody was watching it
+
+Second drive of the session: the operator's TOP-PRIORITY pick (BILH, Healthcare Data Analyst –
+BIDMC), reached through a branded wrapper into Workday. It ended in a state worth having a name
+for — *"You've already applied for this job"* — but almost everything before that was the window
+lying to us.
+
+### The leftover tab from the LAST application broke the NEXT one
+
+`open_pane` called `/open_job_card` with no tab_id and no tab_url, so `_discover_target` took
+whatever CDP listed first — the submitted iCIMS tab, still open. It reported **"card
+data-jk=e5c794ae32973697 not found"**, which reads as a rotated listing. The card was on the results
+page the whole time; `/extract_jobs` found it by that exact id seconds later.
+
+Operator: *"the tab manager should've immediately been a part of the cleanup crew after
+submitting… cleanup needs to be cleaner because it may confuse us going long term."* Exactly right,
+and the confusion arrived one application later.
+
+`APPLY_EPILOGUE` has described itself as **"a REQUIRED step of the loop, not a manual tidy-up"**
+since 2026-07-15. Nothing on the path that ENDS a step ever called it. Prose in the recipe, absent
+from the layer — the same shape as `/select_prompt` knowing about real keystrokes while the shared
+driver did not.
+
+### An apply is a CHAIN of tabs, and each hop strands the one before it
+
+    Indeed  --Apply on company site-->  jobs.bilh.org  --Apply now-->  bilh.wd1.myworkdayjobs.com
+                                        (recorded as the apply tab)     (where the work actually is)
+
+Three faults fell out of that one shape:
+
+* **`_apply_tab` kept returning the doorway.** Its test for a stale record was "is it still open" —
+  and the spent landing page IS still open. Fixed by preferring a tab the window manager calls
+  ROLE_APPLY over a recorded one it does not.
+* **`orient` trusted `step.platform` over the live URL.** classify had answered `company_site` on
+  the wrapper, and that memory shadowed a Workday page, so orient called Workday's
+  Start-Your-Application chooser "new territory" — a state the recipe has known for weeks. **A
+  recorded platform holds only until the page says otherwise.**
+* **The cleanup could not close the doorway.** The window manager refuses UNKNOWN-role tabs, and an
+  employer careers site is exactly that — correctly, since the operator shares the window. The
+  missing warrant is PROVENANCE: a tab we watched appear during our own application is ours. The
+  step now records what it opened and closes precisely those.
+
+### The system could make an account it was not allowed to use
+
+Only the create leg was wired into the automated path. BILH had an ACTIVE account, credentials in
+the vault — and the ladder still stopped to ask the operator to type them. We could create an
+account by typing a generated password and then could not use that same password to sign in.
+Nothing in the operator's directive separates the two; the gates that hold (captcha, verification
+code) are identical either way.
+
+### Two flags that were decoration until today
+
+* **PARKED vs ABANDONED.** The module has always said parked means "not now" and abandoned means
+  "not ever" — and `enqueue` refuses a known job_id, `done` is true for any terminal, and nothing
+  reopened anything. The top-priority pick sat parked under its own note, *"re-queue after the
+  matcher fix"*, with the fix long since shipped. `reopen` archives the failed attempt and
+  re-walks the ladder from the top: the rung it would otherwise inherit was an `enter_apply` that
+  recorded OK for another company's card, and **a rung whose answer we no longer trust is worse
+  than one we re-walk.**
+* **A capture's provenance.** `TrainingCaptureRead` omitted `label_source` / `state_label_source` /
+  `verified_at`, so six human-labelled captures read as unlabelled through the API — the wrong
+  answer to the one question that endpoint exists to answer.
+
+### `submitted` does not always mean *we* submitted it
+
+Signing in revealed the requisition already had an application on file. The queue tracks whether a
+job has been applied to, so the flag is `submitted` — with a detail that says plainly this drive
+did not send it. **The flag records the outcome; the detail owes the provenance.**
+
+## 2026-07-27 (3) — "Have we applied to this?" had nothing to consult
+
+The BIDMC drive ended on Workday's *"You've already applied for this job."* Operator: *"we need
+logic on whether we applied to things or not and that needs to be checked on initial landing on a
+page and scan for the jobs… see if we applied in the database or not."*
+
+### The database did not know either
+
+The obvious reading is "we forgot to check". The real fault was one layer down: **there was
+nothing to check.** `apply_flag` closed tabs without recording, so the Joslin application —
+submitted and confirmed hours earlier, with a screenshot of the confirmation — still read
+`application_status='seen'`, `applied_at=None`.
+
+`APPLY_EPILOGUE` has said **RECORD BEFORE CLOSE**, "because a closed tab with no record is
+unrecoverable", since 2026-07-15. We wired the CLOSE half this morning and left the RECORD half on
+the floor — while quoting the rule in the commit message. The queue knew; the queue is one
+session's blackboard.
+
+**A fact that lives only in session state is a fact the next session does not have.**
+
+### One job, three identities
+
+    Indeed card        indeed:e5c794ae32973697        a jk, and jk rotates per search session
+    employer wrapper   jobs.bilh.org/…-jr88822/       the req id, in the path
+    the ATS            bilh.wd1.myworkdayjobs.com/…   same req, different host
+
+`ObservedJob` is keyed on `platform:external_id`, so an application made through Workday is
+invisible to a lookup keyed on the Indeed jk. Recognising it needs the REQUISITION — which is
+sitting in both urls, unparsed, the whole time. That is tier 2 of `applied_index`, and it is the
+tier that would have saved the drive.
+
+### The fuzzy tier reports, it does not decide
+
+Same employer + same role words is right far more often than it is wrong, and it is also exactly
+the match that would skip "Data Analyst II" for having applied to "Data Analyst I". So it returns
+`likely_applied`, never `applied`: `open_pane` HALTS on a certain match and only WARNS on a fuzzy
+one. **A near-miss that silently skips a job the operator picked is worse than one that asks.**
+
+Two matching details that are not fussiness: the same title arrives with an en-dash on Indeed and a
+hyphen on Workday, and the ATS routinely appends a department the card omits ("Healthcare Data
+Analyst" vs "Healthcare Data Analyst - BIDMC, OBGYN Quality"). Similarity is scored against the
+SHORTER title for that reason — Jaccard punishes the appended department, and punishing it is how
+one job reads as two.
+
+### It goes in the prompt, unlike staleness
+
+`staleness` is deliberately not rendered into the Bundle prompt: its thresholds are guesses, and
+putting an unmeasured level in front of the reasoner would change the feature contract on the
+strength of one. `applied` is the opposite — a fact read out of our own database — and it changes
+what the right next action IS, because there is no good next move on a job already applied to. It
+renders only when present, so every bundle journaled before today still produces a byte-identical
+prompt.
+
+Live on the next scan: *"Page 1: 15 results — 2 new, 13 already seen, 2 ALREADY APPLIED."*

@@ -50,14 +50,24 @@ class _FakeSession:
 class _FakeDB:
     """Enough SQLAlchemy Session for the panel: TrainingSession lookup, ObservedJob get/add."""
 
-    def __init__(self, observed=None, answers=None):
+    def __init__(self, observed=None, answers=None, applied=None):
         self.rows = {}
         self.added = []
         self.observed = observed or {}      # job_id -> (title, company) for ObservedJob.get
         self._answers = answers or []       # ApplicationAnswer-like rows for scalars()
+        self._applied = applied or []       # ObservedJob rows the applied-index should find
 
-    def scalars(self, _stmt):
+    def scalars(self, stmt):
+        # Dispatch on the queried ENTITY. One canned list for every select() made the fake answer
+        # the applied-index with a page of application answers — a fake that lies about WHICH
+        # question it was asked is worse than no fake.
         rows = self._answers
+        try:
+            entity = (stmt.column_descriptions or [{}])[0].get("entity")
+            if entity is not None and getattr(entity, "__name__", "") == "ObservedJob":
+                rows = self._applied
+        except Exception:                    # noqa: BLE001 — a fake must never break the test
+            pass
         return type("_R", (), {"all": lambda self: rows})()
 
     def get(self, model, key):
@@ -93,7 +103,8 @@ class _Harness:
         return [p for p, _ in self.calls]
 
 
-def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None, answers=None):
+def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None,
+             answers=None, applied=None):
     """Wire the seams, an in-memory blackboard, and the DB override. Returns the harness plus a
     one-element list holding the persisted blackboard so tests can read the ledger back.
 
@@ -123,7 +134,7 @@ def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=N
     monkeypatch.setattr(sc.asyncio, "sleep", _nosleep)
 
     def _override_db():
-        yield _FakeDB(observed=observed, answers=answers)
+        yield _FakeDB(observed=observed, answers=answers, applied=applied)
     main.app.dependency_overrides[get_db] = _override_db
     return harness, saved
 
@@ -2915,3 +2926,356 @@ def test_an_unnamed_company_gets_no_credentials_anywhere(monkeypatch):
         _teardown()
     mini = r["queue"]["steps"][0]["minis"][-1]
     assert mini["outcome"] == "unknown" and "no company" in mini["detail"]
+
+
+# --- the cleanup crew: a finished application must not leave its tab behind --------------------
+def test_flagging_a_step_closes_the_application_tab_and_returns_to_the_search(monkeypatch):
+    """Operator, 2026-07-27: "the tab manager should've immediately been a part of the cleanup crew
+    after submitting." APPLY_EPILOGUE already called itself a REQUIRED step of the loop — and
+    nothing on the path that ENDS a step ever ran it, so every finished apply left an inert tab.
+
+    The finished-ness comes from the LADDER, not the URL: a submitted iCIMS application sits on a
+    URL classify_tab reads as ROLE_APPLY, and it is right to — only the terminal flag knows.
+    """
+    closes = []
+
+    def _close(payload):
+        closes.append(payload)
+        return {"ok": True, "closed": payload.get("tab_id")}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://jobs-x.icims.com/jobs/1/job?mode=submit_apply"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": _close,
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step(platform="icims"))
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "submitted",
+                              "detail": "confirmed"}).json()
+    finally:
+        _teardown()
+
+    # The apply tab is resolved LIVE, not from the recorded hint — that record can name a tab
+    # that has since closed or navigated, which is why _apply_tab re-resolves every time.
+    assert len(closes) == 1
+    assert r["last_step"]["cleanup"]["closed"][0]["url"].startswith("https://jobs-x.icims.com")
+    assert closes[0]["focus_tab_url"].startswith("https://www.indeed.com")   # back to the search
+    assert r["last_step"]["cleanup"]["closed"][0]["ok"] is True
+    assert "Closed 1 finished tab" in r["last_step"]["detail"]
+
+
+def test_cleanup_runs_on_an_abandoned_terminal_too(monkeypatch):
+    """An application abandoned at a wall leaves exactly the same orphan tab as a submitted one."""
+    closes = []
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": lambda p: (closes.append(p), {"ok": True})[1],
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "parked:account_wall"}).json()
+    finally:
+        _teardown()
+    assert len(closes) == 1
+    assert r["last_step"]["cleanup"]["closed"][0]["url"].startswith("https://mfs.wd1")
+
+
+def test_the_search_tab_is_never_closed_by_the_cleanup(monkeypatch):
+    """The one tab the drive cannot afford to lose: reopening it costs a real page load, and it is
+    home base between applications."""
+    closes = []
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL),                       # search tab ONLY
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": lambda p: (closes.append(p), {"ok": True})[1],
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:a1", "T", "C")))
+    try:
+        client.post("/api/session_control/1/apply_flag",
+                    json={"job_id": "indeed:a1", "flag": "abandoned:operator"}).json()
+    finally:
+        _teardown()
+    assert closes == []
+
+
+def test_open_pane_addresses_the_search_tab_not_whatever_cdp_lists_first(monkeypatch):
+    """With a finished application still open, an unaddressed /open_job_card hunted for result
+    cards in the ATS document and reported the card 'not found' — which reads as a rotated listing
+    rather than a misaddressed click (live 2026-07-27)."""
+    seen = {}
+
+    def _open_card(payload):
+        seen.update(payload)
+        return {"ok": True, "title": "Healthcare Data Analyst", "apply_type": "company_site"}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs("https://jobs-x.icims.com/jobs/1/job", SEARCH_URL),  # ATS listed FIRST
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": _open_card,
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH")))
+    try:
+        client.post("/api/session_control/1/apply_step", json={"job_id": "indeed:a1"}).json()
+    finally:
+        _teardown()
+    assert seen.get("tab_id") or seen.get("tab_url"), "the click must name the document it means"
+    if seen.get("tab_url"):
+        assert "indeed.com/jobs" in seen["tab_url"]
+
+
+def test_the_apply_tab_follows_the_flow_when_it_hops_to_a_new_tab(monkeypatch):
+    """An apply can open a SECOND tab and leave the first open and inert. BILH: Indeed ->
+    jobs.bilh.org (recorded at enter_apply) -> "Apply now" -> bilh.wd1.myworkdayjobs.com. The
+    recorded tab was still open, so the "is it still open?" test passed and the resolver kept
+    handing back the spent landing — `orient` read a job posting and called the live Workday
+    application "new territory" (live 2026-07-27).
+
+    The window manager already separates them by role, which is why this needs no rule about
+    which tab is newest.
+    """
+    bb = _with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH"))
+    bb.world["apply_tab"] = {"tab_id": "t1",
+                             "url": "https://jobs.bilh.org/jobs/healthcare-data-analyst-jr88822/"}
+    obs = {"tabs": [
+        {"tab_id": "t2", "url": "https://bilh.wd1.myworkdayjobs.com/External/job/x"},
+        {"tab_id": "t1", "url": "https://jobs.bilh.org/jobs/healthcare-data-analyst-jr88822/"},
+        {"tab_id": "t0", "url": SEARCH_URL},
+    ], "search_tab": {"tab_id": "t0", "url": SEARCH_URL}}
+
+    assert sc._apply_tab(bb, obs)["tab_id"] == "t2"          # the application, not the doorway
+
+
+def test_a_recorded_apply_tab_still_wins_when_it_is_the_real_application(monkeypatch):
+    """The hop rule must not fire on a normal single-tab application: a recorded ATS tab that is
+    still open IS the work, even when another apply-role tab exists."""
+    bb = _with_queue(("indeed:a1", "T", "C"))
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"}
+    obs = {"tabs": [
+        {"tab_id": "t2", "url": "https://other.wd1.myworkdayjobs.com/job/y"},
+        {"tab_id": "t1", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"},
+        {"tab_id": "t0", "url": SEARCH_URL},
+    ], "search_tab": {"tab_id": "t0", "url": SEARCH_URL}}
+
+    assert sc._apply_tab(bb, obs)["tab_id"] == "t1"
+
+
+def test_orient_reclassifies_when_the_apply_moves_to_a_real_ats(monkeypatch):
+    """A branded careers wrapper hands off: classify sees `company_site` on the employer page, then
+    "Apply now" lands on the tenant's Workday. With the recorded platform shadowing the live URL,
+    orient asked the GENERIC describer about a Workday page and called a state the recipe knows
+    perfectly well "new territory" (live 2026-07-27, BILH).
+    """
+    bb = _with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].record("classify", aps.OK, "company_site_job_posting")
+    q.steps[0].platform = "company_site"                      # what the WRAPPER looked like
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1",
+                             "url": "https://bilh.wd1.myworkdayjobs.com/External/job/x"}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://bilh.wd1.myworkdayjobs.com/External/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "page_text": "Start Your Application",
+                      "candidates": [{"role": "button", "name": "Autofill with Resume"},
+                                     {"role": "button", "name": "Use My Last Application"}]}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/orient", json={}).json()
+    finally:
+        _teardown()
+
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "workday"                        # the live tab won
+    assert any(m.rung == "classify" and "re-classified" in m.detail for m in step.minis)
+    assert "not a state we recognise" not in r["last_step"]["detail"]
+
+
+def test_the_sign_in_leg_is_driven_too_not_handed_back(monkeypatch):
+    """The system could CREATE an account by typing a generated password and then could not USE it:
+    only the create leg was wired, so an ATS we already held an active account for still stopped at
+    a manual handoff (live 2026-07-27, BILH Workday). Nothing in the operator's directive separates
+    the two — the gates that hold are the same either way.
+    """
+    typed = []
+
+    def _execute(payload):
+        if payload.get("action_id") == "type":
+            typed.append(payload.get("target_name") or payload.get("selector"))
+        return {"outcome": "ok"}
+
+    import accounts, ats_accounts
+    ats_accounts.ensure_account("MFS", "workday", login_url="https://mfs.wd1.myworkdayjobs.com/x")
+    ats_accounts.mark_created("MFS", "workday")               # active -> the sign_in leg is due
+    accounts.put_account(ats_accounts.ats_account_id("MFS", "workday"), {"status": "active"})
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/execute": _execute,
+         "/ax_scan": {"ok": True, "page_text": "My Information", "candidates": []}},
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert typed == ["Email Address", "Password"]             # sign-in fields, not the create set
+    assert "Signed in" in r["last_step"]["detail"]
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any(m.rung == "account" and "sign_in leg" in m.detail and m.outcome == aps.OK
+               for m in step.minis)
+    assert _settled(step) >= {"account"}
+
+
+def test_the_cleanup_closes_the_doorways_the_step_opened(monkeypatch):
+    """An apply HOPS — Indeed -> the employer's careers page -> the ATS — and each hop strands the
+    one before it. The window manager will not close the middle one: an employer careers site is
+    ROLE_UNKNOWN, and "I could not identify it" is the weakest possible reason to close something
+    in a window the operator shares.
+
+    Provenance is the warrant. A tab we watched appear during our own application is ours, so the
+    step records what it opened and the cleanup closes exactly those. Operator, 2026-07-27:
+    "cleanup needs to be cleaner because it may confuse us going long term."
+    """
+    closes = []
+    bb = _with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].platform = "workday"
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t2", "url": "https://bilh.wd1.myworkdayjobs.com/job/x"}
+    # The landing page was watched appearing during this step: role UNKNOWN, but ours.
+    bb.world["apply_tab_census"] = {
+        "job_id": "indeed:a1",
+        "tabs": {"t0": SEARCH_URL, "t1": "https://jobs.bilh.org/jobs/x/", "t2": "https://bilh.wd1.myworkdayjobs.com/job/x"},
+        "opened": ["t1", "t2"]}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://jobs.bilh.org/jobs/x/",
+                             "https://bilh.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": lambda p: (closes.append(p), {"ok": True})[1],
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "submitted"}).json()
+    finally:
+        _teardown()
+
+    closed_urls = [c["url"] for c in r["last_step"]["cleanup"]["closed"]]
+    assert any("myworkdayjobs" in u for u in closed_urls)      # the application
+    assert any("jobs.bilh.org" in u for u in closed_urls)      # and the doorway it came through
+    assert not any("indeed.com" in u for u in closed_urls)     # never home base
+    # the census is spent once the step is over — it must not leak onto the next application
+    assert (saved["bb"].world or {}).get("apply_tab_census") is None
+
+
+# --- have we been here before? the applied check --------------------------------------------
+def _applied_row(db_rows, job_id, title, company, url=""):
+    from models import ObservedJob, utcnow
+    return ObservedJob(job_id=job_id, platform=job_id.split(":")[0],
+                       external_id=job_id.split(":", 1)[1], title=title, company=company,
+                       url=url, application_status="applied", applied_at=utcnow())
+
+
+def test_open_pane_halts_when_the_database_says_we_already_applied(monkeypatch):
+    """Operator, 2026-07-27: "we need logic on whether we applied to things or not and that needs
+    to be checked on initial landing on a page." The BIDMC drive reopened a step, hopped a branded
+    wrapper into Workday and signed in — to be told the answer the database could have given at the
+    results page.
+    """
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": {"ok": True, "title": "Healthcare Data Analyst", "apply_type": "company_site"},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:a1", "Healthcare Data Analyst", "Acme")),
+        applied=[_applied_row(None, "indeed:a1", "Healthcare Data Analyst", "Acme")])
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={"job_id": "indeed:a1"}).json()
+    finally:
+        _teardown()
+
+    assert r["last_step"]["ok"] is False
+    assert "already applied" in r["last_step"]["detail"]
+    assert r["applied_check"]["status"] == "applied"
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    # the rung is still walked — the pane DID open; what changed is that the ladder stops here
+    assert any(m.rung == "open_pane" and "already" in m.detail for m in step.minis)
+
+
+def test_a_fuzzy_applied_match_warns_but_lets_the_step_continue(monkeypatch):
+    """`likely_applied` must never silently skip a job the operator picked."""
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": {"ok": True, "title": "Data Analyst - Reporting", "apply_type": "company_site"},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:b2", "Data Analyst - Reporting", "Acme")),
+        applied=[_applied_row(None, "workday:JR9", "Data Analyst", "Acme")])
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={"job_id": "indeed:b2"}).json()
+    finally:
+        _teardown()
+
+    assert r["last_step"]["ok"] is True                      # NOT halted
+    assert "may have applied" in r["last_step"]["detail"]
+    assert r["applied_check"]["status"] == "likely_applied"
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.next_rung().id == "verify_identity"          # the ladder moved on
+
+
+def test_flagging_submitted_writes_the_durable_record(monkeypatch):
+    """The queue is one session's blackboard; ObservedJob is what the NEXT session can ask. Joslin
+    was submitted and confirmed on 2026-07-27 and its row still read `seen` / applied_at=None,
+    which is precisely why "check the database" had nothing to check."""
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://x.wd1.myworkdayjobs.com/job/JR77"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": {"ok": True},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "submitted",
+                              "detail": "confirmed sent"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["recorded"]["recorded"] is True
+    assert r["last_step"]["recorded"]["status"] == "applied"
+    assert r["last_step"]["recorded"]["applied_at"]
+
+
+def test_a_parked_step_writes_no_application(monkeypatch):
+    """Parked means NOT NOW. Recording it would tell the next session a lie."""
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://x.wd1.myworkdayjobs.com/job/JR77"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": {"ok": True},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "parked:account_wall"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["recorded"]["recorded"] is False
