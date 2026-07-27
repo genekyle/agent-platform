@@ -147,6 +147,10 @@ class ApplyStep:
     terminal: Optional[str] = None      # one of TERMINAL_FLAGS once done
     terminal_detail: str = ""
     minis: list[MiniStep] = field(default_factory=list)
+    #: Previous attempts, moved aside by `reopen`. A parked step that comes back re-walks the
+    #: ladder, and the run that parked it is kept here rather than deleted — the first attempt is
+    #: what makes the second one legible as a correction.
+    archived_minis: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def done(self) -> bool:
@@ -188,11 +192,50 @@ class ApplyStep:
         self.terminal_detail = detail
         self.status = STATUS_DONE
 
+    def reopen(self, reason: str, initiator: str = "operator") -> None:
+        """Bring a PARKED step back into the queue. The other half of the parked/abandoned split.
+
+        This module has always said parked means "not now" and abandoned means "not ever" — but
+        nothing could act on the difference. `enqueue` refuses to re-add a known job_id (rightly:
+        it must not double the work), `done` is true for any terminal flag, and there was no way
+        back. So the two flags behaved identically and the distinction was decoration. Found when
+        the operator's TOP-PRIORITY pick sat parked with its own note saying "re-queue after the
+        matcher fix" — and the matcher fix had landed (2026-07-27).
+
+        The walked rungs are ARCHIVED, not kept. A step comes back in a later session where the
+        pane is not open and the page has moved on, so the prefix must be re-walked from the top;
+        and the specific reason this one parked was an `enter_apply` that recorded OK for the wrong
+        company's card. **Carrying forward a rung whose answer we no longer trust is worse than
+        re-walking it.** The history stays on the step so the second attempt can be compared with
+        the first — that is the pair a corrected mistake is worth.
+
+        Refuses an ABANDONED step: "not ever" is a decision, and quietly reversing it is how dead
+        requisitions come back forever.
+        """
+        if self.terminal is None:
+            raise ValueError("this step is not finished, so there is nothing to reopen")
+        if not self.terminal.startswith("parked:"):
+            raise ValueError(f"only a PARKED step can be reopened; this one is {self.terminal!r}. "
+                             f"Abandoned means not ever — re-pick the job if that has changed.")
+        self.archived_minis.append({
+            "parked_as": self.terminal, "parked_detail": self.terminal_detail,
+            "reopened_at": _utcnow(), "reason": reason,
+            "minis": [m.as_dict() for m in self.minis],
+        })
+        self.minis = []
+        self.terminal = None
+        self.terminal_detail = ""
+        self.status = STATUS_QUEUED
+        self.platform = None
+        self.landing_state = None
+        self.record("reopened", OK, reason, initiator=initiator)
+
     def as_dict(self) -> dict[str, Any]:
         return {"job_id": self.job_id, "title": self.title, "company": self.company,
                 "status": self.status, "platform": self.platform,
                 "landing_state": self.landing_state, "terminal": self.terminal,
                 "terminal_detail": self.terminal_detail, "done": self.done,
+                "archived_minis": self.archived_minis,
                 "needs_operator": self.needs_operator(),
                 "next_rung": (nr.id if (nr := self.next_rung()) else None),
                 "minis": [m.as_dict() for m in self.minis]}
@@ -204,6 +247,7 @@ class ApplyStep:
                    landing_state=d.get("landing_state"),
                    terminal=d.get("terminal"), terminal_detail=d.get("terminal_detail", ""))
         step.minis = [MiniStep(**m) for m in d.get("minis", [])]
+        step.archived_minis = list(d.get("archived_minis") or [])
         return step
 
 

@@ -9,6 +9,7 @@ The properties worth paying for, in order:
 """
 
 import apply_steps as aps
+import pytest
 
 PICKS = [
     {"job_id": "indeed:a1", "title": "Compliance Reporting Analyst", "company": "Acme"},
@@ -268,3 +269,54 @@ def test_validation_does_not_silently_rewrite_a_wrong_key():
     params = {"field": "Apply now"}
     aps.validate_action("click", params)
     assert params == {"field": "Apply now"}      # untouched
+
+
+def test_a_parked_step_can_come_back_and_an_abandoned_one_cannot():
+    """The parked/abandoned split has to be actionable, not just documented. Parked means "not
+    now" — the operator's top pick sat parked under its own "re-queue after the matcher fix" note
+    with the fix already shipped, and there was no way back.
+    """
+    q = aps.Queue()
+    q.enqueue([{"job_id": "indeed:a1", "title": "Healthcare Data Analyst", "company": "BILH"},
+               {"job_id": "indeed:b2", "title": "Quality Systems Analyst", "company": "Abbott"}])
+    parked, abandoned = q.steps[0], q.steps[1]
+
+    parked.record("open_pane", aps.OK, "pane opened")
+    parked.record("enter_apply", aps.OK, "clicked the WRONG company's card")
+    parked.finish(aps.PARKED_OPERATOR, "re-queue after the matcher fix")
+    abandoned.finish(aps.ABANDONED_OPERATOR, "looked and do not want it")
+    assert q.current() is None                      # both terminal: the queue is empty of work
+
+    parked.reopen("the enter_apply matcher fix shipped; nothing was ever entered for this job")
+
+    assert parked.done is False
+    assert q.current() is parked                    # back at its ORIGINAL place in the pick order
+    # The ladder restarts from the top: a rung answered by a click on the wrong card is exactly
+    # what must not be carried forward.
+    assert parked.next_rung().id == "open_pane"
+    assert [m.rung for m in parked.minis] == ["reopened"]
+    # ...but the failed attempt is kept, which is what makes the retry legible as a correction.
+    assert len(parked.archived_minis) == 1
+    assert parked.archived_minis[0]["parked_as"] == aps.PARKED_OPERATOR
+    assert [m["rung"] for m in parked.archived_minis[0]["minis"]] == ["open_pane", "enter_apply"]
+
+    # "not ever" stays not ever.
+    with pytest.raises(ValueError, match="only a PARKED step"):
+        abandoned.reopen("changed my mind")
+    # and a live step has nothing to reopen
+    with pytest.raises(ValueError, match="not finished"):
+        aps.ApplyStep(job_id="indeed:c3").reopen("why")
+
+
+def test_a_reopened_step_survives_a_round_trip():
+    """The archive rides in the queue's dict — a blackboard reload must not lose the first attempt."""
+    q = aps.Queue()
+    q.enqueue([{"job_id": "indeed:a1", "title": "T", "company": "C"}])
+    q.steps[0].record("open_pane", aps.OK, "opened")
+    q.steps[0].finish(aps.PARKED_ACCOUNT_WALL, "account wall")
+    q.steps[0].reopen("operator made the account")
+
+    back = aps.Queue.from_dict(q.as_dict())
+    assert back.current().job_id == "indeed:a1"
+    assert len(back.steps[0].archived_minis) == 1
+    assert back.steps[0].archived_minis[0]["parked_as"] == aps.PARKED_ACCOUNT_WALL

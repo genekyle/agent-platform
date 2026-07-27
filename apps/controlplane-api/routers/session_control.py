@@ -2350,6 +2350,55 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
                                      "choose again to advance the page."))})
 
 
+class ApplyReopenBody(BaseModel):
+    job_id: str
+    reason: str                    # why it is coming back — recorded on the step
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/apply_reopen")
+async def apply_reopen(session_id: int, body: ApplyReopenBody,
+                       db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Bring a PARKED application back into the queue, at its original place in the pick order.
+
+    The other half of the parked/abandoned split, which until now existed only as prose. `enqueue`
+    is idempotent by job_id (it must be — pressing Choose twice cannot double the work), `done` is
+    true for any terminal flag, and nothing reopened anything, so "not now" and "not ever" behaved
+    identically. The operator's TOP-PRIORITY pick sat parked under its own note — "re-queue after
+    the matcher fix" — with the matcher fix already shipped.
+
+    Operator-initiated only, and never for an ABANDONED step: reversing "not ever" on the system's
+    own initiative is how dead requisitions come back forever. The parked attempt is archived on
+    the step rather than deleted, so the retry can be read against what went wrong the first time.
+    """
+    _check_initiator(body.initiator)
+    if not body.reason.strip():
+        raise HTTPException(status_code=422,
+                            detail="Give a reason — a step coming back should say what changed.")
+    session, bb, ledger = _load(session_id, db)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = next((s for s in queue.steps if s.job_id == body.job_id), None)
+    if step is None:
+        raise HTTPException(status_code=404,
+                            detail=f"{body.job_id} is not in this page's apply queue.")
+    try:
+        step.reopen(body.reason, initiator=body.initiator)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    _save_queue(bb, queue)
+    bb.log("apply_reopen", f"{body.job_id} reopened — {body.reason[:100]}")
+    _persist(bb, ledger)
+    summary = queue.summary()
+    nxt = queue.current()
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                 last={"ok": True, "action": "apply_reopen", "queue": summary,
+                       "detail": (f"{step.title or body.job_id} is back in the queue and the "
+                                  f"ladder restarts at the top. "
+                                  + (f"Now working: {nxt.title or nxt.job_id}." if nxt else ""))})
+
+
 # --- the clean start: provisioning through the tab manager ------------------------------------
 def _fresh_start_plan(obs: dict[str, Any]) -> dict[str, Any]:
     """What this window would have to close to be a clean start, via `controller.window` — the
