@@ -298,6 +298,14 @@ class TrainingCaptureRead(BaseModel):
     action_text: Optional[str] = None
     observed_page_state: Optional[str] = None
     post_action_state: Optional[str] = None
+    # WHO labelled it, and how much to trust that. Omitting these made every capture read as
+    # unlabelled through the API even when the row said `human` — which is the wrong answer to
+    # exactly the question this endpoint gets asked ("is this drive's data labelled?"). A label
+    # you cannot see the provenance of is one you have to re-derive.
+    label_source: Optional[str] = None
+    state_label_source: Optional[str] = None
+    state_label_confidence: Optional[float] = None
+    verified_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
