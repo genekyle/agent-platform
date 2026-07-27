@@ -109,8 +109,14 @@ def ensure_account(company: str, ats_id: str, login_url: str = "") -> dict[str, 
         "label": f"{company} · {ats.get('display_name', ats_id)}",
         "username_hint": default_username(),
         "login_url": login_url or (existing or {}).get("login_url", ""),
-        # keep an already-active account active; a brand-new one is 'pending' until created on-site
-        "status": (existing or {}).get("status") if existing and existing.get("has_creds") else "pending",
+        # KEEP AN EXISTING ACCOUNT'S STATUS; only a brand-new one is 'pending'. This used to be
+        # gated on `has_creds`, which asks a different question and answers it wrong: under this
+        # module's own convention the password is DERIVED on demand and never stored, so has_creds
+        # is False for essentially every ATS account we make. The effect was that `ensure_account` —
+        # which the ladder's account rung calls on every crank — flipped `active` back to `pending`,
+        # and the very next read said "this ATS needs an account" about an account we had just
+        # created. Found live on iCIMS 2026-07-27, right after a successful signup.
+        "status": (existing or {}).get("status") or "pending",
     }
     rec = accounts_mod.put_account(aid, patch)
     return {"ok": True, "account": rec, "credentials": suggested_credentials(company, ats_id)}

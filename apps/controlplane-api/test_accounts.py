@@ -128,3 +128,26 @@ def test_clear_credentials_removes_creds_keeps_metadata():
 def test_set_credentials_requires_both():
     with pytest.raises(ValueError):
         accounts.set_credentials("facebook_alt", "", "pw")
+
+
+def test_ensure_account_does_not_undo_mark_created(monkeypatch):
+    """The account rung calls ensure_account on EVERY crank. If that resets the lifecycle, the
+    ladder demands an account it has already made — which is exactly what happened live on iCIMS
+    (2026-07-27): signup succeeded, mark_created ran, and the next crank read 'pending' again.
+
+    The old condition kept the status only when `has_creds` was true. That asks about the VAULT,
+    and under the ats_accounts convention the password is derived on demand and never stored — so
+    has_creds is false for essentially every ATS account, and the guard never fired.
+    """
+    import ats_accounts
+
+    ats_accounts.ensure_account("Joslin Diabetes Center", "icims", login_url="https://x/apply")
+    assert ats_accounts.next_account_action("Joslin Diabetes Center", "icims")["leg"] == "create_account"
+
+    assert ats_accounts.mark_created("Joslin Diabetes Center", "icims")["ok"] is True
+    aid = ats_accounts.ats_account_id("Joslin Diabetes Center", "icims")
+    assert accounts.get_account(aid)["has_creds"] is False      # the convention: nothing stored
+
+    ats_accounts.ensure_account("Joslin Diabetes Center", "icims", login_url="https://x/apply")
+    assert accounts.get_account(aid)["status"] == "active"      # survived the re-register
+    assert ats_accounts.next_account_action("Joslin Diabetes Center", "icims")["leg"] == "sign_in"
