@@ -1482,7 +1482,20 @@ async def orient_step(session_id: int, body: OrientStepBody,
     names = " ".join((c.get("name") or "") for c in (scan.get("candidates") or []))
     text = f"{scan.get('page_text') or ''} {names}"
 
-    platform = step.platform or aps.classify_landing(url).platform
+    # THE LIVE TAB DECIDES WHICH PLATFORM WE ARE ON. `step.platform` is a memory of where classify
+    # last looked, and an apply can move between platforms after that: BILH's careers page is a
+    # branded wrapper, so classify saw `company_site` and the "Apply now" inside it handed off to
+    # bilh.wd1.myworkdayjobs.com. With the record shadowing the live URL, orient asked the GENERIC
+    # describer about a Workday page and called a state the recipe knows perfectly well "new
+    # territory" (live 2026-07-27). A recorded platform only holds until the page says otherwise.
+    live = aps.classify_landing(url)
+    platform = step.platform or live.platform
+    if live.known and live.platform and live.platform != step.platform:
+        step.record("classify", aps.OK,
+                    f"re-classified {step.platform or 'unclassified'} -> {live.platform}: the "
+                    f"apply moved to {url[:70]}", initiator=body.initiator)
+        step.platform = platform = live.platform
+        _save_queue(bb, queue)
     if platform == "workday":
         state = ar.map_workday_state(url, text)
         progress = ar.workday_progress(state)

@@ -3053,3 +3053,38 @@ def test_a_recorded_apply_tab_still_wins_when_it_is_the_real_application(monkeyp
     ], "search_tab": {"tab_id": "t0", "url": SEARCH_URL}}
 
     assert sc._apply_tab(bb, obs)["tab_id"] == "t1"
+
+
+def test_orient_reclassifies_when_the_apply_moves_to_a_real_ats(monkeypatch):
+    """A branded careers wrapper hands off: classify sees `company_site` on the employer page, then
+    "Apply now" lands on the tenant's Workday. With the recorded platform shadowing the live URL,
+    orient asked the GENERIC describer about a Workday page and called a state the recipe knows
+    perfectly well "new territory" (live 2026-07-27, BILH).
+    """
+    bb = _with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].record("classify", aps.OK, "company_site_job_posting")
+    q.steps[0].platform = "company_site"                      # what the WRAPPER looked like
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1",
+                             "url": "https://bilh.wd1.myworkdayjobs.com/External/job/x"}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://bilh.wd1.myworkdayjobs.com/External/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "page_text": "Start Your Application",
+                      "candidates": [{"role": "button", "name": "Autofill with Resume"},
+                                     {"role": "button", "name": "Use My Last Application"}]}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/orient", json={}).json()
+    finally:
+        _teardown()
+
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "workday"                        # the live tab won
+    assert any(m.rung == "classify" and "re-classified" in m.detail for m in step.minis)
+    assert "not a state we recognise" not in r["last_step"]["detail"]
