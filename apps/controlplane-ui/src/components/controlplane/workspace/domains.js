@@ -6,6 +6,8 @@
 // `kind` drives the shared behaviour:
 //   selling      — has a persistent channel browser (connect + supervised login)
 //   jobs         — a career-search AGGREGATOR (Indeed, LinkedIn): search + triage + hand off to an ATS
+//   errands      — exists to be CALLED by other domains (Gmail): a bounded favour that RETURNS,
+//                  measured by what it served and what it had to escalate, not by work of its own
 //   coming_soon  — scaffolded in the UI, not wired to a backend yet (honest placeholder)
 //
 // Two more fields matter for the `jobs` kind:
@@ -172,18 +174,36 @@ export const DOMAIN_CATALOG = [
     ],
   },
   {
+    // Gmail — the first member of the `google` PROVIDER group, and the first domain here whose
+    // point is to be CALLED rather than driven for its own sake. Other domains detour into it for
+    // a one-time login code and return; `kind: "errands"` is what gives it an Errands tab instead
+    // of the jobs/selling data views, and what keeps the Command Center from reporting it as a
+    // jobs domain (that tile branch was a binary, so a domain with no case of its own still got
+    // an answer — Indeed's).
+    //
+    // Its registry entry also owns the shared `google_signin_*` page states on behalf of the WHOLE
+    // provider: they are the one sign-in Docs, Sheets and Drive will reuse, homed here because
+    // Gmail is the surface that triggers login today. Those members are deliberately NOT scaffolded
+    // as tiles — they are declared in providers.py and nothing more, and a disabled card beside
+    // live work is scaffolding pretending to be a product.
     id: "gmail",
     label: "Gmail",
     short: "Gmail",
-    // A real training domain (its registry entry owns the shared Google SSO page-states — the home
-    // for single-sign-on training data — and the fetch_login_code errand goal). The operator
-    // WORKSPACE isn't built yet, so the tile stays non-clickable; training capture is live.
-    kind: "coming_soon",
+    kind: "errands",
     provider: "google",
     host: "gmail",
-    responsibility: "Home for Google single-sign-on training data + the target of cross-domain 'fetch the login code' errands.",
-    blurb: "Google login + email errands — training live, workspace soon.",
-    tabs: [{ id: "overview", label: "Overview" }],
+    // The PROVIDER's shared profile, not a per-domain one: one supervised sign-in here
+    // authenticates every Google surface, which is what makes an errand a tab hop and not a login.
+    profile: "google",
+    accounts: "domain",
+    responsibility: "Serve cross-domain errands — read a one-time login code out of the inbox for another domain's 'sign in with a code' flow — and home the shared Google single-sign-on training data.",
+    blurb: "Email errands for other domains + the shared Google sign-in.",
+    tabs: [
+      { id: "overview", label: "Overview" },
+      { id: "errands", label: "Errands" },
+      { id: "accounts", label: "Accounts" },
+      { id: "training", label: "Training" },
+    ],
   },
   {
     id: "shopify",

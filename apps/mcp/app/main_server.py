@@ -2987,6 +2987,104 @@ async def auth_state(body: ScreenshotRequest):
         return {"ok": False, "detail": str(exc)}
 
 
+_GMAIL_INBOX_JS = r"""
+(() => {
+  // Read the inbox LIST — never a thread. The one-time code lives in the SUBJECT line, so the list
+  // is the entire surface the fetch_login_code errand needs (LEARNINGS 2026-07-10). Not opening the
+  // mail is fewer steps, less churn, and no read-receipt on a message we only needed to glance at.
+  const rows = [];
+  const trs = document.querySelectorAll('tr.zA');
+  for (const tr of trs) {
+    // Sender: the span carrying the address is the stable one; its `name`/`title` is the display
+    // name and often omits the domain, which is exactly what we match on.
+    const senderEl = tr.querySelector('span[email]');
+    const sender = senderEl
+      ? ((senderEl.getAttribute('email') || '') + ' ' + (senderEl.getAttribute('name') || '')).trim()
+      : ((tr.querySelector('.yW') || {}).innerText || '').trim();
+
+    const subjectEl = tr.querySelector('.bog') || tr.querySelector('.y6 span');
+    const subject = subjectEl ? (subjectEl.innerText || '').trim() : '';
+    const snippetEl = tr.querySelector('.y2');
+    const snippet = snippetEl ? (snippetEl.innerText || '').trim() : '';
+
+    // TIMESTAMP — the field the whole errand turns on, because a stale code is indistinguishable
+    // from a fresh one in every other respect. Gmail renders a bare time for today and a date for
+    // older mail, but the `title`/`aria-label` on the date cell carries the FULL timestamp. Parse
+    // it here, in the page, where the browser's own locale can do it, and emit ISO. If it will not
+    // parse we emit null rather than a guess: the resolver treats an unprovable timestamp as a
+    // rejection, which is the honest outcome — better a human glance than a wrong code.
+    const dateEl = tr.querySelector('.xW span[title], .xY span[title], span[title][aria-label]');
+    const rawDate = dateEl ? (dateEl.getAttribute('title') || dateEl.getAttribute('aria-label') || '') : '';
+    let receivedAt = null;
+    if (rawDate) {
+      const parsed = new Date(rawDate);
+      if (!isNaN(parsed.getTime())) receivedAt = parsed.toISOString();
+    }
+
+    rows.push({
+      sender: sender.slice(0, 200),
+      subject: subject.slice(0, 300),
+      snippet: snippet.slice(0, 300),
+      received_at: receivedAt,
+      received_text: rawDate.slice(0, 80),
+      unread: tr.classList.contains('zE'),
+    });
+  }
+
+  // Is this profile actually signed in? Google gives nothing to probe the way Indeed does — no
+  // "Sign out" button in the DOM — so the signal is the presence of a signed-in-only surface. The
+  // Indeed detector answered a confident `false` here on 2026-07-10 and was simply wrong.
+  const signedIn = /mail\.google\.com\/mail\/u\/\d+/.test(location.href) &&
+                   !!document.querySelector('[gh="tl"], [role="main"]');
+
+  return {
+    url: location.href,
+    read_at: new Date().toISOString(),
+    signed_in: signedIn,
+    row_count: rows.length,
+    // The list container exists even when empty; distinguishing "no mail" from "we could not find
+    // the list at all" is the difference between waiting and escalating. A reader that returns []
+    // for both is the silent-undercount bug LinkedIn taught us.
+    list_found: !!document.querySelector('[gh="tl"], table.F'),
+    rows: rows,
+  };
+})()
+"""
+
+
+@app.post("/read_inbox")
+async def read_inbox(body: ScreenshotRequest):
+    """Read the Gmail inbox LIST into structured rows — the reader half of the fetch_login_code
+    errand. The RULES live in the control plane (`errands.resolve_login_code`); this only observes.
+
+    Deliberately its OWN endpoint rather than another branch of `_platform_of`. That dispatcher
+    resolves everything unrecognised to Indeed so existing job-search callers behave unchanged —
+    which is right for job engines and wrong here: Gmail is not an engine, and teaching the jobs
+    dispatcher about it would put a comms surface behind a `*_BY_PLATFORM` lookup that would
+    KeyError on every entry it has no reader for.
+
+    Failure is structured, never a silent empty: `list_found: false` means we could not find the
+    list at all (stale tab, signed out, a layout we do not know), which needs a human — as opposed
+    to `row_count: 0`, which just means no mail and the caller should retry.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            res = await cdp.send("Runtime.evaluate",
+                                 {"expression": _GMAIL_INBOX_JS, "returnByValue": True})
+        data = (res.get("result") or {}).get("value") or {}
+        if not data:
+            return {"ok": False, "detail": "the inbox reader returned nothing — stale tab?"}
+        data["ok"] = True
+        return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("read_inbox failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
 _FRAME_TEXT_JS = r"""
 (() => {
   // Same-origin frames only: a cross-origin contentDocument throws, and we swallow it rather

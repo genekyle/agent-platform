@@ -11,6 +11,7 @@ import { ActivityFeed } from "./ActivityFeed";
 import { DomainTerminal } from "./DomainTerminal";
 import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
+import { ErrandsPanel } from "./ErrandsPanel";
 import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
 import { JobsWorkspaceSection } from "../JobsWorkspaceSection";
 import { AccountsSection } from "../AccountsSection";
@@ -35,6 +36,7 @@ function DataTab({ domain, tab, onOpenTraining }) {
   if (tab === "control") return <SessionControlPanel domain={domain} />;
   if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
+  if (tab === "errands") return <ErrandsPanel domain={domain} />;
   if (tab === "terminal") return <div className="section-body"><DomainTerminal domain={domain} /></div>;
   if (tab === "accounts") {
     // WHICH accounts a domain has is a property OF the domain, declared in the catalog — an ATS
@@ -76,6 +78,18 @@ function Overview({ domain, mode, goalState, onToggleGoal }) {
       getJSON("/api/runtime/handoffs?limit=20")
         .then((d) => setActivity((d.handoffs || []).map((h) => ({
           ts: h.ts, message: h.why || h.detail, status: h.status === "resolved" ? "ok" : "error", kind: "handoff",
+        }))))
+        .catch(() => {});
+    } else if (domain.kind === "errands") {
+      // An errand domain's "what happened" is the favours it did other domains. `blocked` and
+      // `ambiguous` read as errors because each one is a drive somewhere ELSE that is parked; a
+      // `not_found` is not an error at all — the mail may simply not have arrived yet.
+      getJSON("/api/errands?limit=20")
+        .then((d) => setActivity((d.errands || []).map((e) => ({
+          ts: e.ts,
+          message: `${e.requested_by} — ${e.errand_id}${e.escalated ? `: ${e.escalation}` : ""}`,
+          status: e.escalated ? "error" : e.status === "ok" ? "ok" : "info",
+          kind: "errand",
         }))))
         .catch(() => {});
     }

@@ -51,13 +51,36 @@ export function StatusCard({ domain }) {
       .catch(() => {});
   }, [domain.kind, domain.host]);
 
+  /* ---- errands: judged by the last favour it was asked for ---- */
+  // An errand domain has no session of its own to poll — it is called, it answers, it goes quiet.
+  // So its health is the OUTCOME OF THE LAST CALL, which costs nothing to read and is the only
+  // evidence we actually have. Deliberately no active probe: the cheapest way to ask "is the Google
+  // profile signed in" would be to run an errand, and a status card must not have side effects.
+  const [lastErrand, setLastErrand] = useState(null);
+  const pollErrands = useCallback(() => {
+    if (domain.kind !== "errands") return;
+    getJSON("/api/errands?limit=1")
+      .then((d) => {
+        const last = (d.errands || [])[0] || null;
+        setLastErrand(last);
+        setConnected(!!last);
+        // Only a `blocked` errand is evidence about the SESSION. `not_found` says nothing about
+        // being signed in — the mail just hadn't arrived — so it must not read as signed out.
+        setAuthed(last ? (last.status === "blocked" ? false : true) : null);
+        if (last?.ts) setCheckedAt(new Date(last.ts));
+      })
+      .catch(() => {});
+  }, [domain.kind]);
+
   useEffect(() => {
     if (domain.kind === "coming_soon") return undefined;
-    const tick = domain.kind === "selling" ? pollChannel : pollSession;
+    const tick = domain.kind === "selling" ? pollChannel
+      : domain.kind === "errands" ? pollErrands
+      : pollSession;
     tick();
     const t = setInterval(tick, domain.kind === "selling" ? 6000 : 10000);
     return () => clearInterval(t);
-  }, [domain.kind, pollChannel, pollSession]);
+  }, [domain.kind, pollChannel, pollErrands, pollSession]);
 
   const recheck = useCallback(async () => {
     if (!sessionId) return;
@@ -161,9 +184,26 @@ export function StatusCard({ domain }) {
       reason = `Checking whether the session is signed in to ${domain.label}…`;
       primary = { label: "Check sign-in", onClick: recheck };
     }
+  } else if (domain.kind === "errands") {
+    // No "Sign in" primary here, on purpose. Google's password and 2FA screens are human-required
+    // by policy — the credential cascades into every domain that signs in with Google — so the
+    // card TELLS the operator what to do and never offers a button that would imply the agent
+    // could do it. Same class of refusal as never auto-solving a captcha.
+    if (lastErrand?.status === "blocked") {
+      level = "attention"; head = "Blocked — needs you";
+      reason = lastErrand.escalation
+        || "The last errand couldn't be served. Check the shared Google browser.";
+    } else if (lastErrand) {
+      level = "ready"; head = "Serving errands";
+      reason = `Last call: ${lastErrand.requested_by} asked for ${lastErrand.errand_id}. `
+        + "One supervised Google sign-in keeps every Google surface authenticated; the agent never types it.";
+    } else {
+      level = "idle"; head = "Never called yet";
+      reason = `${domain.responsibility} Nothing has asked for an errand — the Errands tab lists what this domain offers.`;
+    }
   }
 
-  const busyLabel = { connect: "Opening…", login: "Signing in…", check: "Checking…" };
+  const busyLabel ={ connect: "Opening…", login: "Signing in…", check: "Checking…" };
 
   return (
     <div className={`status-card ${LEVEL_CLASS[level]}`}>
@@ -174,7 +214,11 @@ export function StatusCard({ domain }) {
         </div>
         <div className="status-card__reason">{reason}</div>
         <div className="status-card__meta">
-          {domain.kind === "selling" ? (connected ? "Browser: healthy" : "Browser: not open") : (connected ? "Session: active" : "Session: none")}
+          {domain.kind === "selling" ? (connected ? "Browser: healthy" : "Browser: not open")
+            /* An errand domain has no session of its own — saying "Session: none" would read as
+               broken when the honest answer is that nobody has called it. */
+            : domain.kind === "errands" ? (connected ? "Last errand: served" : "No errands yet")
+            : (connected ? "Session: active" : "Session: none")}
           {authed === true ? " · Account: signed in" : authed === false ? " · Account: signed out" : ""}
           {checkedAt ? ` · checked ${checkedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
         </div>

@@ -113,6 +113,8 @@ REGISTRY_SEED = {
         {"task_id": "facebook_create_listing_flow", "scope_level": "goal", "domain_id": "facebook_marketplace", "goal_id": "create_listing", "display_name": "Create a Marketplace listing"},
         {"task_id": "indeed_apply_flow", "scope_level": "goal", "domain_id": "indeed_jobs", "goal_id": "apply_to_job", "display_name": "Complete Indeed apply flow"},
         {"task_id": "linkedin_apply_flow", "scope_level": "goal", "domain_id": "linkedin_jobs", "goal_id": "apply_to_linkedin_job", "display_name": "Complete LinkedIn apply flow"},
+        # The errand, as a task another domain's flow detours into and returns from.
+        {"task_id": "gmail_fetch_code_flow", "scope_level": "goal", "domain_id": "gmail", "goal_id": "fetch_login_code", "display_name": "Read a one-time login code from the inbox"},
     ],
     "scenarios": [
         {
@@ -125,6 +127,23 @@ REGISTRY_SEED = {
             "display_name": "Google Sign-in -> Gmail Inbox",
             "start_page_state": "google_signin_email",
             "description": "Supervised one-time Google sign-in for the shared google profile (email -> password -> 2FA -> inbox).",
+            "capture_profile_override": None,
+        },
+        {
+            # The ERRAND, as a startable scenario. Without this row the fetch_login_code goal is
+            # registered and unusable: a training session is created from (domain, scenario) and
+            # the endpoint 404s when the scenario is missing, so the goal shows up in every picker
+            # and nothing can ever run it. Exactly the hole LinkedIn sat in until 642c8dd.
+            # Starts at `inbox` because the shared google profile is already signed in — the errand
+            # is a tab hop, not a login. If it isn't signed in, the recipe's login_wall branch says
+            # so and the operator signs in once for every provider member at once.
+            "scenario_id": "gmail_inbox_fetch_login_code",
+            "domain_id": "gmail",
+            "goal_id": "fetch_login_code",
+            "task_id": "gmail_fetch_code_flow",
+            "display_name": "Inbox -> Read a One-Time Login Code",
+            "start_page_state": "inbox",
+            "description": "Cross-domain errand: read a one-time sign-in code out of the inbox LIST (the subject line carries it) for another domain's 'sign in with a code' flow, then return.",
             "capture_profile_override": None,
         },
         {
@@ -281,6 +300,14 @@ def seed_gmail_domain(db: Session) -> None:
     for payload in [g for g in REGISTRY_SEED["goals"] if g.get("domain_id") == "gmail"]:
         if not db.scalar(select(GoalRegistry.goal_id).where(GoalRegistry.goal_id == payload["goal_id"])):
             db.add(GoalRegistry(status="active", **payload))
+            changed = True
+    # TASKS before scenarios — a scenario carries a task_id foreign key, so seeding them the other
+    # way round leaves the errand scenario pointing at a task that does not exist yet. (This loop
+    # was missing entirely until the errand needed it; the same omission is what left LinkedIn
+    # registered-and-unusable, one row further down the same chain.)
+    for payload in [t for t in REGISTRY_SEED["tasks"] if t.get("domain_id") == "gmail"]:
+        if not db.scalar(select(TaskRegistry.task_id).where(TaskRegistry.task_id == payload["task_id"])):
+            db.add(TaskRegistry(status="active", **payload))
             changed = True
     for payload in [s for s in REGISTRY_SEED["scenarios"] if s.get("domain_id") == "gmail"]:
         if not db.scalar(select(ScenarioRegistry.scenario_id).where(ScenarioRegistry.scenario_id == payload["scenario_id"])):

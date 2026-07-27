@@ -104,6 +104,7 @@ from routers import application_answers as application_answers_router  # noqa: E
 from routers import career_search as career_search_router  # noqa: E402
 from routers import controller as controller_router  # noqa: E402
 from routers import drive_lock as drive_lock_router  # noqa: E402
+from routers import errands as errands_router  # noqa: E402
 from routers import events as events_router  # noqa: E402
 from routers import facebook as facebook_router  # noqa: E402
 from routers import inventory as inventory_router  # noqa: E402
@@ -5236,6 +5237,7 @@ def create_app() -> FastAPI:
     app.include_router(career_search_router.router)
     app.include_router(controller_router.router)
     app.include_router(drive_lock_router.router)
+    app.include_router(errands_router.router)
     app.include_router(events_router.router)
     app.include_router(facebook_router.router)
     app.include_router(inventory_router.router)

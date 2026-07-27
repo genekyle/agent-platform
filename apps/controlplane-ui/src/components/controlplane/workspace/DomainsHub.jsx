@@ -51,6 +51,23 @@ function PlannedItem({ domain }) {
   );
 }
 
+// A provider member that is actually LIVE. Every member used to render as PlannedItem — a
+// non-clickable div badged "Planned" — which was true while Gmail had no workspace and became a
+// lie the moment it got one: the domain other domains now depend on was the one you could not open.
+// A live member is a button; only the not-yet-built ones stay flat.
+function ProviderSurface({ domain, tile, onOpen }) {
+  if (domain.kind === "coming_soon") return <PlannedItem domain={domain} />;
+  return (
+    <button className="planned-domain planned-domain--live" onClick={() => onOpen?.(domain.id)}>
+      <span className="planned-domain__icon"><DomainIcon id={domain.id} size={17} /></span>
+      <span><strong>{domain.label}</strong><small>{domain.blurb}</small></span>
+      {tile?.attention_count
+        ? <span className="badge badge--danger">{tile.attention_count} need you</span>
+        : <span className="badge badge--muted">Open</span>}
+    </button>
+  );
+}
+
 export function DomainsHub({ onOpenDomain, tilesById, compact = false }) {
   const [fetched, setFetched] = useState({});
 
@@ -114,7 +131,10 @@ export function DomainsHub({ onOpenDomain, tilesById, compact = false }) {
             <span><strong>{group.label}</strong><small>{group.blurb}</small></span>
           </div>
           <div className="provider-card__surfaces">
-            {domains.map((domain) => <PlannedItem key={domain.id} domain={domain} />)}
+            {domains.map((domain) => (
+              <ProviderSurface key={domain.id} domain={domain} tile={byId[domain.id]}
+                               onOpen={onOpenDomain} />
+            ))}
             {(group.planned || []).map((label) => <span className="provider-surface" key={label}>{label}<small>planned</small></span>)}
           </div>
         </section>

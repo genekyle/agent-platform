@@ -2970,3 +2970,109 @@ place to get this wrong is exactly where nobody would notice.
   a fill, a decision: the operator chose the top of the posted range. The lesson is that the
   applied-check is not the only thing worth knowing before entering — **the posted range against
   the floor is a triage signal we currently only notice at the salary question**, six steps in.
+
+---
+
+## 2026-07-27 (5) — The Google domain existed as three declarations and no code; and evidence that cites a secret
+
+**The ask.** Start a Google domain so cross-domain **errands have a home** — and make it *open*, so
+the domains that need Gmail can call it.
+
+**What we believed.** That this was greenfield: a new domain to design from scratch.
+
+**What's actually true.** The design was already written, twice, and had never been connected to
+anything. `providers.py` has declared since 2026-07-09 that Google is a provider group with one
+shared profile, four member domains, and an explicit errand hook —
+`code_delivery: {via_domain: gmail, goal: fetch_login_code}`. The errand itself **ran live and
+end-to-end on 2026-07-10**, hand-driven, and that entry closes with "STILL TODO: codify the errand
+as a reusable recipe/endpoint." It was never codified. So what existed was:
+
+* a **tab role** named `errand` (`controller/window.py:55`) — a label,
+* a **goal id** named `fetch_login_code` (`seed.py`) — with no scenario, therefore unusable,
+* a **`code_delivery` block** in the provider constant that **no code read**,
+
+and `apply_recipe.py:322/398` already naming the errand as the next step when an ATS account needs
+email verification. A consumer was waiting on a capability that had a name, a route, a goal, and no
+implementation. **A declaration nothing reads is indistinguishable from a plan**, and this one
+survived two and a half weeks partly *because* it looked built from every angle.
+
+**The goal-with-no-scenario bug, for the second time in two days.** `fetch_login_code` had no
+`ScenarioRegistry` row, and `create_training_session` 404s when the scenario is missing — so the
+errand goal appeared in every picker and no session could ever run it. This is exactly the hole
+`642c8dd` fixed for LinkedIn one commit earlier, one level down the same chain (there: a domain
+with no scenario; here: a goal with no scenario). `seed_gmail_domain` also topped up domains and
+goals but not **tasks**, and a scenario carries a `task_id` FK — so the fix needed the tasks loop
+too, seeded before scenarios. Worth generalising: **the seed chain is domain → goal → task →
+scenario, and a top-up seeder that stops early leaves rows that look present and cannot be used.**
+
+**The bug my own test caught, which is the one worth remembering.** The errand's evidence cites the
+subject line it read the code from — that is the §10 open-brain contract, a decision carrying what
+it decided from. But the subject line for a login code **is** "Sign in to Indeed with code: 418302".
+The evidence cites the secret. It would have been written into the errand log, the Errands tab, the
+activity feed, and any escalation text a human reads. `mask_codes()` now replaces every code-shaped
+token with `[code:6]` before anything durable quotes it — **including the subjects of codes we
+REJECTED**, because a stale row carries a real, recently-valid code and "we didn't use it" is not a
+reason to keep it forever. The general shape: **§4 (never capture secrets) and §10 (cite your
+evidence) pull against each other whenever the evidence IS the secret.** Mask at the point of
+quoting, not at the point of returning — the caller still needs the real value.
+
+**Three rules the resolver encodes, each paid for by something already learned.**
+* **Freshness is the load-bearing check and it fails silently.** A login-code inbox is full of old
+  codes that match sender and subject perfectly. Return yesterday's and the form just says
+  "invalid" — nothing errors, nothing looks broken, and the drive stalls looking like a different
+  problem. So a row must prove it is newer than the request, and **a row whose timestamp will not
+  parse FAILS that proof rather than passing it.** Judged against the BROWSER's clock (`read_at`),
+  not ours, so the verdict does not skew if the capture server ever moves off this host.
+* **Never guess a credential.** An ambiguous match (two different fresh codes) escalates instead of
+  picking the newer. A wrong code is not a free retry — it burns an attempt, and enough of them
+  lock the account. A number that nothing labels a code is reported as *considered*, never
+  returned; "grab the longest number in the subject" reads order numbers and totals as credentials.
+* **`ok` does not mean authenticated.** 2026-07-10 again: the code got Indeed past the email wall
+  and Indeed then demanded phone 2FA. `expect_followup_factor` is in the payload so no caller can
+  read past it.
+
+**A regex detail that would have shipped a plausible wrong answer.** The gap between the keyword and
+the digits is `[^\d\n]{0,15}?` — non-digit, and **lazy**. Greedy, " is G-" gets eaten as filler and
+`G-418302` comes back as `418302`: a code that looks perfectly valid, is one character short of
+correct, and fails at the form with no clue why.
+
+**The rollup branch that answered for a domain it had never heard of.** `build_summary` chose
+metrics with `selling if kind == "selling" else jobs`. A binary — so Gmail would have reported
+"Jobs found: 0" while querying `ObservedJob` for a platform that will never exist. Same lesson as
+Career Search's second member, one altitude up: **a branch with no case for you still answers, and
+it answers as whoever was there first.** Now an explicit three-way dispatch with an else that
+returns empty metrics rather than someone else's.
+
+**Also corrected:** `accounts.gmail_default` used profile `"gmail"` while the provider shares
+`"google"`. A provider exists precisely so ONE sign-in authenticates every member — split, the
+Docs/Sheets members would later launch into a second, signed-OUT Chrome profile beside the
+signed-in one, failing in a way that reads as "Google logged us out" rather than as a config split.
+A test now pins the two together.
+
+**Where it landed.** `errands.py` (contract + resolver + `route()`, the reader `code_delivery`
+never had), `gmail_recipe.py` (login spine, errand spine, URL→state, and `signed_in_signal()` which
+returns **None** when it cannot tell — the Indeed detector's mistake here was a confident `false`),
+`errand_log.py`, `routers/errands.py` (`POST /api/errands/fetch_login_code`, journaled as `OBSERVE`
+through the existing intent journal — a private log would be the event-log mistake again),
+`/read_inbox` in the capture server (its OWN endpoint, not another `_platform_of` branch: that
+dispatcher resolves everything unrecognised to Indeed, which is right for job engines and wrong for
+a comms surface), the seed fix, and the Gmail workspace with an Errands tab. **36 tests in
+`test_gmail_errand.py`** — the checklist a second provider member has to satisfy.
+
+**Still owed, honestly.** None of the Gmail readers have met a live page. The inbox reader's
+selectors (`tr.zA`, `.bog`, `.y2`, the `title` timestamp) are careful guesses written to report
+structured failure rather than a silent empty — `list_found: false` is deliberately distinct from
+`row_count: 0`, because one needs a human and the other needs patience. The first live drive is
+what turns them into knowledge; capture and label on it. The UI was parse-checked with esbuild but
+**not built or linted** — this worktree has no `node_modules` and installing them is a download.
+
+**Unrelated, found on the way: six tests in `test_session_control.py` are not hermetic.** They pass
+in the main checkout and fail in any fresh worktree — verified by stashing every change and watching
+them still fail on a clean tree. `settings.observer_artifacts_dir` is the RELATIVE `../mcp/output`,
+so it resolves per-checkout, and the main tree's cache has `accounts.json`,
+`application_preferences.json`, `domain_settings.json` and more that a new worktree's does not. The
+apply-fill path reads them and produces nothing when they are absent. This is a sibling of the
+2026-07-23 finding above — that one was *code* resolving to main, this one is *state* — and it has
+the same cost: **a worktree session sees a red suite it did not cause**, and either bisects it (as
+happened here) or learns to ignore real failures. Not fixed here; the fix is to give those tests a
+`tmp_path` artifacts dir and explicit fixtures.

@@ -56,8 +56,20 @@ _BUILTIN_ACCOUNTS: dict[str, dict[str, Any]] = {
     },
     "gmail_default": {
         "account_id": "gmail_default", "domain_id": "gmail",
-        "label": "Gmail — default", "profile": "gmail", "secret_ref": "env:GMAIL",
-        "status": "active", "notes": "Legacy GMAIL_USERNAME / GMAIL_PASSWORD.", "builtin": True,
+        "label": "Gmail — default",
+        # The PROVIDER's profile, not a per-domain one — this is the whole point of the google
+        # group. One sign-in in the `google` profile authenticates Gmail and every member that
+        # follows it (Docs, Sheets, Drive). This read `"gmail"` until 2026-07-27, which would have
+        # launched those members into a second, signed-OUT Chrome profile sitting right beside the
+        # signed-in one — a failure that looks like "Google logged us out" rather than like a
+        # config split. Keep it equal to providers.google["profile"]; a test pins the two together.
+        "profile": "google", "secret_ref": "env:GMAIL",
+        "status": "active",
+        "notes": "GMAIL_USERNAME / GMAIL_PASSWORD. The agent NEVER types these — Google's password "
+                 "and 2FA screens are human-required by policy (the credential cascades into every "
+                 "domain that signs in with Google). They exist for the operator's one-time "
+                 "supervised sign-in; the shared profile keeps the session afterwards.",
+        "builtin": True,
     },
 }
 

@@ -60,7 +60,7 @@ def test_recent_activity_is_newest_first():
 def test_build_summary_shape_on_empty_platform():
     summary = command_center.build_summary(_FakeDB())
     assert {d["id"] for d in summary["domains"]} == {"facebook_marketplace", "indeed_jobs",
-                                                     "linkedin_jobs"}
+                                                     "linkedin_jobs", "gmail"}
     for tile in summary["domains"]:
         assert tile["status"] in ("ready", "attention", "idle")
         assert tile["automation_mode"] == "manual"

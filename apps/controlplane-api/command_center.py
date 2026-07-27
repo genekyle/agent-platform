@@ -42,6 +42,18 @@ DOMAINS: list[dict[str, Any]] = [
      # context tore down" or "the URL changed" as proof an action landed — they must compare a
      # SIGNATURE of the results before and after. See `/await_results` in the capture server.
      "spa": True},
+    # Gmail — the first member of the `google` PROVIDER group, and the first domain here that
+    # exists to be CALLED rather than driven for its own sake: other domains detour into it for a
+    # login code and return. Its `profile` is the provider's shared one, so `connected` answers
+    # "is the Google session live?" for every member that follows it, not just for Gmail.
+    #
+    # `kind: "errands"` is load-bearing, not a label. The tile branch below was a binary — selling,
+    # else jobs — so a domain with no case of its own still got an answer, and it was Indeed's.
+    # Gmail would have reported "Jobs found: 0" while querying ObservedJob for a platform that will
+    # never exist. That is the Career-Search lesson at a new altitude: adding a sibling is how you
+    # find out which code was quietly speaking for everyone.
+    {"id": "gmail", "label": "Gmail", "kind": "errands", "profile": "google", "host": "gmail",
+     "capture_domain": "gmail"},
 ]
 
 _BY_ID = {d["id"]: d for d in DOMAINS}
@@ -142,6 +154,28 @@ def _jobs_metrics(db: Session, platform: str) -> dict[str, Any]:
         return {"primary": {"label": "Jobs found", "value": 0}, "chips": [], "needs_attention": 0}
 
 
+def _errand_metrics() -> dict[str, Any]:
+    """What an errand domain is asked for, and how often it had to give up.
+
+    A provider member is measured by the favours it does other domains, not by anything it owns —
+    so the headline is requests served, and the number that actually matters is `escalated`: an
+    errand that escalates is a drive somewhere else that stopped and is waiting on a human.
+    """
+    try:
+        import errand_log
+        stats = errand_log.recent_stats()
+    except Exception:  # best-effort like every other source here — never blank the landing
+        return {"primary": {"label": "Errands served", "value": 0}, "chips": [], "needs_attention": 0}
+    return {
+        "primary": {"label": "Errands served", "value": stats["served"]},
+        "chips": [
+            {"label": "Codes found", "value": stats["ok"]},
+            {"label": "Escalated", "value": stats["escalated"], "warn": True},
+        ],
+        "needs_attention": stats["escalated"],
+    }
+
+
 def _recent_activity(handoffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """A merged, newest-first feed across domains — handoffs (what needed a human) plus the
     inventory action log — so the landing answers 'what just happened' at a glance."""
@@ -235,8 +269,17 @@ def build_summary(db: Session) -> dict[str, Any]:
 
     tiles: list[dict[str, Any]] = []
     for d in DOMAINS:
-        metrics = (_selling_metrics() if d["kind"] == "selling"
-                   else _jobs_metrics(db, platform_for(d["id"])))
+        # Dispatch on the domain's OWN kind, with no else-branch that answers for a kind it has
+        # never heard of. A new kind that lands here gets empty metrics and an honest tile rather
+        # than another domain's numbers — see the note on `gmail` in DOMAINS above.
+        if d["kind"] == "selling":
+            metrics = _selling_metrics()
+        elif d["kind"] == "jobs":
+            metrics = _jobs_metrics(db, platform_for(d["id"]))
+        elif d["kind"] == "errands":
+            metrics = _errand_metrics()
+        else:
+            metrics = {"primary": None, "chips": [], "needs_attention": 0}
         connected = _channel_connected(db, d["profile"])
         active = connected if connected is not None else _has_active_session(db, d["host"])
         attention = attention_by_domain.get(d["id"], 0) + int(metrics.get("needs_attention", 0) or 0)
