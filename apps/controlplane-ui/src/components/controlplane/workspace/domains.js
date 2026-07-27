@@ -5,8 +5,15 @@
 //
 // `kind` drives the shared behaviour:
 //   selling      — has a persistent channel browser (connect + supervised login)
-//   jobs         — runs inside a training session (auth is session-scoped)
+//   jobs         — a career-search AGGREGATOR (Indeed, LinkedIn): search + triage + hand off to an ATS
 //   coming_soon  — scaffolded in the UI, not wired to a backend yet (honest placeholder)
+//
+// Two more fields matter for the `jobs` kind:
+//   accounts: "domain" | "ats" — WHICH accounts panel the Accounts tab shows. An aggregator has one
+//     login of its OWN ("domain"); an ATS sub-domain has a login PER EMPLOYER ("ats").
+//   sweep — does this engine have a driven multi-page sweep? Both aggregators do: the CADENCE is
+//     shared (floor the radius, one page at a time, click into what you shortlist, human pauses)
+//     and only the readers differ, which the capture server picks off the live tab's host.
 
 export const DOMAIN_CATALOG = [
   {
@@ -18,7 +25,7 @@ export const DOMAIN_CATALOG = [
     label: "Career Search",
     short: "Career Search",
     kind: "group",
-    children: ["indeed_jobs", "linkedin", "workday", "greenhouse", "icims"],
+    children: ["indeed_jobs", "linkedin_jobs", "workday", "greenhouse", "icims"],
     responsibility: "Search + apply across job engines (Indeed, LinkedIn, ZipRecruiter) and their ATS (Workday, iCIMS, Taleo, …); the shared application accounts live here.",
     blurb: "Job engines + ATS — search, apply, accounts.",
     tabs: [
@@ -56,6 +63,8 @@ export const DOMAIN_CATALOG = [
     channel: null,
     host: "indeed",
     tabUrl: "indeed.com",
+    accounts: "domain",
+    sweep: true,
     responsibility: "Search Indeed, shortlist matching roles, apply to approved jobs, and track application status.",
     blurb: "Find and apply to jobs on Indeed.",
     tabs: [
@@ -76,6 +85,7 @@ export const DOMAIN_CATALOG = [
     kind: "coming_soon",
     parent: "career_search",
     host: "workday",
+    accounts: "ats",
     responsibility: "Complete Workday applications (the ATS most Indeed applies route to).",
     blurb: "Cross-site apply target — coming soon.",
     tabs: [
@@ -96,6 +106,7 @@ export const DOMAIN_CATALOG = [
     parent: "career_search",
     host: "greenhouse",
     tabUrl: "greenhouse.io",
+    accounts: "ats",
     responsibility: "Complete Greenhouse applications — embedded job_app forms, no account required.",
     blurb: "Cross-site apply target — no account wall.",
     tabs: [
@@ -117,6 +128,7 @@ export const DOMAIN_CATALOG = [
     parent: "career_search",
     host: "icims",
     tabUrl: "icims.com",
+    accounts: "ats",
     responsibility: "Complete iCIMS applications — content lives in an embedded frame on the employer's branded page; account-gated at submit.",
     blurb: "Cross-site apply target — framed content, account wall.",
     tabs: [
@@ -125,16 +137,37 @@ export const DOMAIN_CATALOG = [
     ],
   },
   {
-    id: "linkedin",
+    // LinkedIn — the second career-search AGGREGATOR, a SIBLING of Indeed (both are `kind: "jobs"`
+    // under the Career Search group), not an ATS. It gets Indeed's whole operating pattern because
+    // the questions are identical: what did we search, what did we find, what did we apply to.
+    // The one declared difference: `accounts: "domain"` — LinkedIn has ONE login of its own (the
+    // `linkedin_default` account), typed in the Accounts tab and encrypted into the vault.
+    // Everything else it shares with Indeed, including the sweep and the Session-control ladder:
+    // the cadence is about how we behave, not whose markup we read, so it is the SAME code with
+    // per-engine readers (capture server, chosen by the live tab's host) and a per-engine row in
+    // session_control.ENGINES (front door, results-URL shape, query param, page size).
+    id: "linkedin_jobs",
     label: "LinkedIn",
     short: "LinkedIn",
-    kind: "coming_soon",
+    kind: "jobs",
     parent: "career_search",
+    channel: null,
     host: "linkedin",
     tabUrl: "linkedin.com",
-    responsibility: "Search LinkedIn and apply to roles (Easy Apply + off-site ATS hand-offs).",
-    blurb: "Find and apply to jobs on LinkedIn — coming soon.",
-    tabs: [{ id: "overview", label: "Overview" }],
+    accounts: "domain",
+    sweep: true,
+    responsibility: "Search LinkedIn, shortlist matching roles, and apply (Easy Apply on-engine, or hand off to the employer's ATS).",
+    blurb: "Find and apply to jobs on LinkedIn.",
+    tabs: [
+      { id: "overview", label: "Overview" },
+      { id: "control", label: "Session control" },
+      { id: "live", label: "Live drive" },
+      { id: "jobs", label: "Jobs" },
+      { id: "profile", label: "Application Profile" },
+      { id: "apply-state", label: "Apply State" },
+      { id: "accounts", label: "Accounts" },
+      { id: "training", label: "Training" },
+    ],
   },
   {
     id: "gmail",

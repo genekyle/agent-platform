@@ -77,6 +77,7 @@ from seed import (
     seed_application_answers,
     seed_facebook_extras,
     seed_gmail_domain,
+    seed_linkedin_domain,
     seed_page_states,
     seed_training_registry,
 )
@@ -515,6 +516,7 @@ def on_startup():
         seed_training_registry(db)
         seed_facebook_extras(db)
         seed_gmail_domain(db)
+        seed_linkedin_domain(db)
         seed_page_states(db)
         seed_actions(db)
         backfill_goal_stages(db)
@@ -1782,10 +1784,18 @@ def search_cadence_spec():
     return search_cadence.cadence_spec()
 
 
-@router.get("/api/dashboards/indeed_jobs")
-def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
-    """The Jobs Dashboard data: headline counts + the Jobs Seen and Jobs Applied tables.
-    Duplicates are surfaced explicitly (jobs with seen_count>1) so the corpus stays manageable."""
+@router.get("/api/dashboards/{domain_id}")
+def jobs_dashboard(domain_id: str, platform: Optional[str] = None, db: Session = Depends(get_db)):
+    """The Jobs Dashboard data for ONE career-search domain: headline counts + the Jobs Seen and
+    Jobs Applied tables. Duplicates are surfaced explicitly (jobs with seen_count>1) so the corpus
+    stays manageable.
+
+    Keyed by DOMAIN (indeed_jobs, linkedin_jobs, …) rather than one route per engine — every
+    aggregator answers the same questions off the same table, and `platform` is derived from the
+    domain by command_center so the id->platform mapping lives in exactly one place. An explicit
+    `?platform=` still wins, for reading a platform that has no domain workspace yet."""
+    import command_center
+    platform = platform or command_center.platform_for(domain_id)
     jobs = db.scalars(select(ObservedJob).where(ObservedJob.platform == platform)
                       .order_by(ObservedJob.last_seen_at.desc())).all()
     by_status: dict[str, int] = {}
@@ -1811,6 +1821,7 @@ def jobs_dashboard(platform: str = "indeed", db: Session = Depends(get_db)):
                 row["applied"] += 1
 
     return {
+        "domain_id": domain_id,
         "platform": platform,
         "totals": {
             "jobs_found": len(jobs),
@@ -1845,7 +1856,12 @@ class FetchDescriptionsRequest(BaseModel):
 async def fetch_job_descriptions(body: FetchDescriptionsRequest, db: Session = Depends(get_db)):
     """Click INTO postings to collect full job descriptions (+ salary, apply_type) — the
     richer signal that powers matching + resume tailoring. Targets specific job_ids, or the
-    most-seen jobs that don't have a description yet. One viewjob navigation per job."""
+    most-seen jobs that don't have a description yet. One viewjob navigation per job.
+
+    INDEED ONLY, and deliberately not generalized: this is the legacy path that NAVIGATES to each
+    posting's URL, which is the scraper-shaped behaviour we stopped doing on live accounts. The
+    sweep's `/open_job_card` gets the same descriptions by CLICKING the card in place, and that is
+    the path every aggregator uses. Kept for the jobs already collected this way."""
     session = db.get(TrainingSession, body.training_session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Training session not found")
@@ -1908,6 +1924,10 @@ async def _capture_post(path: str, payload: dict, timeout: float = 40.0) -> dict
 
 class SearchSweepRequest(BaseModel):
     training_session_id: int
+    # WHICH aggregator to sweep. Defaults to Indeed so every existing caller is unchanged; the
+    # capture server picks its readers off the live tab's host, so this only has to name the right
+    # TAB and the right platform tag for the rows we persist.
+    domain_id: str = "indeed_jobs"
     query: Optional[str] = None          # defaults to the active job-search target
     location: Optional[str] = None
     max_pages: Optional[int] = None      # clamped to BOUNDS["max_pages_per_query"]
@@ -1925,15 +1945,23 @@ def _sweep_stop(reason: str, **extra) -> dict:
 
 @router.post("/api/search/sweep")
 async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
-    """The bounded auto-sweep — the 'multi-page' Indeed task, end to end and human-paced:
-    force the radius to >= min_miles by CLICKING the distance filter, then per results page extract
+    """The bounded auto-sweep — the 'multi-page' search task, end to end and human-paced:
+    force the radius to >= min_miles by OPERATING the distance filter, then per results page extract
     every card, shortlist the ones matching the query (cheap/deterministic), CLICK INTO each
-    shortlisted card to read its in-page detail pane (no viewjob URL-jump), and CLICK pagination to
-    the next page — stopping at BOUNDS / a live captcha / logout. Stamps a fresh authenticated cadence
-    run for provenance and persists incrementally, so a mid-sweep stop keeps the data already gathered.
-    Returns the run summary; the dashboard tables read the persisted results."""
+    shortlisted card to read its in-page detail pane (no URL-jump to the posting), and CLICK
+    pagination to the next page — stopping at BOUNDS / a live captcha / logout. Stamps a fresh
+    authenticated cadence run for provenance and persists incrementally, so a mid-sweep stop keeps
+    the data already gathered. Returns the run summary; the dashboard tables read the results.
+
+    Runs against ANY registered aggregator (`domain_id`). The cadence — floor the radius, one page
+    at a time, click into shortlisted cards, human pauses, never under a captcha — is the same
+    everywhere because it is about how we behave, not about whose markup we are reading. Only the
+    tab we aim at and the platform we tag rows with come from the domain; the capture server picks
+    its readers off the live tab's host.
+    """
     import random
     import apply_state_store as store
+    import command_center
     import escalation_rules
     import job_search_targets as jst
     import search_cadence
@@ -1942,6 +1970,8 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     if session is None:
         raise HTTPException(status_code=404, detail="Training session not found")
     browser_url = _session_browser_url(session)
+    platform = command_center.platform_for(body.domain_id)
+    search_tab = command_center.search_tab_url(body.domain_id)
 
     target = jst.active_target() or {}
     query = (body.query or target.get("query") or "").strip()
@@ -1956,9 +1986,13 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     block = await _refine_block_visibility(browser_url, block)
     if block and block.get("strength") == "active":
         return _sweep_stop("captcha", blocker=block)
-    ab = await _capture_post("/auth_state", {"browser_url": browser_url}, timeout=8.0)
+    # Probe the SEARCH tab specifically: the auth reader is chosen by the tab's host, so probing
+    # "whatever tab is first" asks LinkedIn's question of an Indeed page (or an ATS page) and gets a
+    # confident wrong answer. Same lesson as session_control's `_find_indeed_tab`.
+    ab = await _capture_post("/auth_state", {"browser_url": browser_url, "tab_url": search_tab},
+                             timeout=8.0)
     if not (ab.get("ok") and ab.get("logged_in")):
-        return _sweep_stop("not_authenticated")
+        return _sweep_stop("not_authenticated", platform=platform)
 
     # provenance: a fresh authenticated run makes this sweep's data actionable downstream
     bb = store.load_or_create(body.training_session_id, query=query, location=location)
@@ -1968,11 +2002,11 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     # --- DISTANCE: force >= min_miles by clicking the filter. If it can't be set, STOP — we never
     # gather sub-floor results (honors the always->=50mi rule). ---------------------------------
     dist = await _capture_post("/set_distance",
-                               {"browser_url": browser_url, "tab_url": "indeed.com/jobs",
+                               {"browser_url": browser_url, "tab_url": search_tab,
                                 "min_miles": min_miles})
     if not dist.get("applied"):
         store.save(bb)
-        return _sweep_stop("distance_filter_failed", distance=dist)
+        return _sweep_stop("distance_filter_failed", distance=dist, platform=platform)
     await asyncio.sleep(1.0)
 
     # Human pace between actions. Defaults to the cadence bound; min_pause_seconds lets a run go
@@ -1988,9 +2022,9 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     stopped_reason = "max_pages"
     for _ in range(max_pages):
         ex = await _capture_post("/extract_jobs",
-                                 {"browser_url": browser_url, "tab_url": "indeed.com/jobs"})
+                                 {"browser_url": browser_url, "tab_url": search_tab})
         cards = ex.get("jobs", []) if ex.get("ok") else []
-        new_c, _dup = upsert_observed_jobs(db, cards, "indeed", query)
+        new_c, _dup = upsert_observed_jobs(db, cards, platform, query)
         db.commit()
         pages_swept += 1
         total_found += len(cards)
@@ -2004,12 +2038,13 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
 
         # CLICK INTO each shortlisted card (in-page pane) to grab the full description.
         for card in shortlisted[:body.max_details_per_page]:
-            jid = f"indeed:{card.get('external_id')}"
+            jid = f"{platform}:{card.get('external_id')}"
             row = db.get(ObservedJob, jid)
             if row is None or (row.description or "").strip():
                 continue  # missing or already captured — don't re-click
             d = await _capture_post("/open_job_card",
-                                    {"browser_url": browser_url, "external_id": card.get("external_id")})
+                                    {"browser_url": browser_url, "tab_url": search_tab,
+                                     "external_id": card.get("external_id")})
             if d.get("ok"):
                 row.description = (d.get("description") or "")[:20000]
                 row.salary = row.salary or (d.get("salary") or "")[:200] or None
@@ -2021,7 +2056,7 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
             await asyncio.sleep(_jitter(2.0))
 
         nxt = await _capture_post("/next_page",
-                                  {"browser_url": browser_url, "tab_url": "indeed.com/jobs"})
+                                  {"browser_url": browser_url, "tab_url": search_tab})
         if not nxt.get("has_next"):
             stopped_reason = "no_next_page"
             break
@@ -2031,13 +2066,14 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     bb.search_state.page = pages_swept
     bb.search_state.observed_count = total_found
     bb.search_state.shortlist = shortlist_refs
-    bb.log("sweep", f"{query!r} @ {min_miles}mi: {pages_swept}p, {total_found} found, "
+    bb.log("sweep", f"{platform}: {query!r} @ {min_miles}mi: {pages_swept}p, {total_found} found, "
                     f"{total_desc} descriptions ({stopped_reason})")
     store.save(bb)
     return {"ok": True, "stopped_reason": stopped_reason, "pages_swept": pages_swept,
             "jobs_found": total_found, "new": total_new, "shortlisted": total_short,
             "descriptions_captured": total_desc, "min_miles": min_miles,
-            "distance_selected": dist.get("selected_miles"), "query": query, "location": location}
+            "distance_selected": dist.get("selected_miles"), "query": query, "location": location,
+            "domain_id": body.domain_id, "platform": platform}
 
 
 @router.patch("/api/jobs/{job_id:path}")

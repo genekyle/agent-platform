@@ -11,7 +11,7 @@ import { ActivityFeed } from "./ActivityFeed";
 import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
 import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
-import { IndeedWorkspaceSection } from "../IndeedWorkspaceSection";
+import { JobsWorkspaceSection } from "../JobsWorkspaceSection";
 import { AccountsSection } from "../AccountsSection";
 import { EventsConsole } from "../EventsConsole";
 import { DOMAINS_BY_ID } from "./domains";
@@ -23,10 +23,11 @@ import { AppIcon, DomainIcon } from "../../../ui/Icon";
 // tables, jobs hub) untouched.
 
 // Which existing section component + `section` prop each data tab maps to. The Overview tab is
-// the shared cockpit and is handled here directly.
+// the shared cockpit and is handled here directly. Every jobs aggregator shares ONE mapping —
+// the tabs are the same questions, only the domain they're scoped to differs.
+const JOBS_TABS = { jobs: "jobs-dashboard", profile: "application-answers", "apply-state": "apply-state" };
 const TAB_TO_SECTION = {
   facebook_marketplace: { inventory: "inventory", queue: "queue", listings: "listings", messages: "messages" },
-  indeed_jobs: { jobs: "jobs-dashboard", profile: "application-answers", "apply-state": "apply-state" },
 };
 
 function DataTab({ domain, tab, onOpenTraining }) {
@@ -34,14 +35,17 @@ function DataTab({ domain, tab, onOpenTraining }) {
   if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
   if (tab === "accounts") {
-    // Career-Search sub-domains (Workday, …) show the company-first ATS accounts filtered to THIS
-    // ATS; other domains keep the legacy per-domain accounts panel.
-    if (domain.parent === "career_search") return <AccountsSection atsFilter={domain.id} />;
+    // WHICH accounts a domain has is a property OF the domain, declared in the catalog — an ATS
+    // sub-domain has one login per employer (`accounts: "ats"`), an aggregator or channel has a
+    // single login of its own. Inferring it from `parent === "career_search"` sent Indeed to the
+    // company-first ATS panel filtered on an ats_id no account ever carries, so the engine that
+    // most needs a sign-in had nowhere to type one.
+    if (domain.accounts === "ats") return <AccountsSection atsFilter={domain.id} />;
     return <AccountsPanel domain={domain} />;
   }
+  if (domain.kind === "jobs") return <JobsWorkspaceSection domain={domain} section={JOBS_TABS[tab]} />;
   const section = TAB_TO_SECTION[domain.id]?.[tab];
   if (domain.id === "facebook_marketplace") return <FacebookMarketplaceSection section={section} />;
-  if (domain.id === "indeed_jobs") return <IndeedWorkspaceSection section={section} />;
   return <div className="empty-hint">Nothing here yet.</div>;
 }
 

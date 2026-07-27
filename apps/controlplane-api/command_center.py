@@ -21,12 +21,42 @@ from models import ObservedJob, TrainingSession
 
 # The domains that have a real workspace today. Kept deliberately small and backend-owned so
 # the rollup never depends on the UI catalog; "coming soon" domains are a pure-UI concern.
+#
+# `platform` is the value ObservedJob.platform carries for a jobs domain — the registry id
+# (`indeed_jobs`) and the scrape's platform tag (`indeed`) are deliberately different strings, and
+# every "which jobs are this domain's?" query needs the latter. Kept here so there is ONE mapping.
 DOMAINS: list[dict[str, Any]] = [
     {"id": "facebook_marketplace", "label": "Facebook Marketplace", "kind": "selling",
      "profile": "facebook", "host": "facebook", "capture_domain": "facebook_marketplace"},
     {"id": "indeed_jobs", "label": "Indeed", "kind": "jobs", "profile": None, "host": "indeed",
-     "capture_domain": "indeed"},
+     "capture_domain": "indeed", "platform": "indeed", "search_tab": "indeed.com/jobs"},
+    # LinkedIn — the second career-search AGGREGATOR, a sibling of Indeed under the Career Search
+    # group (not an ATS). Same `kind`, so it inherits the whole jobs operating pattern; only the
+    # host/platform differ. Its login is a real per-domain account (`linkedin_default`), unlike
+    # Indeed's session-scoped auth, but the tile doesn't care — that's the accounts registry's job.
+    {"id": "linkedin_jobs", "label": "LinkedIn", "kind": "jobs", "profile": None, "host": "linkedin",
+     "capture_domain": "linkedin", "platform": "linkedin", "search_tab": "linkedin.com/jobs"},
 ]
+
+_BY_ID = {d["id"]: d for d in DOMAINS}
+
+
+def platform_for(domain_id: str) -> str:
+    """ObservedJob.platform for a jobs domain id (`indeed_jobs` -> `indeed`). Falls back to the id
+    itself so an unregistered domain reads as its own platform rather than silently as Indeed's."""
+    return _BY_ID.get(domain_id, {}).get("platform") or domain_id
+
+
+def search_tab_url(domain_id: str) -> str:
+    """The URL SUBSTRING that identifies this domain's search-results tab — what every capture call
+    passes as `tab_url` to pick the right tab out of a session's Chrome.
+
+    Narrow on purpose (`linkedin.com/jobs`, not `linkedin.com`): once an apply is in flight a
+    session holds several tabs on the same host, and a bare host matches the wrong one. That exact
+    trap already cost a drive on Indeed — see the capture note in LEARNINGS about a bare
+    `indeed.com` matching several pages.
+    """
+    return _BY_ID.get(domain_id, {}).get("search_tab") or ""
 
 
 def _attribute_domain(row: dict[str, Any]) -> Optional[str]:
@@ -83,9 +113,9 @@ def _selling_metrics() -> dict[str, Any]:
         return {"primary": {"label": "Active listings", "value": 0}, "chips": [], "needs_attention": 0}
 
 
-def _jobs_metrics(db: Session) -> dict[str, Any]:
+def _jobs_metrics(db: Session, platform: str) -> dict[str, Any]:
     try:
-        jobs = db.scalars(select(ObservedJob).where(ObservedJob.platform == "indeed")).all()
+        jobs = db.scalars(select(ObservedJob).where(ObservedJob.platform == platform)).all()
         applied = sum(1 for j in jobs if j.application_status == "applied")
         return {
             "primary": {"label": "Jobs found", "value": len(jobs)},
@@ -192,7 +222,8 @@ def build_summary(db: Session) -> dict[str, Any]:
 
     tiles: list[dict[str, Any]] = []
     for d in DOMAINS:
-        metrics = _selling_metrics() if d["kind"] == "selling" else _jobs_metrics(db)
+        metrics = (_selling_metrics() if d["kind"] == "selling"
+                   else _jobs_metrics(db, platform_for(d["id"])))
         connected = _channel_connected(db, d["profile"])
         active = connected if connected is not None else _has_active_session(db, d["host"])
         attention = attention_by_domain.get(d["id"], 0) + int(metrics.get("needs_attention", 0) or 0)

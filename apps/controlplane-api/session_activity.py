@@ -13,9 +13,10 @@ from typing import Any, Optional
 
 # ATS ids + task/url hints that mean "Career Search" (rows on the journals carry no domain field).
 _CAREER_ATS = {"workday", "greenhouse", "icims", "taleo", "lever", "successfactors", "smartrecruiters",
-               "ashby", "workable", "brassring", "phenom", "indeed_quick_apply"}
-_CAREER_TASK_HINTS = ("indeed", "ats_login", "workday", "greenhouse", "apply", "career")
-_CAREER_HOST_HINTS = ("myworkdayjobs", "indeed.com", "greenhouse.io", "icims.com", "bilh.org")
+               "ashby", "workable", "brassring", "phenom", "indeed_quick_apply", "linkedin_easy_apply"}
+_CAREER_TASK_HINTS = ("indeed", "linkedin", "ats_login", "workday", "greenhouse", "apply", "career")
+_CAREER_HOST_HINTS = ("myworkdayjobs", "indeed.com", "linkedin.com", "greenhouse.io", "icims.com",
+                      "bilh.org")
 
 
 def _infer_domain(*, ats=None, task=None, url=None, route=None, domain=None) -> Optional[str]:

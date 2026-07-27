@@ -13,6 +13,9 @@ async function activeSessionId(host) {
   return s?.id ?? null;
 }
 
+// A task's `run` receives the whole DOMAIN, so the same task definition works for every engine
+// under a kind — the endpoints take a `domain_id` and resolve the tab/platform from it. `when`
+// gates a task on a capability the domain declares, for the day an engine lacks one.
 const TASKS = {
   selling: [
     { key: "post", label: "Post queued items", outward: true, run: () => postJSON("/api/inventory/queue/run?dry_run=true") },
@@ -22,18 +25,24 @@ const TASKS = {
   jobs: [
     {
       key: "sweep", label: "Run search sweep (≥50 mi)", outward: false,
-      run: async (host) => {
-        const sid = await activeSessionId(host);
-        if (!sid) throw new Error("No active Indeed session — start one and open a search.");
-        return postJSON("/api/search/sweep", { training_session_id: sid, min_miles: 50 });
+      when: (domain) => domain.sweep,
+      run: async (domain) => {
+        const sid = await activeSessionId(domain.host);
+        if (!sid) throw new Error(`No active ${domain.label} session — start one and open a search.`);
+        return postJSON("/api/search/sweep", {
+          training_session_id: sid, domain_id: domain.id, min_miles: 50,
+        });
       },
     },
     {
       key: "extract", label: "Extract current page", outward: false,
-      run: async (host) => {
-        const sid = await activeSessionId(host);
-        if (!sid) throw new Error("No active Indeed session — start one and open a search.");
-        return postJSON("/api/jobs/extract", { training_session_id: sid, tab_url: "indeed.com/jobs", search_query: "manual extract" });
+      run: async (domain) => {
+        const sid = await activeSessionId(domain.host);
+        if (!sid) throw new Error(`No active ${domain.label} session — start one and open a search.`);
+        return postJSON("/api/jobs/extract", {
+          training_session_id: sid, tab_url: domain.tabUrl, platform: domain.host,
+          search_query: "manual extract",
+        });
       },
     },
   ],
@@ -50,7 +59,7 @@ export function TasksPanel({ domain, mode }) {
   const [queueCount, setQueueCount] = useState(null);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState(null);
-  const tasks = TASKS[domain.kind] || [];
+  const tasks = (TASKS[domain.kind] || []).filter((t) => !t.when || t.when(domain));
 
   const loadQueue = useCallback(() => {
     if (domain.kind !== "selling") return;
@@ -69,7 +78,7 @@ export function TasksPanel({ domain, mode }) {
     setBusy(task.key);
     setMsg(null);
     try {
-      const result = await task.run(domain.host);
+      const result = await task.run(domain);
       setMsg({ type: "ok", text: `${task.label} → ${summarize(result)}` });
       loadQueue();
     } catch (e) {
@@ -112,8 +121,8 @@ export function TasksPanel({ domain, mode }) {
           )}
           {domain.kind === "jobs" && (
             <div className="mode-hint" style={{ marginTop: 10 }}>
-              These run inside your active Indeed training session. Applying to a specific job stays a
-              per-job approval on the Jobs tab.
+              These run inside your active {domain.label} training session. Applying to a specific job
+              stays a per-job approval on the Jobs tab.
             </div>
           )}
         </>

@@ -99,6 +99,9 @@ REGISTRY_SEED = {
         {"goal_id": "apply_to_job", "domain_id": "indeed_jobs", "display_name": "Apply to Job", "action_type_hints": ["click", "type", "select"]},
         {"goal_id": "search_linkedin_jobs", "domain_id": "linkedin_jobs", "display_name": "Search LinkedIn Jobs", "action_type_hints": ["type", "click"]},
         {"goal_id": "open_linkedin_job", "domain_id": "linkedin_jobs", "display_name": "Open LinkedIn Job", "action_type_hints": ["click"]},
+        # Apply is the point of the domain, and it forks: Easy Apply completes on LinkedIn, anything
+        # else hands off to a real ATS on that ATS's own host (where the existing ATS recipes take over).
+        {"goal_id": "apply_to_linkedin_job", "domain_id": "linkedin_jobs", "display_name": "Apply to LinkedIn Job", "action_type_hints": ["click", "type", "select"]},
         # Gmail (google provider). fetch_login_code is the cross-domain errand hand-off — read a
         # one-time sign-in code out of the inbox for another domain's "sign in with a code" flow.
         {"goal_id": "fetch_login_code", "domain_id": "gmail", "display_name": "Fetch Login Code from Email", "action_type_hints": ["click", "type"]},
@@ -247,6 +250,41 @@ def seed_gmail_domain(db: Session) -> None:
     for payload in [s for s in REGISTRY_SEED["scenarios"] if s.get("domain_id") == "gmail"]:
         if not db.scalar(select(ScenarioRegistry.scenario_id).where(ScenarioRegistry.scenario_id == payload["scenario_id"])):
             db.add(ScenarioRegistry(status="active", **payload))
+            changed = True
+    if changed:
+        db.commit()
+
+
+def seed_linkedin_domain(db: Session) -> None:
+    """Idempotent top-up for the LinkedIn Jobs domain + its goals on an ALREADY-seeded DB.
+
+    `linkedin_jobs` has been in REGISTRY_SEED since the registry was written, but the base seeder
+    only runs on an EMPTY registry — so every DB seeded before LinkedIn was promoted to a real
+    workspace has no row for it, and captures tagged `linkedin_jobs` would have no domain to hang
+    off. Same merge discipline as `seed_gmail_domain`: add what's missing, never remove, so a
+    concurrent session's edits survive."""
+    want = next((d for d in REGISTRY_SEED["domains"] if d["domain_id"] == "linkedin_jobs"), None)
+    if want is None:
+        return
+    changed = False
+    row = db.get(DomainRegistry, "linkedin_jobs")
+    if row is None:
+        db.add(DomainRegistry(status="active", **want))
+        changed = True
+    else:
+        have_states = {s.get("page_state_id") for s in (row.page_states or [])}
+        missing_states = [s for s in want["page_states"] if s["page_state_id"] not in have_states]
+        if missing_states:
+            row.page_states = (row.page_states or []) + missing_states
+            changed = True
+        have_hosts = set(row.host_patterns or [])
+        missing_hosts = [h for h in want["host_patterns"] if h not in have_hosts]
+        if missing_hosts:
+            row.host_patterns = (row.host_patterns or []) + missing_hosts
+            changed = True
+    for payload in [g for g in REGISTRY_SEED["goals"] if g.get("domain_id") == "linkedin_jobs"]:
+        if not db.scalar(select(GoalRegistry.goal_id).where(GoalRegistry.goal_id == payload["goal_id"])):
+            db.add(GoalRegistry(status="active", **payload))
             changed = True
     if changed:
         db.commit()

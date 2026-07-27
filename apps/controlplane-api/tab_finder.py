@@ -40,7 +40,7 @@ _ATS_HOSTS: dict[str, list[str]] = {
 # Sessions where ATS account creation is ever relevant — Career-Search context ONLY (operator
 # directive 2026-07-19: "look for live indeed/workday/career-search sessions only, THEN the tab").
 # We never need to drive account creation from a Facebook/Gmail session, so we don't scan them.
-_CAREER_SEARCH_DOMAINS = {"indeed_jobs", "indeed", "career_search"}
+_CAREER_SEARCH_DOMAINS = {"indeed_jobs", "indeed", "linkedin_jobs", "linkedin", "career_search"}
 
 
 def _ats_ids() -> set[str]:
@@ -57,7 +57,7 @@ def is_career_search_session(domain_id: Optional[str]) -> bool:
     d = (domain_id or "").lower()
     if d in _CAREER_SEARCH_DOMAINS or d in _ats_ids():
         return True
-    return any(k in d for k in ("indeed", "career", "workday", "greenhouse", "icims", "ats"))
+    return any(k in d for k in ("indeed", "linkedin", "career", "workday", "greenhouse", "icims", "ats"))
 
 
 def _host_of(url: str) -> str:

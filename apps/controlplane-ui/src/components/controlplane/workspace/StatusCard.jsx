@@ -11,6 +11,10 @@ import { DomainIcon } from "../../../ui/Icon";
 const LEVEL_CLASS = { ready: "status-card--ready", attention: "status-card--attention", idle: "status-card--idle" };
 const DOT_CLASS = { ready: "dot--ready", attention: "dot--attention", idle: "dot--idle" };
 
+// "an Indeed session" / "a LinkedIn session" — the copy below is templated per domain now, and
+// a hardcoded "a" reads as broken English on half the catalog.
+const article = (word) => ("aeiou".includes((word || "")[0]?.toLowerCase()) ? "an" : "a");
+
 export function StatusCard({ domain }) {
   // connected: channel browser reachable (selling) or a live session (jobs)
   // authed: true | false | null(unknown)
@@ -140,19 +144,21 @@ export function StatusCard({ domain }) {
       primary = { label: "Check sign-in", onClick: recheck };
     }
   } else if (domain.kind === "jobs") {
+    // Copy is written against `domain.label` because every aggregator reaches this branch — naming
+    // Indeed here would have told a LinkedIn operator to go sign in to the wrong site.
     if (!connected) {
       level = "idle"; head = "No active session";
-      reason = "Start an Indeed training session (Training tab) and open a search — the workspace runs inside it.";
+      reason = `Start ${article(domain.label)} ${domain.label} training session (Training tab) and open a search — the workspace runs inside it.`;
     } else if (authed === true) {
       level = "ready"; head = "Ready to work";
-      reason = "Signed in to Indeed on the active session — search, shortlist, and apply can run.";
+      reason = `Signed in to ${domain.label} on the active session — search, shortlist, and apply can run.`;
     } else if (authed === false) {
       level = "attention"; head = "Needs sign-in";
-      reason = note || "Not signed in to Indeed. Complete the Google sign-in in the session's browser window; the agent resumes once it's healthy.";
+      reason = note || `Not signed in to ${domain.label}. Complete the sign-in in the session's browser window; the agent resumes once it's healthy.`;
       primary = { label: "Re-check sign-in", onClick: recheck };
     } else {
       level = "idle"; head = "Session active";
-      reason = "Checking whether the session is signed in to Indeed…";
+      reason = `Checking whether the session is signed in to ${domain.label}…`;
       primary = { label: "Check sign-in", onClick: recheck };
     }
   }

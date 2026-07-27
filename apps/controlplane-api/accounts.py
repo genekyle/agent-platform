@@ -46,6 +46,14 @@ _BUILTIN_ACCOUNTS: dict[str, dict[str, Any]] = {
         "label": "Indeed — default", "profile": "indeed", "secret_ref": "env:INDEED",
         "status": "active", "notes": "Legacy INDEED_USERNAME / INDEED_PASSWORD.", "builtin": True,
     },
+    "linkedin_default": {
+        "account_id": "linkedin_default", "domain_id": "linkedin_jobs",
+        "label": "LinkedIn — default", "profile": "linkedin", "secret_ref": "env:LINKEDIN",
+        "status": "active",
+        "notes": "LINKEDIN_USERNAME / LINKEDIN_PASSWORD, or type the login in the workspace's "
+                 "Accounts tab to store it in the vault instead.",
+        "builtin": True,
+    },
     "gmail_default": {
         "account_id": "gmail_default", "domain_id": "gmail",
         "label": "Gmail — default", "profile": "gmail", "secret_ref": "env:GMAIL",

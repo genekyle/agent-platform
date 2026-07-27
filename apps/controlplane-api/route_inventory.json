@@ -32,7 +32,7 @@
   "GET /api/controller/programs",
   "GET /api/controller/summary",
   "GET /api/controller/teacher/pending",
-  "GET /api/dashboards/indeed_jobs",
+  "GET /api/dashboards/{domain_id}",
   "GET /api/domains/{domain_id}/settings",
   "GET /api/domains/{domain_id}/training_readiness",
   "GET /api/drive_lock",

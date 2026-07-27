@@ -221,3 +221,99 @@ def test_sweep_stops_when_no_next_page(monkeypatch):
     assert r["ok"] is True
     assert r["stopped_reason"] == "no_next_page"
     assert r["pages_swept"] == 1
+
+
+# --- the SECOND aggregator ---------------------------------------------------------------
+# The sweep is one cadence over many engines. What must change per engine is small and exact: the
+# tab it aims at, and the platform every row is tagged with. What must NOT change is everything
+# else — the pre-gates, the bounds, the shortlist, the human pauses. These tests pin both halves.
+def _recording_capture(has_next=False):
+    """Same fake as _loop_capture, but it REMEMBERS which tab_url each call was aimed at — the
+    thing that decides whether we drove LinkedIn or quietly drove Indeed."""
+    seen: list[tuple] = []
+
+    def capture(path, b):
+        seen.append((path, (b or {}).get("tab_url")))
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True}
+        if path == "/set_distance":
+            return {"ok": True, "applied": True, "selected_miles": 50}
+        if path == "/extract_jobs":
+            return {"ok": True, "jobs": _CARDS}
+        if path == "/open_job_card":
+            return {"ok": True, "description": "A great reporting analyst role.",
+                    "salary": "$70,000", "apply_type": "linkedin_easy_apply"}
+        if path == "/next_page":
+            return {"ok": True, "has_next": has_next}
+        return {"ok": True}
+    capture.seen = seen
+    return capture
+
+
+def test_sweep_drives_linkedin_and_tags_its_rows_linkedin(monkeypatch):
+    db = _FakeDB(rows={"linkedin:a1": _DescRow()})   # note the PLATFORM-prefixed job id
+    cap = _recording_capture()
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=cap, db=db)
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    assert r["ok"] is True
+    assert r["platform"] == "linkedin" and r["domain_id"] == "linkedin_jobs"
+    # The description landed on the LINKEDIN row. If the platform tag leaked back to "indeed" the
+    # sweep would look at `indeed:a1`, find nothing, and silently capture zero descriptions.
+    assert r["descriptions_captured"] == 1
+    assert db.rows["linkedin:a1"].description.startswith("A great reporting")
+
+
+def test_every_sweep_call_is_aimed_at_this_engines_tab(monkeypatch):
+    """A bare host is not enough and the wrong host is a wrong answer: once an apply is in flight a
+    session holds several tabs, and the readers are picked from whichever tab we point at. Every
+    capture call in the sweep must carry THIS engine's search tab."""
+    db = _FakeDB(rows={"linkedin:a1": _DescRow()})
+    cap = _recording_capture()
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=cap, db=db)
+    try:
+        client.post("/api/search/sweep",
+                    json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                          "query": "reporting analyst"})
+    finally:
+        _teardown()
+    aimed = {path: tab for path, tab in cap.seen}
+    for path in ("/auth_state", "/set_distance", "/extract_jobs", "/open_job_card", "/next_page"):
+        assert aimed.get(path) == "linkedin.com/jobs", f"{path} was aimed at {aimed.get(path)!r}"
+
+
+def test_indeed_sweep_is_unchanged_when_no_domain_is_named(monkeypatch):
+    """Every existing caller sends no domain_id at all. It must still be an Indeed sweep, aimed at
+    Indeed's tab, tagging rows `indeed:` — the whole point of the default."""
+    db = _FakeDB(rows={"indeed:a1": _DescRow()})
+    cap = _recording_capture()
+    _install(monkeypatch, tabs=[{"url": "https://www.indeed.com/jobs"}], block=None,
+             capture=cap, db=db)
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    assert r["platform"] == "indeed"
+    assert r["descriptions_captured"] == 1
+    assert {tab for _p, tab in cap.seen} == {"indeed.com/jobs"}
+
+
+def test_the_bot_safety_pre_gates_apply_to_linkedin_too(monkeypatch):
+    """The gates are about how we behave, not about whose site it is — a captcha stops a LinkedIn
+    sweep exactly as it stops an Indeed one."""
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}],
+             block={"strength": "active", "provider": "recaptcha"},
+             capture=lambda p, b: {"ok": True}, db=_FakeDB())
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs"}).json()
+    finally:
+        _teardown()
+    assert r["ok"] is False and r["stopped_reason"] == "captcha"

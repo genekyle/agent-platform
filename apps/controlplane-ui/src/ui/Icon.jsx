@@ -128,7 +128,7 @@ const DOMAIN_ICONS = {
   indeed_jobs: Search,
   workday: Workflow,
   greenhouse: Leaf,
-  linkedin: Network,
+  linkedin_jobs: Network,
   gmail: Mail,
   shopify: Store,
   google: Layers3,

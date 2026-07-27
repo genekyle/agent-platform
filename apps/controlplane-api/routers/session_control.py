@@ -52,6 +52,49 @@ INITIATORS = ("operator", "auto", "teacher")
 #: The front door. A session opens the HOME page and clicks on from there — never a deep URL.
 INDEED_HOME = "https://www.indeed.com/"
 
+# --- the aggregators this ladder can climb ----------------------------------------------------
+# The CADENCE is the same for every job engine — one query per session, floor the radius, one page
+# at a time, click into what you shortlist — because it is about how we behave, not whose markup we
+# are reading. These are the only things that actually differ, so they are DATA rather than five
+# more branches: the front door, how a results URL is recognised, which param carries the query,
+# and how many results a page holds.
+#
+# Why matching is done against ALL engines rather than the session's declared domain: the tab is a
+# fact and the session's `domain_id` is a label, and the label is wrong often enough to matter (a
+# session started as `indeed_jobs` that the operator drove to LinkedIn, a domain_id someone typed).
+# Read the world, then fall back to what we were told. Same precedence as perception/facets.
+ENGINES: list[dict[str, Any]] = [
+    {"id": "indeed_jobs", "platform": "indeed", "host": "indeed.com", "results_path": "/jobs",
+     "query_param": "q", "page_size": 10, "home": INDEED_HOME, "search_tab": "indeed.com/jobs",
+     "label": "Indeed"},
+    {"id": "linkedin_jobs", "platform": "linkedin", "host": "linkedin.com", "results_path": "/jobs",
+     "query_param": "keywords", "page_size": 25, "home": "https://www.linkedin.com/jobs/",
+     "search_tab": "linkedin.com/jobs", "label": "LinkedIn"},
+]
+_ENGINE_BY_ID = {e["id"]: e for e in ENGINES}
+DEFAULT_ENGINE = ENGINES[0]
+
+
+def engine_of_url(url: str) -> Optional[dict[str, Any]]:
+    """Which engine's results page is this URL, if any. Requires BOTH the host and the results
+    path: `linkedin.com/feed` is LinkedIn but is not a job search, and treating it as one is how a
+    ladder ends up reporting a query that was never run."""
+    u = (url or "").lower()
+    for e in ENGINES:
+        if e["host"] in u and e["results_path"] in u:
+            return e
+    return None
+
+
+def engine_for(session: Any, tab: Optional[dict] = None) -> dict[str, Any]:
+    """The engine this session is working. A live tab wins (it is a fact), then the session's
+    declared domain, then Indeed — so nothing that exists today changes behaviour."""
+    if tab:
+        found = engine_of_url(tab.get("url", "") or "")
+        if found:
+            return found
+    return _ENGINE_BY_ID.get((getattr(session, "domain_id", "") or "").lower(), DEFAULT_ENGINE)
+
 
 # --- seams ------------------------------------------------------------------------------------
 async def _capture_post(path: str, payload: dict, timeout: float = 30.0) -> dict:
@@ -130,18 +173,19 @@ async def _observe(browser_url: str, query: str) -> dict[str, Any]:
     # results tab we say False (the effect is gone -> RECOVER), never "re-run it".
     observed["query_entered"] = search_tab is not None
 
-    # THE AUTH PROBE HAS TO LOOK AT AN INDEED TAB. Found live 2026-07-25 on a session left open
+    # THE AUTH PROBE HAS TO LOOK AT AN ENGINE TAB. Found live 2026-07-25 on a session left open
     # two days: with no tab hint `/auth_state` resolves whatever target CDP lists first — here a
     # Workday application open in the other tab — and the Indeed login JS, finding no Indeed
     # markers on a Workday page, returned logged_in=false. `authenticated` read REGRESSED and the
     # panel's next move was "sign in again" on a session that never signed out. Same shape as
     # 069eb61 (classify taking the last tab instead of the apply tab): probe the tab the rung is
-    # ABOUT, not whichever one we are handed.
-    auth_tab = search_tab or _find_indeed_tab(tabs)
+    # ABOUT, not whichever one we are handed. The capture server reads the same tab to pick WHICH
+    # site's login markers to look for, so handing it the right tab answers both questions at once.
+    auth_tab = search_tab or _find_site_tab(tabs)
     if auth_tab is None:
-        # No Indeed tab open, so Indeed auth is UNKNOWN — not false. False here would be a
-        # regression we never observed, and this rung's reason to exist (logged-out data is
-        # provenance-invalid) only bites while gathering FROM Indeed, which needs such a tab.
+        # No engine tab open, so auth is UNKNOWN — not false. False here would be a regression we
+        # never observed, and this rung's reason to exist (logged-out data is provenance-invalid)
+        # only bites while gathering FROM the engine, which needs such a tab.
         observed["authenticated"] = None
     else:
         auth = await _capture_post("/auth_state",
@@ -154,40 +198,49 @@ async def _observe(browser_url: str, query: str) -> dict[str, Any]:
             "reachable": True}
 
 
-def _find_indeed_tab(tabs: list[dict]) -> Optional[dict]:
-    """Any Indeed tab — the fallback the auth probe uses when no results tab matches this
-    session's query. Auth is a property of the SITE, not of the query, so a job-detail or home
-    tab answers it just as well as a results page."""
+def _find_site_tab(tabs: list[dict], engine: Optional[dict] = None) -> Optional[dict]:
+    """Any tab on a job engine — the fallback the auth probe uses when no results tab matches this
+    session's query. Auth is a property of the SITE, not of the query, so a job-detail or home tab
+    answers it just as well as a results page. Pass `engine` to insist on one particular site."""
+    hosts = [engine["host"]] if engine else [e["host"] for e in ENGINES]
     for t in tabs:
-        if "indeed.com" in (t.get("url", "") or ""):
+        url = (t.get("url", "") or "").lower()
+        if any(h in url for h in hosts):
             return t
     return None
 
 
 def _find_search_tab(tabs: list[dict], query: str) -> Optional[dict]:
-    """The tab showing results for THIS session's query. Matching on the query keeps us from
-    mistaking somebody else's search (or a stale one) for our own — the same context-bound
-    validity rule the blackboard's provenance fields enforce."""
+    """The tab showing results for THIS session's query, on ANY engine we know. Matching on the
+    query keeps us from mistaking somebody else's search (or a stale one) for our own — the same
+    context-bound validity rule the blackboard's provenance fields enforce. Each engine names the
+    param that carries the query (`q` on Indeed, `keywords` on LinkedIn); everything else about
+    the check is identical."""
     from urllib.parse import parse_qs, urlparse
     want = " ".join((query or "").split()).lower()
     for t in tabs:
         url = t.get("url", "") or ""
-        if "indeed.com" not in url or "/jobs" not in url:
+        engine = engine_of_url(url)
+        if engine is None:
             continue
         if not want:
             return t
-        got = (parse_qs(urlparse(url).query).get("q", [""])[0] or "").replace("+", " ").lower()
-        if " ".join(got.split()) == want:
+        got = (parse_qs(urlparse(url).query).get(engine["query_param"], [""])[0] or "")
+        if " ".join(got.replace("+", " ").lower().split()) == want:
             return t
     return None
 
 
 def _page_from_url(url: str) -> int:
-    """Indeed paginates with ?start=0/10/20… — 1-based page number, 1 when absent."""
+    """1-based page number from a results URL, 1 when absent. Both engines paginate with `?start=`;
+    they differ only in how many results a page holds (Indeed 10, LinkedIn 25) — so read the size
+    off the engine rather than assuming Indeed's, which would report page 3 of a LinkedIn search as
+    page 6 and make the ladder think it had climbed twice as far as it had."""
     from urllib.parse import parse_qs, urlparse
+    engine = engine_of_url(url) or DEFAULT_ENGINE
     try:
         start = parse_qs(urlparse(url or "").query).get("start", [None])[0]
-        return (int(start) // 10) + 1 if start is not None else 1
+        return (int(start) // engine["page_size"]) + 1 if start is not None else 1
     except Exception:  # noqa: BLE001
         return 1
 
@@ -484,6 +537,9 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
     "reached" without evidence is a claim, and a claimed consuming rung is the expensive kind
     of wrong."""
     action = nxt.checkpoint.action
+    # WHICH engine are we climbing? Resolved once per step from the live results tab, falling back
+    # to the session's declared domain. Every branch below reads it instead of naming a site.
+    engine = engine_for(session, obs.get("search_tab"))
 
     if action == "probe_browser":
         tabs = obs.get("tabs") or []
@@ -535,23 +591,23 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
         if obs["observed"].get("authenticated") is None:
             style = xs.pick_style()
             nav = await _capture_post("/navigate", {
-                "browser_url": browser_url, "url": INDEED_HOME,
+                "browser_url": browser_url, "url": engine["home"],
                 "tab_id": ((obs.get("tabs") or [{}])[0]).get("tab_id", ""),
                 "settle_seconds": 3.0})
             await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
             if not nav.get("ok"):
-                bb.log("handoff", f"could not open Indeed — {str(nav.get('detail'))[:90]}")
+                bb.log("handoff", f"could not open {engine['label']} — {str(nav.get('detail'))[:90]}")
                 return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
-                        "detail": f"No Indeed tab was open and this session could not open one "
-                                  f"({str(nav.get('detail') or 'no detail')[:120]}). The rung is "
-                                  f"left as it was rather than guessed."}
-            bb.log("nav", f"opened Indeed's home page to probe sign-in ({style.name} pace)")
+                        "detail": f"No {engine['label']} tab was open and this session could not "
+                                  f"open one ({str(nav.get('detail') or 'no detail')[:120]}). The "
+                                  f"rung is left as it was rather than guessed."}
+            bb.log("nav", f"opened {engine['label']}'s home page to probe sign-in ({style.name} pace)")
             obs = await _observe(browser_url, bb.search_state.query)
 
         if obs["observed"].get("authenticated"):
             ledger.mark("authenticated", evidence="/auth_state reported logged_in",
                         initiator=initiator)
-            bb.log("checkpoint", "authenticated — signed in to Indeed")
+            bb.log("checkpoint", f"authenticated — signed in to {engine['label']}")
             return {"ok": True, "action": action, "detail": "Signed in."}
 
         # STILL UNKNOWN AFTER OPENING THE DOOR — we navigated but no Indeed tab came back, so we
@@ -559,10 +615,11 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
         # survey below would run against whatever page happens to be in front. Same rule
         # `session_checkpoints` enforces one layer up: an unknown is not a regression.
         if obs["observed"].get("authenticated") is None:
-            bb.log("handoff", "auth unknown — no Indeed tab to probe after navigating")
+            bb.log("handoff", f"auth unknown — no {engine['label']} tab to probe after navigating")
             return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
-                    "detail": "Opened Indeed but no Indeed tab came back, so sign-in could not be "
-                              "checked. The rung is left as it was rather than guessed."}
+                    "detail": f"Opened {engine['label']} but no {engine['label']} tab came back, so "
+                              f"sign-in could not be checked. The rung is left as it was rather "
+                              f"than guessed."}
 
         # NOT SIGNED IN IS A STEP, NOT A DEAD END. The boundary is that we never type a password or
         # clear a 2FA challenge — it was never that we refuse to open the login page. Reporting
@@ -577,7 +634,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                 "detail": login["detail"]}
 
     if action == "run_query":
-        return await _run_query(bb=bb, ledger=ledger, browser_url=browser_url,
+        return await _run_query(engine=engine, bb=bb, ledger=ledger, browser_url=browser_url,
                                 obs=obs, initiator=initiator)
 
     if action == "set_distance":
@@ -587,7 +644,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
         style = xs.pick_style()
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         res = await _capture_post("/set_distance",
-                                  {"browser_url": browser_url, "tab_url": "indeed.com/jobs",
+                                  {"browser_url": browser_url, "tab_url": engine["search_tab"],
                                    "min_miles": miles})
         await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
         if res.get("applied"):
@@ -601,7 +658,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                           f"We never gather below {miles} miles."}
 
     if action == "review_page":
-        return await _review_page(bb=bb, browser_url=browser_url, page=page, db=db)
+        return await _review_page(bb=bb, browser_url=browser_url, page=page, db=db, engine=engine)
 
     return {"ok": False, "action": action, "detail": f"No executor for {action!r}."}
 
@@ -612,7 +669,8 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
 _ACTED_OK = {"ok", "committed_unconfirmed"}
 
 
-async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict[str, Any],
+async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, browser_url: str,
+                     obs: dict[str, Any],
                      initiator: str) -> dict[str, Any]:
     """Type the query and submit it — the one CONSUMING act that makes this whole design
     necessary. Driven through the AX layer (role + accessible name), human-paced, and marked
@@ -663,8 +721,8 @@ async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
                 "detail": f"Could not find a search box and a submit button on this page "
                           f"({seen} elements scanned; found "
-                          f"{', '.join(controls) or 'neither'}). Open Indeed's job search, then "
-                          f"step again."}
+                          f"{', '.join(controls) or 'neither'}). Open {engine['label']}'s job "
+                          f"search, then step again."}
 
     # One style for the whole sequence — a person is not brisk and dawdling in the same five
     # seconds. The hard-coded 1.2 / 1.0 / 3.0 these replace were invariant, which is its own
@@ -760,7 +818,8 @@ async def _run_query(*, bb: Any, ledger: cps.Ledger, browser_url: str, obs: dict
             "detail": f"Ran {query!r}. This session will not search again — page forward instead."}
 
 
-async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session) -> dict[str, Any]:
+async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
+                       engine: dict[str, Any]) -> dict[str, Any]:
     """At the start line: read this page's cards and hand them to the operator.
 
     This is the stop-and-go half. It does NOT mark the page rung — the operator does that by
@@ -768,16 +827,16 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session) -> 
     """
     from observed_jobs import upsert_observed_jobs
     ex = await _capture_post("/extract_jobs",
-                             {"browser_url": browser_url, "tab_url": "indeed.com/jobs"})
+                             {"browser_url": browser_url, "tab_url": engine["search_tab"]})
     if not ex.get("ok"):
         return {"ok": False, "action": "review_page", "awaiting": "operator_results",
                 "detail": f"Could not read the results ({ex.get('detail') or 'extractor said no'})."}
 
     cards = ex.get("jobs") or []
-    new_count, dup_count = upsert_observed_jobs(db, cards, "indeed", bb.search_state.query)
+    new_count, dup_count = upsert_observed_jobs(db, cards, engine["platform"], bb.search_state.query)
     db.commit()
 
-    results = [{"job_id": f"indeed:{c.get('external_id')}", "external_id": c.get("external_id"),
+    results = [{"job_id": f"{engine['platform']}:{c.get('external_id')}", "external_id": c.get("external_id"),
                 "title": c.get("title"), "company": c.get("company"),
                 "location": c.get("location"), "salary": c.get("salary"),
                 "url": c.get("url")} for c in cards if c.get("external_id")]
@@ -2502,6 +2561,7 @@ async def choose(session_id: int, body: ChooseBody,
     browser_url = _session_browser_url(session)
     obs = await _observe(browser_url, bb.search_state.query)
     page = _current_page(obs, bb)
+    engine = engine_for(session, obs.get("search_tab"))
 
     if not cps.at_start_line(ledger, obs["observed"]):
         raise HTTPException(status_code=409,
@@ -2563,7 +2623,7 @@ async def choose(session_id: int, body: ChooseBody,
                                 "detail": f"Page {page} reviewed; {len(body.picks)} picked."}
     if body.advance:
         nxt = await _capture_post("/next_page",
-                                  {"browser_url": browser_url, "tab_url": "indeed.com/jobs"})
+                                  {"browser_url": browser_url, "tab_url": engine["search_tab"]})
         if nxt.get("has_next"):
             bb.search_state.page = page + 1
             bb.world = dict(bb.world or {})

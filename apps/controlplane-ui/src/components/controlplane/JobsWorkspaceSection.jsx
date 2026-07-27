@@ -11,15 +11,19 @@ const EMPTY_DRAFT = {
   question_patterns: [], input_hint: "text", options: [], notes: "",
 };
 
-/** The Indeed job-seeking workspace.
- *  - indeed-overview / jobs-dashboard: the Notion-like database hub (click a database → its table)
+/** The job-seeking workspace for ONE career-search aggregator (Indeed, LinkedIn, …).
+ *  - jobs-dashboard: the Notion-like database hub (click a database → its table)
  *  - application-answers: editable store of reusable application answers
  *  - apply-state: the live apply blackboard
+ *
+ *  Every panel is scoped by the `domain` it's given — the dashboard it reads, the sessions it
+ *  offers, the tab it extracts from. The one panel that is deliberately NOT scoped is the
+ *  Application Profile: those answers are the operator's, reused across every engine and ATS.
  */
-export function IndeedWorkspaceSection({ section }) {
+export function JobsWorkspaceSection({ domain, section }) {
   if (section === "application-answers") return <ApplicationAnswers />;
-  if (section === "apply-state") return <ApplyStatePanel />;
-  return <JobsHub />;
+  if (section === "apply-state") return <ApplyStatePanel domain={domain} />;
+  return <JobsHub domain={domain} />;
 }
 
 const STATUS_COLOR = {
@@ -31,7 +35,7 @@ const STATUS_COLOR = {
  *  per-field form_state (required/filled/valid), the code-enforced proceed/submit gate, and
  *  the blockers (human branches + empty required fields). This is the "where are we" readout
  *  so tab/step/field state lives on screen, not in someone's head. */
-function ApplyStatePanel() {
+function ApplyStatePanel({ domain }) {
   const [sessions, setSessions] = useState([]);
   const [sessionId, setSessionId] = useState(null);
   const [state, setState] = useState(null);
@@ -40,11 +44,11 @@ function ApplyStatePanel() {
 
   useEffect(() => {
     fetch(`${API}/api/training/sessions`).then((r) => r.json()).then((rows) => {
-      const indeed = (rows || []).filter((s) => (s.domain_id || "").startsWith("indeed"));
-      setSessions(indeed);
-      setSessionId((cur) => cur ?? indeed.find((s) => s.status === "active")?.id ?? indeed[0]?.id ?? null);
+      const mine = (rows || []).filter((s) => (s.domain_id || "").startsWith(domain.host));
+      setSessions(mine);
+      setSessionId((cur) => cur ?? mine.find((s) => s.status === "active")?.id ?? mine[0]?.id ?? null);
     }).catch(() => {});
-  }, []);
+  }, [domain.host]);
 
   const load = useCallback(() => {
     if (!sessionId) return;
@@ -70,7 +74,7 @@ function ApplyStatePanel() {
     <div className="section-body">
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <select className="input" value={sessionId ?? ""} onChange={(e) => setSessionId(Number(e.target.value) || null)}>
-          {sessions.length === 0 && <option value="">No Indeed sessions</option>}
+          {sessions.length === 0 && <option value="">No {domain.label} sessions</option>}
           {sessions.map((s) => (
             <option key={s.id} value={s.id}>#{s.id} · {s.status} · {s.goal?.slice(0, 40) || "session"}</option>
           ))}
@@ -166,10 +170,11 @@ function ApplyStatePanel() {
   );
 }
 
-/** Notion-like database hub for the Indeed workspace. The landing is a gallery of "databases"
+/** Notion-like database hub for a jobs workspace. The landing is a gallery of "databases"
  *  (All Jobs, Searches, Job Descriptions, Applied); click one to open its full table, with a
- *  breadcrumb back to the gallery. The sweep/extract controls + headline stats sit on top. */
-function JobsHub() {
+ *  breadcrumb back to the gallery. The sweep/extract controls + headline stats sit on top.
+ *  Everything is scoped to `domain` — the dashboard read, the session picked, the tab extracted. */
+function JobsHub({ domain }) {
   const [data, setData] = useState(null);
   const [targets, setTargets] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -179,44 +184,49 @@ function JobsHub() {
   const [open, setOpen] = useState(null);   // null = gallery; else a database id
 
   const load = useCallback(() => {
-    fetch(`${API}/api/dashboards/indeed_jobs`).then((r) => r.json()).then(setData).catch(() => {});
+    fetch(`${API}/api/dashboards/${domain.id}`).then((r) => r.json()).then(setData).catch(() => {});
     fetch(`${API}/api/search/targets`).then((r) => r.json()).then((d) => setTargets(d.targets || [])).catch(() => {});
-  }, []);
+  }, [domain.id]);
   useEffect(() => { load(); }, [load]);
 
   const activeSession = useCallback(async () => {
     const sessions = await fetch(`${API}/api/training/sessions`).then((r) => r.json());
-    return sessions.find((x) => (x.domain_id || "").startsWith("indeed") && x.status === "active");
-  }, []);
+    return sessions.find((x) => (x.domain_id || "").startsWith(domain.host) && x.status === "active");
+  }, [domain.host]);
 
   const extract = useCallback(async () => {
     setBusy(true); setMsg("");
     try {
       const s = await activeSession();
-      if (!s) { setMsg("No active Indeed session — start one and open a search."); return; }
+      if (!s) { setMsg(`No active ${domain.label} session — start one and open a search.`); return; }
       const r = await fetch(`${API}/api/jobs/extract`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ training_session_id: s.id, tab_url: "indeed.com/jobs", search_query: "manual extract" }),
+        body: JSON.stringify({
+          training_session_id: s.id, tab_url: domain.tabUrl,
+          platform: data?.platform || domain.host, search_query: "manual extract",
+        }),
       }).then((x) => x.json());
       setMsg(r.ok ? `Scraped ${r.scraped} · ${r.new} new · ${r.duplicates} duplicates` : `Failed: ${r.detail || "?"}`);
       load();
     } catch (e) { setMsg(String(e.message || e)); } finally { setBusy(false); }
-  }, [activeSession, load]);
+  }, [activeSession, load, domain.label, domain.tabUrl, domain.host, data?.platform]);
 
   // The bounded auto-sweep: distance >=50mi → extract → click shortlisted cards → paginate.
+  // `domain_id` names WHICH engine — it decides the tab the sweep aims at and the platform the
+  // rows are tagged with. The readers themselves are chosen server-side off the live tab's host.
   const runSweep = useCallback(async () => {
     setSweeping(true); setMsg(""); setSweep(null);
     try {
       const s = await activeSession();
-      if (!s) { setMsg("No active Indeed session — start one and open a search."); return; }
+      if (!s) { setMsg(`No active ${domain.label} session — start one and open a search.`); return; }
       const r = await fetch(`${API}/api/search/sweep`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ training_session_id: s.id, min_miles: 50 }),
+        body: JSON.stringify({ training_session_id: s.id, domain_id: domain.id, min_miles: 50 }),
       }).then((x) => x.json());
       setSweep(r);
       load();
     } catch (e) { setMsg(String(e.message || e)); } finally { setSweeping(false); }
-  }, [activeSession, load]);
+  }, [activeSession, load, domain.label, domain.id]);
 
   const mark = useCallback(async (jobId, status) => {
     await fetch(`${API}/api/jobs/${encodeURIComponent(jobId)}`, {
@@ -248,13 +258,16 @@ function JobsHub() {
       {/* --- action bar + headline stats (always visible) --- */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <p className="muted" style={{ margin: 0, flex: 1, minWidth: 240 }}>
-          Your Indeed databases. The sweep forces ≥50 mi, walks each results page, clicks shortlisted
-          cards for full descriptions, and pages forward — human-paced. Click a database to open it.
+          Your {domain.label} databases. The sweep forces ≥50 mi, walks each results page, clicks
+          shortlisted cards for full descriptions, and pages forward — human-paced.
+          {" "}Click a database to open it.
         </p>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-primary" disabled={sweeping} onClick={runSweep}>
-            {sweeping ? "Sweeping…" : "Run sweep (≥50 mi)"}
-          </button>
+          {domain.sweep && (
+            <button className="btn btn-primary" disabled={sweeping} onClick={runSweep}>
+              {sweeping ? "Sweeping…" : "Run sweep (≥50 mi)"}
+            </button>
+          )}
           <button className="btn" disabled={busy} onClick={extract}>{busy ? "Extracting…" : "Extract page"}</button>
         </div>
       </div>

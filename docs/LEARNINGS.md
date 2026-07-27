@@ -2651,3 +2651,85 @@ posted range ($72,800–$93,600) came from the observed job record so the questi
 own context. Both self-identification answers and both signatures were confirmed explicitly. The
 stored `availability_date` was two weeks stale — **a stored answer with a date in it goes off, and
 nothing in the store knows that.**
+
+---
+
+## 2026-07-26 (4) — Career Search had two members but one of everything
+
+**What we believed.** That Career Search was already a GROUP with members, so adding a second job
+engine would be catalog work: register LinkedIn, point it at the shared machinery, done. The group
+existed in `ats_registry.CAREER_SEARCH` from the start, and `linkedin_jobs` had been sitting in
+`seed.REGISTRY_SEED["domains"]` — with page states and goals — since the registry was written.
+
+**What's actually true.** Indeed was the only member long enough that "Indeed" and "the jobs domain"
+fused in every layer that had no reason to distinguish them. Adding a sibling surfaced five seams,
+each of which would have silently answered "Indeed" for a domain that is not Indeed:
+
+* **The dashboard was a route per engine.** `GET /api/dashboards/indeed_jobs` took a `platform`
+  query param it never received a second value for. Every aggregator answers the same questions off
+  the same table → `GET /api/dashboards/{domain_id}`, with platform DERIVED.
+* **`indeed_jobs` vs `indeed` are two different strings** — the registry id and the
+  `ObservedJob.platform` tag — and the rollup hardcoded the second. That mapping is now
+  `command_center.platform_for()`, in one place, and an unregistered domain resolves to ITSELF
+  rather than silently to Indeed's jobs.
+* **The Accounts tab was chosen by `parent === "career_search"`**, which routed every Career-Search
+  child to the company-first ATS panel filtered on `atsFilter={domain.id}` — an `ats_id` no account
+  ever carries. So the panel was empty for Indeed *and* the engine that most needs a sign-in had
+  nowhere to type one. Which accounts a domain has is now DECLARED (`accounts: "domain" | "ats"`),
+  not inferred from where it sits in the tree.
+* **`classify_ats` would have called linkedin.com a `company_site`**, and `company_site` is a real
+  platform in the facet vocabulary — the same confident-wrong-answer trap facebook.com fell into on
+  2026-07-22. LinkedIn is now a first-class `facets.PLATFORMS` member, and `linkedin_easy_apply`
+  joins `indeed_quick_apply` in `_ON_ENGINE_APPLY`: engine hosts are skipped in the host loop so
+  they can never shadow a real ATS a posting hands off to.
+* **`seed_training_registry` only runs on an EMPTY registry.** `linkedin_jobs` being in the seed
+  dict meant nothing for any database already seeded — the same gap `seed_gmail_domain` exists to
+  close. `seed_linkedin_domain` is its twin: merge, never remove.
+
+**Where it's encoded now.** `test_career_aggregators.py` is the checklist a THIRD member
+(ZipRecruiter, Glassdoor) has to satisfy — one test per seam above, each naming the wrong answer it
+prevents. The UI half is declarative: `domains.js` carries `accounts` and `sweep` per domain, and
+`DomainWorkspace`/`TasksPanel`/`StatusCard` branch on the declaration instead of on the id.
+
+**The mistake I made on the way, and the correction.** I first shipped LinkedIn with `sweep: false`
+and no Session-control tab, reasoning that the ladder was "Indeed's cadence end to end" and that a
+crank which cannot turn is worse than no crank. The operator corrected it flatly: *"it does have a
+job aggregator page... this system can definitely handle it, don't push your policy on my product."*
+They were right, and the reasoning was wrong in an instructive way — **I had mistaken the READERS
+for the CADENCE.** The cadence (one query per session, floor the radius, one page at a time, click
+into what you shortlist, human pauses, never under a captcha) is about **how we behave**, and it is
+identical on every job engine. The only things that are actually Indeed's are the DOM readers and
+four facts about its URLs. Once separated, LinkedIn was a table row and a second set of readers, not
+a second cadence. This is the same lesson as [[feedback_my_policy_not_operators]], arriving in a new
+costume: the caution presented itself as an architectural claim rather than as caution.
+
+**Where the split landed.**
+* `apps/mcp/app/main_server.py` — `_platform_of(url)` picks readers off the tab's HOST (a fact),
+  and `/extract_jobs`, `/next_page`, `/auth_state`, `/open_job_card`, `/set_distance` dispatch on
+  it. Unrecognised hosts resolve to Indeed, so every existing caller is byte-for-byte unchanged.
+* `routers/session_control.ENGINES` — one row per engine carrying the only four things that
+  differ: the front door, the results-URL shape, the query param (`q` vs `keywords`) and the page
+  size (10 vs 25). `engine_for(session, tab)` reads the live tab first and the session's declared
+  `domain_id` second, because a tab is a fact and a `domain_id` is a label.
+* `/api/search/sweep` takes a `domain_id`; the tab it aims at and the platform it tags rows with
+  come from `command_center`, and nothing else about the loop changed.
+
+**Three things LinkedIn taught that Indeed never had to.**
+* **Identity is the URN, not an attribute.** LinkedIn has shipped the job id as `data-job-id`,
+  `data-occludable-job-id` and `data-entity-urn` in different renderings of the same page, and the
+  logged-out list uses none of them. The href (`/jobs/view/<id>`) is the only thing every rendering
+  agrees on — so the href is read FIRST, the reverse of Indeed's `data-jk`.
+* **The results list is VIRTUALISED.** One read of a 25-result page returns ~7 cards, and would
+  have recorded exactly that in the corpus without erroring. `/extract_jobs` scroll-and-re-reads
+  until the count stops growing. This is a silent-undercount bug, the worst kind: nothing fails.
+* **A logged-out visitor still sees results.** So "results are on screen" is not evidence of being
+  signed in, and the LinkedIn auth probe reads the global nav rather than the content — the same
+  shape as facebook.com serving both states at one URL.
+
+**Still owed, and honestly so.** None of the LinkedIn readers have met a live page yet: they are
+written defensively (several selectors per field, href-first identity) and every one of them
+reports a structured failure rather than a silent empty, but the first live drive is what turns
+them from careful guesses into knowledge. `set_distance` for LinkedIn drives the radius SLIDER with
+trusted key events and confirms from `distance=` in the URL; like Indeed's it refuses to fall back
+to a URL rewrite, so if the widget has moved we will hear about it instead of getting a quiet
+radius. Capture + label on that first drive — see [[feedback_capture_label_is_the_work]].

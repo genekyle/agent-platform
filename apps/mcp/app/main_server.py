@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -839,23 +840,188 @@ _INDEED_JOBS_JS = r"""
 """
 
 
+# --- LinkedIn: the SECOND aggregator ---------------------------------------------------------
+# Same contracts as the Indeed readers above ({jobs, meta} / {clicked, has_next} / {logged_in,
+# page_text} / the pane reader), so the sweep drives both through one code path. The differences
+# are all LinkedIn's own:
+#
+#   * IDENTITY IS THE URN, NOT AN ATTRIBUTE. LinkedIn has shipped the job id as `data-job-id`,
+#     `data-occludable-job-id`, and `data-entity-urn="urn:li:jobPosting:1234"` in different
+#     renderings of the same page, and the PUBLIC (logged-out) list uses none of them. The one
+#     thing every rendering agrees on is the href — `/jobs/view/1234567890/`. So the href is read
+#     FIRST and the attributes are the fallback, which is the reverse of Indeed's data-jk.
+#   * THE LIST IS VIRTUALISED. Cards outside the viewport are not in the DOM at all
+#     (`occludable` is LinkedIn's own word for it), so a single read of a 25-result page returns
+#     ~7 cards. `/extract_jobs` scrolls the list and re-reads until the count stops growing —
+#     which is why the scroll lives in the ENDPOINT (it can await) and not in the JS.
+#   * TITLES CARRY A SCREEN-READER DUPLICATE. The anchor renders the title twice — once visible,
+#     once in a `.visually-hidden` span "Job title, Company" — so innerText yields it doubled.
+#     Prefer the aria-label, then strip the hidden node from a clone.
+_LINKEDIN_JOBS_JS = r"""
+(() => {
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  // innerText of a node with the screen-reader duplicate removed.
+  const txt = (n) => {
+    if (!n) return '';
+    const c = n.cloneNode(true);
+    c.querySelectorAll('.visually-hidden, .a11y-text, [aria-hidden=true]').forEach((e) => e.remove());
+    return clean(c.innerText || '');
+  };
+  const pick = (root, sels) => {
+    for (const s of sels) { const n = root.querySelector(s); const t = txt(n); if (t) return t; }
+    return '';
+  };
+  const idFromHref = (href) => {
+    const m = (href || '').match(/\/jobs\/view\/(?:[^/]*-)?(\d{6,})/);
+    if (m) return m[1];
+    try { const cj = new URL(href, location.origin).searchParams.get('currentJobId'); if (cj) return cj; }
+    catch (e) { /* relative/odd href */ }
+    return '';
+  };
+
+  // Every rendering LinkedIn currently serves: the authed virtualised list, the authed card, and
+  // the public (logged-out) results list.
+  const cards = Array.from(document.querySelectorAll(
+    'li[data-occludable-job-id], div.job-card-container, li.jobs-search-results__list-item,'
+    + ' div.base-card.job-search-card, li.jobs-search__results-list > li, div[data-job-id]'
+  ));
+  const seen = new Set();
+  const out = [];
+  for (const card of cards) {
+    const anchor = card.querySelector('a[href*="/jobs/view/"]')
+                || (card.matches('a[href*="/jobs/view/"]') ? card : null);
+    const href = anchor ? anchor.href : '';
+    const id = idFromHref(href)
+            || card.getAttribute('data-occludable-job-id')
+            || card.getAttribute('data-job-id')
+            || ((card.getAttribute('data-entity-urn') || '').match(/(\d{6,})/) || [])[1]
+            || '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+
+    // aria-label is the cleanest title LinkedIn gives us; the anchor's own text is the fallback.
+    let title = clean(anchor && (anchor.getAttribute('aria-label') || '')) || txt(anchor);
+    if (!title) title = pick(card, ['.job-card-list__title', '.base-search-card__title',
+                                    '.artdeco-entity-lockup__title', 'h3']);
+    const company = pick(card, ['.artdeco-entity-lockup__subtitle',
+                                '.job-card-container__primary-description',
+                                '.base-search-card__subtitle', '.job-card-container__company-name']);
+    const location = pick(card, ['.artdeco-entity-lockup__caption',
+                                 '.job-card-container__metadata-item',
+                                 '.job-search-card__location', '.job-card-container__metadata-wrapper li']);
+    // Salary is not a labelled field — it is whichever metadata chip mentions money.
+    let salary = '';
+    for (const li of card.querySelectorAll('.job-card-container__metadata-item, .artdeco-entity-lockup__metadata li, .job-search-card__salary-info')) {
+      const t = txt(li);
+      if (/\$|\bper (hour|year)\b|\ban? (hour|year)\b/i.test(t)) { salary = t; break; }
+    }
+    // "Easy Apply" is the on-engine apply tell — the same question `apply_type` answers on Indeed,
+    // and the fork between finishing here and handing off to an ATS.
+    const apply_type = /easy apply/i.test(card.innerText || '') ? 'linkedin_easy_apply' : '';
+    out.push({ external_id: id, title, company, location, salary, url: href, apply_type });
+  }
+
+  // Pagination state. LinkedIn numbers pages in an artdeco pagination bar; `start=` is 25/page.
+  const pageEls = [...document.querySelectorAll('.artdeco-pagination__indicator button, li.artdeco-pagination__indicator')];
+  const visible_pages = [...new Set(pageEls.map((e) => parseInt(clean(e.innerText), 10))
+    .filter((n) => !isNaN(n)))].sort((a, b) => a - b);
+  const start = parseInt(new URLSearchParams(location.search).get('start') || '0', 10);
+  const totalEl = document.querySelector('.jobs-search-results-list__subtitle, .results-context-header__job-count, small.jobs-search-results-list__text');
+  const totalText = totalEl ? clean(totalEl.innerText) : '';
+  const totalMatch = totalText.match(/([\d,]+)/);
+  const nextBtn = document.querySelector('.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"]');
+  return {
+    jobs: out,
+    meta: {
+      total_results: totalMatch ? parseInt(totalMatch[1].replace(/,/g, ''), 10) : null,
+      total_text: totalText.slice(0, 40),
+      current_page: isNaN(start) ? 1 : Math.floor(start / 25) + 1,
+      visible_pages,
+      has_next: !!(nextBtn && !nextBtn.disabled),
+      rendered: out.length,
+    },
+  };
+})()
+"""
+
+# Force the virtualised list to render the next batch. Scrolls the results COLUMN (LinkedIn scrolls
+# an inner pane, not the window) and, failing that, the window.
+_LINKEDIN_SCROLL_JS = r"""
+(() => {
+  const pane = document.querySelector(
+    '.jobs-search-results-list, .scaffold-layout__list > div, .scaffold-layout__list,'
+    + ' div.jobs-search__results-list');
+  if (pane && pane.scrollHeight > pane.clientHeight) {
+    pane.scrollTop = Math.min(pane.scrollTop + pane.clientHeight * 0.9, pane.scrollHeight);
+    return { scrolled: 'pane', at: pane.scrollTop, height: pane.scrollHeight };
+  }
+  window.scrollBy(0, window.innerHeight * 0.9);
+  return { scrolled: 'window', at: window.scrollY, height: document.body.scrollHeight };
+})()
+"""
+
+
+def _platform_of(url: str) -> str:
+    """Which aggregator's readers apply to this tab, from its HOST.
+
+    The host is a fact; a caller-supplied platform string is a label, and labels drift (the
+    facets module learned the same thing the hard way). Everything unrecognised stays "indeed"
+    so existing callers — which never sent a platform at all — behave exactly as before.
+    """
+    host = (urlparse(url or "").hostname or "").lower()
+    if "linkedin.com" in host:
+        return "linkedin"
+    return "indeed"
+
+
+_JOBS_JS = {"indeed": _INDEED_JOBS_JS, "linkedin": _LINKEDIN_JOBS_JS}
+
+
 @app.post("/extract_jobs")
 async def extract_jobs(body: ExtractJobsRequest):
-    """Scrape the live Indeed results DOM for job cards (data-jk). Returns the raw list;
-    the control plane dedupes + persists. Best-effort — returns [] on any failure."""
+    """Scrape the live results DOM for job cards. Returns the raw list; the control plane dedupes
+    + persists. Best-effort — returns [] on any failure.
+
+    The reader is chosen by the tab's HOST: Indeed's `data-jk` cards, or LinkedIn's `/jobs/view/`
+    anchors. LinkedIn's list is VIRTUALISED, so there we scroll-and-re-read until the count stops
+    growing — one read would return only the handful of cards currently in the viewport, and the
+    corpus would silently record a 25-result page as 7.
+    """
+    import asyncio
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        platform = _platform_of(target.get("url", ""))
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
-            res = await cdp.send("Runtime.evaluate",
-                                 {"expression": _INDEED_JOBS_JS, "returnByValue": True})
-        val = (res.get("result") or {}).get("value") or {}
+
+            async def _read():
+                r = await cdp.send("Runtime.evaluate",
+                                   {"expression": _JOBS_JS[platform], "returnByValue": True})
+                return (r.get("result") or {}).get("value") or {}
+
+            val = await _read()
+            if platform == "linkedin":
+                # Bounded: 12 scrolls covers a 25-card page with room to spare, and stops early on
+                # two consecutive no-growth reads (the list is fully rendered, or it is short).
+                stale = 0
+                for _ in range(12):
+                    before = len(val.get("jobs", []))
+                    await cdp.send("Runtime.evaluate",
+                                   {"expression": _LINKEDIN_SCROLL_JS, "returnByValue": True})
+                    await asyncio.sleep(0.6)
+                    val = await _read()
+                    if len(val.get("jobs", [])) <= before:
+                        stale += 1
+                        if stale >= 2:
+                            break
+                    else:
+                        stale = 0
         jobs = val.get("jobs", val if isinstance(val, list) else [])
         meta = val.get("meta") if isinstance(val, dict) else None
         return {"ok": True, "jobs": jobs, "count": len(jobs), "meta": meta,
-                "url": target.get("url", "")}
+                "platform": platform, "url": target.get("url", "")}
     except Exception as exc:  # noqa: BLE001
         logger.warning("extract_jobs failed: %s", exc)
         return {"ok": False, "jobs": [], "count": 0, "detail": str(exc)}
@@ -1707,6 +1873,173 @@ async def set_date(body: SetDateRequest):
 
 
 DISTANCE_OPTIONS = [0, 5, 10, 15, 25, 35, 50, 100]     # Indeed's own ladder, in miles
+LINKEDIN_DISTANCE_OPTIONS = [0, 5, 10, 25, 50, 75, 100]  # LinkedIn's own ladder, in miles
+
+
+# LinkedIn's distance filter is a SLIDER, not a list of options — so the pill protocol above does
+# not transfer, and this is a different widget with the same shape: open → stage → commit → confirm
+# from outside. Step 1 opens it and reports the slider's geometry so the caller can drive the
+# control with TRUSTED KEY EVENTS. A range input is keyboard-operable by design (Arrow/Home/End),
+# and keys are both the most human path and the one React cannot ignore — the same reason the body
+# driver types instead of assigning: a value poked straight onto the node races the framework's own
+# state and commits a radius the page never actually adopted.
+_LINKEDIN_DISTANCE_OPEN_JS = r"""
+(() => {
+  const pill = document.querySelector(
+    '#searchFilter_distance, button[aria-label*="Distance filter" i], button[aria-label*="Distance" i]')
+    || [...document.querySelectorAll('button')].find((b) => /^\s*Distance\b/i.test(b.innerText || ''));
+  if (!pill) return {found:false, step:'open', detail:'no Distance filter pill on this page'};
+  if (pill.getAttribute('aria-expanded') !== 'true') { pill.scrollIntoView({block:'center'}); pill.click(); }
+  const slider = document.querySelector(
+    'input[type=range][aria-label*="radius" i], input[type=range][aria-label*="distance" i],'
+    + ' .jobs-search-box__distance input[type=range], input[type=range]');
+  if (!slider) return {found:false, step:'stage', detail:'pill opened but no radius slider rendered'};
+  slider.scrollIntoView({block:'center'});
+  const r = slider.getBoundingClientRect();
+  return {
+    found: true,
+    min: Number(slider.min || 0), max: Number(slider.max || 100), step: Number(slider.step || 1),
+    value: Number(slider.value || 0),
+    x: r.x + r.width / 2, y: r.y + r.height / 2,
+    label: (slider.getAttribute('aria-valuetext') || slider.getAttribute('aria-label') || '').slice(0, 60),
+  };
+})()
+"""
+
+# Read the slider back mid-drive (after each key press) and, separately, commit the filter.
+_LINKEDIN_DISTANCE_READ_JS = r"""
+(() => {
+  const s = document.querySelector(
+    'input[type=range][aria-label*="radius" i], input[type=range][aria-label*="distance" i],'
+    + ' input[type=range]');
+  if (!s) return {found:false};
+  return {found:true, value:Number(s.value || 0),
+          text:(s.getAttribute('aria-valuetext') || '').slice(0, 40)};
+})()
+"""
+
+_LINKEDIN_DISTANCE_COMMIT_JS = r"""
+(() => {
+  const names = ['Show results', 'Apply current filter', 'Apply', 'Done'];
+  const btns = [...document.querySelectorAll('button')];
+  for (const n of names) {
+    const b = btns.find((x) => {
+      const t = ((x.innerText || '') + ' ' + (x.getAttribute('aria-label') || '')).trim();
+      return t.toLowerCase().includes(n.toLowerCase()) && x.offsetParent !== null;
+    });
+    if (b) { b.scrollIntoView({block:'center'}); b.click(); return {clicked:true, via:n}; }
+  }
+  return {clicked:false, detail:'no commit button (' + names.join('/') + ') visible in the filter'};
+})()
+"""
+
+
+async def _read_distance_param(browser_url: str, tab_id, tab_url, param: str) -> Optional[int]:
+    """Read a radius-ish query param from the tab list — from OUTSIDE the page, since the commit
+    navigates and tears down any execution context we'd otherwise ask."""
+    from urllib.parse import parse_qs, urlparse
+
+    import httpx
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        tabs = (await client.get(f"{browser_url.rstrip('/')}/json/list")).json()
+    for t in tabs:
+        if t.get("type") != "page":
+            continue
+        url = t.get("url") or ""
+        if tab_id and t.get("id") != tab_id:
+            continue
+        if tab_url and tab_url not in url:
+            continue
+        raw = parse_qs(urlparse(url).query).get(param, [None])[0]
+        return int(raw) if (raw or "").isdigit() else None
+    return None
+
+
+async def _set_distance_linkedin(body: SetDistanceRequest) -> dict:
+    """LinkedIn's radius, by OPERATING THE SLIDER with trusted key events, then Show results.
+    Same contract and same honesty as the Indeed path: the URL (`distance=`) is CONFIRMATION,
+    never the mechanism, and a widget that did not commit is reported as a failure rather than
+    papered over with a rewrite."""
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    target_miles = next((m for m in LINKEDIN_DISTANCE_OPTIONS if m >= body.min_miles),
+                        LINKEDIN_DISTANCE_OPTIONS[-1])
+    log: list[dict] = []
+    current = await _read_distance_param(body.browser_url, body.tab_id, body.tab_url, "distance")
+    if current is not None and current >= body.min_miles:
+        return {"ok": True, "applied": True, "selected_miles": current, "method": "already",
+                "detail": f"distance already {current} (>= {body.min_miles})", "log": []}
+
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        await cdp.send("Page.enable", {})
+        await cdp.send("Runtime.enable", {})
+        await cdp.send("Page.bringToFront", {})     # a popup will not render in a hidden tab
+        await asyncio.sleep(0.4)
+
+        opened = (await cdp.send("Runtime.evaluate", {
+            "expression": _LINKEDIN_DISTANCE_OPEN_JS, "returnByValue": True})
+        ).get("result", {}).get("value") or {}
+        log.append({"step": "open", **{k: opened.get(k) for k in ("found", "value", "label", "detail")}})
+        if not opened.get("found"):
+            return {"ok": False, "applied": False, "selected_miles": None, "method": "widget_failed",
+                    "detail": opened.get("detail") or "distance slider not reachable", "log": log}
+
+        # Focus the slider with a trusted click on its thumb-track, then step it with real keys.
+        for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+            ev = {"type": typ, "x": opened["x"], "y": opened["y"]}
+            if typ != "mouseMoved":
+                ev.update({"button": "left", "clickCount": 1})
+            await cdp.send("Input.dispatchMouseEvent", ev)
+        await asyncio.sleep(0.3)
+
+        step = opened.get("step") or 1
+        span = max(1.0, (opened.get("max", 100) - opened.get("min", 0)) / max(step, 1))
+        value = None
+        for _ in range(int(span) + 4):              # bounded: never more presses than the track has stops
+            read = (await cdp.send("Runtime.evaluate", {
+                "expression": _LINKEDIN_DISTANCE_READ_JS, "returnByValue": True})
+            ).get("result", {}).get("value") or {}
+            value = read.get("value")
+            if value is None or value >= target_miles:
+                break
+            for key in ("rawKeyDown", "keyUp"):
+                await cdp.send("Input.dispatchKeyEvent", {
+                    "type": key, "key": "ArrowRight", "code": "ArrowRight",
+                    "windowsVirtualKeyCode": 39, "nativeVirtualKeyCode": 39})
+            await asyncio.sleep(0.12)
+        log.append({"step": "stage", "value": value, "target": target_miles})
+        if value is None or value < target_miles:
+            return {"ok": False, "applied": False, "selected_miles": value, "method": "widget_failed",
+                    "detail": f"slider stopped at {value}, below the {target_miles} mi target — the "
+                              f"track did not accept keys. NOT rewriting the URL so the break stays "
+                              f"visible.", "log": log}
+
+        committed = (await cdp.send("Runtime.evaluate", {
+            "expression": _LINKEDIN_DISTANCE_COMMIT_JS, "returnByValue": True})
+        ).get("result", {}).get("value") or {}
+        log.append({"step": "commit", **committed})
+
+    applied = None
+    for _ in range(16):
+        await asyncio.sleep(0.5)
+        r = await _read_distance_param(body.browser_url, body.tab_id, body.tab_url, "distance")
+        if r is not None and r >= body.min_miles:
+            applied = r
+            break
+    if applied is not None:
+        return {"ok": True, "applied": True, "selected_miles": applied, "method": "widget",
+                "detail": f"slid to {target_miles} mi + {committed.get('via', 'commit')}; "
+                          f"URL confirms distance={applied}", "log": log}
+    return {"ok": False, "applied": False, "selected_miles": None, "method": "widget_failed",
+            "detail": ("The distance filter staged but did not commit — "
+                       + (committed.get("detail") or "no distance= in the URL after the commit")
+                       + ". NOT falling back to a URL rewrite so the break stays visible."),
+            "log": log}
 
 
 async def _read_radius(browser_url: str, tab_id, tab_url) -> Optional[int]:
@@ -1760,6 +2093,17 @@ async def set_distance(body: SetDistanceRequest):
 
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    # Which engine's filter are we operating? The tab decides, not the caller. Indeed's is a pill
+    # of options committed with Update; LinkedIn's is a slider committed with Show results.
+    probe = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    if _platform_of(probe.get("url", "")) == "linkedin":
+        try:
+            return await _set_distance_linkedin(body)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("set_distance (linkedin) failed: %s", exc)
+            return {"ok": False, "applied": False, "selected_miles": None,
+                    "method": "error", "detail": str(exc), "log": []}
 
     target_miles = next((m for m in DISTANCE_OPTIONS if m >= body.min_miles), DISTANCE_OPTIONS[-1])
     try:
@@ -1847,33 +2191,126 @@ _CARD_BBOX_JS = r"""
 }
 """
 
+# Same job for LinkedIn, whose card is addressed by the id in its /jobs/view/ href (see the note on
+# _LINKEDIN_JOBS_JS for why the href and not an attribute). The card may be scrolled out of the
+# virtualised list, so scrollIntoView is load-bearing here, not cosmetic — and after it we must let
+# the row settle before reading a rect, which the caller does by re-reading if the rect is offscreen.
+_LINKEDIN_CARD_BBOX_JS = r"""
+(id) => {
+  const esc = String(id).replace(/"/g, '');
+  const card = document.querySelector(`a[href*="/jobs/view/${esc}"]`)
+            || document.querySelector(`li[data-occludable-job-id="${esc}"]`)
+            || document.querySelector(`div[data-job-id="${esc}"]`)
+            || document.querySelector(`[data-entity-urn$=":${esc}"]`);
+  if (!card) return {found:false};
+  const el = card.matches('a') ? card : (card.querySelector('a[href*="/jobs/view/"]') || card);
+  el.scrollIntoView({block:'center', inline:'center'});
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return {found:false, reason:'card has no box (occluded)'};
+  return {found:true, x:r.x + r.width/2, y:r.y + r.height/2};
+}
+"""
+
+# LinkedIn's right-hand detail pane. Same contract as _JOB_DESC_JS ({title, company, salary,
+# description, apply_type}) and the same discipline: scope to the PANE, never the document — the
+# results column on the left holds a title/company node per card, so a document-wide read returns
+# the first card's fields for every job (exactly the bug _JOB_DESC_JS carries its scar from).
+_LINKEDIN_JOB_DESC_JS = r"""
+(() => {
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const root = document.querySelector(
+    '.jobs-search__job-details, .jobs-details, .job-view-layout, .jobs-search__job-details--container,'
+    + ' .details-pane__content, .job-details-jobs-unified-top-card'
+  );
+  const pane = root ? (root.closest('.jobs-search__job-details') || root) : document;
+  const pick = (sels) => {
+    for (const s of sels) {
+      const n = pane.querySelector(s);
+      const t = n ? clean(n.innerText) : '';
+      if (t) return t;
+    }
+    return '';
+  };
+  // The description body carries LinkedIn's own "About the job" heading; keep it, it is part of
+  // the posting as rendered, and stripping headings is how you accidentally strip content.
+  let description = '';
+  for (const s of ['#job-details', '.jobs-description__content', '.jobs-box__html-content',
+                   '.jobs-description-content__text', '.show-more-less-html__markup']) {
+    const n = pane.querySelector(s);
+    if (n) {
+      const c = n.cloneNode(true);
+      c.querySelectorAll('style, script').forEach((e) => e.remove());
+      const t = clean(c.innerText);
+      if (t.length > (description || '').length) description = t;
+    }
+  }
+  const title = pick(['.job-details-jobs-unified-top-card__job-title', '.jobs-unified-top-card__job-title',
+                      '.top-card-layout__title', 'h1']);
+  const company = pick(['.job-details-jobs-unified-top-card__company-name',
+                        '.jobs-unified-top-card__company-name', '.topcard__org-name-link',
+                        '.top-card-layout__second-subline a']);
+  const meta = pick(['.job-details-jobs-unified-top-card__job-insight',
+                     '.jobs-unified-top-card__job-insight', '.salary']);
+  const salary = /\$|\bper (hour|year)\b/i.test(meta) ? meta : '';
+  // The apply FORK, read off the button: Easy Apply finishes on LinkedIn; anything else hands off
+  // to the employer's ATS and the existing cross-site machinery takes over.
+  const applyBtn = pane.querySelector('.jobs-apply-button, button[aria-label*="Apply" i], a[aria-label*="Apply" i]');
+  const applyTxt = applyBtn ? clean(applyBtn.innerText) : '';
+  const apply_type = /easy apply/i.test(applyTxt) ? 'linkedin_easy_apply'
+                   : (applyTxt ? 'company_site' : '');
+  return { title, company, salary, description, apply_type, apply_button: applyTxt.slice(0, 40) };
+})()
+"""
+
+_JOB_DESC_JS_BY_PLATFORM = {"indeed": _JOB_DESC_JS, "linkedin": _LINKEDIN_JOB_DESC_JS}
+_CARD_BBOX_JS_BY_PLATFORM = {"indeed": _CARD_BBOX_JS, "linkedin": _LINKEDIN_CARD_BBOX_JS}
+
 
 @app.post("/open_job_card")
 async def open_job_card(body: OpenJobCardRequest):
-    """Click a result card by its data-jk to open the IN-PAGE right-hand detail pane, then scrape
-    its description/salary/apply_type from that pane (reuses _JOB_DESC_JS — #jobDescriptionText is
-    present in the pane). Uses a TRUSTED CDP mouse click (a synthetic .click() doesn't switch the
-    React pane), and CONFIRMS the pane actually changed by polling the description (Indeed auto-opens
-    the first result, so a no-op click would silently return the wrong job). Same tab, no navigation."""
+    """Click a result card by its id to open the IN-PAGE right-hand detail pane, then scrape its
+    description/salary/apply_type from that pane. Uses a TRUSTED CDP mouse click (a synthetic
+    .click() doesn't switch the React pane), and CONFIRMS the pane actually changed by polling it
+    (BOTH engines auto-open the first result, so a no-op click would silently return the wrong
+    job). Same tab, no navigation.
+
+    Card locator and pane reader are both chosen by the tab's host: Indeed's `data-jk`, or
+    LinkedIn's `/jobs/view/<id>` href. On LinkedIn the row may not be rendered at all — the list is
+    virtualised — so a miss earns one scroll-and-retry before it is reported as missing."""
     import asyncio
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        platform = _platform_of(target.get("url", ""))
+        bbox_js = _CARD_BBOX_JS_BY_PLATFORM[platform]
+        desc_js = _JOB_DESC_JS_BY_PLATFORM[platform]
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             await cdp.send("Page.bringToFront", {})
             box = (await cdp.send("Runtime.evaluate", {
-                "expression": f"({_CARD_BBOX_JS})({json.dumps(body.external_id)})",
+                "expression": f"({bbox_js})({json.dumps(body.external_id)})",
                 "returnByValue": True})).get("result", {}).get("value") or {}
+            if not box.get("found") and platform == "linkedin":
+                # The virtualised list may not have rendered this row yet. scrollIntoView above
+                # only works on a node that EXISTS, so give the pane one scroll+settle and retry
+                # before calling it missing.
+                await cdp.send("Runtime.evaluate",
+                               {"expression": _LINKEDIN_SCROLL_JS, "returnByValue": True})
+                await asyncio.sleep(0.8)
+                box = (await cdp.send("Runtime.evaluate", {
+                    "expression": f"({bbox_js})({json.dumps(body.external_id)})",
+                    "returnByValue": True})).get("result", {}).get("value") or {}
             if not box.get("found"):
-                return {"ok": False, "detail": f"card data-jk={body.external_id} not found"}
+                return {"ok": False, "platform": platform,
+                        "detail": f"card {body.external_id} not found"
+                                  + (f" ({box['reason']})" if box.get("reason") else "")}
             # Snapshot the WHOLE pane (from the same scoped reader), not just the description.
             # The old check watched description alone — so when the pane switched but a field was
             # read from a stale node, that field silently kept the previous job's value and the
             # check never noticed. We now require the pane itself to have changed.
             before = (await cdp.send("Runtime.evaluate", {
-                "expression": _JOB_DESC_JS, "returnByValue": True})).get("result", {}).get("value") or {}
+                "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
             for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
                 ev = {"type": typ, "x": box["x"], "y": box["y"]}
                 if typ != "mouseMoved":
@@ -1892,12 +2329,13 @@ async def open_job_card(body: OpenJobCardRequest):
                 await asyncio.sleep(0.4)
                 waited += 0.4
                 data = (await cdp.send("Runtime.evaluate", {
-                    "expression": _JOB_DESC_JS, "returnByValue": True})).get("result", {}).get("value") or {}
+                    "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
                 if _switched(data):
                     break
         data["ok"] = bool(data.get("description"))
         data["switched"] = _switched(data)
         data["external_id"] = body.external_id
+        data["platform"] = platform
         return data
     except Exception as exc:  # noqa: BLE001
         logger.warning("open_job_card failed: %s", exc)
@@ -1933,18 +2371,47 @@ _NEXT_PAGE_JS = r"""
 """
 
 
+# LinkedIn's pagination is an artdeco bar at the bottom of the RESULTS COLUMN, not the window — so
+# scroll the pane to the end first (which also finishes the virtualised list), then click the next
+# NUMBER, falling back to the Next button. Numbers are preferred for the same reason as Indeed's:
+# the Next control is sometimes present-but-disabled on the last page, and clicking it is a no-op
+# that would read as "paged forward" and re-extract the same page.
+_LINKEDIN_NEXT_PAGE_JS = r"""
+(() => {
+  const pane = document.querySelector(
+    '.jobs-search-results-list, .scaffold-layout__list > div, .scaffold-layout__list');
+  if (pane) pane.scrollTop = pane.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
+  const start = parseInt(new URLSearchParams(location.search).get('start') || '0', 10);
+  const cur = isNaN(start) ? 1 : Math.floor(start / 25) + 1;
+  const btnFor = (n) => [...document.querySelectorAll('.artdeco-pagination__indicator button, button[aria-label^="Page "]')]
+      .find((b) => (b.getAttribute('aria-label') === `Page ${n}`)
+                || ((b.innerText || '').trim() === String(n)));
+  const next = document.querySelector(
+    '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"]');
+  const el = btnFor(cur + 1) || (next && !next.disabled ? next : null);
+  if (!el) return {clicked:false, current:cur, has_next:false};
+  el.scrollIntoView({block:'center'}); el.click();
+  return {clicked:true, current:cur, next_page:cur + 1, has_next:true};
+})()
+"""
+
+_NEXT_PAGE_JS_BY_PLATFORM = {"indeed": _NEXT_PAGE_JS, "linkedin": _LINKEDIN_NEXT_PAGE_JS}
+
+
 @app.post("/next_page")
 async def next_page(body: NextPageRequest):
     """Page the results forward by CLICKING the pagination control (never a ?start= URL-jump):
     scroll to the bottom, then click the next page number (or the Next link). Returns whether a
-    next page existed and was clicked, and the new page number. Best-effort."""
+    next page existed and was clicked, and the new page number. Best-effort.
+    Control chosen by the tab's host — Indeed's numbered links, LinkedIn's artdeco bar."""
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        js = _NEXT_PAGE_JS_BY_PLATFORM[_platform_of(target.get("url", ""))]
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
-            res = await cdp.send("Runtime.evaluate", {"expression": _NEXT_PAGE_JS, "returnByValue": True})
+            res = await cdp.send("Runtime.evaluate", {"expression": js, "returnByValue": True})
         data = (res.get("result") or {}).get("value") or {"clicked": False, "has_next": False}
         data["ok"] = True
         return data
@@ -2338,20 +2805,54 @@ _INDEED_AUTH_JS = r"""
 """
 
 
+# LinkedIn auth-state probe — same contract as Indeed's, read off LinkedIn's own affordances.
+# The tell that matters: LinkedIn serves a job SEARCH page to logged-out visitors too, with the
+# results visible behind a "Sign in" nav and a recurring join-modal. So "results are on screen" is
+# NOT evidence of being signed in, and the gate must read the nav, not the content — the same
+# mistake facebook.com's dual-state URL taught us.
+_LINKEDIN_AUTH_JS = r"""
+(() => {
+  const url = location.href, path = location.pathname || '', title = document.title || '';
+  const txt = (document.body && document.body.innerText || '').slice(0, 6000);
+  const q = (sel) => !!document.querySelector(sel);
+  const on_auth = /^\/(login|uas|checkpoint|signup)\b/.test(path) || /\bSign ?in\b/i.test(title);
+  // The authed global nav: the "Me" avatar menu and the app nav are only rendered when signed in.
+  const has_account = q('.global-nav__me, [data-control-name="identity_welcome_message"]')
+                   || q('img.global-nav__me-photo, .global-nav__primary-items')
+                   || q('button[aria-label*="account" i][aria-expanded]');
+  const has_sign_in = q('a[href*="/login"], a[href*="/uas/login"], .nav__button-secondary')
+                   || /\bJoin now\b/i.test(txt);
+  return {
+    // has_account is required (not merely "no sign-in link"), because the logged-out job search
+    // hides its own sign-in affordance behind a dismissable modal on some routes.
+    logged_in: !on_auth && !!has_account,
+    on_auth, has_sign_in: !!has_sign_in, has_account: !!has_account,
+    url, title,
+    // transient by contract, same as Indeed's — see the note on _INDEED_AUTH_JS
+    page_text: txt,
+  };
+})()
+"""
+
+_AUTH_JS_BY_PLATFORM = {"indeed": _INDEED_AUTH_JS, "linkedin": _LINKEDIN_AUTH_JS}
+
+
 @app.post("/auth_state")
 async def auth_state(body: ScreenshotRequest):
-    """Deterministic Indeed login-state probe (logged_in + raw signals). Feeds the state manager's
-    login gate: search/automation stays blocked until logged_in. Best-effort."""
+    """Deterministic login-state probe (logged_in + raw signals) for the tab's platform. Feeds the
+    state manager's login gate: search/automation stays blocked until logged_in. Best-effort."""
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        platform = _platform_of(target.get("url", ""))
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             res = await cdp.send("Runtime.evaluate",
-                                 {"expression": _INDEED_AUTH_JS, "returnByValue": True})
+                                 {"expression": _AUTH_JS_BY_PLATFORM[platform], "returnByValue": True})
         data = (res.get("result") or {}).get("value") or {}
         data["ok"] = True
+        data["platform"] = platform
         return data
     except Exception as exc:  # noqa: BLE001
         logger.warning("auth_state failed: %s", exc)

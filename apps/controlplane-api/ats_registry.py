@@ -129,7 +129,22 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
      "hosts": ["smartapply.indeed.com", "indeed.com"], "recipe": "apply_recipe.INDEED_APPLY_RECIPE",
      "auth": "none", "notes": "On-engine Indeed apply; no external ATS. Not account-gated.",
      "seed_companies": []},
+    # LinkedIn's on-engine "Easy Apply" — the same shape as Indeed's smartapply: an apply that
+    # completes WITHOUT leaving the engine, so it needs a name here even though it is not a
+    # third-party ATS. Its auth is the ENGINE's login (you are already signed in to LinkedIn to
+    # see the button at all), which is why auth="none" — there is no separate per-employer account.
+    # A LinkedIn posting that is not Easy Apply hands off to a real ATS on that ATS's own host, so
+    # the host-matching loop above catches it exactly as it does for an Indeed hand-off.
+    {"ats_id": "linkedin_easy_apply", "display_name": "LinkedIn Easy Apply", "icon": "🔗",
+     "hosts": ["linkedin.com"], "recipe": "seed", "auth": "none",
+     "notes": "On-engine LinkedIn apply; no external ATS. Signed in as the LinkedIn account.",
+     "seed_companies": []},
 ]
+
+# ATS ids that are the ENGINE's own on-page apply rather than a third-party portal. classify_ats
+# must not let their broad engine hosts (indeed.com, linkedin.com) shadow a real ATS, so they are
+# skipped in the host loop and answered explicitly at the end.
+_ON_ENGINE_APPLY = ("indeed_quick_apply", "linkedin_easy_apply")
 
 _BY_ID = {a["ats_id"]: a for a in ATS_PLATFORMS}
 
@@ -161,8 +176,8 @@ def classify_ats(url: str, page_hints: Optional[dict[str, Any]] = None) -> str:
     if not host:
         return "unknown"
     for ats in ATS_PLATFORMS:
-        if ats["ats_id"] == "indeed_quick_apply":
-            continue  # handled explicitly below so a generic indeed.com host doesn't shadow real ATSs
+        if ats["ats_id"] in _ON_ENGINE_APPLY:
+            continue  # handled explicitly below so a broad engine host doesn't shadow real ATSs
         if any(needle in host for needle in ats["hosts"]):
             return ats["ats_id"]
 
@@ -176,13 +191,15 @@ def classify_ats(url: str, page_hints: Optional[dict[str, Any]] = None) -> str:
     for embed in ((page_hints or {}).get("embed_hosts") or []):
         embed_host = (urlparse(embed).hostname or embed or "").lower()
         for ats in ATS_PLATFORMS:
-            if ats["ats_id"] == "indeed_quick_apply":
+            if ats["ats_id"] in _ON_ENGINE_APPLY:
                 continue
             if any(needle in embed_host for needle in ats["hosts"]):
                 return ats["ats_id"]
 
     if "smartapply.indeed.com" in host or "indeed.com" in host:
         return "indeed_quick_apply"
+    if "linkedin.com" in host:
+        return "linkedin_easy_apply"
     return "company_site"
 
 

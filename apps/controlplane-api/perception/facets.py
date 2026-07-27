@@ -33,7 +33,7 @@ from urllib.parse import urlparse
 DOMAINS = ("career_search", "marketplace", "comms", "generic")
 
 PLATFORMS = (
-    "indeed", "workday", "greenhouse", "appvault", "icims", "lever", "taleo",
+    "indeed", "linkedin", "workday", "greenhouse", "appvault", "icims", "lever", "taleo",
     "facebook", "google", "company_site", "generic",
 )
 
@@ -51,7 +51,8 @@ CONDITIONS = ("form_ready", "picker_open", "blocked", "error", "challenge", "com
 
 # --- platform derivation -------------------------------------------------------------------
 _PREFIX_PLATFORM = {
-    "indeed": "indeed", "workday": "workday", "greenhouse": "greenhouse", "appvault": "appvault",
+    "indeed": "indeed", "linkedin": "linkedin",
+    "workday": "workday", "greenhouse": "greenhouse", "appvault": "appvault",
     "icims": "icims", "lever": "lever", "taleo": "taleo",
     "fb": "facebook", "facebook": "facebook", "mkt": "facebook", "listing": "facebook",
     "buyer": "facebook", "notifications": "facebook", "marketplace": "facebook",
@@ -61,16 +62,19 @@ _PREFIX_PLATFORM = {
 #: registry `domain_id` -> platform. The registry predates facets and its domain_id mixes
 #: engines with vendors (`indeed_jobs` vs `indeed`), so normalise rather than trust.
 _DOMAIN_PLATFORM = {
-    "indeed": "indeed", "indeed_jobs": "indeed", "workday": "workday",
+    "indeed": "indeed", "indeed_jobs": "indeed",
+    "linkedin": "linkedin", "linkedin_jobs": "linkedin", "workday": "workday",
     "greenhouse": "greenhouse", "appvault": "appvault", "gmail": "google", "google": "google",
     "facebook_marketplace": "facebook", "facebook": "facebook",
 }
 
-#: ats_registry ids that are not their own platform in facet terms.
-_ATS_PLATFORM = {"indeed_quick_apply": "indeed", "company_site": "company_site", "unknown": ""}
+#: ats_registry ids that are not their own platform in facet terms — the ENGINE's on-page apply is
+#: the engine, not a platform of its own.
+_ATS_PLATFORM = {"indeed_quick_apply": "indeed", "linkedin_easy_apply": "linkedin",
+                 "company_site": "company_site", "unknown": ""}
 
-_CAREER_PLATFORMS = {"indeed", "workday", "greenhouse", "appvault", "icims", "lever", "taleo",
-                     "company_site"}
+_CAREER_PLATFORMS = {"indeed", "linkedin", "workday", "greenhouse", "appvault", "icims", "lever",
+                     "taleo", "company_site"}
 
 # --- phase derivation ----------------------------------------------------------------------
 # Exact ids first (unambiguous, mined from the 102 registry rows + the 59 observed states), then
@@ -97,6 +101,10 @@ _PHASE_EXACT = {
     "inbox": "home", "facebook_home_logged_in": "home", "listing_feed": "home",
     "indeed_search_results": "search_results", "search_results": "search_results",
     "job_search": "search_results",
+    # LinkedIn's three seeded states (seed.py: job_search / job_detail / login_wall) under their
+    # domain-prefixed ids. Everything else LinkedIn grows is caught by the suffix rules below.
+    "linkedin_home": "home", "linkedin_job_search": "search_results",
+    "linkedin_job_detail": "job_posting",
     "indeed_job_posting": "job_posting", "job_detail": "job_posting",
     "company_careers_job_posting": "job_posting", "ats_job_posting": "job_posting",
     "company_page": "job_posting", "ats_careers_index": "job_posting",

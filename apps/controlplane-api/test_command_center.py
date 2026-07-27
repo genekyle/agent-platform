@@ -35,7 +35,17 @@ def _tmp_stores(tmp_path, monkeypatch):
 def test_attribute_domain_by_url():
     assert command_center._attribute_domain({"url": "https://facebook.com/marketplace"}) == "facebook_marketplace"
     assert command_center._attribute_domain({"tab_url": "indeed.com/jobs"}) == "indeed_jobs"
+    assert command_center._attribute_domain({"tab_url": "linkedin.com/jobs"}) == "linkedin_jobs"
     assert command_center._attribute_domain({"url": "https://example.com"}) is None
+
+
+def test_platform_for_maps_domain_to_observed_job_platform():
+    # The registry id and the scrape's platform tag are different strings on purpose; every
+    # "which jobs are this domain's?" query needs the latter, from ONE mapping.
+    assert command_center.platform_for("indeed_jobs") == "indeed"
+    assert command_center.platform_for("linkedin_jobs") == "linkedin"
+    # An unregistered domain reads as itself, never silently as another domain's jobs.
+    assert command_center.platform_for("ziprecruiter") == "ziprecruiter"
 
 
 def test_recent_activity_is_newest_first():
@@ -49,7 +59,8 @@ def test_recent_activity_is_newest_first():
 
 def test_build_summary_shape_on_empty_platform():
     summary = command_center.build_summary(_FakeDB())
-    assert {d["id"] for d in summary["domains"]} == {"facebook_marketplace", "indeed_jobs"}
+    assert {d["id"] for d in summary["domains"]} == {"facebook_marketplace", "indeed_jobs",
+                                                     "linkedin_jobs"}
     for tile in summary["domains"]:
         assert tile["status"] in ("ready", "attention", "idle")
         assert tile["automation_mode"] == "manual"
