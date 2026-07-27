@@ -1784,9 +1784,16 @@ async def orient_step(session_id: int, body: OrientStepBody,
     # bilh.wd1.myworkdayjobs.com. With the record shadowing the live URL, orient asked the GENERIC
     # describer about a Workday page and called a state the recipe knows perfectly well "new
     # territory" (live 2026-07-27). A recorded platform only holds until the page says otherwise.
+    # Gated on the platform being NAMED, not on `known`. `known` answers a different question —
+    # "have we driven it end to end" — and classify_landing says so itself: naming a platform is not
+    # knowing it. Gating on `known` meant a newly-recognised ATS could never correct a stale
+    # `company_site`, which is exactly what Teradyne hit the hour after SuccessFactors detection
+    # shipped: the registry said successfactors, orient kept saying company_site, and the recipe it
+    # then consulted was the generic one (2026-07-27).
     live = aps.classify_landing(url)
     platform = step.platform or live.platform
-    if live.known and live.platform and live.platform != step.platform:
+    named = live.platform not in ("", "unknown", "company_site")
+    if named and live.platform != step.platform:
         step.record("classify", aps.OK,
                     f"re-classified {step.platform or 'unclassified'} -> {live.platform}: the "
                     f"apply moved to {url[:70]}", initiator=body.initiator)

@@ -3450,3 +3450,56 @@ def test_login_action_will_not_click_the_submit_even_when_asked_by_name(monkeypa
         _teardown()
     assert r.status_code == 422                 # not one of the ways in
     assert "/execute" not in harness.paths()
+
+
+def test_orient_adopts_a_newly_recognised_ats_even_before_it_has_been_driven(monkeypatch):
+    """`known` answers "have we driven it end to end", which is not the question orient is asking.
+    Gating re-classification on it meant a newly-recognised ATS could never correct a stale
+    `company_site` — Teradyne, the hour after SuccessFactors detection shipped: the registry said
+    successfactors, orient kept saying company_site, and consulted the generic recipe (2026-07-27).
+    """
+    bb = _with_queue(("indeed:a1", "Pricing Analyst", "Teradyne"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].record("classify", aps.UNKNOWN, "company_site_job_posting")
+    q.steps[0].platform = "company_site"
+    bb.world["apply_queue"] = q.as_dict()
+    url = "https://jobs.teradyne.com/Teradyne/job/North-Reading-Pricing-Analyst-123/"
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": url}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, url),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "page_text": "Apply now", "candidates": []}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/orient", json={}).json()
+    finally:
+        _teardown()
+
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "successfactors"
+    assert any(m.rung == "classify" and "re-classified" in m.detail for m in step.minis)
+
+
+def test_orient_does_not_downgrade_a_named_platform_to_company_site(monkeypatch):
+    """The other direction: an unrecognised url must not wipe a platform we already named."""
+    bb = _with_queue(("indeed:a1", "T", "C"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].platform = "workday"
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://careers.example.com/openings/123"}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://careers.example.com/openings/123"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/orient", json={}).json()
+    finally:
+        _teardown()
+    assert aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0].platform == "workday"
