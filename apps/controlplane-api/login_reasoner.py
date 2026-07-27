@@ -161,30 +161,60 @@ def find_login_fields(candidates: list[dict]) -> dict:
 #: button named "Account". Login sits behind a menu widget, so the way in is a two-step reveal
 #: (`project_widget_protocol_layer`: AX finds elements, not widgets). A matcher that only looked
 #: for "sign in" would report "no way to log in" on the page whose entire job is logging you in.
+#: (hint, why, alternate). `alternate` marks a route AROUND the credential rather than through it —
+#: SSO, an emailed code. The distinction only matters when a password form is already on screen: a
+#: control named "Sign in" beside a password box IS that form's submit, and offering it as a "way
+#: in" would have the agent submitting an empty credential form. "Continue with google" on the same
+#: screen is a different thing entirely — a click that hands off to another site's own window.
+#: LinkedIn's logged-out /jobs page carries BOTH, which is what forced the distinction.
 SIGNIN_ENTRY_HINTS = (
-    ("sign in", "the sign-in control"),
-    ("log in", "the log-in control"),
-    ("sign-in", "the sign-in control"),
-    ("sign in with a code", "the emailed sign-in code (Indeed's fallback when SSO is not wanted)"),
-    ("continue with google", "Google SSO — opens Google's own window"),
-    ("continue with apple", "Apple SSO — opens Apple's own window"),
-    ("google", "Google SSO — opens Google's own window"),
-    ("apple", "Apple SSO — opens Apple's own window"),
-    ("account", "the account menu — sign-in usually hides behind it"),
+    ("sign in with a code", "the emailed sign-in code (Indeed's fallback when SSO is not wanted)", True),
+    ("continue with google", "Google SSO — opens Google's own window", True),
+    ("continue with apple", "Apple SSO — opens Apple's own window", True),
+    ("sign in with google", "Google SSO — opens Google's own window", True),
+    ("sign in with apple", "Apple SSO — opens Apple's own window", True),
+    ("google", "Google SSO — opens Google's own window", True),
+    ("apple", "Apple SSO — opens Apple's own window", True),
+    ("sign in", "the sign-in control", False),
+    ("log in", "the log-in control", False),
+    ("sign-in", "the sign-in control", False),
+    ("account", "the account menu — sign-in usually hides behind it", False),
 )
 
 
-def find_signin_entries(candidates: list[dict]) -> list[dict]:
+#: Names that CONTAIN a vendor word but are not a way in — the footer of any Google-adjacent page
+#: is full of them. Measured live on Google's own sign-in popup, where the bare "google" hint
+#: matched "Google Terms of Service" and "Open Google Account Help Center" and offered both as
+#: routes into the account (2026-07-27).
+_NOT_AN_ENTRY = ("terms of service", "privacy", "policy", "help cent", "help center", "learn more",
+                 "about ", "cookie", "guidelines", "copyright", "opens in a new window",
+                 "create account", "join now", "sign up", "forgot")
+
+
+def _looks_like_an_entry(name: str) -> bool:
+    """A control's NAME has to read like a way in, not like the legal footer beside it."""
+    n = (name or "").strip().lower()
+    return bool(n) and not any(bad in n for bad in _NOT_AN_ENTRY)
+
+
+def find_signin_entries(candidates: list[dict], *, alternates_only: bool = False) -> list[dict]:
     """Every control that plausibly leads toward signing in, best-first.
 
     These are CLICKS, never credentials, which is what makes them safe for the agent to drive: the
     hard boundary is that we never type a password or clear a 2FA challenge, not that we refuse to
     open the login page. Returns [{name, role, backend_node_id, why}] — deduped by name so a page
     listing "Sign in" three times offers one option.
+
+    `alternates_only` restricts the result to routes AROUND the credential (SSO, emailed code).
+    Pass it whenever a password form is already on screen: there, the generic "Sign in" match is
+    that form's own submit button, and clicking it submits an empty credential rather than
+    offering a way in.
     """
     seen: set[str] = set()
     out: list[dict] = []
-    for hint, why in SIGNIN_ENTRY_HINTS:
+    for hint, why, alternate in SIGNIN_ENTRY_HINTS:
+        if alternates_only and not alternate:
+            continue
         for c in candidates:
             role = (c.get("role") or "").lower()
             name = (c.get("name") or "").strip()
@@ -192,10 +222,12 @@ def find_signin_entries(candidates: list[dict]) -> list[dict]:
                 continue
             if hint not in name.lower() or name.lower() in seen:
                 continue
+            if not _looks_like_an_entry(name):
+                continue
             if c.get("backend_node_id") is None:
                 continue
             seen.add(name.lower())
-            out.append({"name": name, "role": role,
+            out.append({"name": name, "role": role, "alternate": alternate,
                         "backend_node_id": c.get("backend_node_id"), "why": why})
     return out
 

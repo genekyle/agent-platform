@@ -3392,3 +3392,61 @@ def test_an_account_with_no_credential_is_not_a_login_attempt(monkeypatch, tmp_p
     accounts.put_account("linkedin_default", {"domain_id": "linkedin_jobs", "kind": "domain",
                                               "status": "active"})
     assert sc._domain_account(sc._ENGINE_BY_ID["linkedin_jobs"]) is None
+
+
+# --- a password form and a way around it can be the SAME screen -------------------------------
+# LinkedIn's logged-out /jobs page (live, session #22, 2026-07-27) carries an email+password form
+# AND a "Continue with google" button. The survey used to short-circuit on the password field and
+# report "you type it, not us" — while a one-click SSO route sat on the same screen, already listed
+# in SIGNIN_ENTRY_HINTS and never looked at.
+_LINKEDIN_LOGGED_OUT = (("link", "Join now"), ("link", "Sign in"),
+                        ("button", "Continue with google"),
+                        ("textbox", "Email or phone"), ("textbox", "Password"))
+
+
+def test_a_password_form_that_also_offers_sso_is_a_choice_not_a_dead_end(monkeypatch):
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://www.linkedin.com/jobs/"),
+              "/auth_state": {"ok": True, "logged_in": False},
+              "/ax_scan": _ax(*_LINKEDIN_LOGGED_OUT)},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert login["state"] == "signin_form"
+    assert login["can_drive"] is True
+    names = [o["name"] for o in login["options"]]
+    assert "Continue with google" in names
+
+
+def test_the_forms_own_submit_is_never_offered_as_a_way_in(monkeypatch):
+    """The boundary the fix had to keep. On a password screen a control named "Sign in" IS that
+    form's submit — offering it would have the agent submitting an empty credential. Only routes
+    AROUND the credential count."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://www.linkedin.com/jobs/"),
+              "/auth_state": {"ok": True, "logged_in": False},
+              "/ax_scan": _ax(*_LINKEDIN_LOGGED_OUT)},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    names = [o["name"] for o in r["last_step"]["login"]["options"]]
+    assert "Sign in" not in names and "Join now" not in names
+
+
+def test_login_action_will_not_click_the_submit_even_when_asked_by_name(monkeypatch):
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs("https://www.linkedin.com/jobs/"),
+                           "/auth_state": {"ok": True, "logged_in": False},
+                           "/ax_scan": _ax(*_LINKEDIN_LOGGED_OUT)},
+                          blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/login_action", json={"control_name": "Sign in"})
+    finally:
+        _teardown()
+    assert r.status_code == 422                 # not one of the ways in
+    assert "/execute" not in harness.paths()

@@ -434,6 +434,10 @@ async def initialize(session_id: int, body: InitializeBody,
 
     import job_search_targets as jst
     session, bb, ledger = _load(session_id, db)
+    # No tab to read yet at setup time, so the engine comes from the session's declared domain —
+    # which is the one place it IS authoritative, because the operator picked it when they created
+    # the session.
+    engine = engine_for(session)
 
     if ledger.holds("query_entered"):
         spent = " ".join((bb.search_state.query or "").split())
@@ -441,12 +445,12 @@ async def initialize(session_id: int, body: InitializeBody,
             raise HTTPException(
                 status_code=409,
                 detail=(f"This session already ran {spent!r}. A session holds ONE query — "
-                        f"re-searching is what makes Indeed collapse results. Start a new "
-                        f"session for {query!r}."))
+                        f"re-searching is what makes {engine['label']} collapse results. Start a "
+                        f"new session for {query!r}."))
 
     bb.search_state.query = query
     bb.search_state.location = " ".join((body.location or "").split())
-    bb.goal = (f"Search Indeed for {query!r}"
+    bb.goal = (f"Search {engine['label']} for {query!r}"
                + (f" in {bb.search_state.location}" if bb.search_state.location else "")
                + " — review page by page")
     bb.world = dict(bb.world or {})
@@ -667,7 +671,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                     "detail": drove["detail"]}
 
         # No stored credential: survey what this page offers and hand back real options.
-        login = await _login_survey(browser_url, obs)
+        login = await _login_survey(browser_url, obs, engine)
         bb.log("handoff", f"not signed in ({login['state']}) — "
                           f"{len(login['options'])} way(s) in offered")
         return {"ok": False, "action": action, "awaiting": "operator_login", "login": login,
@@ -908,7 +912,13 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
 # --- login: a step the system owns, up to the secret ------------------------------------------
 #: Where the agent stops, always. These are the states whose next action IS the secret itself, and
 #: no amount of "the system should own every step" changes who owns those.
-_HUMAN_ONLY_LOGIN = {"signin_form", "mfa", "captcha", "login_error", "create_form"}
+# States where the screen itself is the human's, whatever else is on it. NOTE `signin_form` is NOT
+# here: a page can be a password form AND offer a way in we are allowed to click. LinkedIn's
+# logged-out /jobs page is exactly that — an email+password form beside a "Continue with google"
+# button — and treating the password field as proof that nothing is drivable meant the ladder
+# reported "you type it, not us" while a one-click SSO route sat on the same screen, already in
+# SIGNIN_ENTRY_HINTS and never looked at (found live 2026-07-27, session #22).
+_HUMAN_ONLY_LOGIN = {"mfa", "captcha", "login_error", "create_form"}
 
 _HUMAN_ONLY_COPY = {
     "signin_form": "The password field is up — you type it, not us. Sign in and press Re-check.",
@@ -1026,7 +1036,23 @@ async def _drive_login(*, engine: dict[str, Any], bb: Any, browser_url: str, obs
     return out
 
 
-async def _login_survey(browser_url: str, obs: dict[str, Any]) -> dict[str, Any]:
+#: Hosts that mean "another site's sign-in window is open and waiting". An SSO popup is its own
+#: CDP page target on the SAME port, so it shows up in /list_tabs beside the engine's tab.
+_SSO_POPUP_HOSTS = ("accounts.google.com", "appleid.apple.com", "login.microsoftonline.com",
+                    "www.facebook.com/v", "login.yahoo.com")
+
+
+def find_sso_popup(tabs: list[dict]) -> Optional[dict]:
+    """The identity provider's own window, if one is open."""
+    for t in tabs:
+        url = (t.get("url", "") or "").lower()
+        if any(h in url for h in _SSO_POPUP_HOSTS):
+            return t
+    return None
+
+
+async def _login_survey(browser_url: str, obs: dict[str, Any],
+                        engine: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """What the system can SEE and DO about signing in, right now.
 
     Answers the question the old dead-end could not: not "are we logged in" (no) but "what is the
@@ -1035,13 +1061,37 @@ async def _login_survey(browser_url: str, obs: dict[str, Any]) -> dict[str, Any]
     """
     import login_reasoner as lr
 
-    tab = (obs.get("tabs") or [{}])[0]
+    tabs = obs.get("tabs") or []
+
+    # AN SSO POPUP IS ITS OWN WINDOW, AND IT IS THE THING WAITING. Found live the first time a
+    # LinkedIn session clicked "Continue with google" (session #22, 2026-07-27): the popup became
+    # a second page target, the survey took tabs[0] — the popup — and dutifully offered "Google
+    # Terms of Service" as a way into the account. Two separate faults in one reading: surveying
+    # the wrong window, and treating a footer link as an entry. This answers the first.
+    #
+    # The handoff is deliberate and long-standing (LEARNINGS 2026-07-09): we drive up to the
+    # provider's door and no further. Google's password page is the user's crown-jewel credential
+    # and the most bot-fingerprinted page on the web; the training value is in capturing the
+    # states, not in who typed.
+    popup = find_sso_popup(tabs)
+    if popup is not None:
+        return {"state": "sso_popup", "url": popup.get("url", ""), "options": [],
+                "can_drive": False, "seen": 0,
+                "detail": "A sign-in window for another account is open. Finish it there — that "
+                          "credential is yours, not ours — then press Re-check. Once it is done "
+                          "this browser profile stays signed in, so it is a one-time step."}
+
+    # Otherwise survey the ENGINE's own tab, never "whichever came first".
+    tab = obs.get("search_tab") or (_find_site_tab(tabs, engine) if engine else None) \
+        or (tabs[0] if tabs else {})
     scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
                                             "tab_id": tab.get("tab_id", "")}, timeout=25.0)
     candidates = scan.get("candidates") or []
     page_text = str(scan.get("page_text") or "")
     state = lr.classify_login_state(candidates, page_text, logged_in=False)
-    entries = lr.find_signin_entries(candidates)
+    # On a password screen only ALTERNATE routes count — the generic "Sign in" match there is the
+    # form's own submit, and offering it would have us submitting an empty credential.
+    entries = lr.find_signin_entries(candidates, alternates_only=(state == "signin_form"))
 
     if state in _HUMAN_ONLY_LOGIN:
         return {"state": state, "url": tab.get("url", ""), "options": [], "can_drive": False,
@@ -1051,18 +1101,25 @@ async def _login_survey(browser_url: str, obs: dict[str, Any]) -> dict[str, Any]
     if not entries:
         # AX genuinely showing nothing is a real answer and a known one: Indeed has served a page
         # whose sign-in link AX could not see, and only a screenshot found it. Say so plainly
-        # rather than implying the page has no way in.
+        # rather than implying the page has no way in. On a password form it is also the ONLY
+        # case where "you type it" is the whole truth.
+        detail = (_HUMAN_ONLY_COPY["signin_form"] if state == "signin_form" else
+                  f"No sign-in control is visible to the accessibility tree on this page "
+                  f"({len(candidates)} elements seen). A site has hidden it before — sign in "
+                  f"directly in the window, then press Re-check.")
         return {"state": state, "url": tab.get("url", ""), "options": [], "can_drive": False,
-                "detail": f"No sign-in control is visible to the accessibility tree on this page "
-                          f"({len(candidates)} elements seen). Indeed has hidden it before — sign "
-                          f"in directly in the window, then press Re-check.",
-                "seen": len(candidates)}
+                "detail": detail, "seen": len(candidates)}
 
+    # A password form with a clickable alternative is a CHOICE, not a dead end.
+    detail = (f"Not signed in. {len(entries)} way(s) in from here — pick one and I'll click it; "
+              f"you take over at the password.")
+    if state == "signin_form":
+        detail = (f"A password form is up, and so are {len(entries)} route(s) that are clicks "
+                  f"rather than credentials. Pick one and I'll click it — or type the password "
+                  f"yourself and press Re-check.")
     return {"state": state, "url": tab.get("url", ""), "can_drive": True,
             "options": [{"name": e["name"], "role": e["role"], "why": e["why"]} for e in entries],
-            "detail": f"Not signed in. {len(entries)} way(s) in from here — pick one and I'll "
-                      f"click it; you take over at the password.",
-            "seen": len(candidates)}
+            "detail": detail, "seen": len(candidates)}
 
 
 class LoginActionBody(BaseModel):
@@ -1090,7 +1147,7 @@ async def login_action(session_id: int, body: LoginActionBody,
     if obs["observed"].get("authenticated"):
         raise HTTPException(status_code=409, detail="Already signed in — step instead.")
 
-    before = await _login_survey(browser_url, obs)
+    before = await _login_survey(browser_url, obs, engine_for(session, obs.get("search_tab")))
     if not before["can_drive"]:
         raise HTTPException(status_code=409, detail=before["detail"])
     if body.control_name not in {o["name"] for o in before["options"]}:
