@@ -34,6 +34,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+import re
 from urllib.parse import parse_qs, urlparse
 
 from settings import settings
@@ -81,8 +82,17 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
      "hosts": ["lever.co", "jobs.lever.co"], "recipe": "seed", "auth": "none",
      "notes": "jobs.lever.co/<tenant>; single-page apply, usually no account.", "seed_companies": []},
     {"ats_id": "successfactors", "display_name": "SAP SuccessFactors", "icon": "🟦",
-     "hosts": ["successfactors.com", "successfactors.eu"], "recipe": "seed", "auth": "account",
-     "notes": "SAP ATS; account-gated career site.", "seed_companies": []},
+     # `rmkcdn`/`successfactors.eu` are SAP's own hosts, but MOST tenants serve the career site
+     # from their OWN domain (jobs.teradyne.com) with no SAP string anywhere in the url — which is
+     # why Teradyne classified as `company_site` on the first encounter (2026-07-27). The path
+     # shape and the page's own furniture are the tells; see `_SUCCESSFACTORS_PATH_TELLS`.
+     "hosts": ["successfactors.com", "successfactors.eu", "rmkcdn.successfactors.com"],
+     "recipe": "apply_recipe.SUCCESSFACTORS_APPLY_RECIPE", "auth": "account",
+     "notes": "SAP ATS, usually on the employer's OWN domain. A NATIVE CHROME DIALOG blocked the "
+              "whole window here (operator-observed 2026-07-27) — invisible to CDP, and NOT the "
+              "notification prompt, which this profile already blocks. Apply is a STAGED MENU "
+              "('Apply Now' vs 'Start applying with LinkedIn'), not a direct link.",
+     "seed_companies": ["Teradyne"]},
     {"ats_id": "smartrecruiters", "display_name": "SmartRecruiters", "icon": "🟢",
      "hosts": ["smartrecruiters.com"], "recipe": "seed", "auth": "none", "notes": "",
      "seed_companies": []},
@@ -155,6 +165,18 @@ _BY_ID = {a["ats_id"]: a for a in ATS_PLATFORMS}
 # bespoke KKR path for what is just Greenhouse. These QUERY-PARAM tells are the ATS leaking its own
 # identity through the wrapper — cheap, and they generalize across every employer on that ATS.
 # (Same lesson as Workday's branded wrappers, which are caught by the APPLY-NOW href instead.)
+#: SuccessFactors on a tenant's own domain leaves no host or query tell, so it is recognised by the
+#: SHAPE OF ITS PATH: SAP renders `/<Tenant>/job/<Location>-<Title>-<id>/`. Checked only after the
+#: host, query and embed passes fail, so a real ATS host always wins.
+#:
+#: NARROW ON PURPOSE, and narrower than the first attempt. `/<Tenant>/search/` looked like an
+#: equally good tell until it claimed `linkedin.com/jobs/search` — a confident wrong answer for a
+#: platform we DO know, which is the same trap facebook.com fell into in the facet vocabulary. The
+#: job-page shape is the one worth having anyway: the apply flow needs the posting, not the search.
+_SUCCESSFACTORS_PATH_TELLS = (
+    re.compile(r"^/[A-Za-z0-9_%-]+/job/[^/]+/?$"),          # /Teradyne/job/North-Reading-...-123/
+)
+
 _QUERY_PARAM_TELLS = {
     "gh_jid": "greenhouse",       # Greenhouse embed / board id
     "gh_src": "greenhouse",
@@ -195,6 +217,11 @@ def classify_ats(url: str, page_hints: Optional[dict[str, Any]] = None) -> str:
                 continue
             if any(needle in embed_host for needle in ats["hosts"]):
                 return ats["ats_id"]
+
+    # Branded SuccessFactors: no host tell, no param tell — read the path shape.
+    path = urlparse(url or "").path or ""
+    if any(pat.match(path) for pat in _SUCCESSFACTORS_PATH_TELLS):
+        return "successfactors"
 
     if "smartapply.indeed.com" in host or "indeed.com" in host:
         return "indeed_quick_apply"

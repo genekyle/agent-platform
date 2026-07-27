@@ -545,6 +545,88 @@ ICIMS_ACCOUNT_LOOP = {
 
 
 
+
+# --- SAP SUCCESSFACTORS (Teradyne et al.) ----------------------------------------------------------
+# First encountered 2026-07-27 on jobs.teradyne.com, reached from Indeed's "Apply on company site".
+# Room made for it at the operator's request after it stopped a drive dead.
+#
+# ==================================================================================================
+# THE BLOCKER, FIRST, BECAUSE IT STOPS EVERYTHING: A NATIVE CHROME DIALOG, NOT PAGE CONTENT.
+# ==================================================================================================
+# Operator, 2026-07-27: *"the SAP integration sent me a google chrome notification that was blocking
+# the entire application."*
+#
+# WHAT IS CERTAIN. Something rendered by the BROWSER (or macOS on the browser's behalf) sat over the
+# window and blocked interaction. It is invisible to everything we have: no DOM node, no AX node,
+# and a CDP screenshot captures the PAGE, not the browser's own chrome. The failure therefore looks
+# like nothing at all — `/execute` re-resolved "Apply Now", dispatched, returned `ok`, and the page
+# was unchanged. We only learned it happened because a human was sitting in front of it.
+#
+# WHAT IS NOT YET KNOWN: which dialog. The obvious guess is a notification-permission prompt, and
+# that guess is WRONG or at least incomplete — the training profile already launches with
+# `--disable-notifications` AND `default_content_setting_values.notifications = 2`, and the live
+# profile was verified as blocking with zero per-site exceptions while this happened. So do not
+# "fix" this by denying notifications; that is already done. Candidates still open: a macOS
+# notification banner from Chrome overlaying the window, a protocol-handler prompt ("open in
+# another application"), or a download/beforeunload dialog. PIN IT WHEN IT RECURS by reading the
+# dialog's actual wording — that is evidence only the operator can collect.
+#
+# THE GENERAL LESSON, worth more than the SAP case: a native browser dialog is a class of blocker
+# our whole stack is blind to — permission prompts, the OS file picker, basic-auth, beforeunload,
+# print, protocol handlers. Every one of them makes a click return `ok` and change nothing. When an
+# action reports ok and the page is byte-identical, "is something NATIVE on top of the window"
+# belongs in the diagnosis next to the captcha check — and it is the one cause we cannot confirm
+# from inside the page, so it has to be asked of the human.
+SUCCESSFACTORS_LESSONS = {
+    "native_dialog_blocked_the_window": "A browser/OS-level dialog blocked the whole window while "
+        "driving Teradyne (operator-observed 2026-07-27). Invisible to CDP; a click returns ok and "
+        "nothing moves. NOT fixed by denying notifications — the profile already blocks those. "
+        "Wording unknown; capture it the next time it appears.",
+    "branded_by_default": "The career site runs on the EMPLOYER's domain (jobs.teradyne.com) with no "
+        "SAP string in the url. Recognised by path shape — /<Tenant>/job/<Location>-<Title>-<id>/ "
+        "and /<Tenant>/search/ (ats_registry._SUCCESSFACTORS_PATH_TELLS).",
+    "apply_is_a_staged_menu": "'Apply now' does NOT navigate — it opens a small menu offering "
+        "'Apply Now' and 'Start applying with LinkedIn'. The button STAGES; the menu item acts. A "
+        "click on the button alone reports ok and goes nowhere, which reads exactly like the "
+        "notification blocker and is a different fault.",
+    "cookie_banner": "Two buttons only: 'Accept Use Of Cookies' and 'Close Cookies Notice'. There is "
+        "no decline — Close dismisses without consenting, so Close is the privacy-preserving choice.",
+    "linkedin_path_is_a_detour": "'Start applying with LinkedIn' hands off to LinkedIn auth — a "
+        "different flow with its own account wall. Prefer the plain 'Apply Now'.",
+}
+
+SUCCESSFACTORS_APPLY_RECIPE = [
+    {"step": 0, "state": "successfactors_job_posting",
+     "action": "Dismiss the cookie notice with 'Close Cookies Notice' (never Accept), then click "
+               "'Apply now' to OPEN THE MENU. If a click reports ok and the page does not move, "
+               "SUSPECT A NATIVE DIALOG over the window and ask the operator what they can see — "
+               "see SUCCESSFACTORS_LESSONS.native_dialog_blocked_the_window.",
+     "controls": {"cookie_close": {"role": "button", "name": "Close Cookies Notice"},
+                  "apply_menu": {"role": "button", "name": "Apply now"}},
+     "expect": ["successfactors_apply_menu"]},
+    {"step": 1, "state": "successfactors_apply_menu",
+     "action": "The menu is open. Click the 'Apply Now' ITEM (a link, not the button that opened "
+               "the menu). 'Start applying with LinkedIn' is a detour into LinkedIn auth.",
+     "controls": {"apply_now": {"role": "link", "name": "Apply now"},
+                  "apply_linkedin": {"role": "link", "name": "Apply with LinkedIn"}},
+     "expect": ["successfactors_account_gate", "successfactors_apply_form"]},
+    {"step": 2, "state": "successfactors_account_gate",
+     "action": "UNDRIVEN. SAP career sites are account-gated (auth='account'); the site header "
+               "carries 'View Profile', which suggests a candidate profile/sign-in. Seed this from "
+               "the first capture that reaches it rather than guessing the fields now.",
+     "expect": ["successfactors_apply_form"]},
+    {"step": 3, "state": "successfactors_apply_form",
+     "action": "UNDRIVEN. The application itself.", "expect": ["successfactors_submitted"]},
+]
+
+SUCCESSFACTORS_ACCOUNT_LOOP = {
+    "needs_creation": {"state": "successfactors_account_gate", "recipe": None,
+                       "button": "(undriven — capture it first)"},
+    "created": {"state": "successfactors_sign_in", "recipe": None, "button": "(undriven)"},
+    "then": "hand to SUCCESSFACTORS_APPLY_RECIPE step 3",
+    "runs_as": "the apply ladder's `account` rung, automated by default; captcha / email code escalate",
+}
+
 # --- GREENHOUSE (KKR et al.) -----------------------------------------------------------------------
 # The second ATS we drive, and the FIRST with NO ACCOUNT WALL — a Greenhouse application is one
 # embedded form, submitted anonymously. Mapped live 2026-07-15 on KKR (Analyst - Actuarial Financial
@@ -874,6 +956,13 @@ def recipe_spec() -> dict[str, Any]:
                          "detect": "apply-destination host matches *apply.appvault.com, reached via a "
                                    "careers front (careerswithus.com) 'APPLY NOW' link; record the "
                                    "company→appvault mapping from the applystart feed"},
+            "successfactors": {"recipe": SUCCESSFACTORS_APPLY_RECIPE,
+                               "account_loop": SUCCESSFACTORS_ACCOUNT_LOOP,
+                               "lessons": SUCCESSFACTORS_LESSONS,
+                               "detect": "SAP on the EMPLOYER's own domain: path shape "
+                                         "/<Tenant>/job/<Location>-<Title>-<id>/ or /<Tenant>/search/. "
+                                         "ASKS FOR NOTIFICATION PERMISSION — deny it on the profile "
+                                         "before driving or a native prompt blocks the window"},
             "icims": {"recipe": ICIMS_APPLY_RECIPE,
                       "account_loop": ICIMS_ACCOUNT_LOOP,
                       "create_account_recipe": ICIMS_CREATE_PROFILE_RECIPE,
