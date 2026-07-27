@@ -2922,3 +2922,51 @@ just do" and a reverse-chronological table answers that one scroll too late.
 **Still owed.** The first live LinkedIn drive. Everything above is verified against fakes and a
 seeded journal; the readers and the SPA thresholds (12s settle, two stable reads) have not met a
 real page. Capture and label it — [[feedback_capture_label_is_the_work]].
+
+## 2026-07-27 (4) — Page 1 finished: five submitted, and three ways a form lies about being answered
+
+Page 1 of the Indeed sweep is fully accounted for — 6 picks, 5 submitted, 1 abandoned, 0 remaining.
+The last three (Nichols Road, Datadog, DNP Imagingcomm) ran the loop built earlier today with no
+hand-fixing: applied-check on landing, durable record written before cleanup, tab closed, back to a
+single search tab. Contrast with Joslin at the start of the session, which needed both the record
+and the tabs repaired by hand afterwards.
+
+### Three ways a control reported success while the form disagreed
+
+Every one of these returned `ok` from `/execute`:
+
+1. **A click landed in an overlay that was still open.** Opening the languages dropdown while the
+   CITIES list was open put the click inside the open list and ticked **Amsterdam**; the subsequent
+   "English" went into the cities search box. Caught on the screenshot and removed. **Close a widget
+   before touching the next control** — the same overlay-interception family as the CC-305 radios
+   that only a native click could set.
+2. **A control existed in the AX tree but was not yet live.** DNP's disability radios are present in
+   the scan while hidden behind an unticked acknowledgment checkbox. Clicking one reported ok and
+   set nothing. Ticking the checkbox REVEALED them, and only then did the click take.
+3. **Ticking an attestation added a new required field.** The e-signature checkbox revealed "Please
+   type your full name *", which is why Continue silently refused to advance while showing no error
+   at the top of the page. **A Continue that does not advance means look further down, not that the
+   click failed.**
+
+All three are the widget-protocol lesson in different clothes: AX finds ELEMENTS, and a form is made
+of WIDGETS with preconditions, staging and reveals.
+
+### The polarity trap
+
+DNP asks: *"I wish to **opt out** from having my resume reviewed by artificial intelligence."*
+The stored answer is `ai_use_attestation = Yes` — meaning the operator ACCEPTS AI screening. Mapped
+by keyword, "Yes" answers "yes I opt out" and does the opposite of what the operator stored, setting
+their Profile Relevancy score to "Not Available" invisibly.
+
+**A stored answer is keyed to a QUESTION, not to a word.** Any future auto-answering has to read the
+polarity of the sentence it is answering — the question reasoner's first real job, and the cheapest
+place to get this wrong is exactly where nobody would notice.
+
+### Two answers the profile could not supply
+
+* **Travel willingness** had no stored answer. Asked, answered Yes, and SAVED as
+  `willing_to_travel` so the next application does not have to ask.
+* **Desired salary on a job posting BELOW the floor.** DNP posts $55–60k against a ~$65k floor. Not
+  a fill, a decision: the operator chose the top of the posted range. The lesson is that the
+  applied-check is not the only thing worth knowing before entering — **the posted range against
+  the floor is a triage signal we currently only notice at the salary question**, six steps in.
