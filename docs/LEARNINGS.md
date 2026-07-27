@@ -2720,3 +2720,58 @@ code) are identical either way.
 Signing in revealed the requisition already had an application on file. The queue tracks whether a
 job has been applied to, so the flag is `submitted` — with a detail that says plainly this drive
 did not send it. **The flag records the outcome; the detail owes the provenance.**
+
+## 2026-07-27 (3) — "Have we applied to this?" had nothing to consult
+
+The BIDMC drive ended on Workday's *"You've already applied for this job."* Operator: *"we need
+logic on whether we applied to things or not and that needs to be checked on initial landing on a
+page and scan for the jobs… see if we applied in the database or not."*
+
+### The database did not know either
+
+The obvious reading is "we forgot to check". The real fault was one layer down: **there was
+nothing to check.** `apply_flag` closed tabs without recording, so the Joslin application —
+submitted and confirmed hours earlier, with a screenshot of the confirmation — still read
+`application_status='seen'`, `applied_at=None`.
+
+`APPLY_EPILOGUE` has said **RECORD BEFORE CLOSE**, "because a closed tab with no record is
+unrecoverable", since 2026-07-15. We wired the CLOSE half this morning and left the RECORD half on
+the floor — while quoting the rule in the commit message. The queue knew; the queue is one
+session's blackboard.
+
+**A fact that lives only in session state is a fact the next session does not have.**
+
+### One job, three identities
+
+    Indeed card        indeed:e5c794ae32973697        a jk, and jk rotates per search session
+    employer wrapper   jobs.bilh.org/…-jr88822/       the req id, in the path
+    the ATS            bilh.wd1.myworkdayjobs.com/…   same req, different host
+
+`ObservedJob` is keyed on `platform:external_id`, so an application made through Workday is
+invisible to a lookup keyed on the Indeed jk. Recognising it needs the REQUISITION — which is
+sitting in both urls, unparsed, the whole time. That is tier 2 of `applied_index`, and it is the
+tier that would have saved the drive.
+
+### The fuzzy tier reports, it does not decide
+
+Same employer + same role words is right far more often than it is wrong, and it is also exactly
+the match that would skip "Data Analyst II" for having applied to "Data Analyst I". So it returns
+`likely_applied`, never `applied`: `open_pane` HALTS on a certain match and only WARNS on a fuzzy
+one. **A near-miss that silently skips a job the operator picked is worse than one that asks.**
+
+Two matching details that are not fussiness: the same title arrives with an en-dash on Indeed and a
+hyphen on Workday, and the ATS routinely appends a department the card omits ("Healthcare Data
+Analyst" vs "Healthcare Data Analyst - BIDMC, OBGYN Quality"). Similarity is scored against the
+SHORTER title for that reason — Jaccard punishes the appended department, and punishing it is how
+one job reads as two.
+
+### It goes in the prompt, unlike staleness
+
+`staleness` is deliberately not rendered into the Bundle prompt: its thresholds are guesses, and
+putting an unmeasured level in front of the reasoner would change the feature contract on the
+strength of one. `applied` is the opposite — a fact read out of our own database — and it changes
+what the right next action IS, because there is no good next move on a job already applied to. It
+renders only when present, so every bundle journaled before today still produces a byte-identical
+prompt.
+
+Live on the next scan: *"Page 1: 15 results — 2 new, 13 already seen, 2 ALREADY APPLIED."*
