@@ -2267,11 +2267,30 @@ def _apply_tab(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
     it is still open (taking its CURRENT url), otherwise the live tab that is neither the Indeed
     search nor blank. Exact-URL matching against the record was the bug — it found nothing the
     moment the page moved (2026-07-24, the My Information bunch-fill scanned an empty tab_id)."""
+    from controller import window as window_mod
+
     tabs = obs.get("tabs") or []
     recorded_id = ((bb.world or {}).get("apply_tab") or {}).get("tab_id")
     if recorded_id:
         live = next((t for t in tabs if t.get("tab_id") == recorded_id), None)
         if live:
+            # THE FLOW MAY HAVE HOPPED PAST THE RECORDED TAB. The record was only ever wrong when
+            # its tab had closed or navigated — but an apply can also open a SECOND tab and leave
+            # the first one open and inert. BILH: Indeed -> jobs.bilh.org (recorded) -> "Apply now"
+            # -> bilh.wd1.myworkdayjobs.com, and the resolver kept handing back the spent landing,
+            # so `orient` read a job posting and called the Workday application "new territory"
+            # (live 2026-07-27). The stepping-stone is still open, so being open is not the test.
+            #
+            # The window manager already tells them apart — an ATS host is ROLE_APPLY, an employer
+            # careers page is ROLE_UNKNOWN — so prefer a real application tab over a recorded one
+            # that is not, rather than inventing an ordering rule about which tab is "newest".
+            if window_mod.classify_tab(live.get("url", "")) != window_mod.ROLE_APPLY:
+                hopped = next((t for t in tabs
+                               if t.get("tab_id") != recorded_id
+                               and window_mod.classify_tab(t.get("url", "")) == window_mod.ROLE_APPLY),
+                              None)
+                if hopped is not None:
+                    return {"tab_id": hopped.get("tab_id"), "url": hopped.get("url", "")}
             return {"tab_id": live.get("tab_id"), "url": live.get("url", "")}
     search = (obs.get("search_tab") or {}).get("tab_id")
     for t in tabs:

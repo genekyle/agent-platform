@@ -3017,3 +3017,39 @@ def test_open_pane_addresses_the_search_tab_not_whatever_cdp_lists_first(monkeyp
     assert seen.get("tab_id") or seen.get("tab_url"), "the click must name the document it means"
     if seen.get("tab_url"):
         assert "indeed.com/jobs" in seen["tab_url"]
+
+
+def test_the_apply_tab_follows_the_flow_when_it_hops_to_a_new_tab(monkeypatch):
+    """An apply can open a SECOND tab and leave the first open and inert. BILH: Indeed ->
+    jobs.bilh.org (recorded at enter_apply) -> "Apply now" -> bilh.wd1.myworkdayjobs.com. The
+    recorded tab was still open, so the "is it still open?" test passed and the resolver kept
+    handing back the spent landing — `orient` read a job posting and called the live Workday
+    application "new territory" (live 2026-07-27).
+
+    The window manager already separates them by role, which is why this needs no rule about
+    which tab is newest.
+    """
+    bb = _with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH"))
+    bb.world["apply_tab"] = {"tab_id": "t1",
+                             "url": "https://jobs.bilh.org/jobs/healthcare-data-analyst-jr88822/"}
+    obs = {"tabs": [
+        {"tab_id": "t2", "url": "https://bilh.wd1.myworkdayjobs.com/External/job/x"},
+        {"tab_id": "t1", "url": "https://jobs.bilh.org/jobs/healthcare-data-analyst-jr88822/"},
+        {"tab_id": "t0", "url": SEARCH_URL},
+    ], "search_tab": {"tab_id": "t0", "url": SEARCH_URL}}
+
+    assert sc._apply_tab(bb, obs)["tab_id"] == "t2"          # the application, not the doorway
+
+
+def test_a_recorded_apply_tab_still_wins_when_it_is_the_real_application(monkeypatch):
+    """The hop rule must not fire on a normal single-tab application: a recorded ATS tab that is
+    still open IS the work, even when another apply-role tab exists."""
+    bb = _with_queue(("indeed:a1", "T", "C"))
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"}
+    obs = {"tabs": [
+        {"tab_id": "t2", "url": "https://other.wd1.myworkdayjobs.com/job/y"},
+        {"tab_id": "t1", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"},
+        {"tab_id": "t0", "url": SEARCH_URL},
+    ], "search_tab": {"tab_id": "t0", "url": SEARCH_URL}}
+
+    assert sc._apply_tab(bb, obs)["tab_id"] == "t1"
