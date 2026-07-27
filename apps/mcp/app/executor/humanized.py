@@ -18,11 +18,14 @@ these agents to autonomy. Selected via EXECUTOR_DRIVER=humanized or driver="huma
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from typing import Optional
 
 from .driver import ActionRequest, DirectDriver
 from .minimum_jerk import min_jerk_points
+
+logger = logging.getLogger("mcp.executor")
 
 
 def humanized_path(start: tuple[float, float], end: tuple[float, float],
@@ -127,22 +130,52 @@ class HumanizedDriver(DirectDriver):
         else:
             await super()._apply_value(cdp, request)
 
-    # React (and other framework) inputs manage their own value + caret, so synthetic
-    # select-all/Backspace fight the re-render and leave residue / interleave. The reliable clear is
-    # the React "trick": call the NATIVE value setter to '' then dispatch a bubbling input event, so
-    # the framework syncs its state to the empty field. Operates on document.activeElement (the field
-    # we just clicked to focus), so no node id is needed on the coordinate path.
-    _CLEAR_FOCUSED_JS = (
-        "(()=>{const el=document.activeElement; if(!el) return false;"
-        " const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;"
-        " const set=Object.getOwnPropertyDescriptor(proto,'value'); if(set&&set.set){set.set.call(el,'');}"
-        " else {el.value='';}"
-        " el.dispatchEvent(new Event('input',{bubbles:true}));"
-        " el.dispatchEvent(new Event('change',{bubbles:true})); return true;})()"
+    # THE ACTIVE ELEMENT IS PER-DOCUMENT, AND THE FIELD MAY NOT BE IN THIS ONE. When focus sits
+    # inside an iframe, the TOP document's `activeElement` is the IFRAME ELEMENT — not the input.
+    # Everything below writes to the focused field, so on a framed form both writes landed on the
+    # frame element and did nothing, silently: the clear reported success, the keystrokes (which go
+    # to the browser's REAL focus) appended onto the prefilled value, and the authoritative
+    # value-set that exists to guarantee correctness no-oped. iCIMS's email field came out
+    # "genomags@gmail.comgenomags@gmail.com" — a malformed address one click from creating a real
+    # account with it (live, jobs-joslin.icims.com, 2026-07-27).
+    #
+    # So both writes start by walking DOWN the focus chain to the deepest document that owns focus.
+    # A cross-origin frame throws on `contentDocument`; that is caught and we stop at the last
+    # document we could read, rather than pretending we reached the field.
+    _FOCUSED_EL_JS = (
+        "let el=document.activeElement;"
+        " for(let hops=0; hops<5; hops++){"
+        "   let inner=null;"
+        "   try { inner = el && el.contentDocument && el.contentDocument.activeElement; }"
+        "   catch(e) { inner = null; }"           # cross-origin frame — cannot reach in
+        "   if(!inner) break;"
+        "   el = inner;"
+        " }"
     )
 
+    # React (and other framework) inputs manage their own value + caret, so synthetic
+    # select-all/Backspace fight the re-render and leave residue / interleave. The reliable write is
+    # the React "trick": call the NATIVE value setter, then dispatch a bubbling input event so the
+    # framework syncs its state to the field. The setter must come from the element's OWN window —
+    # an inner document is a different realm, and reaching for this frame's constructors to patch
+    # that frame's node is the same "which document do you mean" mistake one level down.
+    @classmethod
+    def _set_focused_value_js(cls, value_expr: str) -> str:
+        return (
+            "(()=>{" + cls._FOCUSED_EL_JS +
+            " if(!el) return false;"
+            " const win = (el.ownerDocument && el.ownerDocument.defaultView) || window;"
+            " const proto = el instanceof win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype"
+            "                                                     : win.HTMLInputElement.prototype;"
+            " const set=Object.getOwnPropertyDescriptor(proto,'value');"
+            f" if(set&&set.set){{set.set.call(el,{value_expr});}} else {{el.value={value_expr};}}"
+            " el.dispatchEvent(new Event('input',{bubbles:true}));"
+            " el.dispatchEvent(new Event('change',{bubbles:true})); return el.value;})()"
+        )
+
     async def _clear_focused(self, cdp) -> None:
-        await cdp.send("Runtime.evaluate", {"expression": self._CLEAR_FOCUSED_JS, "returnByValue": True})
+        await cdp.send("Runtime.evaluate",
+                       {"expression": self._set_focused_value_js("''"), "returnByValue": True})
         await asyncio.sleep(self._rng.uniform(0.05, 0.12))
 
     async def _human_type(self, cdp, text: str) -> None:
@@ -162,16 +195,15 @@ class HumanizedDriver(DirectDriver):
         await self._set_value_react_safe(cdp, text)
 
     async def _set_value_react_safe(self, cdp, text: str) -> None:
-        """Authoritatively set document.activeElement's value via the native setter + input/change
-        events (the React-safe write), so the field ends EXACTLY `text` regardless of the per-char race."""
+        """Authoritatively set the FOCUSED field's value via the native setter + input/change events
+        (the React-safe write), so it ends EXACTLY `text` regardless of the per-char race. Returns
+        the field's value afterwards — which is how a write into a frame we cannot reach shows up as
+        a mismatch instead of as success."""
         import json as _json
-        v = _json.dumps(text)
-        expr = (
-            "(()=>{const el=document.activeElement; if(!el) return false;"
-            " const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;"
-            " const set=Object.getOwnPropertyDescriptor(proto,'value');"
-            f" if(set&&set.set){{set.set.call(el,{v});}} else {{el.value={v};}}"
-            " el.dispatchEvent(new Event('input',{bubbles:true}));"
-            " el.dispatchEvent(new Event('change',{bubbles:true})); return el.value;})()"
-        )
-        await cdp.send("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        res = await cdp.send("Runtime.evaluate",
+                             {"expression": self._set_focused_value_js(_json.dumps(text)),
+                              "returnByValue": True})
+        got = ((res or {}).get("result") or {}).get("value")
+        if got != text:
+            logger.warning("humanized type: field reads %r after writing %r — the write did not "
+                           "reach the field (a frame we cannot see into?)", got, text)
