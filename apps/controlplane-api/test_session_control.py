@@ -13,15 +13,31 @@ What is being pinned, in order of how expensive it is to get wrong:
   5. An active captcha stops the crank before anything else is decided.
 """
 
+import accounts
 import apply_state_store as store
 import apply_steps as aps
 import main
+import pytest
 import session_checkpoints as cps
 from db import get_db
 from fastapi.testclient import TestClient
 from routers import session_control as sc
 
 client = TestClient(main.app)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_accounts(tmp_path, monkeypatch):
+    """Point the account registry at a temp file for EVERY test in this module.
+
+    Without this the suite wrote to the operator's real accounts.json: the account-rung tests call
+    ensure_account/mark_created against live records, so running the tests registered fake
+    companies and flipped real accounts' lifecycle. It went unnoticed because ensure_account used
+    to reset any account it touched back to `pending` — the pollution kept undoing itself, and the
+    day that reset was fixed (2026-07-27) the leak turned into seven failures that were really one
+    missing fixture.
+    """
+    monkeypatch.setattr(accounts, "_path", lambda: tmp_path / "accounts.json")
 
 SEARCH_URL = "https://www.indeed.com/jobs?q=reporting+analyst&l=Nashua%2C+NH"
 
