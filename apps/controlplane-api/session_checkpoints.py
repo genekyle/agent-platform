@@ -79,7 +79,7 @@ PREAMBLE: tuple[Checkpoint, ...] = (
     ),
     Checkpoint(
         id="authenticated",
-        label="Signed in to Indeed",
+        label="Signed in to {engine}",
         kind=STANDING,
         why="Logged-out data is provenance-invalid, so this has to hold CONTINUOUSLY, not once. "
             "Re-running it is safe — it stops at any credential/2FA wall for the operator.",
@@ -89,8 +89,8 @@ PREAMBLE: tuple[Checkpoint, ...] = (
         id="query_entered",
         label="Query run",
         kind=CONSUMING,
-        why="Submitting the query hits Indeed's search backend. Repeat the same query too often "
-            "and Indeed caches/collapses it — results we already saw stop coming back. This is "
+        why="Submitting the query hits {engine}'s search backend. Repeat the same query too often "
+            "and {engine} caches/collapses it — results we already saw stop coming back. This is "
             "the rung that makes start-stop tasks harmful, so it runs ONCE per session.",
         action="run_query",
         recovery="Return to the results we already have — refocus the existing search tab, or go "
@@ -303,7 +303,27 @@ def adopt_prior_run(ledger: Ledger, *, query: str = "", cadence_run_id: str = ""
     return "query_entered"
 
 
-def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1) -> NextStep:
+#: The engine a ladder is climbing, filled into the rung text at RENDER time. Rungs are keyed by
+#: ID and the ledger stores IDs, so the operator-facing strings are display-only and free to vary
+#: per session — which is exactly what a LinkedIn session needs, having been told for one release
+#: that its next step was to sign in to Indeed.
+DEFAULT_ENGINE = "Indeed"
+
+
+def for_engine(cp: Checkpoint, engine: str = DEFAULT_ENGINE) -> Checkpoint:
+    """The same rung, worded for the engine actually being driven."""
+    def _f(text: str) -> str:
+        return text.replace("{engine}", engine or DEFAULT_ENGINE)
+    return Checkpoint(id=cp.id, label=_f(cp.label), kind=cp.kind, why=_f(cp.why),
+                      action=cp.action, recovery=_f(cp.recovery))
+
+
+def preamble(engine: str = DEFAULT_ENGINE) -> tuple[Checkpoint, ...]:
+    return tuple(for_engine(cp, engine) for cp in PREAMBLE)
+
+
+def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1,
+              engine: str = DEFAULT_ENGINE) -> NextStep:
     """The one decision this module exists to make: what does the next crank work on?
 
     Walks the preamble in order. The first rung that isn't satisfied wins — and HOW it is
@@ -317,7 +337,7 @@ def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1) -> Nex
     Past the preamble the ladder is open-ended, so we always land on REVIEW for the current
     page: there is no terminal rung and therefore nothing to flag as "done".
     """
-    for cp in PREAMBLE:
+    for cp in preamble(engine):
         if not ledger.holds(cp.id):
             return NextStep(ADVANCE, cp, reason=f"{cp.label} has not been reached yet.")
         if observed.get(cp.id) is False:
@@ -333,7 +353,8 @@ def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1) -> Nex
 
 
 def status_rows(ledger: Ledger, observed: dict[str, Any], *,
-                page: int = 1, has_results: bool = False) -> list[dict[str, Any]]:
+                page: int = 1, has_results: bool = False,
+                engine: str = DEFAULT_ENGINE) -> list[dict[str, Any]]:
     """The ladder as the panel renders it: every preamble rung plus the page rungs walked so
     far, each with its status and provenance. Read-only view over `next_step`.
 
@@ -341,9 +362,9 @@ def status_rows(ledger: Ledger, observed: dict[str, Any], *,
     whether the SELECTION rung is the operator's next move or still pending. Without it the panel
     would invite a choice between fifteen jobs nobody has looked at yet.
     """
-    nxt = next_step(ledger, observed, page=page)
+    nxt = next_step(ledger, observed, page=page, engine=engine)
     rows: list[dict[str, Any]] = []
-    for cp in PREAMBLE:
+    for cp in preamble(engine):
         held = ledger.holds(cp.id)
         ok = observed.get(cp.id)
         if cp.id == nxt.checkpoint.id:

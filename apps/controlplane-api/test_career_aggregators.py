@@ -196,6 +196,28 @@ def test_seeding_linkedin_is_idempotent_and_additive():
     assert goals == {"search_linkedin_jobs", "open_linkedin_job", "apply_to_linkedin_job"}
 
 
+def test_a_domain_without_a_scenario_cannot_have_a_session():
+    """A training session is (domain, scenario) and the create endpoint 404s on a missing scenario.
+    So a domain seeded with goals but no scenario is registered and UNUSABLE — it shows up in every
+    picker and nothing can be started for it. That is exactly where linkedin_jobs sat until the
+    seeder learned to top up scenarios + tasks as well."""
+    from models import ScenarioRegistry, TaskRegistry
+    db = _db()
+    seed.seed_linkedin_domain(db)
+    scenarios = set(db.scalars(select(ScenarioRegistry.scenario_id)
+                               .where(ScenarioRegistry.domain_id == "linkedin_jobs")).all())
+    assert scenarios == {"linkedin_login_wall_log_in", "linkedin_job_search_open_job",
+                         "linkedin_job_detail_apply"}
+    # every scenario must start on a page state the domain actually declares, or the session opens
+    # pointing at a state nothing can ever classify
+    row = db.get(DomainRegistry, "linkedin_jobs")
+    declared = {s["page_state_id"] for s in row.page_states}
+    starts = set(db.scalars(select(ScenarioRegistry.start_page_state)
+                            .where(ScenarioRegistry.domain_id == "linkedin_jobs")).all())
+    assert starts <= declared, f"scenarios start on undeclared states: {starts - declared}"
+    assert db.get(TaskRegistry, "linkedin_apply_flow") is not None
+
+
 def test_seeding_linkedin_on_a_bare_database_creates_it():
     db = _db()
     seed.seed_linkedin_domain(db)

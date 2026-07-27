@@ -294,6 +294,10 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     which page we are on, and this page's results."""
     ss = bb.search_state
     observed = obs.get("observed", {})
+    # The rungs are worded for the engine actually being driven. They used to read "Signed in to
+    # Indeed" on every ladder, which a LinkedIn session renders as an instruction to go and sign in
+    # to the wrong site — found the first time a LinkedIn session was started, 2026-07-27.
+    engine_label = engine_for(session, obs.get("search_tab"))["label"]
     return {
         "session_id": session.id,
         "goal": bb.goal,
@@ -301,10 +305,11 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "location": ss.location,
         "radius_miles": (bb.world or {}).get("radius_miles"),
         "page": page,
-        "ladder": cps.status_rows(ledger, observed, page=page,
+        "engine": engine_label,
+        "ladder": cps.status_rows(ledger, observed, page=page, engine=engine_label,
                                   has_results=bool(results if results is not None
                                                    else (bb.world or {}).get("page_results"))),
-        "next": cps.next_step(ledger, observed, page=page).as_dict(),
+        "next": cps.next_step(ledger, observed, page=page, engine=engine_label).as_dict(),
         "progress": cps.progress(ledger, observed, page=page),
         "observed": observed,
         "block": obs.get("block"),

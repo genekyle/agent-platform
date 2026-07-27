@@ -112,6 +112,7 @@ REGISTRY_SEED = {
         {"task_id": "marketplace_open_inbox", "scope_level": "domain", "domain_id": "facebook_marketplace", "goal_id": None, "display_name": "Open marketplace inbox"},
         {"task_id": "facebook_create_listing_flow", "scope_level": "goal", "domain_id": "facebook_marketplace", "goal_id": "create_listing", "display_name": "Create a Marketplace listing"},
         {"task_id": "indeed_apply_flow", "scope_level": "goal", "domain_id": "indeed_jobs", "goal_id": "apply_to_job", "display_name": "Complete Indeed apply flow"},
+        {"task_id": "linkedin_apply_flow", "scope_level": "goal", "domain_id": "linkedin_jobs", "goal_id": "apply_to_linkedin_job", "display_name": "Complete LinkedIn apply flow"},
     ],
     "scenarios": [
         {
@@ -165,6 +166,40 @@ REGISTRY_SEED = {
             "start_page_state": "login_wall",
             "description": "Start at the Indeed login wall and authenticate.",
             "capture_profile_override": None,
+        },
+        # LinkedIn. A scenario names WHERE a session starts, and the login-wall one is the entry
+        # point that matters: a fresh LinkedIn profile has no cookies, so the first session begins
+        # signed out and the ladder's auth rung drives from there.
+        {
+            "scenario_id": "linkedin_login_wall_log_in",
+            "domain_id": "linkedin_jobs",
+            "goal_id": "log_in",
+            "task_id": None,
+            "display_name": "Login Wall -> Log In",
+            "start_page_state": "login_wall",
+            "description": "Start at the LinkedIn sign-in wall and authenticate with the stored login.",
+            "capture_profile_override": None,
+        },
+        {
+            "scenario_id": "linkedin_job_search_open_job",
+            "domain_id": "linkedin_jobs",
+            "goal_id": "open_linkedin_job",
+            "task_id": None,
+            "display_name": "Job Search -> Open Job",
+            "start_page_state": "job_search",
+            "description": "Start from LinkedIn job search results and open a posting in the detail pane.",
+            "capture_profile_override": None,
+        },
+        {
+            "scenario_id": "linkedin_job_detail_apply",
+            "domain_id": "linkedin_jobs",
+            "goal_id": "apply_to_linkedin_job",
+            "task_id": "linkedin_apply_flow",
+            "display_name": "Job Detail -> Apply",
+            "start_page_state": "job_detail",
+            "description": "Start from an open LinkedIn posting and enter the apply flow — Easy Apply "
+                           "on-engine, or the hand-off to the employer's ATS.",
+            "capture_profile_override": "fullpage",
         },
         {
             "scenario_id": "indeed_job_detail_apply_to_job",
@@ -285,6 +320,19 @@ def seed_linkedin_domain(db: Session) -> None:
     for payload in [g for g in REGISTRY_SEED["goals"] if g.get("domain_id") == "linkedin_jobs"]:
         if not db.scalar(select(GoalRegistry.goal_id).where(GoalRegistry.goal_id == payload["goal_id"])):
             db.add(GoalRegistry(status="active", **payload))
+            changed = True
+    # TASKS + SCENARIOS. A training session is (domain, scenario) and the endpoint 404s when the
+    # scenario is missing — so a domain with goals but no scenario is registered and unusable, which
+    # is precisely where LinkedIn sat: `linkedin_jobs` showed up in every picker and no session
+    # could be created for it.
+    for payload in [t for t in REGISTRY_SEED["tasks"] if t.get("domain_id") == "linkedin_jobs"]:
+        if not db.scalar(select(TaskRegistry.task_id).where(TaskRegistry.task_id == payload["task_id"])):
+            db.add(TaskRegistry(status="active", **payload))
+            changed = True
+    for payload in [sc for sc in REGISTRY_SEED["scenarios"] if sc.get("domain_id") == "linkedin_jobs"]:
+        if not db.scalar(select(ScenarioRegistry.scenario_id)
+                         .where(ScenarioRegistry.scenario_id == payload["scenario_id"])):
+            db.add(ScenarioRegistry(status="active", **payload))
             changed = True
     if changed:
         db.commit()
