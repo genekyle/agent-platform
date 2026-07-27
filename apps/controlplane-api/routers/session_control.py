@@ -946,25 +946,38 @@ _ACCOUNT_VERIFY_MARKERS = ("verification code", "verify your email", "check your
 #: and a "Create Account" button. iCIMS wants six fields, calls the button "Submit Profile", and
 #: puts a username field beside the email — so the first genuinely different ATS could not be
 #: driven at all, which is the reverse of what a recipe system is for.
-_CREATE_ACCOUNT_FORM: dict[str, dict[str, Any]] = {
-    "workday": {
-        "fields": (("email", "username"), ("password", "password"),
-                   ("verify_password", "password")),
-        "submit": "create_account_submit",
+#: Keyed by LEG then ATS. Signing in was the missing half: the system could CREATE an account by
+#: typing a generated password and then could not USE it, because only the create leg was wired —
+#: so an ATS we already had an active account for still stopped at a manual handoff. Nothing about
+#: the operator's directive distinguishes the two (their account, their machine, their job search);
+#: the gates that hold are the same ones either way, a captcha or a verification code.
+_ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
+    "create_account": {
+        "workday": {
+            "fields": (("email", "username"), ("password", "password"),
+                       ("verify_password", "password")),
+            "submit": "create_account_submit",
+        },
+        "icims": {
+            # Step 1 of 4 IS the account form: identity and credential on one page (ICIMS_FIELDS).
+            "fields": (("first_name", "first_name"), ("last_name", "last_name"),
+                       ("email", "username"), ("login", "username"),
+                       ("password", "password"), ("verify_password", "password")),
+            "submit": "create_account_submit",
+        },
     },
-    "icims": {
-        # Step 1 of 4 IS the account form: identity and credential on one page (see ICIMS_FIELDS).
-        "fields": (("first_name", "first_name"), ("last_name", "last_name"),
-                   ("email", "username"), ("login", "username"),
-                   ("password", "password"), ("verify_password", "password")),
-        "submit": "create_account_submit",
+    "sign_in": {
+        "workday": {
+            "fields": (("email", "username"), ("password", "password")),
+            "submit": "sign_in_submit",
+        },
     },
 }
 
 
-async def _drive_create_account(browser_url: str, tab_id: str, creds: dict, *,
-                                ats: str, submit: bool) -> dict[str, Any]:
-    """Fill (and optionally submit) this ATS's create-account form.
+async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
+                              ats: str, leg: str, submit: bool) -> dict[str, Any]:
+    """Fill (and optionally submit) this ATS's account form for `leg` — create_account or sign_in.
 
     Credential-safe by construction: fields are addressed by their exact accessible name, so the
     honeypot ("Enter website. This input is for robots only") is never touched; the password value
@@ -985,12 +998,13 @@ async def _drive_create_account(browser_url: str, tab_id: str, creds: dict, *,
                 "detail": "No username or generated password available (is ATS_ACCOUNT_PW_SUFFIX "
                           "configured?). Cannot fill the form."}
 
-    form = _CREATE_ACCOUNT_FORM.get((ats or "").strip().lower())
+    by_ats = _ACCOUNT_FORMS.get((leg or "").strip().lower()) or {}
+    form = by_ats.get((ats or "").strip().lower())
     if form is None:
         return {"ok": False, "reason": "no_form_recipe",
-                "detail": f"No create-account form mapped for {ats!r} (mapped: "
-                          f"{', '.join(sorted(_CREATE_ACCOUNT_FORM))}). Scan the form and add it to "
-                          f"apply_fields + _CREATE_ACCOUNT_FORM — do not drive it blind."}
+                "detail": f"No {leg} form mapped for {ats!r} (mapped: "
+                          f"{', '.join(sorted(by_ats)) or 'none'}). Scan the form and add it to "
+                          f"apply_fields + _ACCOUNT_FORMS — do not drive it blind."}
 
     values = {"username": username, "password": password,
               "first_name": ats_accounts.default_first_name(),
@@ -1110,7 +1124,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     # AUTOMATED PATH — the default. The system fills (and, in "auto", submits) the create-account
     # form itself. A CAPTCHA or an email/2FA verification prompt still escalates: those are real
     # external gates, not the manual-handoff boundary, and they hold regardless of mode.
-    if body.mode in ("auto", "fill") and action.get("leg") == "create_account":
+    if body.mode in ("auto", "fill") and action.get("leg") in ("create_account", "sign_in"):
         obs = await _observe(browser_url, bb.search_state.query)
         block = obs.get("block")
         if block and block.get("strength") == "active":
@@ -1124,8 +1138,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                "detail": "A challenge is up on the signup form — clear it yourself. "
                                          "We never auto-solve, on any form."})
         tab_id = _apply_tab(bb, obs).get("tab_id", "")
-        drive = await _drive_create_account(browser_url, tab_id, creds, ats=step.platform,
-                                            submit=(body.mode == "auto"))
+        drive = await _drive_account_form(browser_url, tab_id, creds, ats=step.platform,
+                                          leg=action.get("leg") or "create_account",
+                                          submit=(body.mode == "auto"))
         if not drive.get("ok"):
             step.record(_ACCOUNT_RUNG, aps.FAILED, f"create leg: {drive.get('detail', '')}"[:200],
                         initiator=body.initiator)
@@ -1145,9 +1160,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
                          awaiting="operator_account",
                          last={"ok": True, "action": "apply_account", "queue": queue.summary(),
-                               "detail": "Filled the create-account form with your generated "
-                                         "credentials. Review it in the window, then confirm to "
-                                         "click Create Account."})
+                               "detail": f"Filled the {action.get('leg')} form with your stored "
+                                         f"credentials. Review it in the window, then confirm to "
+                                         f"click {drive.get('button') or action.get('button')!r}."})
 
         # Submitted. Did it land — or is there an email/2FA verification wall (a real gate)?
         after = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
@@ -1168,19 +1183,27 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                          "verification code. That is a real gate — grab the code "
                                          "(a Gmail errand we can automate next), then continue."})
 
-        ats_accounts.mark_created(company, step.platform)
+        signing_in = action.get("leg") == "sign_in"
+        if not signing_in:
+            # Only a CREATE makes the account exist. Signing in must not re-stamp that — the
+            # lifecycle flag is what tells the next session which leg is due.
+            ats_accounts.mark_created(company, step.platform)
         step.record(_ACCOUNT_RUNG, aps.OK,
-                    f"create leg: created the {company} {step.platform} account automatically",
+                    (f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
+                     f"create leg: created the {company} {step.platform} account automatically"),
                     initiator="auto")
         bb.world.pop("account_handoff", None)
         _save_queue(bb, queue)
-        bb.log("account_create", f"{company} {step.platform}: account created automatically")
+        bb.log("account_signin" if signing_in else "account_create",
+               f"{company} {step.platform}: "
+               + ("signed in automatically" if signing_in else "account created automatically"))
         _persist(bb, ledger)
         obs2 = await _observe(browser_url, bb.search_state.query)
         return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_account", "queue": queue.summary(),
-                           "detail": f"Created the {company} account automatically. The "
-                                     f"application can continue — orient, then the form."})
+                           "detail": (f"Signed in to {company} automatically. " if signing_in else
+                                      f"Created the {company} account automatically. ")
+                                     + "The application can continue — orient, then the form."})
 
     step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
                 f"{action.get('leg')} leg: {company} {step.platform}, operator creates it "

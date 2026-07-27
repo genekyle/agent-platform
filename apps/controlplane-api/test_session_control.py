@@ -3088,3 +3088,41 @@ def test_orient_reclassifies_when_the_apply_moves_to_a_real_ats(monkeypatch):
     assert step.platform == "workday"                        # the live tab won
     assert any(m.rung == "classify" and "re-classified" in m.detail for m in step.minis)
     assert "not a state we recognise" not in r["last_step"]["detail"]
+
+
+def test_the_sign_in_leg_is_driven_too_not_handed_back(monkeypatch):
+    """The system could CREATE an account by typing a generated password and then could not USE it:
+    only the create leg was wired, so an ATS we already held an active account for still stopped at
+    a manual handoff (live 2026-07-27, BILH Workday). Nothing in the operator's directive separates
+    the two — the gates that hold are the same either way.
+    """
+    typed = []
+
+    def _execute(payload):
+        if payload.get("action_id") == "type":
+            typed.append(payload.get("target_name") or payload.get("selector"))
+        return {"outcome": "ok"}
+
+    import accounts, ats_accounts
+    ats_accounts.ensure_account("MFS", "workday", login_url="https://mfs.wd1.myworkdayjobs.com/x")
+    ats_accounts.mark_created("MFS", "workday")               # active -> the sign_in leg is due
+    accounts.put_account(ats_accounts.ats_account_id("MFS", "workday"), {"status": "active"})
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/execute": _execute,
+         "/ax_scan": {"ok": True, "page_text": "My Information", "candidates": []}},
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert typed == ["Email Address", "Password"]             # sign-in fields, not the create set
+    assert "Signed in" in r["last_step"]["detail"]
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any(m.rung == "account" and "sign_in leg" in m.detail and m.outcome == aps.OK
+               for m in step.minis)
+    assert _settled(step) >= {"account"}
