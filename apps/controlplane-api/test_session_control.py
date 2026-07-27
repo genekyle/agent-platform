@@ -2915,3 +2915,105 @@ def test_an_unnamed_company_gets_no_credentials_anywhere(monkeypatch):
         _teardown()
     mini = r["queue"]["steps"][0]["minis"][-1]
     assert mini["outcome"] == "unknown" and "no company" in mini["detail"]
+
+
+# --- the cleanup crew: a finished application must not leave its tab behind --------------------
+def test_flagging_a_step_closes_the_application_tab_and_returns_to_the_search(monkeypatch):
+    """Operator, 2026-07-27: "the tab manager should've immediately been a part of the cleanup crew
+    after submitting." APPLY_EPILOGUE already called itself a REQUIRED step of the loop — and
+    nothing on the path that ENDS a step ever ran it, so every finished apply left an inert tab.
+
+    The finished-ness comes from the LADDER, not the URL: a submitted iCIMS application sits on a
+    URL classify_tab reads as ROLE_APPLY, and it is right to — only the terminal flag knows.
+    """
+    closes = []
+
+    def _close(payload):
+        closes.append(payload)
+        return {"ok": True, "closed": payload.get("tab_id")}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://jobs-x.icims.com/jobs/1/job?mode=submit_apply"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": _close,
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step(platform="icims"))
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "submitted",
+                              "detail": "confirmed"}).json()
+    finally:
+        _teardown()
+
+    # The apply tab is resolved LIVE, not from the recorded hint — that record can name a tab
+    # that has since closed or navigated, which is why _apply_tab re-resolves every time.
+    assert len(closes) == 1
+    assert r["last_step"]["cleanup"]["closed"][0]["url"].startswith("https://jobs-x.icims.com")
+    assert closes[0]["focus_tab_url"].startswith("https://www.indeed.com")   # back to the search
+    assert r["last_step"]["cleanup"]["closed"][0]["ok"] is True
+    assert "Closed 1 finished tab" in r["last_step"]["detail"]
+
+
+def test_cleanup_runs_on_an_abandoned_terminal_too(monkeypatch):
+    """An application abandoned at a wall leaves exactly the same orphan tab as a submitted one."""
+    closes = []
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": lambda p: (closes.append(p), {"ok": True})[1],
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "parked:account_wall"}).json()
+    finally:
+        _teardown()
+    assert len(closes) == 1
+    assert r["last_step"]["cleanup"]["closed"][0]["url"].startswith("https://mfs.wd1")
+
+
+def test_the_search_tab_is_never_closed_by_the_cleanup(monkeypatch):
+    """The one tab the drive cannot afford to lose: reopening it costs a real page load, and it is
+    home base between applications."""
+    closes = []
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL),                       # search tab ONLY
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": lambda p: (closes.append(p), {"ok": True})[1],
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:a1", "T", "C")))
+    try:
+        client.post("/api/session_control/1/apply_flag",
+                    json={"job_id": "indeed:a1", "flag": "abandoned:operator"}).json()
+    finally:
+        _teardown()
+    assert closes == []
+
+
+def test_open_pane_addresses_the_search_tab_not_whatever_cdp_lists_first(monkeypatch):
+    """With a finished application still open, an unaddressed /open_job_card hunted for result
+    cards in the ATS document and reported the card 'not found' — which reads as a rotated listing
+    rather than a misaddressed click (live 2026-07-27)."""
+    seen = {}
+
+    def _open_card(payload):
+        seen.update(payload)
+        return {"ok": True, "title": "Healthcare Data Analyst", "apply_type": "company_site"}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs("https://jobs-x.icims.com/jobs/1/job", SEARCH_URL),  # ATS listed FIRST
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": _open_card,
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH")))
+    try:
+        client.post("/api/session_control/1/apply_step", json={"job_id": "indeed:a1"}).json()
+    finally:
+        _teardown()
+    assert seen.get("tab_id") or seen.get("tab_url"), "the click must name the document it means"
+    if seen.get("tab_url"):
+        assert "indeed.com/jobs" in seen["tab_url"]

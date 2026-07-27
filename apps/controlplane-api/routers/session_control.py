@@ -266,6 +266,10 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # pane had plainly reported `company_site`. Fabricated evidence is worse than none: it
         # lands in the corpus looking exactly like the real thing.
         "open_pane": (bb.world or {}).get("open_pane"),
+        # What the WINDOW did since the last crank. The apply stage opens tabs on its own (an
+        # employer landing, then the ATS), so "nothing changed" has to be something the drive can
+        # actually see rather than assume.
+        "tab_drift": (bb.world or {}).get("tab_drift"),
         "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
         "awaiting": awaiting,
         "last_step": last,
@@ -1828,13 +1832,22 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                            "those are not built yet — drive it and flag the result.")
 
     tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
+    _note_tab_drift(bb, obs, step)      # recorded on the view; never acts on its own
     style = xs.pick_style()
     await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
     if rung.id == "open_pane":
         ext = step.job_id.split(":", 1)[-1]
+        # SAY WHICH TAB. Without one, `_discover_target` takes whatever CDP lists first — which,
+        # the moment a finished application is still open, is the ATS tab. The card was on the
+        # results page all along and this reported "card data-jk=… not found", which reads as a
+        # rotated listing rather than a misaddressed click (live 2026-07-27, with the submitted
+        # iCIMS tab still open). The search tab is the only document that HAS result cards.
+        search_tab = (obs.get("search_tab") or {})
         res = await _capture_post("/open_job_card",
-                                  {"browser_url": browser_url, "external_id": ext})
+                                  {"browser_url": browser_url, "external_id": ext,
+                                   "tab_id": search_tab.get("tab_id") or None,
+                                   "tab_url": None if search_tab.get("tab_id") else "indeed.com/jobs"})
         if not res.get("ok"):
             step.record("open_pane", aps.FAILED, res.get("detail") or "card did not open",
                         initiator=body.initiator)
@@ -2335,19 +2348,116 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
         bb.world.pop("apply_proposal", None)
     bb.log("apply_flag", f"{body.job_id} -> {body.flag}"
                          + (f" ({body.detail})" if body.detail else ""))
+
+    # THE CLEANUP CREW RUNS ON EVERY TERMINAL, not just on success. An application abandoned at a
+    # wall leaves exactly the same orphan tab as one that was submitted, and the next prospect has
+    # to start from a window that means something.
+    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    cleanup = await _apply_cleanup(bb, obs, _session_browser_url(session), step)
+    bb.world.pop("apply_tab", None)          # the record dies with the tab it pointed at
     _persist(bb, ledger)
+    if cleanup["closed"]:
+        obs = await _observe(_session_browser_url(session), bb.search_state.query)
 
     summary = queue.summary()
     nxt = queue.current()
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    tidied = sum(1 for c in cleanup["closed"] if c["ok"])
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
                  awaiting="apply" if summary["blocks_page"] else "choose",
                  last={"ok": True, "action": "apply_flag", "queue": summary,
+                       "cleanup": cleanup,
                        "detail": (f"{body.job_id} ended as {body.flag}. "
+                                  + (f"Closed {tidied} finished tab(s); back on the search. "
+                                     if tidied else "")
                                   + (f"Next up: {nxt.title or nxt.job_id}."
                                      if nxt else
                                      "Every application from this page is accounted for — "
                                      "choose again to advance the page."))})
+
+
+def _note_tab_drift(bb: Any, obs: dict[str, Any], step: aps.ApplyStep) -> dict[str, Any]:
+    """Which tabs have appeared or vanished since this step was last worked. Pure bookkeeping.
+
+    Operator, 2026-07-27: *"tab manager always needs to be weary especially in the beginning of the
+    apply company stage or probably throughout just to check if anything's changed."* The apply
+    stage is where the window changes UNDER us — Apply-on-company-site opens the employer landing
+    in a new tab, and an Apply inside that can open another — and until now nothing looked between
+    cranks. A drive that does not notice a new tab is a drive that can act on the wrong one, which
+    is exactly how `open_pane` came to hunt for result cards in a submitted application.
+
+    This only REPORTS. Closing during an application is how you lose live work; the cleanup runs at
+    the terminal, when the ladder says the work is finished.
+    """
+    census = dict((bb.world or {}).get("apply_tab_census") or {})
+    live = {t.get("tab_id"): (t.get("url") or "") for t in (obs.get("tabs") or []) if t.get("tab_id")}
+    known = census.get("tabs") or {}
+    same_step = census.get("job_id") == step.job_id
+
+    appeared = [{"tab_id": k, "url": v[:90]} for k, v in live.items() if same_step and k not in known]
+    vanished = [{"tab_id": k, "url": str(v)[:90]} for k, v in known.items() if k not in live] \
+        if same_step else []
+
+    bb.world = dict(bb.world or {})
+    bb.world["apply_tab_census"] = {"job_id": step.job_id, "tabs": live}
+    drift = {"appeared": appeared, "vanished": vanished, "count": len(live),
+             "baseline": bool(same_step)}
+    if appeared or vanished:
+        bb.log("tab_drift", f"{step.job_id}: +{len(appeared)} -{len(vanished)} tab(s) since the "
+                            f"last crank")
+    bb.world["tab_drift"] = drift
+    return drift
+
+
+async def _apply_cleanup(bb: Any, obs: dict[str, Any], browser_url: str,
+                         step: aps.ApplyStep) -> dict[str, Any]:
+    """Close the finished application's tab and hand the window back to the search.
+
+    THE APPLY STAGE SPAWNS TABS. Indeed's "Apply on company site" opens the employer landing in a
+    new tab, and the Apply inside THAT can open another — so an apply that nobody tidies leaves one
+    or two inert tabs per prospect, and they accumulate across a session. Operator, 2026-07-27:
+    *"the tab manager should've immediately been a part of the cleanup crew after submitting."*
+
+    It was already written down — APPLY_EPILOGUE calls itself "a REQUIRED step of the loop, not a
+    manual tidy-up" — and nothing on the path that ENDS a step ever called it. Prose in the recipe,
+    absent from the layer.
+
+    **The finished-ness comes from the LADDER, not from the URL.** A submitted iCIMS application
+    sits on `…icims.com/jobs/…/job?mode=submit_apply`, which `classify_tab` reads as ROLE_APPLY —
+    correctly, since it cannot know. The step reaching a terminal flag is the fact that makes the
+    tab inert, so this closes the apply tab BY IDENTITY and leaves the URL classifier alone. The
+    window manager then plans the rest (blanks, duplicates); nothing here invents its own rule
+    about what may be closed, and the search tab is never a candidate.
+    """
+    from controller import window as window_mod
+
+    tabs = obs.get("tabs") or []
+    search_url = (obs.get("search_tab") or {}).get("url") or "indeed.com/jobs"
+    apply_tab = _apply_tab(bb, obs)
+    closed: list[dict[str, Any]] = []
+
+    async def _close(tab_id: str, url: str, why: str) -> None:
+        res = await _capture_post("/close_tab", {"browser_url": browser_url, "tab_id": tab_id,
+                                                 "focus_tab_url": search_url})
+        closed.append({"tab_id": tab_id, "url": url[:90], "why": why,
+                       "ok": bool(res.get("ok")), "detail": res.get("detail", "")})
+
+    if apply_tab.get("tab_id") and apply_tab.get("tab_id") != (obs.get("search_tab") or {}).get("tab_id"):
+        await _close(apply_tab["tab_id"], apply_tab.get("url", ""),
+                     f"the application tab for {step.job_id}, now {step.terminal}")
+
+    # Whatever else the window manager would retire anyway — blanks, exact duplicates, orphaned
+    # duplicate apply flows. Its four rails (never the active tab, the last tab, an UNKNOWN role,
+    # or the only search tab) are the reason this is a survey rather than a loop over `tabs`.
+    remaining = [t for t in tabs if t.get("tab_id") not in {c["tab_id"] for c in closed}]
+    win = window_mod.survey(remaining, active_tab_id=(obs.get("search_tab") or {}).get("tab_id", ""))
+    for tab, why in zip(win.closable, win.reasons):
+        if tab.role == window_mod.ROLE_SEARCH:
+            continue
+        await _close(tab.tab_id, tab.url, why)
+
+    if closed:
+        bb.log("tab_cleanup", f"{step.job_id}: closed {len(closed)} tab(s) after {step.terminal}")
+    return {"closed": closed, "tabs_before": len(tabs), "search_focused": search_url[:90]}
 
 
 class ApplyReopenBody(BaseModel):
