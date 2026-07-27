@@ -2452,10 +2452,19 @@ def _note_tab_drift(bb: Any, obs: dict[str, Any], step: aps.ApplyStep) -> dict[s
     vanished = [{"tab_id": k, "url": str(v)[:90]} for k, v in known.items() if k not in live] \
         if same_step else []
 
+    # Tabs this STEP opened, accumulated across cranks. This is what lets the cleanup be thorough
+    # without being reckless: the window manager rightly refuses to close an UNKNOWN-role tab (it
+    # might be the operator's), but a tab we watched appear during our own application is ours to
+    # close. The BILH landing page — an employer careers site, role UNKNOWN — is exactly that: a
+    # doorway we opened, spent the moment its Apply handed off, and left behind.
+    opened = list(census.get("opened") or []) if same_step else []
+    opened.extend(a["tab_id"] for a in appeared if a["tab_id"] not in opened)
+
     bb.world = dict(bb.world or {})
-    bb.world["apply_tab_census"] = {"job_id": step.job_id, "tabs": live}
+    bb.world["apply_tab_census"] = {"job_id": step.job_id, "tabs": live, "opened": opened}
+
     drift = {"appeared": appeared, "vanished": vanished, "count": len(live),
-             "baseline": bool(same_step)}
+             "baseline": bool(same_step), "opened_by_this_step": opened}
     if appeared or vanished:
         bb.log("tab_drift", f"{step.job_id}: +{len(appeared)} -{len(vanished)} tab(s) since the "
                             f"last crank")
@@ -2499,6 +2508,19 @@ async def _apply_cleanup(bb: Any, obs: dict[str, Any], browser_url: str,
     if apply_tab.get("tab_id") and apply_tab.get("tab_id") != (obs.get("search_tab") or {}).get("tab_id"):
         await _close(apply_tab["tab_id"], apply_tab.get("url", ""),
                      f"the application tab for {step.job_id}, now {step.terminal}")
+
+    # The doorways this step opened on its way in. An apply hops — Indeed -> the employer's careers
+    # page -> the ATS — and each hop strands the one before it. They are ours by provenance (we
+    # watched them appear during this step), which is the only warrant strong enough to close a tab
+    # the window manager would leave alone.
+    census = (bb.world or {}).get("apply_tab_census") or {}
+    if census.get("job_id") == step.job_id:
+        by_id = {t.get("tab_id"): t.get("url", "") for t in tabs}
+        for tid in census.get("opened") or []:
+            if tid in by_id and tid not in {c["tab_id"] for c in closed} \
+                    and tid != (obs.get("search_tab") or {}).get("tab_id"):
+                await _close(tid, by_id[tid], f"a doorway this step opened on the way to the ATS")
+        bb.world.pop("apply_tab_census", None)
 
     # Whatever else the window manager would retire anyway — blanks, exact duplicates, orphaned
     # duplicate apply flows. Its four rails (never the active tab, the last tab, an UNKNOWN role,

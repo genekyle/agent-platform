@@ -3126,3 +3126,49 @@ def test_the_sign_in_leg_is_driven_too_not_handed_back(monkeypatch):
     assert any(m.rung == "account" and "sign_in leg" in m.detail and m.outcome == aps.OK
                for m in step.minis)
     assert _settled(step) >= {"account"}
+
+
+def test_the_cleanup_closes_the_doorways_the_step_opened(monkeypatch):
+    """An apply HOPS — Indeed -> the employer's careers page -> the ATS — and each hop strands the
+    one before it. The window manager will not close the middle one: an employer careers site is
+    ROLE_UNKNOWN, and "I could not identify it" is the weakest possible reason to close something
+    in a window the operator shares.
+
+    Provenance is the warrant. A tab we watched appear during our own application is ours, so the
+    step records what it opened and the cleanup closes exactly those. Operator, 2026-07-27:
+    "cleanup needs to be cleaner because it may confuse us going long term."
+    """
+    closes = []
+    bb = _with_queue(("indeed:a1", "Healthcare Data Analyst", "BILH"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].platform = "workday"
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t2", "url": "https://bilh.wd1.myworkdayjobs.com/job/x"}
+    # The landing page was watched appearing during this step: role UNKNOWN, but ours.
+    bb.world["apply_tab_census"] = {
+        "job_id": "indeed:a1",
+        "tabs": {"t0": SEARCH_URL, "t1": "https://jobs.bilh.org/jobs/x/", "t2": "https://bilh.wd1.myworkdayjobs.com/job/x"},
+        "opened": ["t1", "t2"]}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://jobs.bilh.org/jobs/x/",
+                             "https://bilh.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": lambda p: (closes.append(p), {"ok": True})[1],
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "submitted"}).json()
+    finally:
+        _teardown()
+
+    closed_urls = [c["url"] for c in r["last_step"]["cleanup"]["closed"]]
+    assert any("myworkdayjobs" in u for u in closed_urls)      # the application
+    assert any("jobs.bilh.org" in u for u in closed_urls)      # and the doorway it came through
+    assert not any("indeed.com" in u for u in closed_urls)     # never home base
+    # the census is spent once the step is over — it must not leak onto the next application
+    assert (saved["bb"].world or {}).get("apply_tab_census") is None
