@@ -2651,3 +2651,72 @@ posted range ($72,800–$93,600) came from the observed job record so the questi
 own context. Both self-identification answers and both signatures were confirmed explicitly. The
 stored `availability_date` was two weeks stale — **a stored answer with a date in it goes off, and
 nothing in the store knows that.**
+
+## 2026-07-27 (2) — The window is state, and nobody was watching it
+
+Second drive of the session: the operator's TOP-PRIORITY pick (BILH, Healthcare Data Analyst –
+BIDMC), reached through a branded wrapper into Workday. It ended in a state worth having a name
+for — *"You've already applied for this job"* — but almost everything before that was the window
+lying to us.
+
+### The leftover tab from the LAST application broke the NEXT one
+
+`open_pane` called `/open_job_card` with no tab_id and no tab_url, so `_discover_target` took
+whatever CDP listed first — the submitted iCIMS tab, still open. It reported **"card
+data-jk=e5c794ae32973697 not found"**, which reads as a rotated listing. The card was on the results
+page the whole time; `/extract_jobs` found it by that exact id seconds later.
+
+Operator: *"the tab manager should've immediately been a part of the cleanup crew after
+submitting… cleanup needs to be cleaner because it may confuse us going long term."* Exactly right,
+and the confusion arrived one application later.
+
+`APPLY_EPILOGUE` has described itself as **"a REQUIRED step of the loop, not a manual tidy-up"**
+since 2026-07-15. Nothing on the path that ENDS a step ever called it. Prose in the recipe, absent
+from the layer — the same shape as `/select_prompt` knowing about real keystrokes while the shared
+driver did not.
+
+### An apply is a CHAIN of tabs, and each hop strands the one before it
+
+    Indeed  --Apply on company site-->  jobs.bilh.org  --Apply now-->  bilh.wd1.myworkdayjobs.com
+                                        (recorded as the apply tab)     (where the work actually is)
+
+Three faults fell out of that one shape:
+
+* **`_apply_tab` kept returning the doorway.** Its test for a stale record was "is it still open" —
+  and the spent landing page IS still open. Fixed by preferring a tab the window manager calls
+  ROLE_APPLY over a recorded one it does not.
+* **`orient` trusted `step.platform` over the live URL.** classify had answered `company_site` on
+  the wrapper, and that memory shadowed a Workday page, so orient called Workday's
+  Start-Your-Application chooser "new territory" — a state the recipe has known for weeks. **A
+  recorded platform holds only until the page says otherwise.**
+* **The cleanup could not close the doorway.** The window manager refuses UNKNOWN-role tabs, and an
+  employer careers site is exactly that — correctly, since the operator shares the window. The
+  missing warrant is PROVENANCE: a tab we watched appear during our own application is ours. The
+  step now records what it opened and closes precisely those.
+
+### The system could make an account it was not allowed to use
+
+Only the create leg was wired into the automated path. BILH had an ACTIVE account, credentials in
+the vault — and the ladder still stopped to ask the operator to type them. We could create an
+account by typing a generated password and then could not use that same password to sign in.
+Nothing in the operator's directive separates the two; the gates that hold (captcha, verification
+code) are identical either way.
+
+### Two flags that were decoration until today
+
+* **PARKED vs ABANDONED.** The module has always said parked means "not now" and abandoned means
+  "not ever" — and `enqueue` refuses a known job_id, `done` is true for any terminal, and nothing
+  reopened anything. The top-priority pick sat parked under its own note, *"re-queue after the
+  matcher fix"*, with the fix long since shipped. `reopen` archives the failed attempt and
+  re-walks the ladder from the top: the rung it would otherwise inherit was an `enter_apply` that
+  recorded OK for another company's card, and **a rung whose answer we no longer trust is worse
+  than one we re-walk.**
+* **A capture's provenance.** `TrainingCaptureRead` omitted `label_source` / `state_label_source` /
+  `verified_at`, so six human-labelled captures read as unlabelled through the API — the wrong
+  answer to the one question that endpoint exists to answer.
+
+### `submitted` does not always mean *we* submitted it
+
+Signing in revealed the requisition already had an application on file. The queue tracks whether a
+job has been applied to, so the flag is `submitted` — with a detail that says plainly this drive
+did not send it. **The flag records the outcome; the detail owes the provenance.**
