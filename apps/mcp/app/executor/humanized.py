@@ -180,12 +180,22 @@ class HumanizedDriver(DirectDriver):
 
     async def _human_type(self, cdp, text: str) -> None:
         """Per-character entry with jittered pauses for a realistic TIMING signal, then an
-        authoritative value set for CORRECTNESS. Per-char synthetic 'char' events race a
+        authoritative value set for CORRECTNESS. Per-char synthetic key events race a
         framework-controlled input's value/caret (interleaving), so the keystrokes provide the human
         cadence and the final native-setter write guarantees the field holds exactly `text`. (Typing
-        speed isn't the anti-detection signal — the mouse motion is — so this trade is sound.)"""
+        speed isn't the anti-detection signal — the mouse motion is — so this trade is sound.)
+
+        EACH CHARACTER IS keyDown(text) + keyUp, not a bare `char`. A `char` event carries the
+        character but fires no keydown/keypress/keyup, so a widget that filters or fetches ON
+        KEYSTROKE never hears it — and neither does the `input` event from the authoritative write.
+        iCIMS's searchable State dropdown sat unfiltered with "New Hampshire" sitting in its own
+        search box (live 2026-07-27); /select_prompt already knew this about Workday's prompts and
+        typed real keys, but the shared driver every other caller uses did not.
+        """
         for ch in text:
-            await cdp.send("Input.dispatchKeyEvent", {"type": "char", "text": ch})
+            await cdp.send("Input.dispatchKeyEvent",
+                           {"type": "keyDown", "text": ch, "key": ch, "unmodifiedText": ch})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
             delay = self._rng.uniform(0.04, 0.16)
             if ch == " " or ch in ",.;:":
                 delay += self._rng.uniform(0.05, 0.15)

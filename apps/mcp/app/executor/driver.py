@@ -178,7 +178,9 @@ class TrajectoryDriver(ABC):
             await self._approach(cdp, float(pt["x"]), float(pt["y"]), start)
 
         if request.action_id == "select" and request.value:
-            await self._select_option(cdp, object_id, request.value)
+            # The verdict rides out in the mode so the caller can see WHICH kind of select this
+            # was and whether the option was actually found.
+            return f"element:select:{await self._select_option(cdp, object_id, request.value)}"
         elif request.action_id == "type" and request.value:
             await call("function(){ this.focus(); }")
             await self._apply_value(cdp, request)   # driver-specific: humanized cadence, or single insertText
@@ -220,11 +222,23 @@ class TrajectoryDriver(ABC):
                 await asyncio.sleep(pause)
         return "scroll"
 
-    async def _select_option(self, cdp, object_id: str, value: str) -> None:
-        """Choose `value` in a dropdown — handles BOTH a native <select> (set value +
-        dispatch change) and a custom ARIA combobox (click to open, then click the option
-        whose text matches). Custom-combobox options often render in a portal at the
-        document root, so phase 2 searches the whole document, not just the node."""
+    #: Where a custom combobox's options are searched. `this.ownerDocument` — NOT the top
+    #: `document` — because a portal renders at the root of the document its widget lives in, and on
+    #: a branded ATS wrapper that is the iframe, not the page. Searching the top document there
+    #: finds nothing while the open listbox sits on screen: iCIMS's Country and State both reported
+    #: a completed action and stayed unset (live, 2026-07-27).
+    _OPTION_SELECTORS = ("[role=option],li[role=option],[role=listbox] li,[role=menuitem],"
+                         "ul[role=listbox] [role=option]")
+
+    async def _select_option(self, cdp, object_id: str, value: str) -> str:
+        """Choose `value` in a dropdown — handles BOTH a native <select> (set value + dispatch
+        change) and a custom ARIA combobox (click to open, then click the option whose text
+        matches).
+
+        Returns WHAT HAPPENED — native / native_notfound / picked / notfound — because the two
+        failures are the interesting ones and this used to return None either way. A dropdown that
+        could not find its option looked exactly like one that had been set, all the way up to a
+        caller whose `ok` only ever meant "CDP did not throw"."""
         import asyncio
 
         phase = await cdp.send("Runtime.callFunctionOn", {
@@ -240,19 +254,24 @@ class TrajectoryDriver(ABC):
                 " this.scrollIntoView({block:'center'}); this.click(); return 'opened';"
                 "}"),
         })
-        if (phase.get("result") or {}).get("value") != "opened":
-            return  # native <select> already handled (or not found)
+        verdict = (phase.get("result") or {}).get("value")
+        if verdict != "opened":
+            return str(verdict or "unknown")   # native <select> already handled (or not found)
 
         await asyncio.sleep(0.4)  # let the listbox/portal render
         import json as _json
         v = _json.dumps(value)
-        await cdp.send("Runtime.evaluate", {"returnByValue": True, "expression": (
-            "(()=>{const v=" + v + ".toLowerCase();"
-            "const opts=[...document.querySelectorAll('[role=option],li[role=option],"
-            "[role=listbox] li,[role=menuitem],ul[role=listbox] [role=option]')];"
-            "const o=opts.find(x=>(x.innerText||'').trim().toLowerCase().includes(v));"
-            "if(o){o.scrollIntoView({block:'center'});o.click();return 'picked';}return 'notfound';})()"
-        )})
+        picked = await cdp.send("Runtime.callFunctionOn", {
+            "objectId": object_id, "returnByValue": True,
+            "functionDeclaration": (
+                "function(){const v=" + v + ".toLowerCase();"
+                " const doc=this.ownerDocument||document;"
+                " const opts=[...doc.querySelectorAll('" + self._OPTION_SELECTORS + "')];"
+                " const o=opts.find(x=>(x.innerText||'').trim().toLowerCase().includes(v));"
+                " if(o){o.scrollIntoView({block:'center'});o.click();return 'picked';}"
+                " return 'notfound';}"),
+        })
+        return str(((picked.get("result") or {}).get("value")) or "notfound")
 
 
 class DirectDriver(TrajectoryDriver):
@@ -286,8 +305,12 @@ class DirectDriver(TrajectoryDriver):
             logger.warning("%s execute failed: %s", self.name, exc)
             return ExecResult(ok=False, driver=self.name, action_id=request.action_id, detail=str(exc))
         logger.info("%s executed %s (%s) at css(%.1f,%.1f)", self.name, request.action_id, mode, x, y)
+        # A select's verdict belongs in `detail`, where /execute actually surfaces it. `ok` still
+        # means only "the mechanism completed" — but "notfound" now reaches the caller instead of
+        # dying in a local variable.
         return ExecResult(ok=True, driver=self.name, action_id=request.action_id,
-                          css_point=(x, y), path_points=0, extra={"mode": mode})
+                          css_point=(x, y), path_points=0, extra={"mode": mode},
+                          detail=(mode if mode.startswith("element:select:") else ""))
 
 
 def get_driver(name: Optional[str] = None) -> TrajectoryDriver:
