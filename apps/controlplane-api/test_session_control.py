@@ -3465,7 +3465,8 @@ def test_orient_adopts_a_newly_recognised_ats_even_before_it_has_been_driven(mon
     q.steps[0].record("classify", aps.UNKNOWN, "company_site_job_posting")
     q.steps[0].platform = "company_site"
     bb.world["apply_queue"] = q.as_dict()
-    url = "https://jobs.teradyne.com/Teradyne/job/North-Reading-Pricing-Analyst-123/"
+    url = ("https://jobs.teradyne.com/Teradyne/job/North-Reading-Pricing-Marketing-Operations-"
+           "Analyst-%28Teradyne%2C-N_-Reading-MA%29-MA/1385295400/")
     bb.world["apply_tab"] = {"tab_id": "t1", "url": url}
 
     harness, saved = _install(

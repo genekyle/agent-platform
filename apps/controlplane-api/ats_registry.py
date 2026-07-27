@@ -173,8 +173,13 @@ _BY_ID = {a["ats_id"]: a for a in ATS_PLATFORMS}
 #: equally good tell until it claimed `linkedin.com/jobs/search` — a confident wrong answer for a
 #: platform we DO know, which is the same trap facebook.com fell into in the facet vocabulary. The
 #: job-page shape is the one worth having anyway: the apply flow needs the posting, not the search.
+#: The REAL shape, taken from the live url rather than from memory: SAP appends a NUMERIC job id as
+#: its own segment. The first version of this pattern required exactly `/<Tenant>/job/<slug>/` and
+#: was "verified" against a url I typed myself — so it passed the test and missed the page that was
+#: open at the time. The numeric id is also the more distinctive half, which is why the corrected
+#: pattern is both righter and narrower.
 _SUCCESSFACTORS_PATH_TELLS = (
-    re.compile(r"^/[A-Za-z0-9_%-]+/job/[^/]+/?$"),          # /Teradyne/job/North-Reading-...-123/
+    re.compile(r"^/[A-Za-z0-9_%-]+/job/[^/]+/\d+/?$"),   # /Teradyne/job/North-Reading-.../1385295400/
 )
 
 _QUERY_PARAM_TELLS = {

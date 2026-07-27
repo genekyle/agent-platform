@@ -21,8 +21,12 @@ def test_a_branded_successfactors_site_is_recognised_without_an_sap_host():
     """SAP career sites run on the EMPLOYER's domain with no SAP string in the url, so Teradyne
     classified as `company_site` on first contact (2026-07-27). The path shape is the tell."""
     import ats_registry
-    assert ats_registry.classify_ats(
-        "https://jobs.teradyne.com/Teradyne/job/North-Reading-Pricing-Analyst-123/") == "successfactors"
+    # THE URL VERBATIM FROM THE OPEN TAB, not one written from memory. The first version of this
+    # test used an invented two-segment path, passed, and missed the four-segment page that was on
+    # screen at the time — SAP appends a numeric job id as its own segment.
+    live = ("https://jobs.teradyne.com/Teradyne/job/North-Reading-Pricing-Marketing-Operations-"
+            "Analyst-%28Teradyne%2C-N_-Reading-MA%29-MA/1385295400/?codes=WBIND")
+    assert ats_registry.classify_ats(live) == "successfactors"
 
 
 def test_the_successfactors_path_tell_does_not_claim_linkedin():
