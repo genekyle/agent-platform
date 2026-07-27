@@ -2558,3 +2558,96 @@ why a generic "create the account, then apply" recipe would not have fitted it.
   because iCIMS puts "Returning Candidate? / Log back in!" in its header. Decisive phrases
   (confirmation, gone) still win alone; everything else is weighed, and STRONG phrases count double
   so a three-line page can still be classified.
+
+## 2026-07-27 — The first iCIMS application, submitted. Four silent successes and one loop
+
+Joslin, Healthcare Data Analyst: account created, five steps completed, **"Your application was
+submitted successfully"** observed. First `submitted` flag in the queue. What it cost to get there
+is the useful part.
+
+### The wrapper/frame assumption, instances four through seven
+
+Yesterday's entry named three (reading, clicking, targeting). Today added four more, all in code
+that had *already been fixed once* somewhere else:
+
+4. **`_resolve_node_by_selector`** runs `DOM.querySelector` on the top document, so no CSS selector
+   can address anything inside the frame. (Still true — recorded, not fixed. Every iCIMS field is
+   addressed by role+name for this reason.)
+5. **The humanized driver's clear-before-type** wrote to `document.activeElement`. That property is
+   PER-DOCUMENT: with focus inside a frame the top document's activeElement is the IFRAME ELEMENT.
+   The clear no-opped, the keystrokes appended, and the "authoritative" value-set that exists to
+   guarantee correctness no-opped too — so iCIMS's prefilled email read
+   `genomags@gmail.comgenomags@gmail.com`, one click from creating a real account with it.
+6. **`_select_option`'s phase 2** searched the top document for the open listbox. A portal renders
+   at the root of ITS OWN document. Country and State reported success and stayed unset.
+7. **`/locate`** — same `document.querySelector`. Unfixed, recorded.
+
+The pattern is not "iframes are tricky". It is that **every layer that reads, measures, matches or
+writes has its own idea of "the document", and each one has to be told which one it means.** Fixing
+it in the reader does not fix it in the writer.
+
+### Four things that returned success while doing nothing
+
+Worth listing together, because the shape recurs more than any individual bug:
+
+| what said ok | what actually happened |
+|---|---|
+| `/execute type` | keystrokes appended to a prefilled field; the corrective write missed |
+| `/execute select` | listbox opened, option never found, field left unset |
+| `_select_option` | returned `None` whether it picked or failed — the caller could not tell |
+| a trusted click on the CC-305 radios | nothing; the native node click works (overlay takes the hit) |
+
+`ok` at tier 1 means the mechanism completed — that is documented and correct. The bug is when the
+mechanism itself cannot distinguish "did the thing" from "did nothing": `_select_option` now returns
+`picked`/`notfound` and the verdict reaches `/execute`'s detail. **A layer whose failures are
+invisible to itself cannot be debugged from above.**
+
+### A lesson learned in one endpoint is not learned
+
+`/select_prompt` knew, in a comment written weeks ago, that Workday's prompts "FETCH results
+server-side on real keystrokes; a programmatic value-set does NOT trigger the fetch" — and typed
+`keyDown(text)+keyUp` accordingly. The shared humanized driver, which every other caller uses, still
+sent bare `char` events. So iCIMS's State list sat unfiltered with "New Hampshire" sitting in its own
+search box, and we rediscovered from scratch a thing the codebase already knew. **When a lesson
+lands in one endpoint instead of the layer, the next caller pays for it again** — which is the same
+argument as putting lessons in the repo rather than in chat, one level down.
+
+### The rung that could not settle, and the register that undid itself
+
+Two bugs that between them made the account rung a loop:
+
+* `apply_account` recorded its legs as `account_create` / `account_handoff` / `account_created` /
+  `account_verify`. `next_rung` settles a rung **by name**, and none of those is `account` — so the
+  ladder asked for the account after making it, forever. Exactly the classify bug (5b596c2) one rung
+  over: **a rung that reports its outcome instead of answering itself never settles.**
+* `ensure_account` — called on every crank — kept an existing account's status only `if
+  existing.get("has_creds")`. Under this module's own convention the password is DERIVED and never
+  stored, so `has_creds` is false for every ATS account we make. Each crank reset `active` to
+  `pending`. The guard asked about the vault; the question was about the lifecycle.
+
+The second one hid a third: **the test suite was writing to the operator's real `accounts.json`** —
+no isolation fixture — and the reset was quietly undoing the pollution every run. Fixing the reset
+turned the leak into seven failures that were really one missing fixture.
+
+### iCIMS, recorded (see ICIMS_APPLY_RECIPE / ICIMS_FIELDS)
+
+* **The stepper GROWS on authentication**: 4 steps before, 5 after (a "Job Specific Questions" step
+  appears). Workday's tell in reverse, for the same reason — a stepper describes the work remaining
+  for whoever is asking. Never read the pre-auth count as the shape of the application.
+* **Step 1 is the account AND the application.** No separate wall to clear first.
+* **Two comboboxes named `Type`** (phone, address). Role+name takes the first; the address one needs
+  a node id from a scan taken immediately before acting. The ambiguity is recorded as DATA in
+  ICIMS_FIELDS rather than left to surprise the next drive.
+* **Country/State are searchable widgets with WINDOWED lists** (25 of 50 states rendered): open,
+  type with real keys, click the option by name. State is empty until Country is set.
+* **The EEO step's "I do not wish to self-identify" checkbox satisfies its three starred selects.**
+* **The two OFCCP forms (CC-305, VEVRAA) have radios with EMPTY accessible names** and a signature
+  checkbox that the form states is equivalent to a handwritten signature. Ask before every one.
+
+### What the operator was asked, and what was not worth asking
+
+Salary, commute and start date went to the operator; sponsorship came from stored answers; the
+posted range ($72,800–$93,600) came from the observed job record so the question arrived with its
+own context. Both self-identification answers and both signatures were confirmed explicitly. The
+stored `availability_date` was two weeks stale — **a stored answer with a date in it goes off, and
+nothing in the store knows that.**

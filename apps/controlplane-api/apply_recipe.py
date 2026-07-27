@@ -472,17 +472,62 @@ ICIMS_CREATE_PROFILE_RECIPE = [
      "expect": ["icims_candidate_profile", "icims_create_account", "icims_verify_email"]},
 ]
 
-#: The application's own spine, from the stepper read live. Steps 2-4 are UNDRIVEN — the shape is
-#: recorded (it is what the stepper says), the contents are not yet observed. Seed each one from the
-#: first capture that reaches it rather than guessing its fields now.
+#: The application's own spine. DRIVEN END TO END 2026-07-26/27 (Joslin, Healthcare Data Analyst):
+#: account created, five steps completed, confirmation observed.
+#:
+#: THE STEPPER GROWS ONCE YOU ARE AUTHENTICATED — 4 steps before, 5 after: a "Job Specific
+#: Questions" step appears between EEO and Portal Specific Forms. Same tell as Workday's 7→6, in
+#: the opposite direction, and for the same reason: the stepper describes the work REMAINING for
+#: whoever is asking. Never treat the pre-auth count as the shape of the application.
 ICIMS_APPLY_RECIPE = [
-    {"step": 1, "state": "icims_create_account", "action": "Basic Information — see "
-     "ICIMS_CREATE_PROFILE_RECIPE (account + application, one form)"},
-    {"step": 2, "state": "icims_candidate_profile", "action": "Candidate Profile (2 of 4) — UNDRIVEN"},
-    {"step": 3, "state": "icims_eeo", "action": "EEO (3 of 4) — UNDRIVEN. Operator preference: "
-     "decline demographics/EEO."},
-    {"step": 4, "state": "icims_portal_forms", "action": "Portal Specific Forms (4 of 4) — UNDRIVEN. "
-     "The application's real Submit lives at the end of this step; operator confirms it."},
+    {"step": 1, "state": "icims_create_account",
+     "action": "Basic Information — see ICIMS_CREATE_PROFILE_RECIPE (account + application, one "
+               "form, one 'Submit Profile')"},
+    {"step": 2, "state": "icims_candidate_profile",
+     "action": "Candidate Profile — upload the resume (REQUIRED here, unlike step 1; there is an "
+               "'Upload Resume at a later time' checkbox if none is held), then phone, address, "
+               "and 'How did you hear about us?' (pick the source we actually came from).",
+     "fields": "apply_fields.ICIMS_FIELDS (profile_* entries)",
+     "gotchas": [
+         "TWO comboboxes are named 'Type' — phone and address. Exact-name matching takes the "
+         "first (phone) every time, so the ADDRESS one needs a fresh backend_node_id from a "
+         "scan taken immediately before the act.",
+         "Country and State are searchable custom widgets: their option lists exist only while "
+         "open, render a windowed subset (25 of 50 states), and filter on REAL keystrokes. "
+         "Open → type the value → click the option by accessible name. State stays empty until "
+         "Country is set.",
+     ],
+     "expect": ["icims_eeo"]},
+    {"step": 3, "state": "icims_eeo",
+     "action": "Gender/Race/Veteran are starred BUT an 'I do not wish to self-identify' checkbox "
+               "satisfies all three — tick it and submit, leaving the three unselected. Matches "
+               "the operator's standing 'decline demographics/EEO' preference.",
+     "expect": ["icims_job_specific_questions"]},
+    {"step": 4, "state": "icims_job_specific_questions",
+     "action": "Employer-authored free-text questions — the SET VARIES BY REQUISITION, so read "
+               "them. At Joslin: salary expectations, commute acceptance, availability date, visa "
+               "sponsorship. Sponsorship answers from stored answers; salary/commute/start date "
+               "are the operator's call (a comp figure and a commute judgement are not ours to "
+               "invent). Answer salary WITHIN the posted range from the observed job record.",
+     "expect": ["icims_portal_forms_cc305"]},
+    {"step": 5, "state": "icims_portal_forms_cc305",
+     "action": "Portal Specific Forms, served in TWO sub-forms (1/2 then 2/2) as their own "
+               "?form=OFCCP pages: CC-305 disability self-identification, then VEVRAA protected "
+               "veteran. Each has three radios with EMPTY accessible names (address them by node "
+               "id from a fresh scan; document order is Yes / No / decline) and a Signature "
+               "checkbox that the form states is equivalent to a handwritten signature — ASK "
+               "before ticking it, every time.",
+     "gotchas": [
+         "A TRUSTED COORDINATE CLICK DOES NOT SET THESE RADIOS; the native node click "
+         "(driver='direct') does. They sit under a highlight overlay that takes the hit. This is "
+         "the one place we knowingly step off the humanized default — and it is worth a probe "
+         "before assuming the same of any other control on the page.",
+     ],
+     "expect": ["icims_application_confirmed"]},
+    {"step": 6, "state": "icims_application_confirmed",
+     "action": "TERMINAL. 'Your application was submitted successfully... You are currently being "
+               "considered for this job.' above the job overview. Nothing short of this text "
+               "justifies the submitted flag."},
 ]
 
 ICIMS_ACCOUNT_LOOP = {

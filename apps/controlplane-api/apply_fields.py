@@ -253,8 +253,67 @@ ICIMS_FIELDS: dict[str, dict[str, Any]] = {
                       "dialog CDP cannot drive)."),
     "create_account_submit": _f(ats="icims", role="button", name="Submit Profile",
                                 widget_type=WidgetType.UNKNOWN,
-                                note="creates the account AND commits step 1 of 4. Not the "
-                                     "application's final Submit — that is step 4."),
+                                note="creates the account AND commits step 1. Not the "
+                                     "application's final Submit — that is the last portal form."),
+
+    # --- Candidate Profile (step 2 of 5). Driven live 2026-07-27. -------------------------------
+    "profile_resume": _f(ats="icims", role="button",
+                         name="My Computer (Opens new window) Please upload your resume "
+                              "(max size: 5 MB)",
+                         widget_type=WidgetType.FILE,
+                         note="REQUIRED here (unlike step 1). The control is the file input "
+                              "itself, parked off-screen; `upload` sets files on it directly. "
+                              "'Upload Resume at a later time' is the escape hatch if no resume "
+                              "is held."),
+    "profile_phone": _f(ats="icims", role="textbox", name="Number", widget_type=WidgetType.TEXT,
+                        answer_key="phone"),
+    # THE DUPLICATE NAME. Both the phone and the address type render as a combobox named exactly
+    # "Type", and role+name resolution takes the first in document order — the phone one. That is
+    # correct for this entry and WRONG for the address, which is why the address type is not
+    # addressable here at all: see the note on `profile_address_type`.
+    "profile_phone_type": _f(ats="icims", role="combobox", name="Type",
+                             widget_type=WidgetType.NATIVE_SELECT,
+                             answer_key="phone_device_type",
+                             note="the FIRST 'Type' in document order (phones)."),
+    "profile_address_type": _f(ats="icims", role="combobox", name="Type",
+                               widget_type=WidgetType.UNKNOWN,
+                               note="THE SECOND 'Type' — NOT REACHABLE by this addressing. Role + "
+                                    "accessible name cannot distinguish it from the phone's, and a "
+                                    "selector cannot cross the iCIMS frame. Resolve it from a scan "
+                                    "taken immediately before acting (order by bbox y) and drive "
+                                    "it by backend_node_id. Recorded here so the ambiguity is "
+                                    "DATA rather than a surprise on the next drive."),
+    "profile_street": _f(ats="icims", role="textbox", name="Street", widget_type=WidgetType.TEXT,
+                         answer_key="street_address"),
+    "profile_city": _f(ats="icims", role="textbox", name="City", widget_type=WidgetType.TEXT,
+                       answer_key="city"),
+    "profile_zip": _f(ats="icims", role="textbox", name="Zip", widget_type=WidgetType.TEXT,
+                      answer_key="postal_code"),
+    "profile_country": _f(ats="icims", role="combobox", name="Country",
+                          widget_type=WidgetType.UNKNOWN, answer_key="country",
+                          note="searchable custom widget, not a native select: options exist only "
+                               "while open. Set this BEFORE state — state stays empty until a "
+                               "country is chosen."),
+    "profile_state": _f(ats="icims", role="combobox", name="State", widget_type=WidgetType.UNKNOWN,
+                        answer_key="state",
+                        note="searchable custom widget with a WINDOWED list (25 of 50 states "
+                             "rendered). Open it, type the full state NAME into its own '— Type "
+                             "to Search —' box with real keystrokes, then click the option by "
+                             "accessible name. Wants 'New Hampshire', not 'NH'."),
+    "profile_source": _f(ats="icims", role="combobox", name="How did you hear about us?",
+                         widget_type=WidgetType.NATIVE_SELECT, answer_key="how_did_you_hear",
+                         vocabulary={"Indeed": "Indeed.com"},
+                         note="native select, employer-specific option list — Joslin spells Indeed "
+                              "'Indeed.com'."),
+    "profile_submit": _f(ats="icims", role="button", name="Submit Profile",
+                         widget_type=WidgetType.UNKNOWN),
+
+    # --- EEO (step 3 of 5) -----------------------------------------------------------------
+    "eeo_decline": _f(ats="icims", role="checkbox", name="I do not wish to self-identify",
+                      widget_type=WidgetType.CHECKBOX_GROUP,
+                      note="satisfies the starred Gender/Race/Veteran selects on its own — the "
+                           "step submits with all three left unselected (verified live)."),
+    "eeo_submit": _f(ats="icims", role="button", name="Submit", widget_type=WidgetType.UNKNOWN),
 }
 
 _BY_ATS: dict[str, dict[str, dict[str, Any]]] = {
