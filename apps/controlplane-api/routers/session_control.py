@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
@@ -37,12 +37,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+import applied_index
 import apply_fields
 import apply_steps as aps
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
-from models import TrainingSession
+from models import ObservedJob, TrainingSession
 from settings import settings
 
 router = APIRouter()
@@ -270,6 +271,10 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # employer landing, then the ATS), so "nothing changed" has to be something the drive can
         # actually see rather than assume.
         "tab_drift": (bb.world or {}).get("tab_drift"),
+        # Whether the DATABASE already holds an application for the job in hand. Part of the
+        # context every proposal is made against: "have we been here before" is a question the
+        # reasoner should never have to spend a drive answering.
+        "applied_check": (bb.world or {}).get("applied_check"),
         "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
         "awaiting": awaiting,
         "last_step": last,
@@ -781,10 +786,20 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session) -> 
     new_count, dup_count = upsert_observed_jobs(db, cards, "indeed", bb.search_state.query)
     db.commit()
 
+    # THE APPLIED CHECK, AT SCAN TIME. One query for the whole page, so every card arrives already
+    # knowing whether the database has an application on file for it — by id, by requisition, or
+    # (as a warning only) by employer + role. Asking here is what stops a drive from rediscovering
+    # the answer six steps into an ATS, which is exactly how this page's own BIDMC pick was spent.
+    applied = applied_index.check_many(db, cards, platform="indeed")
+
     results = [{"job_id": f"indeed:{c.get('external_id')}", "external_id": c.get("external_id"),
                 "title": c.get("title"), "company": c.get("company"),
                 "location": c.get("location"), "salary": c.get("salary"),
-                "url": c.get("url")} for c in cards if c.get("external_id")]
+                "url": c.get("url"),
+                "applied": (applied.get(c.get("external_id")) or applied_index.AppliedVerdict()
+                            ).as_dict()} for c in cards if c.get("external_id")]
+    already = sum(1 for r in results if r["applied"]["status"] == applied_index.STATUS_APPLIED)
+    maybe = sum(1 for r in results if r["applied"]["status"] == applied_index.STATUS_LIKELY)
     bb.search_state.page = page
     bb.search_state.observed_count = (bb.search_state.observed_count or 0) + len(results)
     bb.world = dict(bb.world or {})
@@ -792,8 +807,12 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session) -> 
     bb.log("review", f"page {page}: {len(results)} results ({new_count} new, {dup_count} seen before)")
     return {"ok": True, "action": "review_page", "page": page, "results": results,
             "awaiting": "choose",
+            "applied_summary": {"applied": already, "likely": maybe},
             "detail": f"Page {page}: {len(results)} results — {new_count} new, "
-                      f"{dup_count} already seen. Choose what to do with them."}
+                      f"{dup_count} already seen"
+                      + (f", {already} ALREADY APPLIED" if already else "")
+                      + (f", {maybe} possibly applied (worth a look)" if maybe else "")
+                      + ". Choose what to do with them."}
 
 
 # --- login: a step the system owns, up to the secret ------------------------------------------
@@ -1895,11 +1914,39 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             bb.world = dict(bb.world or {})
             bb.world["open_pane"] = {"title": res.get("title", ""),
                                      "apply_type": res.get("apply_type", "")}
+
+            # THE APPLIED CHECK, ON LANDING. Asked here — with the pane's own title, the richest
+            # description of this job we will hold before entering — and not after a drive has
+            # spent its way into an ATS to be told the same thing. `applied` HALTS the step;
+            # `likely_applied` only warns, because a fuzzy match that silently skipped a job the
+            # operator picked would be worse than the drive it saves.
+            verdict = applied_index.check(db, job_id=step.job_id,
+                                          title=res.get("title") or step.title,
+                                          company=step.company, url=res.get("url") or "")
+            bb.world["applied_check"] = verdict.as_dict()
+            if verdict.applied:
+                step.record("open_pane", aps.OK,
+                            f"pane switched to {res.get('title', '')!r} — but we have already "
+                            f"applied ({verdict.matched_on}: {'; '.join(verdict.evidence)})",
+                            initiator=body.initiator)
+                _save_queue(bb, queue); _persist(bb, ledger)
+                return _save_queue_and_view(
+                    session, bb, ledger, queue, obs, ok=False, pace=style,
+                    detail=(f"We have already applied to this job — matched on "
+                            f"{verdict.matched_on} ({'; '.join(verdict.evidence)}"
+                            + (f", applied {verdict.applied_at[:10]}" if verdict.applied_at else "")
+                            + "). Flag it rather than applying twice."))
+
             step.record("open_pane", aps.OK,
                         f"pane switched to {res.get('title', '')!r}"
-                        + (f" · apply_type={res.get('apply_type')}" if res.get("apply_type") else ""),
+                        + (f" · apply_type={res.get('apply_type')}" if res.get("apply_type") else "")
+                        + (f" · WARNING {verdict.status}: {'; '.join(verdict.evidence)}"
+                           if verdict.worth_asking else ""),
                         initiator=body.initiator)
-            detail = f"Opened {res.get('title') or step.job_id}."
+            detail = (f"Opened {res.get('title') or step.job_id}."
+                      + (f" NOTE: this looks like one we may have applied to already — "
+                         f"{'; '.join(verdict.evidence)}. Check before entering."
+                         if verdict.worth_asking else ""))
 
     elif rung.id == "verify_identity":
         seen = ((bb.world or {}).get("open_pane") or {}).get("title", "")
@@ -2408,6 +2455,9 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     # wall leaves exactly the same orphan tab as one that was submitted, and the next prospect has
     # to start from a window that means something.
     obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    # RECORD BEFORE CLOSE — the epilogue's own rule. A closed tab with no record is unrecoverable,
+    # and the record is what the NEXT session gets to ask (applied_index).
+    recorded = _record_outcome(db, step, ats_url=_apply_tab(bb, obs).get("url", ""))
     cleanup = await _apply_cleanup(bb, obs, _session_browser_url(session), step)
     bb.world.pop("apply_tab", None)          # the record dies with the tab it pointed at
     _persist(bb, ledger)
@@ -2420,7 +2470,7 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
                  awaiting="apply" if summary["blocks_page"] else "choose",
                  last={"ok": True, "action": "apply_flag", "queue": summary,
-                       "cleanup": cleanup,
+                       "cleanup": cleanup, "recorded": recorded,
                        "detail": (f"{body.job_id} ended as {body.flag}. "
                                   + (f"Closed {tidied} finished tab(s); back on the search. "
                                      if tidied else "")
@@ -2428,6 +2478,56 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
                                      if nxt else
                                      "Every application from this page is accounted for — "
                                      "choose again to advance the page."))})
+
+
+#: How a step's terminal flag lands in the DURABLE record. The queue is per-session state on the
+#: blackboard; `ObservedJob` is what survives the session and what the next drive asks.
+_TERMINAL_TO_STATUS = {
+    aps.SUBMITTED: "applied",
+    aps.ABANDONED_GONE: "rejected",
+    aps.ABANDONED_OPERATOR: "skipped",
+}
+
+
+def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "") -> dict[str, Any]:
+    """Write the step's terminal to `ObservedJob`, so the next session can ask the database.
+
+    APPLY_EPILOGUE always said RECORD before CLOSE, "because a closed tab with no record is
+    unrecoverable" — and `apply_flag` closed without recording. The Joslin application was
+    submitted and confirmed on 2026-07-27 and its row still read `seen`, `applied_at=None`. The
+    queue knew; the durable table did not; and a queue lives on one session's blackboard.
+
+    That is what made the operator's question unanswerable: *"see if we applied in the database or
+    not."* There was nothing in the database to see.
+
+    Only SUBMITTED stamps `applied_at` — the same rule the epilogue states. A parked step writes
+    nothing: parked means not now, and marking it would tell the next session a lie.
+    """
+    status = _TERMINAL_TO_STATUS.get(step.terminal or "")
+    if not status:
+        return {"recorded": False, "reason": f"{step.terminal} is not a durable outcome"}
+
+    row = db.get(ObservedJob, step.job_id)
+    if row is None:
+        platform, _, ext = step.job_id.partition(":")
+        row = ObservedJob(job_id=step.job_id, platform=platform or "indeed", external_id=ext,
+                          title=step.title or "", company=step.company or "")
+        db.add(row)
+    row.application_status = status
+    if step.platform:
+        row.application_platform = step.platform
+    # The ATS url carries the requisition id, and the requisition is how this job is recognised
+    # when it is met again through a different door (applied_index, tier 2). Worth keeping even
+    # when the row already has the Indeed url: that one shares no id with the ATS.
+    if ats_url:
+        row.url = ats_url[:1200]
+    if status == "applied" and row.applied_at is None:
+        row.applied_at = datetime.now(timezone.utc)
+    if step.terminal_detail:
+        row.notes = (step.terminal_detail or "")[:2000]
+    db.commit()
+    return {"recorded": True, "status": status, "job_id": step.job_id,
+            "applied_at": row.applied_at.isoformat() if row.applied_at else None}
 
 
 def _note_tab_drift(bb: Any, obs: dict[str, Any], step: aps.ApplyStep) -> dict[str, Any]:

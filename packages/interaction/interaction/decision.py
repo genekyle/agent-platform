@@ -244,6 +244,20 @@ class Bundle:
     #: once the thresholds are measured — not as a side effect of wiring it up.
     staleness: Optional[dict] = None
 
+    #: --- applied: "have we already applied to this job?" — `applied_index.AppliedVerdict`, or
+    #: None when nobody asked.
+    #:
+    #: Unlike `staleness`, this IS rendered into the prompt, because it is a fact read out of our
+    #: own database rather than a threshold we guessed, and it changes what the right next action
+    #: is: there is no good next move on a job we have already applied to. It cost a whole drive
+    #: to learn that the hard way — reopening a step, hopping a branded wrapper into Workday and
+    #: signing in, only to be told "You've already applied for this job" (2026-07-27).
+    #:
+    #: Rendered ONLY when present and non-empty, exactly like `window`, so every bundle journaled
+    #: before this field existed still produces a byte-identical prompt and the replay evals stay
+    #: comparable.
+    applied: Optional[dict] = None
+
 
 # --- the Decision: what the controller EMITS ----------------------------------------
 @dataclass(frozen=True)
@@ -452,6 +466,28 @@ def window_to_prompt(window: Optional[dict]) -> str:
     return "\n".join(lines)
 
 
+def applied_to_prompt(applied: Optional[dict]) -> str:
+    """One line about whether this job already has an application on file, or "" for silence.
+
+    Silence is the normal case and it must stay byte-for-byte silent: a bundle nobody asked the
+    question of, and a bundle whose answer was "no", both render nothing. Only a positive answer
+    is worth the reasoner's attention, and the two positives read differently on purpose —
+    `applied` is a fact to act on, `likely_applied` is a similarity worth a human glance.
+    """
+    if not isinstance(applied, dict):
+        return ""
+    status = str(applied.get("status") or "")
+    if status not in ("applied", "likely_applied"):
+        return ""
+    when = str(applied.get("applied_at") or "")[:10]
+    matched = applied.get("matched_on") or "?"
+    if status == "applied":
+        return (f"ALREADY APPLIED (matched on {matched}"
+                + (f", {when}" if when else "") + ") — do not apply again")
+    return (f"possibly already applied (matched on {matched}"
+            + (f", {when}" if when else "") + ") — worth checking before applying")
+
+
 def bundle_to_prompt(bundle: Bundle) -> str:
     """The STABLE serialization of a Bundle — the reasoner's prompt and L4's feature set.
 
@@ -485,6 +521,9 @@ def bundle_to_prompt(bundle: Bundle) -> str:
     window = window_to_prompt(bundle.window)
     if window:
         parts += ["", "# WINDOW", window]
+    applied = applied_to_prompt(bundle.applied)
+    if applied:
+        parts += ["", "# APPLIED", applied]
     if bundle.lessons:
         parts += ["", "# LESSONS", bundle.lessons]
     parts += [

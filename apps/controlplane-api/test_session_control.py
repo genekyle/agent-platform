@@ -50,14 +50,24 @@ class _FakeSession:
 class _FakeDB:
     """Enough SQLAlchemy Session for the panel: TrainingSession lookup, ObservedJob get/add."""
 
-    def __init__(self, observed=None, answers=None):
+    def __init__(self, observed=None, answers=None, applied=None):
         self.rows = {}
         self.added = []
         self.observed = observed or {}      # job_id -> (title, company) for ObservedJob.get
         self._answers = answers or []       # ApplicationAnswer-like rows for scalars()
+        self._applied = applied or []       # ObservedJob rows the applied-index should find
 
-    def scalars(self, _stmt):
+    def scalars(self, stmt):
+        # Dispatch on the queried ENTITY. One canned list for every select() made the fake answer
+        # the applied-index with a page of application answers — a fake that lies about WHICH
+        # question it was asked is worse than no fake.
         rows = self._answers
+        try:
+            entity = (stmt.column_descriptions or [{}])[0].get("entity")
+            if entity is not None and getattr(entity, "__name__", "") == "ObservedJob":
+                rows = self._applied
+        except Exception:                    # noqa: BLE001 — a fake must never break the test
+            pass
         return type("_R", (), {"all": lambda self: rows})()
 
     def get(self, model, key):
@@ -93,7 +103,8 @@ class _Harness:
         return [p for p, _ in self.calls]
 
 
-def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None, answers=None):
+def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None,
+             answers=None, applied=None):
     """Wire the seams, an in-memory blackboard, and the DB override. Returns the harness plus a
     one-element list holding the persisted blackboard so tests can read the ledger back.
 
@@ -123,7 +134,7 @@ def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=N
     monkeypatch.setattr(sc.asyncio, "sleep", _nosleep)
 
     def _override_db():
-        yield _FakeDB(observed=observed, answers=answers)
+        yield _FakeDB(observed=observed, answers=answers, applied=applied)
     main.app.dependency_overrides[get_db] = _override_db
     return harness, saved
 
@@ -3172,3 +3183,99 @@ def test_the_cleanup_closes_the_doorways_the_step_opened(monkeypatch):
     assert not any("indeed.com" in u for u in closed_urls)     # never home base
     # the census is spent once the step is over — it must not leak onto the next application
     assert (saved["bb"].world or {}).get("apply_tab_census") is None
+
+
+# --- have we been here before? the applied check --------------------------------------------
+def _applied_row(db_rows, job_id, title, company, url=""):
+    from models import ObservedJob, utcnow
+    return ObservedJob(job_id=job_id, platform=job_id.split(":")[0],
+                       external_id=job_id.split(":", 1)[1], title=title, company=company,
+                       url=url, application_status="applied", applied_at=utcnow())
+
+
+def test_open_pane_halts_when_the_database_says_we_already_applied(monkeypatch):
+    """Operator, 2026-07-27: "we need logic on whether we applied to things or not and that needs
+    to be checked on initial landing on a page." The BIDMC drive reopened a step, hopped a branded
+    wrapper into Workday and signed in — to be told the answer the database could have given at the
+    results page.
+    """
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": {"ok": True, "title": "Healthcare Data Analyst", "apply_type": "company_site"},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:a1", "Healthcare Data Analyst", "Acme")),
+        applied=[_applied_row(None, "indeed:a1", "Healthcare Data Analyst", "Acme")])
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={"job_id": "indeed:a1"}).json()
+    finally:
+        _teardown()
+
+    assert r["last_step"]["ok"] is False
+    assert "already applied" in r["last_step"]["detail"]
+    assert r["applied_check"]["status"] == "applied"
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    # the rung is still walked — the pane DID open; what changed is that the ladder stops here
+    assert any(m.rung == "open_pane" and "already" in m.detail for m in step.minis)
+
+
+def test_a_fuzzy_applied_match_warns_but_lets_the_step_continue(monkeypatch):
+    """`likely_applied` must never silently skip a job the operator picked."""
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": {"ok": True, "title": "Data Analyst - Reporting", "apply_type": "company_site"},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_with_queue(("indeed:b2", "Data Analyst - Reporting", "Acme")),
+        applied=[_applied_row(None, "workday:JR9", "Data Analyst", "Acme")])
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={"job_id": "indeed:b2"}).json()
+    finally:
+        _teardown()
+
+    assert r["last_step"]["ok"] is True                      # NOT halted
+    assert "may have applied" in r["last_step"]["detail"]
+    assert r["applied_check"]["status"] == "likely_applied"
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.next_rung().id == "verify_identity"          # the ladder moved on
+
+
+def test_flagging_submitted_writes_the_durable_record(monkeypatch):
+    """The queue is one session's blackboard; ObservedJob is what the NEXT session can ask. Joslin
+    was submitted and confirmed on 2026-07-27 and its row still read `seen` / applied_at=None,
+    which is precisely why "check the database" had nothing to check."""
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://x.wd1.myworkdayjobs.com/job/JR77"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": {"ok": True},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "submitted",
+                              "detail": "confirmed sent"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["recorded"]["recorded"] is True
+    assert r["last_step"]["recorded"]["status"] == "applied"
+    assert r["last_step"]["recorded"]["applied_at"]
+
+
+def test_a_parked_step_writes_no_application(monkeypatch):
+    """Parked means NOT NOW. Recording it would tell the next session a lie."""
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://x.wd1.myworkdayjobs.com/job/JR77"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": {"ok": True},
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_flag",
+                        json={"job_id": "indeed:a1", "flag": "parked:account_wall"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["recorded"]["recorded"] is False
