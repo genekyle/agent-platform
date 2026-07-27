@@ -30,7 +30,9 @@ const RUNG_MARK = { held: "check", next: "play", pending: "circle", regressed: "
 
 // What the operator is being asked for, in their words rather than the API's.
 const AWAITING_COPY = {
-  operator_login: "Not signed in. Pick a way in below, or sign in directly in the window — we never type passwords or clear 2FA.",
+  operator_login: "Couldn't sign in with a saved login. Pick a way in below, or sign in directly in the window.",
+  operator_2fa: "A verification code is being asked for. That one is yours — enter it in the window, then step again.",
+  operator_open_engine: "No tab for this site is open and one couldn't be opened. Open its home page in the window, then step again.",
   operator_challenge: "A challenge is up. Clear it yourself in the window — we never auto-solve.",
   operator_browser: "The session's Chrome isn't answering. Start it, then step again.",
   operator_clean_start: "This window still holds tabs from a previous session. Clear them before we begin.",

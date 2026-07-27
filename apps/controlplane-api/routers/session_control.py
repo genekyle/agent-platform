@@ -67,10 +67,13 @@ INDEED_HOME = "https://www.indeed.com/"
 ENGINES: list[dict[str, Any]] = [
     {"id": "indeed_jobs", "platform": "indeed", "host": "indeed.com", "results_path": "/jobs",
      "query_param": "q", "page_size": 10, "home": INDEED_HOME, "search_tab": "indeed.com/jobs",
-     "label": "Indeed"},
+     "label": "Indeed", "spa": False},
     {"id": "linkedin_jobs", "platform": "linkedin", "host": "linkedin.com", "results_path": "/jobs",
      "query_param": "keywords", "page_size": 25, "home": "https://www.linkedin.com/jobs/",
-     "search_tab": "linkedin.com/jobs", "label": "LinkedIn"},
+     "search_tab": "linkedin.com/jobs", "label": "LinkedIn",
+     # A SINGLE-PAGE APP: query, filters and pagination all pushState and re-render in place, so
+     # nothing here may treat a navigation (or its absence) as proof an action landed.
+     "spa": True},
 ]
 _ENGINE_BY_ID = {e["id"]: e for e in ENGINES}
 DEFAULT_ENGINE = ENGINES[0]
@@ -606,7 +609,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
             await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
             if not nav.get("ok"):
                 bb.log("handoff", f"could not open {engine['label']} — {str(nav.get('detail'))[:90]}")
-                return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
+                return {"ok": False, "action": action, "awaiting": "operator_open_engine",
                         "detail": f"No {engine['label']} tab was open and this session could not "
                                   f"open one ({str(nav.get('detail') or 'no detail')[:120]}). The "
                                   f"rung is left as it was rather than guessed."}
@@ -625,17 +628,40 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
         # `session_checkpoints` enforces one layer up: an unknown is not a regression.
         if obs["observed"].get("authenticated") is None:
             bb.log("handoff", f"auth unknown — no {engine['label']} tab to probe after navigating")
-            return {"ok": False, "action": action, "awaiting": "operator_open_indeed",
+            return {"ok": False, "action": action, "awaiting": "operator_open_engine",
                     "detail": f"Opened {engine['label']} but no {engine['label']} tab came back, so "
                               f"sign-in could not be checked. The rung is left as it was rather "
                               f"than guessed."}
 
-        # NOT SIGNED IN IS A STEP, NOT A DEAD END. The boundary is that we never type a password or
-        # clear a 2FA challenge — it was never that we refuse to open the login page. Reporting
-        # "the operator signs in" and offering nothing meant login was the one rung the system did
-        # not own: the operator could see it was next and had nothing to press (operator, live
-        # 2026-07-24). So we survey what this page actually offers and hand back real options.
+        # NOT SIGNED IN IS A STEP, NOT A DEAD END. The boundary is that we never CLEAR a 2FA
+        # challenge or solve a captcha — it was never that we refuse to sign in. Reporting "the
+        # operator signs in" and offering nothing meant login was the one rung the system did not
+        # own: the operator could see it was next and had nothing to press (operator, live
+        # 2026-07-24).
         ledger.release("authenticated")
+
+        # FIRST, TRY THE LOGIN WE WERE GIVEN. If this domain has an account with credentials the
+        # operator stored in the vault, sign in with them — that is what the credentials are FOR,
+        # and it is the same reasoning loop `/api/accounts/{id}/login` already runs for ATS logins
+        # (login_reasoner: observe → classify → reason → act → verify, credentials filled AT MOST
+        # ONCE so a wrong password escalates instead of hammering a real account). MFA, captcha and
+        # checkpoints still escalate untouched — those are the actual boundary.
+        drove = await _drive_login(engine=engine, bb=bb, browser_url=browser_url, obs=obs,
+                                   initiator=initiator)
+        if drove is not None:
+            if drove.get("authenticated"):
+                ledger.mark("authenticated",
+                            evidence=f"signed in as {drove['account']} ({drove['steps']} step(s))",
+                            initiator=initiator)
+                bb.log("checkpoint", f"authenticated — signed in to {engine['label']} "
+                                     f"as {drove['account']}")
+                return {"ok": True, "action": action, "login": drove,
+                        "detail": f"Signed in to {engine['label']}."}
+            # It ran and did not get there. The reason matters — a human gate is not a failure.
+            return {"ok": False, "action": action, "awaiting": drove["awaiting"], "login": drove,
+                    "detail": drove["detail"]}
+
+        # No stored credential: survey what this page offers and hand back real options.
         login = await _login_survey(browser_url, obs)
         bb.log("handoff", f"not signed in ({login['state']}) — "
                           f"{len(login['options'])} way(s) in offered")
@@ -886,6 +912,113 @@ _HUMAN_ONLY_COPY = {
     "login_error": "The last sign-in attempt was rejected. Fix it in the window, then Re-check.",
     "create_form": "This is an account-creation form. Creating accounts is yours, not ours.",
 }
+
+
+#: What each non-authenticated login outcome means for the LADDER — which is a different question
+#: from what it means for the login loop. `awaiting` is the operator-facing "what now", and only
+#: these four are genuinely the human's; everything else is ours to report and retry.
+_LOGIN_AWAITING = {
+    "captcha": "operator_challenge",
+    "mfa": "operator_2fa",
+    "bad_credentials": "operator_login",
+    "account_exists": "operator_login",
+}
+
+
+def _domain_account(engine: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The account this ENGINE signs in with — the domain login (`linkedin_default`), not one of
+    the per-employer ATS accounts. Picks the first active account registered against the engine's
+    domain that actually has a credential stored; None when the operator has not saved one, which
+    is a legitimate state and not an error."""
+    try:
+        import accounts as accounts_mod
+    except Exception:  # noqa: BLE001
+        return None
+    for acct in accounts_mod.list_accounts(domain_id=engine["id"]):
+        if acct.get("kind", "domain") == "domain" and acct.get("status") == "active" \
+                and acct.get("has_creds"):
+            return acct
+    return None
+
+
+async def _drive_login(*, engine: dict[str, Any], bb: Any, browser_url: str, obs: dict[str, Any],
+                       initiator: str) -> Optional[dict[str, Any]]:
+    """Sign in to the engine with the operator's stored credential.
+
+    Returns None when there is nothing to try (no stored login) so the caller falls back to the
+    survey. Otherwise returns a dict the ladder can render: {authenticated, awaiting, detail,
+    account, steps, trail}.
+
+    The whole loop is `login_reasoner.run_login` — the same one the Accounts panel's Login button
+    runs. Reusing it is the point: it already classifies 'account already exists' apart from a
+    wrong password apart from an MFA prompt, fills the credential AT MOST ONCE (so a bad password
+    escalates instead of hammering a real account), journals every step to the Open Brain, and
+    recovers from a stale tab once. Re-implementing any of that here would be a second, worse
+    login that nobody trains on.
+
+    The password never passes through this function's reasoning: it is resolved server-side from
+    the vault and handed straight to the driver. MFA, captcha and checkpoints escalate untouched.
+    """
+    import httpx
+
+    import login_reasoner
+
+    acct = _domain_account(engine)
+    if not acct:
+        return None
+    try:
+        import accounts as accounts_mod
+        creds = accounts_mod.resolve_creds(acct["account_id"])
+    except Exception:  # noqa: BLE001
+        creds = None
+    if not creds:
+        return None
+    username, password = creds
+
+    # Drive the tab this rung is ABOUT. Same lesson as the auth probe: the login readers are chosen
+    # by the tab's host, so pointing at "whatever is first" asks the wrong site's question.
+    tab = obs.get("search_tab") or _find_site_tab(obs.get("tabs") or [], engine)
+    if tab is None:
+        return {"authenticated": False, "awaiting": "operator_open_engine",
+                "account": acct["account_id"], "steps": 0, "trail": [],
+                "detail": f"No {engine['label']} tab to sign in on."}
+
+    def _journal(step, state, idx):
+        try:
+            from routers.accounts import _journal_login_step
+            _journal_login_step(acct["account_id"], state, step)
+        except Exception:  # noqa: BLE001 — journaling must never sink a login
+            pass
+
+    bb.log("login", f"signing in to {engine['label']} as {acct.get('username_hint') or acct['account_id']}")
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            result = await login_reasoner.run_login(
+                client=client, capture_url=settings.capture_server_url,
+                browser_url=browser_url, tab_id=tab.get("tab_id", ""),
+                username=username, password=password, journal=_journal)
+    except httpx.HTTPError as exc:
+        return {"authenticated": False, "awaiting": "operator_login", "account": acct["account_id"],
+                "steps": 0, "trail": [], "detail": f"Login driver unreachable: {exc}"}
+
+    out = {"authenticated": bool(result.ok), "account": acct["account_id"],
+           "status": result.status, "steps": result.steps, "trail": result.trail,
+           "awaiting": _LOGIN_AWAITING.get(result.status, "operator_login"),
+           "detail": result.detail or result.status}
+    if not result.ok:
+        # A stop here is a real "agent needs help" event, so it goes to the handoff log and the
+        # activity feed rather than dying inside a JSON field nobody is watching.
+        bb.log("handoff", f"sign-in stopped at {result.status} — {result.detail}"[:180])
+        try:
+            from runtime import handoff as handoff_mod
+            handoff_mod.emit_escalation(
+                reason=result.status,
+                task_goal=f"log in to {engine['label']}",
+                detail=f"{engine['label']} sign-in stopped: {result.detail or result.status}",
+                url=tab.get("url", ""), state=result.status)
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 
 
 async def _login_survey(browser_url: str, obs: dict[str, Any]) -> dict[str, Any]:
@@ -2909,8 +3042,33 @@ async def choose(session_id: int, body: ChooseBody,
                                 "queue": queue.summary(),
                                 "detail": f"Page {page} reviewed; {len(body.picks)} picked."}
     if body.advance:
+        # On a SPA the click re-renders in place, so "has_next" alone is not evidence the NEXT page
+        # is what is now on screen. Take a signature first and require it to change; otherwise the
+        # ladder marks page N+1 while still showing page N, and the operator picks from a page they
+        # have already picked from. (No-op on Indeed, which navigates.)
+        sig_before = {}
+        if engine.get("spa"):
+            sig = await _capture_post("/results_signature",
+                                      {"browser_url": browser_url, "tab_url": engine["search_tab"]})
+            sig_before = sig.get("signature") or {}
         nxt = await _capture_post("/next_page",
                                   {"browser_url": browser_url, "tab_url": engine["search_tab"]})
+        if nxt.get("has_next") and engine.get("spa"):
+            settled = await _capture_post("/await_results",
+                                          {"browser_url": browser_url,
+                                           "tab_url": engine["search_tab"],
+                                           "before": sig_before}, timeout=40.0)
+            if not settled.get("changed"):
+                bb.log("advance", f"page {page}: next was clicked but the list never changed")
+                advanced.update(awaiting="operator_results",
+                                detail=f"Page {page} reviewed; {len(body.picks)} picked. The next "
+                                       f"page was clicked but the results never changed — check "
+                                       f"the window before stepping, rather than re-reading a page "
+                                       f"we already have.")
+                _persist(bb, ledger)
+                obs_now = await _observe(browser_url, bb.search_state.query)
+                return _view(session, bb, ledger, obs_now, page=page,
+                             awaiting="operator_results", last=advanced)
         if nxt.get("has_next"):
             bb.search_state.page = page + 1
             bb.world = dict(bb.world or {})

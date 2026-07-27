@@ -19,9 +19,35 @@ _CAREER_HOST_HINTS = ("myworkdayjobs", "indeed.com", "linkedin.com", "greenhouse
                       "bilh.org")
 
 
+# Which ENGINE a row belongs to, when it is specific enough to say. `career_search` is the group;
+# these are its members, and a row that names one should not be filed only under the group — the
+# LinkedIn workspace's own feed would then show every Indeed drive as well, which is not "recent
+# activity", it is noise wearing the same label.
+_ENGINE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("linkedin_jobs", ("linkedin.com", "linkedin_", "linkedin ")),
+    ("indeed_jobs", ("indeed.com", "indeed_", "smartapply")),
+)
+
+
+def _infer_engine(*haystacks: Optional[str]) -> Optional[str]:
+    """The specific engine a row is about, or None. Checked before the group so the more precise
+    answer wins; `indeed_` also catches the state ids (`indeed_apply_questions`) the journals carry
+    instead of a URL."""
+    hay = " ".join(h or "" for h in haystacks).lower()
+    for domain_id, needles in _ENGINE_HINTS:
+        if any(n in hay for n in needles):
+            return domain_id
+    return None
+
+
 def _infer_domain(*, ats=None, task=None, url=None, route=None, domain=None) -> Optional[str]:
     if domain:
         return domain
+    # MOST SPECIFIC FIRST. A row that mentions linkedin.com is LinkedIn's, not merely
+    # career-search's — see `_matches_domain` for how the group still collects both.
+    engine = _infer_engine(ats, task, url, route)
+    if engine:
+        return engine
     if (ats or "").lower() in _CAREER_ATS:
         return "career_search"
     if any(h in (task or "").lower() for h in _CAREER_TASK_HINTS):
@@ -29,6 +55,29 @@ def _infer_domain(*, ats=None, task=None, url=None, route=None, domain=None) -> 
     if any(h in f"{url or ''} {route or ''}".lower() for h in _CAREER_HOST_HINTS):
         return "career_search"
     return None
+
+
+#: Engine -> the group it rolls up into. Asking for the group gets the group's rows AND its
+#: members'; asking for a member gets only its own. That asymmetry is the whole point: the Career
+#: Search workspace wants everything underneath it, a LinkedIn workspace wants LinkedIn.
+_ROLLS_UP_INTO = {"indeed_jobs": "career_search", "linkedin_jobs": "career_search"}
+
+
+def _keep_for(entry: dict, domain: str) -> bool:
+    """Does this row belong in `domain`'s feed?"""
+    d = entry.get("domain")
+    if d == domain:
+        return True
+    # A GROUP collects its members; a member does not collect its siblings.
+    if _ROLLS_UP_INTO.get(d or "") == domain:
+        return True
+    # Undomained reasoning/action/escalation/api are Career-Search by construction today, so the
+    # GROUP still shows them. A specific ENGINE must not: an unattributable row is not evidence
+    # that this engine did anything, and a feed titled "LinkedIn" that fills with rows from an
+    # Indeed drive is worse than an empty one.
+    if d is None and entry.get("source") in ("reasoning", "action", "handoff", "api"):
+        return domain not in _ROLLS_UP_INTO
+    return False
 
 
 # --- per-source normalizers → the common shape {ts, kind, source, domain, session, title, detail, meta}
@@ -123,13 +172,7 @@ def build_feed(*, domain: Optional[str] = None, session: Optional[str] = None,
             pass
 
     if domain:
-        def _keep(e: dict) -> bool:
-            d = e.get("domain")
-            if d == domain:
-                return True
-            # undomained reasoning/action/escalation/api are Career-Search by construction today
-            return d is None and e.get("source") in ("reasoning", "action", "handoff", "api")
-        entries = [e for e in entries if _keep(e)]
+        entries = [e for e in entries if _keep_for(e, domain)]
     if session:
         entries = [e for e in entries if str(e.get("session")) == str(session)]
     if kinds:

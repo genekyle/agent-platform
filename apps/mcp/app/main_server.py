@@ -961,6 +961,134 @@ _LINKEDIN_SCROLL_JS = r"""
 """
 
 
+# --- "did that actually take?" on a single-page app -------------------------------------------
+# THE PROBLEM LINKEDIN CREATES. On Indeed every consequential act NAVIGATES: submitting the search,
+# committing the distance pill, paging forward. A navigation tears down the execution context, and
+# that teardown is itself the proof the act landed — which is why `set_distance` reads the radius
+# back "from outside" and why `run_query` confirms by diffing the window's tab URLs.
+#
+# LinkedIn does none of that. It is a single-page app: the query, the filters and the pagination
+# all mutate history with pushState and re-render the list in place. Nothing tears down, nothing
+# loads, and every URL-diff check answers "no change" for an action that worked perfectly — or,
+# worse, answers "changed" the instant pushState fires while the list underneath is still the OLD
+# page. Sleep-then-read is not a fix; it is a race with a longer fuse, and the failure it produces
+# is silent: page 2 gets extracted as a duplicate of page 1 and the corpus records it as truth.
+#
+# So the confirmation has to be about CONTENT, not about navigation. This returns a cheap signature
+# of the result set — which page it claims to be, and the identity of the cards actually rendered.
+# Compare one taken before an action with one taken after: same signature means the page has not
+# caught up (or the click did nothing), and a changed signature is positive evidence the new
+# results are on screen. That is a fact about the page rather than a hope about timing.
+_RESULTS_SIGNATURE_JS = r"""
+(() => {
+  const idFromHref = (href) => {
+    const m = (href || '').match(/\/jobs\/view\/(?:[^/]*-)?(\d{6,})/);
+    if (m) return m[1];
+    const jk = (href || '').match(/[?&]jk=([a-z0-9]+)/i);
+    return jk ? jk[1] : '';
+  };
+  // Both engines: whatever currently identifies a card, in DOM order. Indeed's data-jk is read
+  // directly; LinkedIn's identity lives in the href (see _LINKEDIN_JOBS_JS).
+  const ids = [];
+  for (const el of document.querySelectorAll('[data-jk], a[href*="/jobs/view/"]')) {
+    const id = el.getAttribute && el.getAttribute('data-jk')
+            || idFromHref(el.href || el.getAttribute('href') || '');
+    if (id && !ids.includes(id)) ids.push(id);
+    if (ids.length >= 8) break;      // the head of the list is enough to tell two pages apart
+  }
+  const start = new URLSearchParams(location.search).get('start') || '0';
+  return { start, ids, count: ids.length, url: location.href.slice(0, 300) };
+})()
+"""
+
+
+def _sig_key(sig: dict) -> str:
+    """One comparable string per result set. `start` alone is not enough (LinkedIn pushes the new
+    start before the list re-renders) and the ids alone are not enough (a filter can return the
+    same head of list on a different page), so the signature is both together."""
+    return f"{(sig or {}).get('start', '')}|{','.join((sig or {}).get('ids') or [])}"
+
+
+class SettleRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    #: The signature taken BEFORE the action. Omit to just read the current one.
+    before: Optional[dict] = None
+    timeout_seconds: float = 12.0
+    poll_seconds: float = 0.5
+    #: How many consecutive identical reads mean "it has stopped moving". A virtualised list grows
+    #: as it renders, so the first changed read is not necessarily the final one.
+    stable_reads: int = 2
+
+
+@app.post("/results_signature")
+async def results_signature(body: SettleRequest):
+    """The current result set's signature — which page it says it is, plus the identity of the
+    cards rendered. Cheap (one Runtime.evaluate) and read-only."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            res = await _CDPSession(ws).send(
+                "Runtime.evaluate", {"expression": _RESULTS_SIGNATURE_JS, "returnByValue": True})
+        sig = (res.get("result") or {}).get("value") or {}
+        return {"ok": True, "signature": sig, "key": _sig_key(sig),
+                "platform": _platform_of(target.get("url", ""))}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("results_signature failed: %s", exc)
+        return {"ok": False, "detail": str(exc)}
+
+
+@app.post("/await_results")
+async def await_results(body: SettleRequest):
+    """Wait until the result set has CHANGED from `before` and then STOPPED changing.
+
+    Two conditions, both necessary on a SPA:
+      * changed — the click had an effect (a same-signature timeout means it did not, and the
+        caller must not extract, because what is on screen is the page it already recorded);
+      * settled — two identical reads in a row, so we are not extracting a list mid-render. The
+        virtualised list grows in batches; the first changed read is rarely the whole page.
+
+    Returns {ok, changed, settled, signature, waited}. `changed:false` is a real answer, not an
+    error — it is the caller's cue to stop rather than to sleep longer and hope.
+    """
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        before_key = _sig_key(body.before or {})
+        deadline = max(1.0, min(body.timeout_seconds, 60.0))
+        poll = max(0.1, min(body.poll_seconds, 3.0))
+        waited, same_streak, last_key, sig = 0.0, 0, None, {}
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            while waited < deadline:
+                res = await cdp.send("Runtime.evaluate",
+                                     {"expression": _RESULTS_SIGNATURE_JS, "returnByValue": True})
+                sig = (res.get("result") or {}).get("value") or {}
+                key = _sig_key(sig)
+                if key != before_key:
+                    same_streak = same_streak + 1 if key == last_key else 0
+                    if same_streak + 1 >= max(1, body.stable_reads):
+                        return {"ok": True, "changed": True, "settled": True, "signature": sig,
+                                "key": key, "waited": round(waited, 2)}
+                last_key = key
+                await asyncio.sleep(poll)
+                waited += poll
+        changed = _sig_key(sig) != before_key
+        return {"ok": True, "changed": changed, "settled": False, "signature": sig,
+                "key": _sig_key(sig), "waited": round(waited, 2),
+                "detail": ("the result set changed but never stopped moving" if changed else
+                           "the result set never changed — the action did not land")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("await_results failed: %s", exc)
+        return {"ok": False, "changed": False, "settled": False, "detail": str(exc)}
+
+
 def _platform_of(url: str) -> str:
     """Which aggregator's readers apply to this tab, from its HOST.
 

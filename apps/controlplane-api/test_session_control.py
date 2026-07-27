@@ -38,6 +38,20 @@ def _isolate_accounts(tmp_path, monkeypatch):
     missing fixture.
     """
     monkeypatch.setattr(accounts, "_path", lambda: tmp_path / "accounts.json")
+    # And hide the DOMAIN logins specifically. The registry file above holds no secrets, but the
+    # built-in accounts reference `env:INDEED` / `env:LINKEDIN`, which `_read_env_value` resolves
+    # out of the operator's real gitignored .env. So on a machine that HAS those creds — i.e. the
+    # one this is actually developed on — `has_creds` was true and the auth rung drove a real login
+    # instead of taking the no-credential path most of these tests are about. A test whose result
+    # depends on the developer's .env is not a test.
+    #
+    # Scoped to those prefixes rather than blanking the reader: the per-employer ATS accounts
+    # DERIVE their password from `ATS_ACCOUNT_PW_SUFFIX`, read through the same function, so a
+    # blanket stub silently un-credentialed the account rungs too.
+    _real_env = accounts._read_env_value
+    _hidden = ("INDEED_", "LINKEDIN_", "FB_", "GMAIL_")
+    monkeypatch.setattr(accounts, "_read_env_value",
+                        lambda key: "" if key.startswith(_hidden) else _real_env(key))
 
 SEARCH_URL = "https://www.indeed.com/jobs?q=reporting+analyst&l=Nashua%2C+NH"
 
@@ -551,7 +565,7 @@ def test_auth_probe_that_cannot_open_indeed_leaves_the_rung_alone(monkeypatch):
     finally:
         _teardown()
     assert r["last_step"]["action"] == "auth_probe"
-    assert r["awaiting"] == "operator_open_indeed"
+    assert r["awaiting"] == "operator_open_engine"
     # The survey reads the page in front of it. Run here it would classify about:blank — or a
     # Workday application — as an Indeed login screen and offer "ways in" that lead elsewhere.
     assert "/ax_scan" not in harness.paths()
@@ -3279,3 +3293,102 @@ def test_a_parked_step_writes_no_application(monkeypatch):
     finally:
         _teardown()
     assert r["last_step"]["recorded"]["recorded"] is False
+
+
+# --- the sign-in leg the ladder now owns -------------------------------------------------------
+# The operator's ask: start a session and, because it is a LinkedIn session, it gets itself signed
+# in — rather than climbing to the auth rung and handing back a list of buttons. The credential is
+# theirs, already in the vault; using it is what it is for. What must NOT change is the boundary:
+# MFA, captcha and a wrong password stop, every time.
+def _with_domain_login(monkeypatch, tmp_path, *, domain_id, account_id):
+    """Give this domain a stored login, isolated from the operator's real vault."""
+    import secrets_vault
+    monkeypatch.setenv("AGENT_VAULT_KEY_PATH", str(tmp_path / "vault.key"))
+    monkeypatch.setattr(secrets_vault, "_vault_path", lambda: tmp_path / "vault.json")
+    secrets_vault.reset_provider_cache()
+    accounts.put_account(account_id, {"domain_id": domain_id, "kind": "domain", "status": "active"})
+    accounts.set_credentials(account_id, "person@example.com", "not-a-real-password")
+
+
+def _fake_run_login(monkeypatch, *, ok, status, detail="", steps=1):
+    """Stand in for login_reasoner.run_login. The reasoning loop has its own tests; what these
+    pin is how the LADDER treats each outcome."""
+    import login_reasoner
+    seen = {}
+
+    async def _run(**kw):
+        seen.update(kw)
+        return login_reasoner.LoginResult(ok, status, steps, detail, [])
+
+    monkeypatch.setattr(login_reasoner, "run_login", _run)
+    return seen
+
+
+def test_the_sign_in_leg_is_driven_not_handed_back(monkeypatch, tmp_path):
+    """With a credential stored, the auth rung SIGNS IN and the rung is marked on that evidence."""
+    _with_domain_login(monkeypatch, tmp_path, domain_id="indeed_jobs", account_id="indeed_default")
+    seen = _fake_run_login(monkeypatch, ok=True, status="authenticated", detail="signed in")
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs("https://www.indeed.com/"),
+         "/auth_state": {"ok": True, "logged_in": False},
+         "/ax_scan": _ax(("link", "Sign in"))},
+        blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    assert r["last_step"]["login"]["authenticated"] is True
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
+    # the credential reached the DRIVER, and the rung is evidenced by the sign-in, not by a probe
+    assert seen["username"] == "person@example.com"
+
+
+def test_a_human_gate_during_sign_in_stops_the_ladder_at_the_right_rung(monkeypatch, tmp_path):
+    """MFA and captcha are the actual boundary. Each has to surface as ITS OWN `awaiting` so the
+    panel asks the operator for the right thing — a 2FA prompt is not 'try another way in'."""
+    # NOTE mfa -> operator_2fa, NOT operator_verify: that key already means "the search was
+    # submitted but not confirmed", and two meanings on one key is how a panel tells an operator
+    # to check a search box when it wants a 6-digit code.
+    for status, awaiting in (("mfa", "operator_2fa"), ("captcha", "operator_challenge"),
+                             ("bad_credentials", "operator_login")):
+        _with_domain_login(monkeypatch, tmp_path, domain_id="indeed_jobs",
+                           account_id="indeed_default")
+        _fake_run_login(monkeypatch, ok=False, status=status, detail=f"stopped at {status}")
+        _install(monkeypatch,
+                 {"/list_tabs": _tabs("https://www.indeed.com/"),
+                  "/auth_state": {"ok": True, "logged_in": False},
+                  "/ax_scan": _ax(("link", "Sign in"))},
+                 blackboard=_ready_for_provisioned())
+        try:
+            r = client.post("/api/session_control/1/step", json={}).json()
+        finally:
+            _teardown()
+        assert r["last_step"]["ok"] is False, status
+        assert r["awaiting"] == awaiting, status
+
+
+def test_without_a_stored_login_the_rung_still_surveys_the_ways_in(monkeypatch):
+    """The survey is the FALLBACK, not the dead code path — an operator who has saved nothing must
+    still get real options rather than a silent no-op."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs("https://www.indeed.com/"),
+              "/auth_state": {"ok": True, "logged_in": False},
+              "/ax_scan": _ax(("link", "Sign in with a code"))},
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert "can_drive" in login                       # the survey's shape, not the drive's
+    assert r["awaiting"] == "operator_login"
+
+
+def test_an_account_with_no_credential_is_not_a_login_attempt(monkeypatch, tmp_path):
+    """A registered-but-empty account must not be picked: driving with no password would surface
+    as a 'bad credentials' escalation about a password that was never set."""
+    accounts.put_account("linkedin_default", {"domain_id": "linkedin_jobs", "kind": "domain",
+                                              "status": "active"})
+    assert sc._domain_account(sc._ENGINE_BY_ID["linkedin_jobs"]) is None

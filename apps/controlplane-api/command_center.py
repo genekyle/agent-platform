@@ -29,13 +29,19 @@ DOMAINS: list[dict[str, Any]] = [
     {"id": "facebook_marketplace", "label": "Facebook Marketplace", "kind": "selling",
      "profile": "facebook", "host": "facebook", "capture_domain": "facebook_marketplace"},
     {"id": "indeed_jobs", "label": "Indeed", "kind": "jobs", "profile": None, "host": "indeed",
-     "capture_domain": "indeed", "platform": "indeed", "search_tab": "indeed.com/jobs"},
+     "capture_domain": "indeed", "platform": "indeed", "search_tab": "indeed.com/jobs",
+     "spa": False},
     # LinkedIn — the second career-search AGGREGATOR, a sibling of Indeed under the Career Search
     # group (not an ATS). Same `kind`, so it inherits the whole jobs operating pattern; only the
     # host/platform differ. Its login is a real per-domain account (`linkedin_default`), unlike
     # Indeed's session-scoped auth, but the tile doesn't care — that's the accounts registry's job.
     {"id": "linkedin_jobs", "label": "LinkedIn", "kind": "jobs", "profile": None, "host": "linkedin",
-     "capture_domain": "linkedin", "platform": "linkedin", "search_tab": "linkedin.com/jobs"},
+     "capture_domain": "linkedin", "platform": "linkedin", "search_tab": "linkedin.com/jobs",
+     # LinkedIn is a SINGLE-PAGE APP: the query, the filters and the pagination all mutate history
+     # with pushState and re-render the list in place. Nothing navigates, so no caller may use "the
+     # context tore down" or "the URL changed" as proof an action landed — they must compare a
+     # SIGNATURE of the results before and after. See `/await_results` in the capture server.
+     "spa": True},
 ]
 
 _BY_ID = {d["id"]: d for d in DOMAINS}
@@ -57,6 +63,13 @@ def search_tab_url(domain_id: str) -> str:
     `indeed.com` matching several pages.
     """
     return _BY_ID.get(domain_id, {}).get("search_tab") or ""
+
+
+def is_spa(domain_id: str) -> bool:
+    """Does this domain re-render in place instead of navigating? On a SPA an action's effect has
+    to be confirmed from the CONTENT (a results signature), because there is no navigation to
+    observe — and a sleep-then-read silently extracts the previous page."""
+    return bool(_BY_ID.get(domain_id, {}).get("spa"))
 
 
 def _attribute_domain(row: dict[str, Any]) -> Optional[str]:

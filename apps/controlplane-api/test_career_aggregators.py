@@ -144,11 +144,34 @@ def test_a_linkedin_session_counts_as_career_search():
     assert not tab_finder.is_career_search_session("facebook_marketplace")
 
 
-def test_linkedin_activity_lands_in_the_career_search_feed():
-    """Journal rows carry no domain field; the feed infers one. Without the hint a LinkedIn drive's
-    reasoning would drop out of the Career Search activity tab entirely."""
-    assert session_activity._infer_domain(url="https://www.linkedin.com/jobs") == "career_search"
-    assert session_activity._infer_domain(ats="linkedin_easy_apply") == "career_search"
+def test_activity_rows_are_attributed_to_the_ENGINE_not_just_the_group():
+    """Journal rows carry no domain field; the feed infers one. It used to answer `career_search`
+    for everything underneath it, which is right for the group's tab and useless for an engine's:
+    a feed titled "LinkedIn" that fills with Indeed rows is worse than an empty one. The most
+    specific true answer wins."""
+    assert session_activity._infer_domain(url="https://www.linkedin.com/jobs") == "linkedin_jobs"
+    assert session_activity._infer_domain(ats="linkedin_easy_apply") == "linkedin_jobs"
+    assert session_activity._infer_domain(url="https://www.indeed.com/jobs") == "indeed_jobs"
+    # an ATS row is not either engine's — it stays with the group that owns the hand-off
+    assert session_activity._infer_domain(ats="workday") == "career_search"
+
+
+def test_the_group_collects_its_members_but_a_member_does_not_collect_its_siblings():
+    """The asymmetry the two feeds need: Career Search shows everything underneath it, LinkedIn
+    shows LinkedIn."""
+    rows = [
+        {"ts": "2026-07-27T10:00:00Z", "domain": "linkedin_jobs", "source": "action", "kind": "action"},
+        {"ts": "2026-07-27T09:00:00Z", "domain": "indeed_jobs", "source": "action", "kind": "action"},
+        {"ts": "2026-07-27T08:00:00Z", "domain": "career_search", "source": "action", "kind": "action"},
+        {"ts": "2026-07-27T07:00:00Z", "domain": None, "source": "reasoning", "kind": "reasoning"},
+    ]
+
+    def _feed(domain):
+        return [e for e in rows if session_activity._keep_for(e, domain)]
+
+    assert {e["domain"] for e in _feed("linkedin_jobs")} == {"linkedin_jobs"}
+    assert {e["domain"] for e in _feed("career_search")} == {
+        "linkedin_jobs", "indeed_jobs", "career_search", None}
 
 
 # --- the seeder, for databases that predate the promotion ------------------------------------

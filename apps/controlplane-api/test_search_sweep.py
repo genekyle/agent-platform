@@ -317,3 +317,78 @@ def test_the_bot_safety_pre_gates_apply_to_linkedin_too(monkeypatch):
     finally:
         _teardown()
     assert r["ok"] is False and r["stopped_reason"] == "captcha"
+
+
+# --- the single-page-app problem ----------------------------------------------------------------
+# On Indeed every consequential act navigates, and the navigation is the proof it landed. LinkedIn
+# pushes `?start=` and re-renders in place, so a pause-then-extract can read the page we already
+# recorded and upsert it as the next one — every row a duplicate, nothing raised, the corpus wrong.
+# The sweep therefore takes a SIGNATURE of the results before paging and requires it to change.
+def _spa_capture(*, changed, has_next=True):
+    calls: list[str] = []
+
+    def capture(path, b):
+        calls.append(path)
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True}
+        if path == "/set_distance":
+            return {"ok": True, "applied": True, "selected_miles": 50}
+        if path == "/extract_jobs":
+            return {"ok": True, "jobs": _CARDS}
+        if path == "/open_job_card":
+            return {"ok": True, "description": "A great reporting analyst role.", "salary": ""}
+        if path == "/results_signature":
+            return {"ok": True, "signature": {"start": "0", "ids": ["a1", "w9"]}}
+        if path == "/next_page":
+            return {"ok": True, "has_next": has_next}
+        if path == "/await_results":
+            return {"ok": True, "changed": changed, "settled": changed}
+        return {"ok": True}
+    capture.calls = calls
+    return capture
+
+
+def test_a_spa_sweep_stops_rather_than_re_reading_a_page_that_never_changed(monkeypatch):
+    """The silent-duplicate bug, made loud. `has_next` was true and the click dispatched fine — but
+    the list underneath never changed, so extracting again would record page 1 twice."""
+    cap = _spa_capture(changed=False)
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=cap, db=_FakeDB(rows={"linkedin:a1": _DescRow()}))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    assert r["stopped_reason"] == "page_did_not_advance"
+    assert r["pages_swept"] == 1          # the page it DID read, counted once
+
+
+def test_a_spa_sweep_walks_on_once_the_results_actually_change(monkeypatch):
+    cap = _spa_capture(changed=True)
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=cap, db=_FakeDB(rows={"linkedin:a1": _DescRow()}))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    import search_cadence
+    assert r["ok"] is True
+    assert r["pages_swept"] == search_cadence.BOUNDS["max_pages_per_query"]
+
+
+def test_indeed_does_not_pay_for_the_spa_check(monkeypatch):
+    """Indeed navigates, so it needs neither call — and adding a per-page round trip to a path that
+    does not need one is a cost with no answer attached."""
+    cap = _spa_capture(changed=True)
+    _install(monkeypatch, tabs=[{"url": "https://www.indeed.com/jobs"}], block=None,
+             capture=cap, db=_FakeDB(rows={"indeed:a1": _DescRow()}))
+    try:
+        client.post("/api/search/sweep",
+                    json={"training_session_id": 1, "query": "reporting analyst"})
+    finally:
+        _teardown()
+    assert "/results_signature" not in cap.calls
+    assert "/await_results" not in cap.calls

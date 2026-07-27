@@ -8,6 +8,7 @@ import { AttentionInbox } from "./AttentionInbox";
 import { LiveDrivePanel } from "./LiveDrivePanel";
 import { SessionControlPanel } from "./SessionControlPanel";
 import { ActivityFeed } from "./ActivityFeed";
+import { DomainTerminal } from "./DomainTerminal";
 import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
 import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
@@ -34,6 +35,7 @@ function DataTab({ domain, tab, onOpenTraining }) {
   if (tab === "control") return <SessionControlPanel domain={domain} />;
   if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
+  if (tab === "terminal") return <div className="section-body"><DomainTerminal domain={domain} /></div>;
   if (tab === "accounts") {
     // WHICH accounts a domain has is a property OF the domain, declared in the catalog — an ATS
     // sub-domain has one login per employer (`accounts: "ats"`), an aggregator or channel has a
@@ -89,7 +91,11 @@ function Overview({ domain, mode, goalState, onToggleGoal }) {
         <GoalsPanel domain={domain} mode={mode} goalState={goalState} onToggleGoal={onToggleGoal} />
         <TasksPanel domain={domain} mode={mode} />
       </div>
-      <ActivityFeed items={activity} title="Recent activity" />
+      {/* A jobs domain gets its own terminal instead of the handoff-only list: mid-drive the
+          question is "what did it just do", and handoffs alone only ever show the stops. */}
+      {domain.kind === "jobs"
+        ? <DomainTerminal domain={domain} limit={120} />
+        : <ActivityFeed items={activity} title="Recent activity" />}
     </div>
   );
 }

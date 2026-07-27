@@ -1972,6 +1972,7 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     browser_url = _session_browser_url(session)
     platform = command_center.platform_for(body.domain_id)
     search_tab = command_center.search_tab_url(body.domain_id)
+    is_spa = command_center.is_spa(body.domain_id)
 
     target = jst.active_target() or {}
     query = (body.query or target.get("query") or "").strip()
@@ -2055,12 +2056,33 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
                 db.commit()
             await asyncio.sleep(_jitter(2.0))
 
+        # SIGNATURE BEFORE THE CLICK, on a SPA. Indeed navigates to the next page, so a pause is a
+        # fair proxy for "it arrived". LinkedIn re-renders in place: `?start=` is pushed instantly
+        # while the old cards are still on screen, so a pause-then-extract re-reads page N and
+        # upserts it as page N+1 — every row a duplicate, nothing raised, the corpus wrong. So we
+        # take a signature first and require it to CHANGE before trusting the next read.
+        sig_before = {}
+        if is_spa:
+            sig = await _capture_post("/results_signature",
+                                      {"browser_url": browser_url, "tab_url": search_tab})
+            sig_before = sig.get("signature") or {}
+
         nxt = await _capture_post("/next_page",
                                   {"browser_url": browser_url, "tab_url": search_tab})
         if not nxt.get("has_next"):
             stopped_reason = "no_next_page"
             break
         await asyncio.sleep(_jitter(2.5))
+
+        if is_spa:
+            settled = await _capture_post("/await_results",
+                                          {"browser_url": browser_url, "tab_url": search_tab,
+                                           "before": sig_before}, timeout=40.0)
+            if not settled.get("changed"):
+                # Positive evidence the click did NOT land. Stopping here keeps the run honest:
+                # the alternative is extracting the page we just recorded and counting it twice.
+                stopped_reason = "page_did_not_advance"
+                break
 
     # fold sweep progress onto the blackboard's search_state (written-down, not re-derived)
     bb.search_state.page = pages_swept

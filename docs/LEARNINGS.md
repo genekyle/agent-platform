@@ -2857,3 +2857,68 @@ renders only when present, so every bundle journaled before today still produces
 prompt.
 
 Live on the next scan: *"Page 1: 15 results — 2 new, 13 already seen, 2 ALREADY APPLIED."*
+
+---
+
+## 2026-07-27 — Making LinkedIn drivable: a single-page app breaks how we prove an action landed
+
+**What we believed.** That porting the cadence to LinkedIn was finished once the readers were
+per-engine (previous entry). Extract, paginate and filter all had LinkedIn implementations and the
+whole suite was green.
+
+**What's actually true.** The readers were the easy half. **Every confirmation in the cadence was
+built on the assumption that a consequential act NAVIGATES**, and on LinkedIn none of them do.
+
+Indeed navigates on the search submit, the distance commit and every page forward. That teardown is
+not incidental — it is load-bearing evidence, and three separate places rely on it: `set_distance`
+reads the radius back "from outside" *because* the commit tears down the execution context;
+`run_query` confirms by diffing the window's tab URLs; the sweep pages forward, sleeps, extracts.
+
+LinkedIn is a SPA. The query, the filters and the pagination all `pushState` and re-render the list
+in place. Nothing tears down and nothing loads, so:
+
+* a URL-diff check answers "no change" for an action that worked perfectly, **or** answers "changed"
+  the instant `pushState` fires while the OLD cards are still on screen;
+* `sleep-then-extract` is not a fix, it is the same race with a longer fuse.
+
+The failure this produces is the dangerous kind: **page 2 gets extracted as a duplicate of page 1,
+`upsert_observed_jobs` records it, and nothing raises.** A green run, a wrong corpus.
+
+**Where it's encoded now.** Confirmation had to become a fact about CONTENT rather than a hope about
+timing. `/results_signature` returns a cheap signature of the result set — the `start` it claims to
+be plus the identity of the cards actually rendered — and `/await_results` waits for that signature
+to (a) CHANGE from the one taken before the action and (b) STOP changing for two reads, because a
+virtualised list arrives in batches and the first changed read is rarely the whole page. Both the
+sweep and the ladder's `choose(advance=True)` now take a signature first and **stop** on
+`changed:false` (`stopped_reason: "page_did_not_advance"`) instead of re-reading. Engines declare
+`spa: True`; Indeed pays for none of it.
+
+**The other half: the sign-in the ladder never owned.** The `authenticated` rung surveyed the page
+and handed back a list of buttons, which is what the operator meant by *"start a session and because
+it's a LinkedIn session it starts that process of logging in"*. It now DRIVES it — reusing
+`login_reasoner.run_login` rather than growing a second login, because that loop already tells
+'account already exists' from a wrong password from an MFA prompt, fills the credential **at most
+once** (so a bad password escalates instead of hammering a real account), and journals every step to
+the Open Brain. The boundary did not move: MFA, captcha and checkpoints still escalate untouched.
+The survey is now the FALLBACK, for when no credential is stored.
+
+**Two things that only surfaced because the rung started driving.**
+* **A test whose result depends on the developer's `.env` is not a test.** Four survey tests broke
+  the moment the rung began preferring a stored login — because the real `.env` has
+  `INDEED_USERNAME`/`INDEED_PASSWORD`, so `has_creds` was true on this machine and false on a fresh
+  clone. `test_session_control` now hides the DOMAIN login env keys specifically. Scoped, not
+  blanket: the per-employer ATS accounts derive their password from `ATS_ACCOUNT_PW_SUFFIX` through
+  the same reader, and a blanket stub silently un-credentialed the account rungs.
+* **`operator_verify` already meant something.** Mapping MFA onto it would have told an operator
+  "the search was submitted but not confirmed" when the page wanted a 6-digit code. MFA got its own
+  `operator_2fa`. Two meanings on one wire key is a bug with a UI-shaped symptom.
+
+**Also landed.** Activity is attributed to the ENGINE, not just the group: `career_search` collects
+its members' rows, a member does not collect its siblings'. A feed titled "LinkedIn" that fills with
+an Indeed drive's rows is worse than an empty one. The per-domain `DomainTerminal` renders it
+oldest→newest with the last line called out, because mid-drive the question is always "what did it
+just do" and a reverse-chronological table answers that one scroll too late.
+
+**Still owed.** The first live LinkedIn drive. Everything above is verified against fakes and a
+seeded journal; the readers and the SPA thresholds (12s settle, two stable reads) have not met a
+real page. Capture and label it — [[feedback_capture_label_is_the_work]].
