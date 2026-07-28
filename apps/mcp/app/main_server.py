@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import subprocess
 import json
 import logging
 from datetime import datetime, timezone
@@ -2929,6 +2931,194 @@ async def dialog_guard(body: DialogGuardRequest):
             "url": record["url"],
             "note": "dialogs opening from now on are dismissed automatically and recorded; a "
                     "dialog already on screen cannot be taken over — that one is the operator's."}
+
+
+# --- THE OS LAYER: browser chrome, which CDP cannot reach at all ----------------------------------
+# Our two interaction layers are both CDP — role+name -> node, and coordinate input — and both only
+# reach PAGE CONTENT. Everything the browser itself draws (JS dialogs, permission prompts, the file
+# picker, basic-auth, print) is a third surface we had no access to. It is not a gap in our
+# plumbing: a dialog belongs to whichever CDP client had Page.enable active when it OPENED, so an
+# already-open one can never be adopted (verified three ways on Teradyne, 2026-07-27).
+#
+# So this layer speaks to macOS Accessibility instead. Proven live 2026-07-28: the alert cleared,
+# renderer_responsive went False -> True, and the dialog window vanished from the AX tree.
+#
+# TWO RULES THIS LAYER LIVES BY, both learned the hard way:
+#
+# 1. ADDRESS THE PROCESS, NEVER THE APP NAME. `tell application "Google Chrome"` reached a
+#    DIFFERENT Chrome — the operator's personal window, showing LinkedIn and a Google sign-in —
+#    while our target sat elsewhere. Three Chromes were running. A keystroke sent by app name goes
+#    into somebody's real browsing. This is the frame lesson one layer up: the page layer had to
+#    ask WHICH DOCUMENT, and this one has to ask WHICH PROCESS. We resolve it from the debug port,
+#    which is the only identity we actually own.
+#
+# 2. KEYBOARD ONLY, FOR KNOWN SHAPES. Chrome exposes the dialog as its own AX window (titled
+#    "<host> says") but its CONTENTS are opaque — every element returned empty for AXRole, AXTitle
+#    and AXDescription. So this layer can address windows and press keys; it cannot see buttons.
+#    Pretending otherwise would make it a blind clicker on a real desktop. An alert() has exactly
+#    one button, so Return is unambiguous — that is the shape we support, and the gate below is
+#    what keeps it from being used as a general-purpose escape hatch.
+_DIALOG_WINDOW_HINT = " says"      # Chrome titles JS dialog windows "<host> says"
+
+
+def _chrome_pid_for_debug_port(browser_url: str) -> Optional[int]:
+    """The PID of the Chrome that owns this debug port. Identity, not a name.
+
+    Parsed from the process table because the port IS the thing we addressed over CDP all along —
+    resolving by "Google Chrome" would pick whichever instance macOS felt like handing us.
+    """
+    from urllib.parse import urlparse
+    port = urlparse(browser_url).port
+    if not port:
+        return None
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
+                             timeout=8).stdout
+    except Exception:  # noqa: BLE001
+        return None
+    return _pid_from_ps(out, port)
+
+
+def _pid_from_ps(ps_output: str, port: int) -> Optional[int]:
+    """Pure half of the lookup, so the matching is testable without a process table."""
+    needle = f"--remote-debugging-port={port}"
+    for line in (ps_output or "").splitlines():
+        line = line.strip()
+        if needle not in line:
+            continue
+        head = line.split(None, 1)[0] if line.split() else ""
+        if head.isdigit():
+            return int(head)
+    return None
+
+
+def _osa(script: str, timeout: float = 12.0) -> tuple[bool, str]:
+    """Run one AppleScript. Returns (ok, output-or-error). Never raises."""
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True,
+                           timeout=timeout)
+        out = (r.stdout or "").strip() or (r.stderr or "").strip()
+        return (r.returncode == 0), out
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)[:200]
+
+
+class NativeDismissRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_url: Optional[str] = None        # the blocked tab, for the before/after CDP check
+    tab_id: Optional[str] = None
+    force: bool = False                  # act even if CDP still sees the page (default: refuse)
+
+
+@app.post("/dismiss_native_dialog")
+async def dismiss_native_dialog(body: NativeDismissRequest):
+    """Clear a browser-owned dialog via macOS Accessibility, and PROVE the tab came back.
+
+    THE GATE IS THE POINT. This runs only once CDP has demonstrated it is blind — the tab's
+    renderer must be unresponsive. While the page can still be read, the page layer is the right
+    layer and this one stays shut; `force` exists for the operator, not for the loop. Without that
+    precondition this would be a general-purpose desktop clicker wearing a browser costume.
+
+    Verification is two-sided and mandatory, the same shape as /dialog_guard: the AX window must
+    disappear AND the CDP renderer must answer again. Either alone can lie — a dialog can close
+    while the tab stays wedged behind a second one, and a responsive tab proves nothing if no
+    dialog was ever there.
+    """
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    if sys.platform != "darwin":
+        return {"ok": False, "detail": f"the OS layer is macOS-only; this host is {sys.platform}"}
+
+    async def _renderer_alive() -> Optional[bool]:
+        """True/False, or None when the tab cannot be addressed at all."""
+        try:
+            target = await _discover_target(body.browser_url, tab_id=body.tab_id,
+                                            tab_url=body.tab_url)
+            async with websockets.connect(target["webSocketDebuggerUrl"],
+                                          max_size=1024 * 1024) as ws:
+                cdp = _CDPSession(ws)
+                await asyncio.wait_for(
+                    cdp.send("Runtime.evaluate", {"expression": "1", "returnByValue": True}),
+                    timeout=3.0)
+                return True
+        except asyncio.TimeoutError:
+            return False
+        except Exception:  # noqa: BLE001
+            return False
+
+    before = await _renderer_alive() if (body.tab_url or body.tab_id) else None
+    out: dict[str, Any] = {"ok": True, "renderer_before": before}
+
+    if before is True and not body.force:
+        out.update(dismissed=False, verified=False,
+                   verdict="refused: CDP can still read this tab, so the page layer owns it. The "
+                           "OS layer is only for a tab CDP has gone blind to (force=true to "
+                           "override, operator-only).")
+        return out
+
+    pid = _chrome_pid_for_debug_port(body.browser_url)
+    if not pid:
+        out.update(ok=False, detail=f"no Chrome found owning {body.browser_url} — refusing to "
+                                    f"guess which browser to type into")
+        return out
+    out["pid"] = pid
+
+    ok, windows_before = _osa(
+        f'tell application "System Events" to tell (first process whose unix id is {pid}) '
+        f'to get name of windows')
+    if not ok:
+        out.update(ok=False, detail=f"accessibility unavailable: {windows_before}. Grant the "
+                                    f"CONTROLLING APP (not osascript) Accessibility in System "
+                                    f"Settings > Privacy & Security.")
+        return out
+
+    # Chrome only builds its AX tree when frontmost — before activating, the window list is EMPTY,
+    # and it stays empty for a moment afterwards. POLL rather than sleep a guessed interval: the
+    # first encoded run failed on "window 1 ... Invalid index" purely because 1.2s was short that
+    # time, which is the kind of flake a fixed sleep guarantees eventually.
+    _osa(f'tell application "System Events" to set frontmost of '
+         f'(first process whose unix id is {pid}) to true')
+    win1, ok = "", False
+    for _ in range(12):                      # ~6s, in 500ms steps
+        await asyncio.sleep(0.5)
+        ok, names = _osa(f'tell application "System Events" to tell '
+                         f'(first process whose unix id is {pid}) to get name of windows')
+        if ok and _DIALOG_WINDOW_HINT in (names or ""):
+            ok, win1 = _osa(f'tell application "System Events" to tell '
+                            f'(first process whose unix id is {pid}) to get name of window 1')
+            break
+    out["front_window"] = win1
+    if not ok or _DIALOG_WINDOW_HINT not in win1:
+        out.update(dismissed=False, verified=False,
+                   verdict=f"the front window is not a dialog ({win1!r}); refusing to send keys "
+                           f"into a browser window.")
+        return out
+
+    # One key, one meaning: an alert() has a single button, so Return can only press it.
+    ok, err = _osa(f'tell application "System Events" to tell '
+                   f'(first process whose unix id is {pid}) to key code 36')
+    out["keystroke_sent"] = ok
+    if not ok:
+        out.update(ok=False, detail=f"could not send Return: {err}")
+        return out
+    await asyncio.sleep(1.2)
+
+    _, windows_after = _osa(f'tell application "System Events" to tell '
+                            f'(first process whose unix id is {pid}) to get name of windows')
+    out["dialog_window_gone"] = _DIALOG_WINDOW_HINT not in (windows_after or "")
+    after = await _renderer_alive() if (body.tab_url or body.tab_id) else None
+    out["renderer_after"] = after
+
+    out["dismissed"] = bool(out["dialog_window_gone"])
+    out["verified"] = bool(out["dialog_window_gone"]) and (after is True or after is None)
+    out["verdict"] = ("dialog gone and the renderer answers again — confirmed"
+                      if out["verified"] else
+                      "NOT confirmed: the dialog window and/or the renderer did not recover. "
+                      "Another dialog may be queued behind it — run again, or look at the screen.")
+    return out
 
 
 class DismissDialogRequest(BaseModel):
