@@ -111,8 +111,13 @@ class TrajectoryDriver(ABC):
         if path:
             await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": x, "y": y})
 
-    async def _apply_value(self, cdp, request: ActionRequest) -> None:
-        """For type/select/clear actions, apply the value after focusing via click."""
+    async def _apply_value(self, cdp, request: ActionRequest,
+                           object_id: Optional[str] = None) -> None:
+        """For type/select/clear actions, apply the value after focusing via click.
+
+        `object_id` is the already-resolved node, when the caller has one. Subclasses use it to
+        write to THAT element rather than to whatever is focused at the moment the write runs —
+        focus is not reliable across a typeahead that opens on input."""
         if request.action_id in ("type", "select") and request.value:
             await cdp.send("Input.insertText", {"text": request.value})
         elif request.action_id == "clear":
@@ -183,7 +188,9 @@ class TrajectoryDriver(ABC):
             return f"element:select:{await self._select_option(cdp, object_id, request.value)}"
         elif request.action_id == "type" and request.value:
             await call("function(){ this.focus(); }")
-            await self._apply_value(cdp, request)   # driver-specific: humanized cadence, or single insertText
+            # Hand the resolved node down: the authoritative write must target the element we
+            # addressed, not `document.activeElement` — a typeahead steals focus mid-type.
+            await self._apply_value(cdp, request, object_id=object_id)
         elif request.action_id == "clear":
             await call("function(){ this.focus(); if(this.select)this.select(); }")
             await self._apply_value(cdp, request)

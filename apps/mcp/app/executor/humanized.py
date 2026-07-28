@@ -123,12 +123,13 @@ class HumanizedDriver(DirectDriver):
             steps.append((drift, rng.uniform(0.02, 0.08)))
         return steps
 
-    async def _apply_value(self, cdp, request: ActionRequest) -> None:
+    async def _apply_value(self, cdp, request: ActionRequest,
+                           object_id: Optional[str] = None) -> None:
         if request.action_id in ("type", "select") and request.value:
             await self._clear_focused(cdp)          # don't append onto residue
-            await self._human_type(cdp, request.value)
+            await self._human_type(cdp, request.value, object_id=object_id)
         else:
-            await super()._apply_value(cdp, request)
+            await super()._apply_value(cdp, request, object_id=object_id)
 
     # THE ACTIVE ELEMENT IS PER-DOCUMENT, AND THE FIELD MAY NOT BE IN THIS ONE. When focus sits
     # inside an iframe, the TOP document's `activeElement` is the IFRAME ELEMENT — not the input.
@@ -178,7 +179,7 @@ class HumanizedDriver(DirectDriver):
                        {"expression": self._set_focused_value_js("''"), "returnByValue": True})
         await asyncio.sleep(self._rng.uniform(0.05, 0.12))
 
-    async def _human_type(self, cdp, text: str) -> None:
+    async def _human_type(self, cdp, text: str, object_id: Optional[str] = None) -> None:
         """Per-character entry with jittered pauses for a realistic TIMING signal, then an
         authoritative value set for CORRECTNESS. Per-char synthetic key events race a
         framework-controlled input's value/caret (interleaving), so the keystrokes provide the human
@@ -202,17 +203,48 @@ class HumanizedDriver(DirectDriver):
             if self._rng.random() < 0.06:  # occasional 'thinking' pause
                 delay += self._rng.uniform(0.2, 0.6)
             await asyncio.sleep(delay)
-        await self._set_value_react_safe(cdp, text)
+        await self._set_value_react_safe(cdp, text, object_id=object_id)
 
-    async def _set_value_react_safe(self, cdp, text: str) -> None:
-        """Authoritatively set the FOCUSED field's value via the native setter + input/change events
-        (the React-safe write), so it ends EXACTLY `text` regardless of the per-char race. Returns
-        the field's value afterwards — which is how a write into a frame we cannot reach shows up as
-        a mismatch instead of as success."""
+    #: The authoritative write, targeted at a NODE WE ALREADY RESOLVED rather than at whatever is
+    #: focused when it runs. Same native-setter + input/change body as the focused variant.
+    _SET_NODE_VALUE_JS = (
+        "function(v){"
+        " const win = (this.ownerDocument && this.ownerDocument.defaultView) || window;"
+        " const proto = this instanceof win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype"
+        "                                                       : win.HTMLInputElement.prototype;"
+        " const set = Object.getOwnPropertyDescriptor(proto,'value');"
+        " if(set&&set.set){set.set.call(this,v);} else {this.value=v;}"
+        " this.dispatchEvent(new Event('input',{bubbles:true}));"
+        " this.dispatchEvent(new Event('change',{bubbles:true}));"
+        " return this.value;}"
+    )
+
+    async def _set_value_react_safe(self, cdp, text: str,
+                                    object_id: Optional[str] = None) -> None:
+        """Authoritatively set the field's value via the native setter + input/change events (the
+        React-safe write), so it ends EXACTLY `text` regardless of the per-char race.
+
+        WRITE TO THE NODE, NOT TO WHATEVER IS FOCUSED. When we already resolved the element we
+        address it directly, because focus is not ours to rely on between the first keystroke and
+        this write: a typeahead that opens on input takes focus with it, and then `activeElement`
+        is the dropdown. Measured on LinkedIn's job-search combobox (session #22, 2026-07-28) —
+        click reported focused, `type` reported ok, and the field was still EMPTY afterwards with
+        focus gone. The keystrokes had gone to the browser's real focus and the authoritative write
+        had landed on something else, so both halves "succeeded" and nothing was typed.
+
+        The focused-element path stays for the coordinate/bbox route, which has no node to hold on
+        to — and it keeps the iframe hop that route needs.
+        """
         import json as _json
-        res = await cdp.send("Runtime.evaluate",
-                             {"expression": self._set_focused_value_js(_json.dumps(text)),
-                              "returnByValue": True})
+        if object_id:
+            res = await cdp.send("Runtime.callFunctionOn",
+                                 {"objectId": object_id,
+                                  "functionDeclaration": self._SET_NODE_VALUE_JS,
+                                  "arguments": [{"value": text}], "returnByValue": True})
+        else:
+            res = await cdp.send("Runtime.evaluate",
+                                 {"expression": self._set_focused_value_js(_json.dumps(text)),
+                                  "returnByValue": True})
         got = ((res or {}).get("result") or {}).get("value")
         if got != text:
             logger.warning("humanized type: field reads %r after writing %r — the write did not "

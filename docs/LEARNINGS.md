@@ -3584,3 +3584,47 @@ old.** Worth a `dev-up` that fails loudly, or reclaims the port.
 `fbclc_emailEnabled` (marketing), `fbclc_campaignEmailEnabled` (marketing), `fbclc_dpcsId`
 (consent), `fbclc_createAccountButton`. The observation artifact already held them — a reminder that
 a capture is a queryable record, not just a training row.
+
+---
+
+## 2026-07-28 (3) — The control renames itself when you focus it, and I recorded that backwards
+
+**What I committed.** In `linkedin_recipe`, as a MEASURED fact: *"Its visible PLACEHOLDER changes to
+'Describe the job you want' on focus — so the placeholder is not an identifier; the AX name is."*
+
+**What is actually true.** The reverse. There is exactly ONE real input on LinkedIn's jobs home — an
+`<input>`, 280x34, with **no aria-label** — so the accessibility tree derives its name FROM the
+placeholder. And the placeholder changes on focus:
+
+    unfocused -> "I'm looking for…"        focused -> "Describe the job you want"
+
+So the accessible name is unstable BY CONSTRUCTION here: **the act of focusing the control renames
+it.** Addressing it by name works exactly once. The second call re-resolves the stale name, finds a
+leftover AX node with no box — `/execute` returned `css_point: [0.0, 0.0]` — types into nothing, and
+reports `ok`.
+
+That, not the React write, is why the field stayed empty. I had diagnosed it as a focus-stealing
+typeahead defeating the authoritative value-set, built a node-targeted write for that, and it did
+not help — because the node being written to was the wrong node all along. The measurement that
+settled it was one probe comparing every candidate's bounding box; the earlier AX scan had shown two
+entries with nearly the same name and I read that as "two controls" rather than "one control, seen
+at two moments".
+
+**Where it's encoded now.** `linkedin_recipe`'s module note carries the correction in place of the
+wrong claim, and `QUERY_NAME_HINTS` holds BOTH spellings so a matcher cannot know only one of them.
+`SEARCH_SUBMIT_READY` stays False with the cause named.
+
+**Kept anyway:** the node-targeted authoritative write (`_SET_NODE_VALUE_JS`). It did not fix this,
+and the commit says so — but writing to the element we resolved rather than to `document.activeElement`
+is correct on its own terms, and the focused-element path stays for the coordinate route that has no
+node to hold.
+
+**The general lesson, which is not about LinkedIn.** An accessible name is only an identifier if
+it is *derived from something stable*. A name that comes from a placeholder, a value, or any state
+that our own interaction changes is a handle that breaks when used. Before addressing a control by
+name, ask what the name is derived from — and when it is the thing you are about to change, hold
+the node instead.
+
+**And the habit, three drives running:** every one of these was found by reading the result back —
+the value probe, the bounding-box probe, the screenshot. `ok` has now been wrong about a click, a
+key press, and a type, in three different ways.

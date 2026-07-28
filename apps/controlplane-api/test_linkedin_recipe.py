@@ -78,3 +78,47 @@ def test_the_home_state_id_matches_what_facets_already_maps():
     from perception import facets
     assert facets.phase_for(lr.HOME) == "home"
     assert facets.platform_for(lr.HOME) == "linkedin"
+
+
+# --- the staged cadence -----------------------------------------------------------------------
+# Operator-described 2026-07-28 and the real structural difference from Indeed:
+#   INDEED    [what] + [where] together -> submit -> results -> radius
+#   LINKEDIN  [title] alone             -> submit -> results -> location -> radius
+def test_the_search_is_staged_title_then_location_then_radius():
+    assert [s["stage"] for s in lr.SEARCH_CADENCE] == ["title", "location", "radius"]
+    assert lr.stage_for_state(lr.HOME)["stage"] == "title"
+    assert lr.stage_for_state(lr.HOME)["value_from"] == "query"
+
+
+def test_only_the_title_stage_spends_the_query():
+    """Location and radius refine an existing result set — they re-query but do not spend a NEW
+    search, which is why they are separate rungs rather than inputs to the first one."""
+    by_stage = {s["stage"]: s for s in lr.SEARCH_CADENCE}
+    assert by_stage["title"]["commits"] is True
+    assert by_stage["location"]["commits"] is False
+    assert by_stage["radius"]["commits"] is False
+
+
+def test_location_and_radius_only_exist_once_results_are_on_screen():
+    """The location box is not missing from the jobs home — it does not exist YET. A cadence that
+    tried to fill it there would hunt a control that cannot exist and call the page broken."""
+    assert lr.location_box_expected_on(lr.HOME) is False
+    assert lr.location_box_expected_on(lr.SEARCH_RESULTS) is True
+    for stage in ("location", "radius"):
+        step = next(s for s in lr.SEARCH_CADENCE if s["stage"] == stage)
+        assert step["on_state"] == lr.SEARCH_RESULTS
+
+
+def test_radius_follows_location_never_precedes_it():
+    """A radius is meaningless before there is a location to be radial about."""
+    on_results = lr.stage_for_state(lr.SEARCH_RESULTS, done=("title",))
+    assert on_results["stage"] == "location"
+    after_loc = lr.stage_for_state(lr.SEARCH_RESULTS, done=("title", "location"))
+    assert after_loc["stage"] == "radius"
+
+
+def test_a_state_with_no_outstanding_stage_answers_none():
+    """The honest answer on a page the cadence does not drive — it keeps a caller from forcing a
+    stage onto the wrong screen."""
+    assert lr.stage_for_state(lr.JOB_DETAIL) is None
+    assert lr.stage_for_state(lr.SEARCH_RESULTS, done=("title", "location", "radius")) is None

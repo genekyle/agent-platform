@@ -17,10 +17,25 @@ MEASURED
 --------------------------------------------------------------------------------------
 * **Classes are build-hashed** (`_5b06c34f cfc88646 _7a48f6fa`). No class selector survives a
   deploy. Address by accessible NAME, by href, or by a data-* the site's own tests use.
-* **The jobs home has one search box and NO location box and NO submit button.** The box's
-  accessible name is `I'm looking for...` (a curly apostrophe, ellipsis as three dots). Its visible
-  PLACEHOLDER changes to "Describe the job you want" on focus — so the placeholder is not an
-  identifier; the AX name is.
+* **The search is STAGED** (operator, 2026-07-28) — title alone on the home page, then location,
+  then radius on the RESULTS page. Indeed asks for what+where together and then the radius; that
+  ordering difference is the cadence, see SEARCH_CADENCE.
+* **The jobs home has one search box and NO submit button.**
+* **THE BOX'S ACCESSIBLE NAME IS ITS PLACEHOLDER, AND THE PLACEHOLDER CHANGES ON FOCUS.** Corrected
+  2026-07-28, having first been recorded here BACKWARDS ("the placeholder is not an identifier; the
+  AX name is"). There is exactly one real input — `<input>`, 280x34, no aria-label — so AX derives
+  its name from the placeholder:
+
+      unfocused -> "I'm looking for…"        focused -> "Describe the job you want"
+
+  Which means addressing this control by accessible name is unstable BY CONSTRUCTION: the act of
+  focusing it renames it. Resolving the stale name afterwards finds a boxless node — `/execute`
+  reported `css_point: [0.0, 0.0]`, drove nothing, and returned ok. That, not the React write, is
+  why the field stayed empty.
+  The honest consequence: this control needs an addressing scheme that is not the name. It has no
+  aria-label and no data-* to use, so the candidate is the node id from a scan taken IMMEDIATELY
+  before the act (the tight scan->act window `project_fb_listing_schema` already describes), or a
+  driver that holds the node it focused instead of re-resolving.
 * **`_SUBMIT_HINTS` matching "search" picks `Skip to search`** — a skip-link, not a submit.
   Clicking it would jump the caret to a landmark and report a submitted query. This is why the
   engine declares its own control profile instead of inheriting Indeed's matcher.
@@ -92,14 +107,15 @@ def classify(url: str = "", page_text: str = "") -> str:
 # --- the search controls ----------------------------------------------------------------------
 #: MEASURED. The query box's ACCESSIBLE NAME — matched as a substring because the apostrophe is
 #: curly and the ellipsis is three dots, and neither survives being retyped by hand.
+#: BOTH spellings, because the name flips on focus (see the module note). A matcher that knows only
+#: one of them finds the box exactly once and then loses it.
 QUERY_NAME_HINTS: tuple[str, ...] = ("looking for", "describe the job", "search by title")
 QUERY_ROLES: tuple[str, ...] = ("combobox", "textbox", "searchbox")
 
-#: MEASURED: there is no separate location field on the jobs home. LinkedIn takes location either
-#: from the typeahead ("<role> in <city>") or from a second box that only appears on the RESULTS
-#: page. Declared absent rather than guessed at, so the cadence skips it instead of typing a city
-#: into the keyword box.
-LOCATION_NAME_HINTS: tuple[str, ...] = ("city, state", "location")
+#: The location box is not ABSENT from the jobs home — it does not exist YET. Operator, 2026-07-28:
+#: LinkedIn's search is STAGED, and that is the real difference from Indeed, not a missing field.
+#: I had recorded the measurement ("no location box here") and drawn the wrong conclusion from it.
+LOCATION_NAME_HINTS: tuple[str, ...] = ("city", "location", "where")
 
 #: MEASURED: no submit button exists on the jobs home, and the generic "search" hint matches the
 #: `Skip to search` SKIP-LINK. So the engine declares that it has none, and anything looking for a
@@ -108,6 +124,9 @@ SUBMIT_NAME_HINTS: tuple[str, ...] = ()
 FORBIDDEN_SUBMIT_NAMES: tuple[str, ...] = ("skip to", "keyboard shortcut", "close jump menu")
 
 #: The blocker above. Flip to True only when a drive has typed into the box AND read the value back.
+#: Still False: the cause is now known (name-based addressing resolves a boxless node once focus
+#: renames the control) but the fix — hold the focused node, or re-scan immediately before acting —
+#: is not built.
 SEARCH_SUBMIT_READY = False
 
 
@@ -138,8 +157,11 @@ def search_controls(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     query = find_query_box(candidates)
     return {
         **({"query": query} if query else {}),
-        "location": None,          # MEASURED absent on the jobs home
-        "submit": None,            # MEASURED absent; Enter/typeahead is the commit
+        # Location is STAGED, not absent — it lives on the results page. Reporting it as missing
+        # here would send a caller hunting for a control that cannot exist yet.
+        "location": None,
+        "location_stage": SEARCH_RESULTS,
+        "submit": None,            # MEASURED absent; the typeahead/Enter is the commit
         "ready": bool(query) and SEARCH_SUBMIT_READY,
         "why": ("" if SEARCH_SUBMIT_READY else
                 "The query box is found but the humanized `type` does not fill it — it reports ok, "
@@ -148,14 +170,90 @@ def search_controls(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# --- the cadence: LinkedIn stages what Indeed asks for at once --------------------------------
+# Operator-described, 2026-07-28, and the single most important structural difference between the
+# two engines:
+#
+#   INDEED    one form, both fields:  [what] + [where]  -> submit -> results -> set radius
+#   LINKEDIN  title ALONE             [describe the job] -> submit -> RESULTS PAGE
+#                                     ...then on the results page: location, THEN radius
+#
+# So the location box being missing from the jobs home is not an absence to route around — it is
+# stage 2, and it appears only after the first submit. A cadence that tried to fill location on the
+# home page would hunt for a control that cannot exist yet and report the page as broken.
+#
+# This also means LinkedIn spends its CONSUMING query on the title alone. Location and radius are
+# refinements applied to an existing result set, which is why they are separate rungs rather than
+# inputs to the search: changing them re-queries, but it does not spend a NEW search.
+STAGE_TITLE = "title"
+STAGE_LOCATION = "location"
+STAGE_RADIUS = "radius"
+
+SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
+    {
+        "stage": STAGE_TITLE,
+        "on_state": HOME,
+        "value_from": "query",              # SearchState.query — the job title only
+        "control": "query",                 # find_query_box
+        "commits": True,                    # this is the CONSUMING act
+        "lands_on": SEARCH_RESULTS,
+        "why": "LinkedIn asks for the job title by itself. The city is not on this page and cannot "
+               "be typed here — putting it in the title box searches for a place, not a role.",
+    },
+    {
+        "stage": STAGE_LOCATION,
+        "on_state": SEARCH_RESULTS,
+        "value_from": "location",           # e.g. "Greater Boston"
+        "control": "location",
+        "commits": False,                   # refines an existing result set
+        "lands_on": SEARCH_RESULTS,
+        "why": "The location box exists only once results are on screen. Applying it re-queries "
+               "but does not spend a new search.",
+    },
+    {
+        "stage": STAGE_RADIUS,
+        "on_state": SEARCH_RESULTS,
+        "value_from": "radius_miles",       # ~100mi, or the nearest offered stop
+        "control": "distance",              # the slider — /set_distance's linkedin branch
+        "commits": False,
+        "lands_on": SEARCH_RESULTS,
+        "why": "Radius is a slider on the results page and is meaningless before there is a "
+               "location to be radial about — which is why it follows location, not precedes it.",
+    },
+)
+
+
+def stage_for_state(state: str, done: tuple[str, ...] = ()) -> Optional[dict[str, Any]]:
+    """The next search stage to work, given where we are and what has already been applied.
+
+    Returns None when this state has no outstanding stage — which is the honest answer on a page
+    the cadence does not drive, and keeps a caller from forcing a stage onto the wrong screen.
+    """
+    for step in SEARCH_CADENCE:
+        if step["stage"] in done:
+            continue
+        if step["on_state"] == state:
+            return step
+    return None
+
+
+def location_box_expected_on(state: str) -> bool:
+    """Should a location field exist here at all? False on the home page — so 'not found' there is
+    the expected answer and never an error worth reporting."""
+    return state == SEARCH_RESULTS
+
+
 def spec() -> dict[str, Any]:
     return {
         "host": HOST,
         "states": [HOME, SEARCH_RESULTS, JOB_DETAIL, LOGIN_WALL, EASY_APPLY],
-        "search": {"query_hints": list(QUERY_NAME_HINTS), "has_location_box": False,
+        "search": {"query_hints": list(QUERY_NAME_HINTS),
+                   "cadence": [st["stage"] for st in SEARCH_CADENCE],
+                   "location_box_on": SEARCH_RESULTS,   # staged, not absent
                    "has_submit_button": False, "ready": SEARCH_SUBMIT_READY},
         "measured": ["classes are build-hashed — never a class selector",
-                     "one search box, no location box, no submit button on the jobs home",
+                     "the search is STAGED: title alone, then location, then radius",
+                     "one search box and no submit button on the jobs home",
                      "the placeholder changes on focus; the AX name does not",
                      "'Skip to search' matches a generic submit hint and must be excluded"],
         "blocked_on": ("humanized `type` does not fill the search combobox (ok + blur + empty); "
