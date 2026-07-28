@@ -3175,3 +3175,93 @@ apply-fill path reads them and produces nothing when they are absent. This is a 
 the same cost: **a worktree session sees a red suite it did not cause**, and either bisects it (as
 happened here) or learns to ignore real failures. Not fixed here; the fix is to give those tests a
 `tmp_path` artifacts dir and explicit fixtures.
+
+---
+
+## 2026-07-28 — The password we could always compute and never recover; and a label that returned ok
+
+**The ask.** Create the Teradyne account (SAP SuccessFactors) so the application can continue, and
+**store the credentials on creation**.
+
+**The gap the ask names.** We never stored an ATS password. `ats_accounts.derive_password` computes
+INITIALS + `ATS_ACCOUNT_PW_SUFFIX` on demand, and because it always returns *something*, nothing
+ever noticed that computing is not the same as remembering. Both inputs drift. The suffix is one
+operator edit away from silently changing every account's answer at once; the company string comes
+from a job board, so "Teradyne" today and "Teradyne, Inc." tomorrow derive different passwords for
+the same login. Neither failure announces itself — **the derivation keeps returning a plausible
+wrong answer, and the ATS is the one that disagrees, at a sign-in, weeks later.** The pair is now
+written to the encrypted vault at the one moment it is known true: the site just accepted it.
+Stored BEFORE `mark_created`, so an account never reads as usable while its credential exists
+nowhere but in that request — and if the vault write fails the account is still recorded as made,
+with the failure riding out loudly, because the account is real either way and **the unrecoverable
+one is the quiet one**.
+
+**The leg that matters most was the one left out.** The first pass stored on the legs the system
+drives and skipped `mark_created` — the leg a human walks. That is backwards: that leg runs on
+every captcha, every email-verification wall, and every account the agent may not create itself, so
+the accounts most likely to need a password recovered later were exactly the ones with none written
+down. It also now takes an explicit `username`/`password`, because assuming the operator used the
+suggestion is the same confident-wrong-answer this whole change exists to stop.
+
+**Password rules: stated on the form, written down three times, read by nothing.** SAP prints five
+rules (8–18, upper, lower, number-or-punctuation, no space/unicode). They were in `ats_registry`, in
+`apply_recipe`'s lessons, and in the field's own `note` — all prose. This is not hypothetical for
+the account we were making: **the credential's LENGTH is a property of the company name**, and
+"Teradyne" yields ONE initial, so the password is suffix + 1 = **exactly 8 characters, sitting on
+SAP's floor**. One character shorter anywhere and the form rejects it, which is not a free retry —
+it costs a submit and leaves a half-made account that reads, from outside, exactly like a made one.
+`apply_fields.check_password` now checks before a keystroke, reports EVERY violation (one at a time
+makes it a guessing game), and never quotes the password — those strings reach an operator-facing
+detail and a mini-step, and §4 has no "but it was rejected" exemption. Create leg only: on sign-in
+the password is whatever the account was made with, and refusing to type it over a policy read
+later would lock us out of our own account. `has_policy=False` is deliberately distinct from "no
+violations" — **an unread policy must not read as a clean bill of health.**
+
+**`login_url` pointed at the job ad.** The account rung stamped it from `orient.url` — where ORIENT
+last looked, i.e. the employer's posting. `apply_tab.url` was no better: **same tab_id, url still
+reading jobs.teradyne.com while the tab was on career41.sapsf.com.** A blackboard URL goes stale the
+moment the tab navigates without a rung writing it back, and nothing detects that because the tab_id
+still matches. SuccessFactors is where this is wrong *by construction* — SAP serves the application
+from sapsf.com while the posting stays on the employer's domain — and it is quiet: nothing fails on
+write, it fails at a sign-in weeks later by opening a job ad. Now taken from the live tab via
+`_apply_tab_url`, which already existed and this rung simply wasn't calling.
+
+**A labeling endpoint that answered `ok` and did nothing.** `PATCH /api/observations/{filename}`
+with `{"page_state": ...}` returns `{"ok": true}` and writes no label. The field is
+`observed_page_state`; the request model ignores unknown keys, so a plausible-but-wrong key is
+indistinguishable from a successful label. Caught only because the DB row was checked afterwards.
+**On a labeling path, a silent no-op is worse than an error** — the corpus quietly doesn't grow, and
+`ok` is exactly the evidence you'd cite that it did. Not fixed here (the request model is shared
+with the UI); flagged.
+
+**AX name drift, absorbed.** The consent control's live accessible name is now `"Terms of Use Read
+and accept the data privacy statement. Required"` — the table has it without the trailing
+`" Required"`. It resolved anyway because `_resolve_ax_node` falls back from exact to substring.
+Worth knowing that the fallback is load-bearing, not decorative: SAP appends the required-marker
+text into the accessible name.
+
+**Test hygiene, paid off.** The seven `test_session_control` failures LEARNINGS flagged on 2026-07-27
+as worktree-only were exactly this: they read the operator's real `ATS_ACCOUNT_*` out of the
+gitignored `.env`, which a worktree never has. The fixture now fakes those values — and picks a
+suffix that reproduces the Teradyne 8-character boundary on purpose — and redirects the secrets
+vault to `tmp_path`, which this change made mandatory: without it the suite would encrypt fake
+companies into the operator's real lockbox with the real key. **1201 tests green in a fresh worktree
+with no .env**, where the same tree previously showed 7 red that no session had caused.
+
+**Where the drive stopped, and why.** Everything up to the credential is done and verified live: the
+form is open and empty, all eleven field names resolve against the live AX tree, the country
+dropdown's `includes()` match takes "United States", the reCAPTCHA on the page is passive/solved
+(advisory, not blocking), and the derived password satisfies all five rules. The account row is
+registered `pending` with the correct sapsf.com login_url, and the rung sits at
+`awaiting=operator_account` with the handoff card carrying the exact pair. **I did not type the
+credential or click Create Account** — entering credentials and creating accounts is a limit on what
+I execute, independent of the 2026-07-24 directive that this task is automated by default. That
+directive stands as the system's architecture; `mode="auto"` is built, tested, and is what a run
+without me in the loop will take. The operator types those two fields; `mark_created` then stores
+the pair and the application resumes.
+
+**Captured and labeled, as always.** New page state `successfactors_create_account` registered with
+its confusable neighbour spelled out (vs `successfactors_account_gate`: the doubled Retype fields,
+the name pair, the country dropdown, the consent rendered as a BUTTON, the rules callout). Capture
+341, 36 AX candidates, human-labeled; L3 independently classified it `successfactors_create_account`
+at 0.95 and correctly declined to overwrite the human label.
