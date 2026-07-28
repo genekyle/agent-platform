@@ -3019,7 +3019,60 @@ cannot claim something we already classify correctly.**
 
 ---
 
-## 2026-07-27 (6) — The Google domain existed as three declarations and no code; and evidence that cites a secret
+## 2026-07-27 (6) — The dialog: prevented, not detected
+
+The SAP blocker has a name now. It is a plain JavaScript `alert()`:
+
+    jobs.teradyne.com says
+    Join our talent community, receive job alerts, and start the apply process.   [ OK ]
+
+I had recorded it as "browser-level, unclearable, wording unknown". **That was wrong**, and it was
+wrong in the direction that matters: I inferred the class of blocker from a failed dismissal instead
+of from the thing itself. The operator sent a screenshot and the guess collapsed. Two hours of
+reasoning about permission prompts, and the answer was one button on screen the whole time.
+
+### Why it reads as a browser dialog even though it is page-owned
+
+An `alert()` BLOCKS THE TAB'S RENDERER. Every probe we own reads the page, so all of them hang: no
+DOM, no AX, no screenshot. The drive goes blind in the most misleading way available — `/execute`
+re-resolves its target, dispatches, returns `ok`, and nothing moves.
+
+**The measured signature** (this is the reusable part): the blocked tab answered NO CDP command
+while the Indeed tab beside it returned 8731 characters in the same second. *This tab stopped
+talking and its sibling did not.* `/native_dialog` reports exactly that, and it needs no sight of
+the dialog.
+
+### It cannot be dismissed after the fact — that is a property, not a bug
+
+Chrome hands a dialog to a CDP client only if that client had `Page.enable` **active when the dialog
+opened**. Every probe in the capture server connects one websocket per request, so we always arrive
+late: `Page.handleJavaScriptDialog` answers "No dialog is showing" about a dialog plainly on screen,
+and `Page.enable` itself times out, queued behind the block. `/dismiss_dialog` tries three
+strategies — page session, attached flattened session, then honest failure — and all three failed
+live. That endpoint's value is now the FAILURE it documents, not a recovery it can perform.
+
+### So the answer is a guard, and the guard is verifiable
+
+`/dialog_guard` holds a Page-enabled socket open on a tab, answers `javascriptDialogOpening` the
+instant it fires, and records the message. Proven end to end on a live alert: `dismissed_count: 1`,
+the message captured verbatim, and the renderer never blocked.
+
+That last clause is the verification point worth keeping: **a dismissal you cannot confirm is the
+same failure you were trying to fix.** So the check is two-sided — the guard's own log says it
+answered something, and `/native_dialog` says the renderer is alive. Either alone can lie; together
+they cannot.
+
+### The shape of the lesson
+
+A dialog is the one blocker that makes the page UNREADABLE rather than WRONG. Everything else we
+have hit this week — a frame-misaddressed write, an overlay eating a click, a control present in AX
+but not yet live — leaves the page readable and the mistake discoverable. This one removes the
+instrument. **By the time you can see the problem you have already lost the ability to act on it**,
+which is why it belongs to prevention and not to diagnosis.
+
+---
+
+## 2026-07-27 (7) — The Google domain existed as three declarations and no code; and evidence that cites a secret
 
 **The ask.** Start a Google domain so cross-domain **errands have a home** — and make it *open*, so
 the domains that need Gmail can call it.
