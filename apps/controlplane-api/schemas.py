@@ -1,7 +1,24 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StrictModel(BaseModel):
+    """A request body that REFUSES keys it doesn't know, instead of dropping them.
+
+    Pydantic's default is to ignore unknown keys, which on a write path turns a typo into a
+    silent no-op that still answers `{"ok": true}`. Hit live on 2026-07-28: a capture was
+    labeled with `{"page_state": ...}` (the real field is `observed_page_state`), the endpoint
+    answered ok, and the TrainingCapture row's `observed_page_state` was still NULL — caught
+    only by querying the DB afterwards. On a labeling path that is worse than an error: the
+    corpus quietly doesn't grow, and the `ok` is exactly the evidence you'd cite that it did.
+
+    Every request model that WRITES should inherit this. A 422 naming the offending key is a
+    caller's cheapest possible correction; a dropped field is one nobody ever pays for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class StepRead(BaseModel):

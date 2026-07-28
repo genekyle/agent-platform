@@ -3438,3 +3438,44 @@ never a reader guessing from what it was called. **When two code paths share a n
 behaviour, the one that acted has to say so; anything downstream reading the name is guessing.** And
 the failure mode is the quiet one, twice over now: withholding a remedy fails as surely as proposing
 a destructive one, and it never announces itself.
+
+## 2026-07-28 (3) — The endpoint that answered `ok` now refuses the key it can't honour
+
+Closing the item the previous entry flagged and did not fix. `PATCH /api/observations/{filename}`
+took `{"page_state": ...}`, answered `{"ok": true}`, and wrote nothing — the field is
+`observed_page_state`, and Pydantic's default is to **ignore** keys a model doesn't declare. The
+label never reached the corpus and only a DB query afterwards found it.
+
+**Why this class of bug is worse than an exception.** A 500 costs one retry. A silent drop costs a
+label you believe you have: the corpus quietly stops growing, every downstream count is off by the
+labels that were never written, and the `{"ok": true}` in the transcript is precisely the evidence
+a later session would cite to prove it *was* labeled. The failure has no observer. That is the
+argument for `extra="forbid"` on anything that writes, and it does not weaken for fields that
+"probably weren't important" — you can't know which, because you never saw the key.
+
+**The fix is a base class, not a flag.** `StrictModel` in `schemas.py` carries
+`ConfigDict(extra="forbid")` plus the story above; all 16 request models in `main.py` now inherit
+it (`BaseModel` is no longer imported there, so a new endpoint reaching for the permissive default
+is visible in review). A rejected key comes back as a 422 that **names** the key — the cheapest
+correction a caller can be handed.
+
+**Forbidding extras on a shared model is only safe if you enumerate the callers first**, so:
+every UI caller was read, not grepped-and-assumed. `updateObsMeta` (the generic
+`(filename, patch)` pass-through in `App.jsx`) is called with `{title}` and `{status}` only;
+`saveTrainingAnnotation` and the three `TrainingSpaceSection` savers send `training_annotation`,
+`element_query`, `action_type`, `action_text`, `observed_page_state`, `post_action_state`, `label`,
+`status`; `scripts/capture.sh` sends `training_annotation` only. Every key was already declared —
+which is the point: **the exposure was never a caller sending junk, it was the one hand-written
+call that guessed a field name and got congratulated for it.** No Python code constructs these
+models directly, so the config only affects request parsing. 1203 tests green.
+
+**Nested dicts are still permissive, deliberately.** `training_annotation` is typed `dict`, so
+`extra="forbid"` stops at the top level and `merge_training_annotation` keeps absorbing free-form
+sub-keys (`notes`, etc.) as before. Worth knowing before assuming the whole payload is now checked.
+
+**Still exposed: the write models in `schemas.py`** — `DomainWrite`/`DomainUpdate`,
+`GoalWrite`/`GoalUpdate`, `TaskWrite`/`TaskUpdate`, `ScenarioWrite`/`ScenarioUpdate`,
+`TrainingSessionCreate`, `WorkerHeartbeatIn`, `StepResultIn`. Same hole; not converted here because
+each needs its UI callers read the same way first. `test_strict_request_models.py` guards `main.py`
+structurally (any new `main.py` request model that doesn't forbid extras fails the suite) and names
+that exclusion in the test rather than leaving the gap silent.
