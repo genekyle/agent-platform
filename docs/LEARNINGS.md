@@ -3479,3 +3479,51 @@ sub-keys (`notes`, etc.) as before. Worth knowing before assuming the whole payl
 each needs its UI callers read the same way first. `test_strict_request_models.py` guards `main.py`
 structurally (any new `main.py` request model that doesn't forbid extras fails the suite) and names
 that exclusion in the test rather than leaving the gap silent.
+
+---
+
+## 2026-07-28 (2) — The LinkedIn search dry run: `/execute` said ok, typed nothing, and blurred the field
+
+**What we set out to do.** Stub the LinkedIn query rung by dry-running it — typing is not the
+consuming act, submitting is, so the box could be probed without spending the session's one query.
+That ordering paid for itself immediately.
+
+**Three faults, all found before a query was spent.**
+
+1. **The shared matcher finds no query box and picks a SKIP-LINK as the submit.**
+   `search_cadence._QUERY_HINTS` is Indeed-shaped ("job title", "keywords", "what") and LinkedIn's
+   box is named `I'm looking for...`; `_SUBMIT_HINTS` contains "search" and LinkedIn ships
+   `Skip to search`. Run as-is, `find_search_controls` returns `{submit: "Skip to search"}` and
+   nothing else — a control that jumps the caret to a landmark while reporting a submitted query.
+   `run_query` requires BOTH, so it fails safe today; it could never have succeeded.
+
+2. **The placeholder is not an identifier.** On focus it changes from `I'm looking for…` to
+   `Describe the job you want`. The ACCESSIBLE NAME does not change. A matcher keyed to the
+   placeholder finds the box once and then loses it — and `not_found` on the second call is exactly
+   what that looks like.
+
+3. **THE BLOCKER: the humanized `type` does not fill this combobox, and reports `ok`.** Measured,
+   twice, reading the value back each time:
+
+       click  -> outcome ok, focused: True,  value ""
+       type   -> outcome ok, focused: FALSE, value ""
+
+   So `type` blurs the element and inserts nothing. `/execute`'s `ok` means "the node resolved and
+   CDP dispatched" — never "the page accepted it", exactly as its own docstring says — and here the
+   gap is total. `Input.insertText` at a caret that is no longer in the field writes nowhere.
+
+**Where it's encoded now.** `linkedin_recipe.py`: LinkedIn's states, its query-box name hints, and
+the two ABSENCES stated as facts (no location box, no submit button on the jobs home) so the
+cadence skips them rather than guessing. `FORBIDDEN_SUBMIT_NAMES` names the skip-link trap.
+`search_controls()` returns `ready: False` with the reason, so no caller can read "we found a query
+box" as "we can run a query" — the distinction the whole dry run existed to draw.
+
+**What is NOT fixed.** The fill itself. The likely answer is the one the body driver already
+documents for React inputs — type for timing, then set the value authoritatively and dispatch
+input/change — but that is a DRIVER change in `apps/mcp`, and writing a bespoke selector around it
+in the recipe would be the workaround this codebase keeps refusing. Named, not worked around.
+
+**The habit that keeps paying.** Every fault above was found by reading the result back instead of
+trusting the return value: the value probe after `type`, the screenshot after the click, the AX
+scan after the focus. Three drives in a row now, the same lesson — an action's report of itself is
+not evidence.
