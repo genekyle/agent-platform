@@ -3286,3 +3286,60 @@ and its test was mid-update, so `test_google_identity` was red for reasons unrel
 here. Staging explicit paths is what kept the two apart — `git add -A` would have swept an in-flight
 policy change into a commit about ATS credentials. **A red suite is not automatically yours: check
 `git status` before you believe a failure belongs to your change.**
+
+---
+
+## 2026-07-27 (2) — The first SSO drive: an expired challenge looks exactly like a live one
+
+**What we proved.** LinkedIn's login routes through Google SSO, and the seam works: clicked
+"Continue with google" on the logged-out `/jobs` page, Google's popup opened as its own CDP page
+target on the SAME port, the stored address was typed as keystrokes, Next was clicked, and Google
+advanced to "Hi Geno / genomags@gmail.com". The account was accepted. Then it stopped, correctly, at
+the passkey.
+
+**Four things only a live drive could teach.**
+
+1. **`/ax_scan` returns no `page_text` — the key is absent.** Every caller doing
+   `scan.get("page_text")` has been classifying on an empty string since it was written. It went
+   unnoticed because the signal that matters most on a login form (is there a password field?) is
+   read from candidate ROLES, which were fine; the text-only tells — captcha, MFA, "account already
+   exists" — were silently dead on that path. Accessible NAMES are the visible text here, so
+   `google_recipe.text_from()` reconstructs it and both surveys now pass it.
+
+2. **`/challenge/pk` is the passkey path, and it was not in the challenge list.** So a screen we may
+   never touch classified as the address screen we had just left. A challenge path that is not
+   listed is a challenge we will drive straight into.
+
+3. **There is no `press` intent.** The first submit dispatched `action_id="press"` with Enter, on my
+   assertion that Enter was "steadier than the button because the hit target moves" — speculation
+   written as fact. The vocabulary is closed (`contract.py`: set_text / click / submit / …), so it
+   went nowhere: the address typed correctly, the screen never moved, and only a screenshot showed
+   which half had worked. The submit is a CLICK on Next. A per-stack claim that has not been driven
+   is a guess.
+
+4. **THE ONE THAT MATTERS: an expired challenge is indistinguishable from a live one.** The passkey
+   prompt is a NATIVE dialog — no DOM node, no AX node. It expired on its own in well under a
+   minute, and the page behind it did not change: same URL, same accessible tree, same "Verifying
+   it's you..." heading, `/native_dialog` reporting the renderer clear. **No probe we own can tell
+   them apart.** Anything built on "look again and see" will keep reporting a challenge that has
+   been dead for ten minutes.
+
+**Where it's encoded now.** `google_recipe.CHALLENGE_TTL_SECONDS` + `challenge_age_note()`; the
+blackboard stamps when each challenge URL was first seen (`_challenge_age`), so the survey reports
+an AGE and says plainly when a screen is almost certainly dead instead of implying it is worth
+acting on. `find_alternative_control` surfaces "Try another way" — a click, not a credential, but
+WHICH way to verify is the operator's choice, so it is offered and never taken.
+
+**The design consequence is bigger than the constant.** A factor only a human can clear must not be
+ENTERED unless that human is already at the keyboard. Driving the address step and then waiting for
+someone to notice burns the challenge every time — it does not fail, it *succeeds*, spawns the
+native prompt, and times out silently. `/sso_step` now takes `attended` (default **False**), so the
+unattended path is the one you opt out of, and it refuses to start a step that lands on a factor.
+
+**Also corrected here.** The boundary moved one screen, in the operator's favour and per their own
+2026-07-09 line: the account ADDRESS is a username, not a secret — already a display hint, already
+printed on every chooser tile — so `google_signin_email` is `AUTO`. Password, 2FA and any refusal
+stay `HUMAN`, and approval cannot buy a credential.
+
+**Still owed.** The sign-in itself. It has to be hand-driven with the drive watching, or planned as
+one attended run start-to-finish; nothing is captured or labelled from this drive yet.

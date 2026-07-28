@@ -46,13 +46,44 @@ def test_a_page_that_is_not_google_is_not_this_modules_business():
 
 
 # --- the policy that is the whole point -------------------------------------------------------
-def test_choosing_among_your_own_accounts_is_ours_and_the_credential_never_is():
+def test_the_line_is_drawn_at_the_secret_not_at_the_host():
+    """LEARNINGS 2026-07-09 put it here: everything up to and after Google's auth we drive; the
+    PASSWORD and second factor are the deliberate hand-off. The account ADDRESS is a username —
+    already a display hint, already printed on every chooser tile — so refusing it too stopped the
+    flow a screen early for no gain."""
     assert gr.policy_for(gr.CHOOSER) == gr.AUTO
-    for state in (gr.EMAIL, gr.PASSWORD, gr.TWO_FACTOR, gr.BLOCKED):
+    assert gr.policy_for(gr.EMAIL) == gr.AUTO
+    for state in (gr.PASSWORD, gr.TWO_FACTOR, gr.BLOCKED):
         assert gr.policy_for(state) == gr.HUMAN, state
     assert gr.may_drive(gr.CHOOSER) is True
     assert gr.may_drive(gr.PASSWORD) is False
     assert gr.may_drive(gr.PASSWORD, approved=True) is False     # approval cannot buy a credential
+
+
+def test_the_identifier_step_types_keystrokes_and_submits_with_enter():
+    """Per-stack tailoring, and the reason the recipe is data. Google's identifier is a controlled
+    input in its own view layer: an assigned value leaves the internal model empty, Next re-renders
+    the same screen, and nothing errors. The opposite choice is right on React inputs — which is
+    exactly why it cannot be a global default."""
+    cands = [_c("textbox", "Email or phone", 7), _c("button", "Next", 9)]
+    plan = gr.next_action(gr.EMAIL, cands, username="a@example.com")
+    assert plan["action"] == "type" and plan["policy"] == gr.AUTO
+    assert plan["target"]["backend_node_id"] == 7
+    assert plan["type_style"] == gr.TYPE_STYLE_KEYSTROKES
+    assert plan["submit"]["name"] == "Next"          # a CLICK; there is no press intent
+
+
+def test_the_identifier_step_refuses_to_type_into_a_form_it_cannot_submit():
+    """Typing an address and stranding it looks identical to a page that refused us — and the
+    first live attempt produced exactly that, from a submit that dispatched into nothing."""
+    assert gr.next_action(gr.EMAIL, [_c("textbox", "Email or phone", 7)],
+                          username="a@example.com")["action"] == "escalate"
+
+
+def test_the_identifier_step_will_not_invent_an_address():
+    """No stored login means no answer to give — never a guess at whose account this is."""
+    cands = [_c("textbox", "Email or phone", 7)]
+    assert gr.next_action(gr.EMAIL, cands, username="")["action"] == "escalate"
 
 
 def test_granting_access_is_approval_gated_not_automatic():
@@ -114,3 +145,45 @@ def test_the_spec_states_the_boundary_out_loud():
     assert by_state[gr.CHOOSER] == gr.AUTO
     assert by_state[gr.PASSWORD] == gr.HUMAN
     assert "STATE, not the host" in spec["note"]
+
+
+def test_the_passkey_challenge_is_recognised_under_the_identifier_url():
+    """MEASURED live (session #22): once the address is accepted Google renders the passkey
+    challenge under the UNCHANGED identifier URL, with "Verifying it's you… Complete sign-in using
+    your passkey". The first version of the tells matched the phrase "verify it's you" and the
+    screen says "VerifyING" — so a screen we may never touch classified as one we may drive. This
+    is the exact string that got past it."""
+    url = "https://accounts.google.com/v3/signin/identifier?x=1"
+    text = ("Hi Geno genomags@gmail.com Verifying it’s you... "
+            "Complete sign-in using your passkey Try another way")
+    assert gr.classify(url, text) == gr.TWO_FACTOR
+    assert gr.policy_for(gr.TWO_FACTOR) == gr.HUMAN
+    assert gr.next_action(gr.TWO_FACTOR, [], username="genomags@gmail.com")["action"] == "escalate"
+
+
+def test_a_passkey_prompt_is_2fa_however_it_is_worded():
+    for text in ("Complete sign-in using your passkey", "Use your security key",
+                 "Get a verification code", "2-Step Verification"):
+        assert gr.classify("https://accounts.google.com/v3/signin/identifier", text) == gr.TWO_FACTOR, text
+
+
+# --- the clock, which is the only thing that can tell live from dead ---------------------------
+def test_an_expired_challenge_is_indistinguishable_so_only_time_can_say():
+    """MEASURED session #22: the passkey prompt is a NATIVE dialog, it expired on its own, and the
+    page behind it did not change — same URL, same accessible tree, same heading, renderer clear.
+    No probe we own can tell a live challenge from a dead one, so elapsed time is the only honest
+    signal and the copy has to say so instead of implying the screen is worth acting on."""
+    assert gr.challenge_age_note(None) == ""
+    assert gr.challenge_age_note(10) == ""
+    note = gr.challenge_age_note(600)
+    assert "timed out" in note and "Try another way" in note
+
+
+def test_the_alternatives_fork_is_offered_and_not_taken():
+    """'Try another way' is a click, not a credential — but WHICH way to verify is the operator's
+    choice. Picking a verification method on someone's behalf is not ours to do."""
+    alt = gr.find_alternative_control([{"role": "button", "name": "Try another way"}])
+    assert alt is not None
+    # ...and it is never turned into an action by the planner
+    assert gr.next_action(gr.TWO_FACTOR, [{"role": "button", "name": "Try another way"}],
+                          username="a@b.com")["action"] == "escalate"

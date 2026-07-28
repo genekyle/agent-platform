@@ -655,7 +655,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
         # underneath it would be answering a question nobody asked, on a page that is not in front.
         # Checked before the credential drive for exactly that reason.
         if find_sso_popup(obs.get("tabs") or []) is not None:
-            login = await _login_survey(browser_url, obs, engine)
+            login = await _login_survey(browser_url, obs, engine, bb)
             bb.log("handoff", f"provider window open ({login['state']}) — {login['detail'][:80]}")
             return {"ok": False, "action": action,
                     "awaiting": "operator_login" if not login["can_drive"] else "operator_pick",
@@ -683,7 +683,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                     "detail": drove["detail"]}
 
         # No stored credential: survey what this page offers and hand back real options.
-        login = await _login_survey(browser_url, obs, engine)
+        login = await _login_survey(browser_url, obs, engine, bb)
         bb.log("handoff", f"not signed in ({login['state']}) — "
                           f"{len(login['options'])} way(s) in offered")
         return {"ok": False, "action": action, "awaiting": "operator_login", "login": login,
@@ -952,6 +952,36 @@ _LOGIN_AWAITING = {
 }
 
 
+def _identity_username(engine: dict[str, Any]) -> str:
+    """The address to sign the IDENTITY PROVIDER in with.
+
+    Not the engine's account. LinkedIn's own account has no credential and should not — LinkedIn's
+    route IS Google, so the login that answers Google's question belongs to the google PROVIDER
+    (today that is the gmail domain's account, which is where the operator stores it). Resolved
+    server-side and used only to fill the address field; the password half is never read here.
+    """
+    try:
+        import accounts as accounts_mod
+        import providers
+    except Exception:  # noqa: BLE001
+        return ""
+    # The engine's own login first — a domain that really does own its identity keeps working.
+    own = _domain_account(engine)
+    if own:
+        creds = accounts_mod.resolve_creds(own["account_id"])
+        if creds:
+            return creds[0]
+    # Otherwise the google provider's member domains, in declared order.
+    group = providers.get_provider("google") or {}
+    for domain_id in group.get("member_domains", []):
+        for acct in accounts_mod.list_accounts(domain_id=domain_id):
+            if acct.get("has_creds") and acct.get("status") == "active":
+                creds = accounts_mod.resolve_creds(acct["account_id"])
+                if creds:
+                    return creds[0]
+    return ""
+
+
 def _domain_account(engine: dict[str, Any]) -> Optional[dict[str, Any]]:
     """The account this ENGINE signs in with — the domain login (`linkedin_default`), not one of
     the per-employer ATS accounts. Picks the first active account registered against the engine's
@@ -1064,8 +1094,35 @@ def find_sso_popup(tabs: list[dict]) -> Optional[dict]:
     return None
 
 
+def _challenge_age(bb: Any, popup: dict[str, Any]) -> Optional[float]:
+    """Seconds since this challenge screen was first seen, or None if it is new.
+
+    Kept on the blackboard and keyed by the challenge URL, because the URL changes when Google
+    moves to a different factor and a new factor deserves a fresh clock. This is the ONLY way to
+    tell a live challenge from an expired one — see CHALLENGE_TTL_SECONDS.
+    """
+    from datetime import datetime, timezone
+    url = (popup.get("url") or "")[:200]
+    if not url:
+        return None
+    bb.world = dict(bb.world or {})
+    seen = dict(bb.world.get("sso_challenge_seen") or {})
+    now = datetime.now(timezone.utc)
+    first = seen.get(url)
+    if not first:
+        seen[url] = now.isoformat()
+        bb.world["sso_challenge_seen"] = seen
+        return None
+    try:
+        started = datetime.fromisoformat(first)
+        return (now - started).total_seconds()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _survey_sso_popup(browser_url: str, popup: dict[str, Any],
-                            username: str = "") -> dict[str, Any]:
+                            username: str = "",
+                            challenge_age: Optional[float] = None) -> dict[str, Any]:
     """What the identity provider is asking, and whose turn it is.
 
     THE BOUNDARY IS THE STATE, NOT THE HOST. Refusing everything on accounts.google.com is what
@@ -1080,24 +1137,108 @@ async def _survey_sso_popup(browser_url: str, popup: dict[str, Any],
     url = popup.get("url", "") or ""
     state = google_recipe.classify(url, str(scan.get("page_text") or ""))
     plan = google_recipe.next_action(state, candidates, username=username)
-    drivable = plan["action"] == "click"
+    drivable = plan["action"] in ("click", "type")
+    # A challenge screen carries a FORK and a CLOCK, and the operator needs both. The fork
+    # ("Try another way") is a click, not a credential — but WHICH way to verify is their choice,
+    # not ours, so it is offered rather than taken. The clock is the only thing that distinguishes
+    # a live challenge from an expired one, because nothing on the page does.
+    alt = google_recipe.find_alternative_control(candidates)
+    age_note = google_recipe.challenge_age_note(challenge_age)
     return {
         "state": f"sso:{state}", "url": url, "seen": len(candidates),
         "can_drive": drivable,
+        "alternatives": ([{"name": alt.get("name"), "role": alt.get("role"),
+                           "why": "Google's other ways to verify — you pick which."}]
+                         if alt and google_recipe.policy_for(state) == google_recipe.HUMAN else []),
+        "challenge_age_seconds": round(challenge_age) if challenge_age is not None else None,
+        "stale": bool(age_note),
         "provider": "google" if google_recipe.is_sso_url(url) else "unknown",
         "policy": plan["policy"],
         "needs_approval": bool(plan.get("needs_approval")),
+        "action": plan["action"],
         "options": ([{"name": plan["target"].get("name"), "role": plan["target"].get("role"),
                       "why": plan["why"]}] if drivable else []),
-        "detail": (f"{plan['why']} — I can click "
-                   f"{(plan['target'] or {}).get('name')!r} for you." if drivable else
-                   f"{plan['why']} Finish it in the window, then press Re-check. Once it is done "
-                   f"this browser profile stays signed in, so it is a one-time step."),
+        "detail": (f"{plan['why']} — I can take this step for you." if drivable else
+                   f"{plan['why']} " + (age_note or
+                   "Finish it in the window, then press Re-check. Once it is done this browser "
+                   "profile stays signed in, so it is a one-time step.")),
     }
 
 
+async def _drive_sso_step(browser_url: str, popup: dict[str, Any], username: str,
+                          *, approved: bool = False) -> dict[str, Any]:
+    """Take ONE step on the identity provider's screen, human-paced.
+
+    One step, never a loop: each Google screen swaps content in place, so the only honest way to
+    know what happened is to re-observe and classify again. A loop here would be guessing at
+    Google's state machine, and a wrong guess on the identity provider is the expensive kind.
+    """
+    scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                            "tab_id": popup.get("tab_id", "")}, timeout=25.0)
+    candidates = scan.get("candidates") or []
+    state = google_recipe.classify(popup.get("url", ""), str(scan.get("page_text") or ""),
+                                   candidates)
+    plan = google_recipe.next_action(state, candidates, username=username, approved=approved)
+    if plan["action"] not in ("click", "type"):
+        return {"ok": False, "state": state, "policy": plan["policy"], "detail": plan["why"]}
+
+    style = xs.pick_style()
+    target = plan["target"]
+    base = {"browser_url": browser_url, "tab_id": popup.get("tab_id", ""), "target_bbox": {},
+            "target_role": target.get("role"), "target_name": target.get("name"),
+            "driver": "humanized"}
+
+    if plan["action"] == "type":
+        # KEYSTROKES, not an assignment. Google's identifier is a controlled input inside its own
+        # view layer: setting the value and firing one event leaves the internal model empty, Next
+        # re-renders the same screen, and nothing errors. This is the per-stack tailoring — the
+        # opposite choice is right on React inputs, which is why it is recipe data and not a
+        # global default.
+        await _capture_post("/execute", {**base, "action_id": "clear"})
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        typed = await _capture_post("/execute", {**base, "action_id": "type", "value": username})
+        if typed.get("outcome") not in _ACTED_OK:
+            return {"ok": False, "state": state, "policy": plan["policy"],
+                    "detail": f"Could not type the address ({typed.get('outcome') or 'no outcome'})."}
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        # CLICK NEXT. `press` is not in the interaction vocabulary — dispatching it typed the
+        # address and then submitted nothing, which reads as "the screen did not change" and looks
+        # exactly like a page that refused us. The submit control is addressed by role+name like
+        # every other click.
+        submit = plan["submit"]
+        pressed = await _capture_post("/execute", {
+            **base, "action_id": "click",
+            "target_role": submit.get("role"), "target_name": submit.get("name")})
+        if pressed.get("outcome") not in _ACTED_OK:
+            return {"ok": False, "state": state, "policy": plan["policy"],
+                    "detail": f"Typed the address but could not submit it "
+                              f"({pressed.get('outcome') or 'no outcome'})."}
+    else:
+        res = await _capture_post("/execute", {**base, "action_id": "click"})
+        if res.get("outcome") not in _ACTED_OK:
+            return {"ok": False, "state": state, "policy": plan["policy"],
+                    "detail": f"Could not click {target.get('name')!r} "
+                              f"({res.get('outcome') or 'no outcome'})."}
+
+    await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+    # The popup swaps content in place, so "did it advance?" is a CONTENT question. Re-classify.
+    after = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                             "tab_id": popup.get("tab_id", "")}, timeout=25.0)
+    tabs = (await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)).get("tabs") or []
+    still = find_sso_popup(tabs)
+    landed = (google_recipe.classify(still.get("url", ""), str(after.get("page_text") or ""),
+                                     after.get("candidates") or [])
+              if still else "closed")
+    return {"ok": True, "state": state, "landed": landed, "policy": plan["policy"],
+            "pace": xs.describe(style),
+            "detail": (f"{state} -> {landed}." if landed != state else
+                       f"Took the step on {state} but the screen did not change — "
+                       f"check the window.")}
+
+
 async def _login_survey(browser_url: str, obs: dict[str, Any],
-                        engine: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                        engine: Optional[dict[str, Any]] = None,
+                        bb: Any = None) -> dict[str, Any]:
     """What the system can SEE and DO about signing in, right now.
 
     Answers the question the old dead-end could not: not "are we logged in" (no) but "what is the
@@ -1125,16 +1266,9 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
         # address, so it is resolved SERVER-SIDE from the vault and used only for the comparison;
         # it never enters the response. (The option label comes from the tile's own accessible
         # name, which is already on the operator's screen.)
-        acct = _domain_account(engine) if engine else None
-        username = ""
-        if acct:
-            try:
-                import accounts as accounts_mod
-                creds = accounts_mod.resolve_creds(acct["account_id"])
-                username = creds[0] if creds else ""
-            except Exception:  # noqa: BLE001 — no credential is a normal state, not an error
-                username = ""
-        return await _survey_sso_popup(browser_url, popup, username=username)
+        return await _survey_sso_popup(
+            browser_url, popup, username=(_identity_username(engine) if engine else ""),
+            challenge_age=(_challenge_age(bb, popup) if bb is not None else None))
 
     # Otherwise survey the ENGINE's own tab, never "whichever came first".
     tab = obs.get("search_tab") or (_find_site_tab(tabs, engine) if engine else None) \
@@ -1142,7 +1276,9 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
     scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
                                             "tab_id": tab.get("tab_id", "")}, timeout=25.0)
     candidates = scan.get("candidates") or []
-    page_text = str(scan.get("page_text") or "")
+    # `/ax_scan` carries no page_text (the key is absent), so the accessible names ARE the text —
+    # without this the captcha / MFA / "account already exists" tells never fire on this path.
+    page_text = str(scan.get("page_text") or "") + " " + google_recipe.text_from(candidates)
     state = lr.classify_login_state(candidates, page_text, logged_in=False)
     # On a password screen only ALTERNATE routes count — the generic "Sign in" match there is the
     # form's own submit, and offering it would have us submitting an empty credential.
@@ -1175,6 +1311,65 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
     return {"state": state, "url": tab.get("url", ""), "can_drive": True,
             "options": [{"name": e["name"], "role": e["role"], "why": e["why"]} for e in entries],
             "detail": detail, "seen": len(candidates)}
+
+
+class SsoStepBody(BaseModel):
+    #: The operator's per-instance yes, for the one state that needs it (OAuth consent). It is not
+    #: a standing setting and is never remembered — a grant approved once is not a grant approved
+    #: forever.
+    approved: bool = False
+    #: ARE YOU AT THE KEYBOARD? Every drivable Google step lands on a factor only a human can
+    #: clear, and those expire in under a minute (google_recipe.CHALLENGE_TTL_SECONDS). Taking the
+    #: address step while nobody is watching does not fail — it succeeds, spawns a native passkey
+    #: prompt, and that prompt times out silently, leaving a screen indistinguishable from a live
+    #: one. Measured session #22. Default False so the unattended path is the one you opt OUT of.
+    attended: bool = False
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/sso_step")
+async def sso_step(session_id: int, body: SsoStepBody,
+                   db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Take ONE step on the identity provider's window.
+
+    Separate from `/step` on purpose. The ladder's rungs are the ENGINE's process; this is the
+    IDENTITY's, and it is a different domain with a different stack, a different boundary and a
+    different owner. Collapsing them would mean the LinkedIn ladder claiming credit for a screen
+    LinkedIn does not own.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query)
+    popup = find_sso_popup(obs.get("tabs") or [])
+    if popup is None:
+        raise HTTPException(status_code=409,
+                            detail="No identity-provider window is open — nothing to step.")
+
+    engine = engine_for(session, obs.get("search_tab"))
+    username = _identity_username(engine)
+    if not username:
+        raise HTTPException(
+            status_code=409,
+            detail="No Google login is stored to sign in with. Add one in Accounts first.")
+
+    # The step is only worth taking if someone is here to finish what it starts.
+    scan_state = google_recipe.classify(popup.get("url", ""), "", [])
+    if not body.attended and scan_state in (google_recipe.EMAIL, google_recipe.CHOOSER):
+        raise HTTPException(
+            status_code=409,
+            detail=("This step lands on a verification factor only you can clear, and Google's "
+                    "expire in under a minute — taking it unattended burns the challenge and "
+                    "leaves a screen that looks live but is dead. Re-send with attended=true when "
+                    "you are at the keyboard."))
+
+    res = await _drive_sso_step(browser_url, popup, username, approved=body.approved)
+    bb.log("sso", f"{res.get('state')} -> {res.get('landed') or 'no change'}"[:160])
+    _persist(bb, ledger)
+    obs2 = await _observe(browser_url, bb.search_state.query)
+    return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
+                 awaiting=None if res.get("ok") else "operator_login",
+                 last={**res, "action": "sso_step"})
 
 
 class LoginActionBody(BaseModel):
