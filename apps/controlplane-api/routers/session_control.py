@@ -41,6 +41,7 @@ import applied_index
 import apply_fields
 import apply_steps as aps
 import google_recipe
+import session_windows
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
@@ -146,7 +147,8 @@ def _check_initiator(initiator: str) -> str:
 
 
 # --- observation: the tri-state the ladder reads ----------------------------------------------
-async def _observe(browser_url: str, query: str) -> dict[str, Any]:
+async def _observe(browser_url: str, query: str, *,
+                   session_id: Any = None, note: str = "", actor: str = "system") -> dict[str, Any]:
     """What is actually true right now, as a tri-state map for `session_checkpoints.next_step`.
 
     True / False / **None**, and the None matters: "we did not check" must never read as a
@@ -156,6 +158,13 @@ async def _observe(browser_url: str, query: str) -> dict[str, Any]:
     """
     tabs_res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
     tabs = tabs_res.get("tabs") or []
+
+    # RECORD EVERY LOOK. `/list_tabs` is the browser's own /json/list over a local socket, so this
+    # costs nothing and can therefore run on every observation rather than behind a flag someone
+    # has to remember. A diff does not care who caused the change — the drive, the operator, or a
+    # redirect — which is precisely why it can see an operator's mistake as readily as our own.
+    if session_id is not None:
+        session_windows.record(session_id, tabs, note=note, actor=actor)
     observed: dict[str, Any] = {
         # A Chrome that answers but holds NO page is not ready to work — there is nothing to look
         # at, type into, or sign in on. Found live 2026-07-23: both session Chromes were up with
@@ -472,7 +481,7 @@ async def get_panel(session_id: int, db: Session = Depends(get_db)) -> dict[str,
     """The panel's view. READ-ONLY — probes the tabs and auth state (a local CDP socket, free
     even in low-data mode) and drives nothing."""
     session, bb, ledger = _load(session_id, db)
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     page = _current_page(obs, bb)
     return _view(session, bb, ledger, obs, page=page)
 
@@ -510,7 +519,7 @@ async def step(session_id: int, body: StepBody,
                             detail="Initialize the session with a query first — a session with no "
                                    "query has nothing to be for.")
 
-    obs = await _observe(browser_url, query)
+    obs = await _observe(browser_url, query, session_id=session.id)
     page = _current_page(obs, bb)
 
     # Captcha/checkpoint first, always: never diagnose a blocked page as a broken step.
@@ -545,7 +554,7 @@ async def step(session_id: int, body: StepBody,
     # (seen live 2026-07-24). Every other endpoint here already re-observes; step was the
     # exception, and the `observed_delta` hook it used instead was never populated by anything.
     # Observing is a local CDP socket, so this costs nothing but a round trip.
-    obs_after = await _observe(browser_url, query)
+    obs_after = await _observe(browser_url, query, session_id=session.id)
     return _view(session, bb, ledger, obs_after,
                  page=result.pop("page", page),
                  results=result.pop("results", None),
@@ -624,7 +633,7 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
                                   f"open one ({str(nav.get('detail') or 'no detail')[:120]}). The "
                                   f"rung is left as it was rather than guessed."}
             bb.log("nav", f"opened {engine['label']}'s home page to probe sign-in ({style.name} pace)")
-            obs = await _observe(browser_url, bb.search_state.query)
+            obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
 
         if obs["observed"].get("authenticated"):
             ledger.mark("authenticated", evidence="/auth_state reported logged_in",
@@ -1313,6 +1322,25 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
             "detail": detail, "seen": len(candidates)}
 
 
+@router.get("/api/session_control/{session_id}/windows")
+def session_windows_view(session_id: int, limit: int = 100) -> dict[str, Any]:
+    """What this session's browser has DONE — windows opened, closed and navigated, in order.
+
+    Read-only and free: it serves the ledger that `_observe` folds a snapshot into on every look,
+    so it reflects changes whoever caused them — the drive, the operator, or a redirect. The blind
+    spot is stated rather than implied: a native OS dialog (a passkey prompt, a file picker) has no
+    tab, so no diff will show it. `openers` is the correlation point — the moment a popup appeared
+    is when to go looking for one with `/native_dialog`.
+    """
+    return {
+        "summary": session_windows.summarize(session_id),
+        "timeline": session_windows.timeline(session_id, limit=limit),
+        "openers": session_windows.openers(session_id),
+        "blind_spot": "Native OS dialogs have no tab and cannot appear here — correlate an "
+                      "`opened` event with /native_dialog on that tab.",
+    }
+
+
 class SsoStepBody(BaseModel):
     #: The operator's per-instance yes, for the one state that needs it (OAuth consent). It is not
     #: a standing setting and is never remembered — a grant approved once is not a grant approved
@@ -1340,7 +1368,7 @@ async def sso_step(session_id: int, body: SsoStepBody,
     _check_initiator(body.initiator)
     session, bb, ledger = _load(session_id, db)
     browser_url = _session_browser_url(session)
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     popup = find_sso_popup(obs.get("tabs") or [])
     if popup is None:
         raise HTTPException(status_code=409,
@@ -1366,7 +1394,7 @@ async def sso_step(session_id: int, body: SsoStepBody,
     res = await _drive_sso_step(browser_url, popup, username, approved=body.approved)
     bb.log("sso", f"{res.get('state')} -> {res.get('landed') or 'no change'}"[:160])
     _persist(bb, ledger)
-    obs2 = await _observe(browser_url, bb.search_state.query)
+    obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
                  awaiting=None if res.get("ok") else "operator_login",
                  last={**res, "action": "sso_step"})
@@ -1392,7 +1420,7 @@ async def login_action(session_id: int, body: LoginActionBody,
     _check_initiator(body.initiator)
     session, bb, ledger = _load(session_id, db)
     browser_url = _session_browser_url(session)
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
 
     if obs["observed"].get("authenticated"):
         raise HTTPException(status_code=409, detail="Already signed in — step instead.")
@@ -1414,7 +1442,7 @@ async def login_action(session_id: int, body: LoginActionBody,
     })
     await asyncio.sleep(2.0)
 
-    obs_after = await _observe(browser_url, bb.search_state.query)
+    obs_after = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     after = await _login_survey(browser_url, obs_after)
     # Only a recognised outcome counts as a click. A reply with no `outcome` is an error body,
     # not a result — reading one as success is what let a whole drive report work it never did.
@@ -1716,7 +1744,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         _save_queue(bb, queue)
         bb.world.pop("account_handoff", None)   # the handoff is resolved
         _persist(bb, ledger)
-        obs = await _observe(_session_browser_url(session), bb.search_state.query)
+        obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_account", "queue": queue.summary(),
                            "credentials_stored": saved,
@@ -1735,7 +1763,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     # posting — and this is precisely the ATS family where that is wrong by construction, since SAP
     # serves the application from sapsf.com while the posting lives on the employer's own domain.
     # A wrong login_url is quiet: nothing fails now, and the sign-in leg weeks later opens a job ad.
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     live_url = _apply_tab_url(bb, obs) or (bb.world or {}).get("orient", {}).get("url", "")
 
     # Register the account record; next_account_action decides the leg (create vs sign-in) and
@@ -1782,7 +1810,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
             step.record(_ACCOUNT_RUNG, aps.FAILED, f"create leg: {drive.get('detail', '')}"[:200],
                         initiator=body.initiator)
             _save_queue(bb, queue); _persist(bb, ledger)
-            obs2 = await _observe(browser_url, bb.search_state.query)
+            obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                          last={"ok": False, "action": "apply_account", "queue": queue.summary(),
                                "detail": drive.get("detail")})
@@ -1793,7 +1821,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                         f"{drive.get('button') or 'submit'!r} click",
                         initiator=body.initiator)
             _save_queue(bb, queue); _persist(bb, ledger)
-            obs2 = await _observe(browser_url, bb.search_state.query)
+            obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
                          awaiting="operator_account",
                          last={"ok": True, "action": "apply_account", "queue": queue.summary(),
@@ -1812,7 +1840,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                         "escalated",
                         initiator=body.initiator)
             _save_queue(bb, queue); _persist(bb, ledger)
-            obs2 = await _observe(browser_url, bb.search_state.query)
+            obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
                          awaiting="operator_verify",
                          last={"ok": False, "action": "apply_account", "queue": queue.summary(),
@@ -1853,7 +1881,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                + ("signed in automatically" if signing_in else "account created automatically")
                + (" (credential stored in the vault)" if saved else " (CREDENTIAL NOT STORED)"))
         _persist(bb, ledger)
-        obs2 = await _observe(browser_url, bb.search_state.query)
+        obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
         return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_account", "queue": queue.summary(),
                            "credentials_stored": saved,
@@ -1883,7 +1911,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     bb.log("account_handoff", f"{company} {step.platform}: {action.get('leg')} handoff to operator")
     _persist(bb, ledger)
 
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="operator_account",
                  last={"ok": False, "action": "apply_account", "queue": queue.summary(),
                        "account": handoff,
@@ -1944,7 +1972,7 @@ async def apply_prompt_select(session_id: int, body: ApplyPromptBody,
         raise HTTPException(status_code=422,
                             detail="Give an explicit value, or use_source for 'how did you hear'.")
 
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     tab_id = _apply_tab(bb, obs).get("tab_id", "")
     tried: list[str] = []
     picked: Optional[str] = None
@@ -2000,7 +2028,7 @@ async def apply_prompt_select(session_id: int, body: ApplyPromptBody,
 
     _save_queue(bb, queue)
     _persist(bb, ledger)
-    obs2 = await _observe(browser_url, bb.search_state.query)
+    obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                  last={"ok": ok, "action": "apply_prompt_select", "queue": queue.summary(),
                        "picked": picked, "tried": tried, "detail": detail})
@@ -2064,7 +2092,7 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     if step is None:
         raise HTTPException(status_code=409, detail="No open application to fill.")
 
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     block = obs.get("block")
     if block and block.get("strength") == "active":
         return _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
@@ -2103,7 +2131,7 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
                 initiator=body.initiator)
     _save_queue(bb, queue)
     _persist(bb, ledger)
-    obs2 = await _observe(browser_url, bb.search_state.query)
+    obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                  last={"ok": not failed, "action": "apply_fill", "queue": queue.summary(),
                        "fill_plan": rows, "fill_summary": summary, "pace": xs.describe(style),
@@ -2148,7 +2176,7 @@ async def orient_step(session_id: int, body: OrientStepBody,
     if step is None:
         raise HTTPException(status_code=409, detail="No open application to orient within.")
 
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     url = _apply_tab_url(bb, obs)
     if not url:
         raise HTTPException(status_code=409,
@@ -2211,7 +2239,7 @@ async def orient_step(session_id: int, body: OrientStepBody,
     bb.log("orient", f"{step.job_id}: {platform}/{state}{depth}")
     _persist(bb, ledger)
 
-    obs2 = await _observe(browser_url, bb.search_state.query)
+    obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     view = _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                  last={"ok": recognised, "action": "orient", "queue": queue.summary(),
                        "orient": {"platform": platform, "state": state, "progress": progress},
@@ -2249,7 +2277,7 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     if step is None:
         raise HTTPException(status_code=409, detail="No open application to reconcile.")
 
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     ats_url = _apply_tab_url(bb, obs)
     if not ats_url:
         raise HTTPException(
@@ -2311,7 +2339,7 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     bb.log("reconcile_step", f"{step.job_id}: recorded {added or 'nothing new'} from the live "
                              f"window ({disc.platform})")
     _persist(bb, ledger)
-    obs2 = await _observe(browser_url, bb.search_state.query)
+    obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     stuck = step.needs_operator()
     nxt = step.next_rung()
     if stuck:
@@ -2379,7 +2407,7 @@ async def rebuild_queue(session_id: int, body: RebuildQueueBody,
     bb.world["apply_queue"] = queue.as_dict()
     bb.log("rebuild", f"restored {added} step(s) from {len(approved)} approved picks")
     _persist(bb, ledger)
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                  last={"ok": True, "action": "rebuild_queue", "queue": queue.summary(),
                        "detail": f"Rebuilt the queue: {added} application(s) restored from your "
@@ -2515,7 +2543,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                    f"application before another one is worked. Omit job_id to work whatever is "
                    f"current.")
 
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     block = obs.get("block")
     if block and block.get("strength") == "active":
         step.record("challenge", aps.BLOCKED, f"active {block.get('provider')}",
@@ -2816,7 +2844,7 @@ async def apply_propose(session_id: int, body: ApplyProposeBody,
     }
     bb.log("propose", f"{step.job_id}: teacher proposes {body.intent} — {body.rationale[:80]}")
     _persist(bb, ledger)
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                  last={"ok": True, "action": "propose", "queue": queue.summary(),
                        "detail": f"Proposed {body.intent!r} — waiting on you."})
@@ -2853,7 +2881,7 @@ async def apply_decide(session_id: int, body: ApplyDecideBody,
         bb.world.pop("apply_proposal", None)
         bb.log("skip", f"operator dropped the proposal to {prop.get('intent')}")
         _persist(bb, ledger)
-        obs = await _observe(_session_browser_url(session), bb.search_state.query)
+        obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
         queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                      last={"ok": True, "action": "skip", "queue": queue.summary(),
@@ -2974,7 +3002,7 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
         outcome, detail = aps.FAILED, f"{body.intent} -> {res.get('outcome')}: {res.get('detail','')}"
 
     step.record(rung, outcome, detail[:300], initiator=body.initiator)
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     view = _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=outcome == aps.OK,
                                 detail=f"Taught {body.intent!r}: {detail}")
@@ -3099,7 +3127,7 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     # THE CLEANUP CREW RUNS ON EVERY TERMINAL, not just on success. An application abandoned at a
     # wall leaves exactly the same orphan tab as one that was submitted, and the next prospect has
     # to start from a window that means something.
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     # RECORD BEFORE CLOSE — the epilogue's own rule. A closed tab with no record is unrecoverable,
     # and the record is what the NEXT session gets to ask (applied_index).
     recorded = _record_outcome(db, step, ats_url=_apply_tab(bb, obs).get("url", ""))
@@ -3107,7 +3135,7 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     bb.world.pop("apply_tab", None)          # the record dies with the tab it pointed at
     _persist(bb, ledger)
     if cleanup["closed"]:
-        obs = await _observe(_session_browser_url(session), bb.search_state.query)
+        obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
 
     summary = queue.summary()
     nxt = queue.current()
@@ -3323,7 +3351,7 @@ async def apply_reopen(session_id: int, body: ApplyReopenBody,
     _persist(bb, ledger)
     summary = queue.summary()
     nxt = queue.current()
-    obs = await _observe(_session_browser_url(session), bb.search_state.query)
+    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                  last={"ok": True, "action": "apply_reopen", "queue": summary,
                        "detail": (f"{step.title or body.job_id} is back in the queue and the "
@@ -3368,7 +3396,7 @@ async def clean_start(session_id: int, body: CleanStartBody,
     _check_initiator(body.initiator)
     session, bb, ledger = _load(session_id, db)
     browser_url = _session_browser_url(session)
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     plan = _fresh_start_plan(obs)
 
     if not plan["to_close"]:
@@ -3393,7 +3421,7 @@ async def clean_start(session_id: int, body: CleanStartBody,
     bb.log("clean_start", f"closed {len(closed)} inherited tab(s)"
                           + (f"; {len(failed)} refused" if failed else ""))
     _persist(bb, ledger)
-    obs_after = await _observe(browser_url, bb.search_state.query)
+    obs_after = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs_after, page=_current_page(obs_after, bb),
                  last={"ok": not failed, "action": "clean_start",
                        "detail": f"Closed {len(closed)} inherited tab(s)."
@@ -3432,7 +3460,7 @@ async def choose(session_id: int, body: ChooseBody,
                                    f"'classifier:' / 'rule:' — got {body.decided_by!r}")
     session, bb, ledger = _load(session_id, db)
     browser_url = _session_browser_url(session)
-    obs = await _observe(browser_url, bb.search_state.query)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     page = _current_page(obs, bb)
     engine = engine_for(session, obs.get("search_tab"))
 
@@ -3478,7 +3506,7 @@ async def choose(session_id: int, body: ChooseBody,
     if queue.blocks_page():
         summary = queue.summary()
         _persist(bb, ledger)
-        obs_now = await _observe(browser_url, bb.search_state.query)
+        obs_now = await _observe(browser_url, bb.search_state.query, session_id=session.id)
         return _view(session, bb, ledger, obs_now, page=page, awaiting="apply",
                      last={"ok": True, "action": "choose", "page": page, "queue": summary,
                            "detail": f"{summary['remaining']} application(s) queued from page "
@@ -3519,7 +3547,7 @@ async def choose(session_id: int, body: ChooseBody,
                                        f"the window before stepping, rather than re-reading a page "
                                        f"we already have.")
                 _persist(bb, ledger)
-                obs_now = await _observe(browser_url, bb.search_state.query)
+                obs_now = await _observe(browser_url, bb.search_state.query, session_id=session.id)
                 return _view(session, bb, ledger, obs_now, page=page,
                              awaiting="operator_results", last=advanced)
         if nxt.get("has_next"):
@@ -3541,6 +3569,6 @@ async def choose(session_id: int, body: ChooseBody,
                                    f"this query is walked out. Ending is your call.")
 
     _persist(bb, ledger)
-    obs_after = await _observe(browser_url, bb.search_state.query)
+    obs_after = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs_after, page=advanced.get("page", page),
                  awaiting=advanced.get("awaiting"), last=advanced)

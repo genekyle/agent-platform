@@ -63,7 +63,10 @@ ROLE_UNKNOWN = "unknown"      # anything we cannot place. NEVER closable (see be
 _TERMINAL_MARKERS = ("/post-apply", "/application-submitted", "myworkdayjobs.com/thank-you")
 _APPLY_MARKERS = ("smartapply.indeed.com", "myworkdayjobs.com", "greenhouse.io", "lever.co",
                   "icims.com", "appvault", "/apply", "applystart")
-_SEARCH_MARKERS = ("indeed.com/jobs", "indeed.com/q-", "linkedin.com/jobs/search")
+# `linkedin.com/jobs` without the `/search` covers the jobs HOME too — the logged-out wall and the
+# landing both live there, and the recorder showed them classifying as `unknown`, which is the one
+# role hygiene will never touch. Indeed's entry is already prefix-shaped for the same reason.
+_SEARCH_MARKERS = ("indeed.com/jobs", "indeed.com/q-", "linkedin.com/jobs")
 _ERRAND_MARKERS = ("mail.google.com", "gmail.com", "accounts.google.com", "outlook.")
 _BLANK_MARKERS = ("about:blank", "chrome://", "devtools://", "chrome-extension://")
 
