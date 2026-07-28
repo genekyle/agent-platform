@@ -3343,3 +3343,45 @@ stay `HUMAN`, and approval cannot buy a credential.
 
 **Still owed.** The sign-in itself. It has to be hand-driven with the drive watching, or planned as
 one attended run start-to-finish; nothing is captured or labelled from this drive yet.
+
+---
+
+## 2026-07-28 — LinkedIn ships hashed class names, so the auth probe was reading nothing
+
+**What we believed.** That the LinkedIn auth probe worked. It shipped with the obvious selectors —
+`.global-nav__me`, `img.global-nav__me-photo`, `.global-nav__primary-items` — and it returned
+`logged_in: false` on a signed-out page, which looked like proof.
+
+**What's actually true.** It returned `logged_in: false` on a **fully signed-in** page too. The
+operator signed in by hand, the Jobs home rendered with their profile card, the Me avatar and
+"Jobs based on your preferences" — and the probe still said signed out, `has_account: false`.
+
+The reason, measured: **every LinkedIn nav class is build-hashed** —
+`class="_5b06c34f cfc88646 _7a48f6fa"`. Not one `.global-nav__*` node exists. Those selectors are
+from an older LinkedIn, they matched nothing, and a probe whose positive signals can never fire
+reports the negative answer forever. It is the false-negative shape: nothing errors, nothing is
+empty, the answer is just always "no".
+
+Only the screenshot caught it — the same lesson as the Indeed sign-in link AX could not see, and
+the reason `feedback_confirm_state_with_screenshot` exists. A URL and an AX tree that agree can
+still both be wrong about the same thing.
+
+**Where it's encoded now.** The probe reads what LinkedIn cannot hash:
+* the profile HREF — `a[href*="/in/"]` exists only when signed in;
+* the app nav by href (`/mynetwork`, `/messaging`, `/notifications`) and by its accessible NAME,
+  which is the same string a screen reader gets ("My Network, 0 new notifications").
+Hashed classes change every deploy, so a class selector here was a bug with a delay fuse; the
+comment says so, in the file, next to the selectors.
+
+**The generalizable rule.** On a site that hashes its classes, a class selector is not a weak
+signal — it is a *timer*. Prefer, in order: a stable href, an accessible name, a data-* attribute
+the site's own tests rely on. This is the CDP-AX principle (PRINCIPLES §6) arriving from the other
+direction: not "AX is nicer", but "everything else here is unstable by construction".
+
+**Also.** Restarting the capture server by killing it took the operator's running MCP down; it was
+started with `--reload`, so editing the file was all that was needed. Touch the file, don't kill
+the process.
+
+**Recorded.** Capture #342 — `linkedin_home`, human-labelled, 100 AX candidates, the first
+signed-in LinkedIn state in the corpus. State registered as a domain-scoped page state so it
+matches the id `perception/facets` already maps to phase `home`.

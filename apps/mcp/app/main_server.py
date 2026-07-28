@@ -3518,11 +3518,18 @@ _LINKEDIN_AUTH_JS = r"""
   const txt = (document.body && document.body.innerText || '').slice(0, 6000);
   const q = (sel) => !!document.querySelector(sel);
   const on_auth = /^\/(login|uas|checkpoint|signup)\b/.test(path) || /\bSign ?in\b/i.test(title);
-  // The authed global nav: the "Me" avatar menu and the app nav are only rendered when signed in.
-  const has_account = q('.global-nav__me, [data-control-name="identity_welcome_message"]')
-                   || q('img.global-nav__me-photo, .global-nav__primary-items')
-                   || q('button[aria-label*="account" i][aria-expanded]');
-  const has_sign_in = q('a[href*="/login"], a[href*="/uas/login"], .nav__button-secondary')
+  // NEVER CLASS NAMES ON LINKEDIN. Measured live 2026-07-27 on a signed-in Jobs home: every nav
+  // class is build-hashed ("_5b06c34f cfc88646 _7a48f6fa"), so the `.global-nav__*` selectors this
+  // probe shipped with matched NOTHING and it reported logged_in=false on a fully signed-in page —
+  // the screenshot was the only thing that caught it. Hashed classes also change every deploy, so
+  // a class selector here is a bug with a delay fuse.
+  //
+  // What IS stable: the profile HREF (/in/<vanity> exists only when signed in) and the accessible
+  // NAMES of the app nav, which are the same strings a screen reader gets.
+  const has_account = q('a[href*="/in/"]')
+                   || q('a[href*="/mynetwork"], a[href*="/messaging"], a[href*="/notifications"]')
+                   || /\bMy Network\b/.test(txt);
+  const has_sign_in = q('a[href*="/login"], a[href*="/uas/login"]')
                    || /\bJoin now\b/i.test(txt);
   return {
     // has_account is required (not merely "no sign-in link"), because the logged-out job search
