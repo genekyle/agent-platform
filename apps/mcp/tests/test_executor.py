@@ -125,3 +125,78 @@ def test_element_act_upload_sets_files():
     assert up[0][1]["files"] == ["/abs/a.jpg", "/abs/b.jpg"]
     # upload must NOT click or move the mouse (file dialog can't be driven)
     assert not any(m == "Input.dispatchMouseEvent" for m, _ in sent)
+
+
+# --- the dropdown matcher, tested as the string we actually ship ------------------------
+def _native_select_js():
+    """The EXACT functionDeclaration `_select_option` sends to the page for a native <select>.
+
+    Captured from the driver rather than retyped: a test that re-implements the JS proves the
+    re-implementation works. This one runs the shipped string.
+    """
+    import asyncio
+
+    from app.executor.humanized import HumanizedDriver
+
+    sent = {}
+
+    class _FakeCDP:
+        async def send(self, method, params=None):
+            sent["fn"] = (params or {}).get("functionDeclaration")
+            return {"result": {"value": "native"}}   # stop after the first call
+
+    asyncio.run(HumanizedDriver()._select_option(_FakeCDP(), "obj-1", "United States"))
+    return sent["fn"]
+
+
+def _run_native_select(option_texts, value):
+    """Run that JS in node against a stub <select>, and report which option it chose."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:                                     # pragma: no cover - environment-dependent
+        import pytest
+        pytest.skip("node not available")
+
+    script = (
+        "const fn = " + _native_select_js() + ";\n"
+        "const opts = " + json.dumps(option_texts) + ".map(t => ({text: t, value: t}));\n"
+        "const sel = {tagName: 'SELECT', options: opts, value: null,\n"
+        "             dispatchEvent(){ return true; }};\n"
+        "const verdict = fn.call(sel, " + json.dumps(value) + ");\n"
+        "console.log(JSON.stringify({verdict, chosen: sel.value}));\n"
+    )
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip())
+
+
+def test_a_dropdown_prefers_the_exact_option_over_one_that_merely_contains_it():
+    """SAP's country list really does carry both of these. Substring-only matching picked the
+    right one purely because the exact option sorts first — order is not a guarantee we have, and
+    the failure is a job application silently filed against the wrong country."""
+    countries = ["United Arab Emirates", "United Kingdom", "United States",
+                 "United States Minor Outlying Islands"]
+    got = _run_native_select(countries, "United States")
+    assert got["chosen"] == "United States"
+    assert got["verdict"] == "native"
+
+    # The order that used to decide it. Exact match must still win when it sorts LAST.
+    got = _run_native_select(list(reversed(countries)), "United States")
+    assert got["chosen"] == "United States"
+
+
+def test_a_substring_match_still_works_but_says_so():
+    # Not a failure — the stored answer is legitimately shorter than the option's own label. But
+    # "the value we were given is not what the option is called" is worth seeing in the verdict.
+    got = _run_native_select(["United States of America", "Canada"], "United States")
+    assert got["chosen"] == "United States of America"
+    assert got["verdict"] == "native_contains"
+
+
+def test_a_dropdown_that_cannot_find_its_option_says_so_rather_than_setting_nothing():
+    got = _run_native_select(["Canada", "Mexico"], "United States")
+    assert got["verdict"] == "native_notfound"
+    assert got["chosen"] is None

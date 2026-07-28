@@ -235,10 +235,21 @@ class TrajectoryDriver(ABC):
         change) and a custom ARIA combobox (click to open, then click the option whose text
         matches).
 
-        Returns WHAT HAPPENED — native / native_notfound / picked / notfound — because the two
-        failures are the interesting ones and this used to return None either way. A dropdown that
-        could not find its option looked exactly like one that had been set, all the way up to a
-        caller whose `ok` only ever meant "CDP did not throw"."""
+        EXACT MATCH WINS, substring is the fallback — the same order `_resolve_ax_node` uses for
+        accessible names, and for the same reason. This was substring-only, which on SAP's country
+        list meant "United States" was tested against both "United States" and "United States Minor
+        Outlying Islands"; it picked the right one purely because the exact option sorts first
+        alphabetically. Order is not a guarantee we have — reorder that list, or meet a site that
+        sorts by ISO code, and the drive silently applies to a job in the wrong country with an
+        `ok` on the way out. Verified live on career41.sapsf.com 2026-07-28, where both options are
+        genuinely present.
+
+        Returns WHAT HAPPENED — native / native_contains / native_notfound / picked /
+        picked_contains / notfound — because the two failures are the interesting ones and this
+        used to return None either way. A dropdown that could not find its option looked exactly
+        like one that had been set, all the way up to a caller whose `ok` only ever meant "CDP did
+        not throw". The `_contains` verdicts are not failures, but they say the value we were given
+        is not what the option is called, which is worth seeing before it becomes a wrong answer."""
         import asyncio
 
         phase = await cdp.send("Runtime.callFunctionOn", {
@@ -248,8 +259,11 @@ class TrajectoryDriver(ABC):
                 "function(v){"
                 " v=(v||'').toLowerCase();"
                 " if(this.tagName==='SELECT'){"
-                "   const o=[...this.options].find(x=>x.text.trim().toLowerCase().includes(v));"
-                "   if(o){this.value=o.value;this.dispatchEvent(new Event('change',{bubbles:true}));return 'native';}"
+                "   const os=[...this.options];"
+                "   const t=x=>x.text.trim().toLowerCase();"
+                "   const o=os.find(x=>t(x)===v)||os.find(x=>t(x).includes(v));"
+                "   if(o){this.value=o.value;this.dispatchEvent(new Event('change',{bubbles:true}));"
+                "     return t(o)===v?'native':'native_contains';}"
                 "   return 'native_notfound';}"
                 " this.scrollIntoView({block:'center'}); this.click(); return 'opened';"
                 "}"),
@@ -267,8 +281,10 @@ class TrajectoryDriver(ABC):
                 "function(){const v=" + v + ".toLowerCase();"
                 " const doc=this.ownerDocument||document;"
                 " const opts=[...doc.querySelectorAll('" + self._OPTION_SELECTORS + "')];"
-                " const o=opts.find(x=>(x.innerText||'').trim().toLowerCase().includes(v));"
-                " if(o){o.scrollIntoView({block:'center'});o.click();return 'picked';}"
+                " const t=x=>(x.innerText||'').trim().toLowerCase();"
+                " const o=opts.find(x=>t(x)===v)||opts.find(x=>t(x).includes(v));"
+                " if(o){o.scrollIntoView({block:'center'});o.click();"
+                "   return t(o)===v?'picked':'picked_contains';}"
                 " return 'notfound';}"),
         })
         return str(((picked.get("result") or {}).get("value")) or "notfound")
