@@ -3385,3 +3385,56 @@ the process.
 **Recorded.** Capture #342 — `linkedin_home`, human-labelled, 100 AX candidates, the first
 signed-in LinkedIn state in the corpus. State registered as a domain-scoped page state so it
 matches the id `perception/facets` already maps to phase `home`.
+
+---
+
+## 2026-07-28 (2) — The same rung both types and types nothing, so the rung cannot be the answer
+
+**What we believed.** That `_queue_in_progress` had been fixed. Its own docstring says so: the first
+version counted "has started" as unsaved work, which suppressed a refresh on a session that had
+only opened a pane, and the fix was `_READ_ONLY_RUNGS` — a set of rungs that only LOOK.
+
+**What's actually true.** Session 21 again, four days later (Teradyne / SuccessFactors,
+2026-07-28). `idle_s` 66266 — 18.4 hours, red. The SAP create-account form on screen, verifiably
+EMPTY, confirmed by screenshot. And the panel: *"a reload cures this — but the page holds unsaved
+work, so refresh is withheld (continuing)."* The refresh was being withheld to protect nothing, on
+an 18-hour-old session. A manual reload fixed it and SAP re-rendered the form fine.
+
+The cause is that `account` is **not one behaviour**. In `mode="auto"`/`"fill"` it types credentials
+into the page — so it is rightly not read-only. In `mode="handoff"`, and on a failed or refused
+create, it types NOTHING: it records HUMAN_REQUIRED and surfaces the credential on a card for the
+operator. Same rung id, opposite answer, and the only thing distinguishing them in the record was
+**prose in the detail string** ("filled the form, awaiting…" vs "…operator creates it (button …)").
+
+**Why it could not be fixed by adding a rung.** The obvious move — split `account_handoff` out as
+its own read-only rung — is the exact failure `_ACCOUNT_RUNG`'s comment already documents: the
+ladder settles rungs BY NAME, so a leg recorded under any name but `account` leaves `account`
+unsettled forever. The categories the ladder needs and the categories the staleness reader needs
+are different partitions of the same events, and forcing one to serve both breaks the other.
+
+**Where it's encoded now.** `MiniStep.staged: Optional[bool]` — a structural marker written by the
+code that drove the page, because that code is the only thing that knows whether it typed.
+`_drive_account_form` tracks it across its eight return paths (half of its refusals happen before a
+keystroke — no credential, no form recipe, a password the site's own rules reject — and half after)
+and sets it BEFORE the `await`, since a fill that reports a bad outcome may still have left
+characters in the box. `_mini_staged_input` prefers the marker and falls back to `_READ_ONLY_RUNGS`
+only when it is unstated, which is every mini-step already persisted in a blackboard.
+
+**The tri-state is the load-bearing part.** `None` means UNSTATED, not False. Collapsing the two
+would silently un-protect every mini-step written before the field existed — the same
+unmeasured-is-not-an-all-clear rule the staleness module and the checkpoint ladder both already
+enforce, arriving for a third time.
+
+**Also found, same shape.** `ApplyStep.reopen` records a `reopened` rung on a step whose rungs it
+has just archived away — nothing of ours is in any page — and that rung read as "typed" too. Now
+`staged=False` at the record site.
+
+**The generalizable rule, and it is a correction of our own first fix.** A category is not evidence.
+`_READ_ONLY_RUNGS` reads like a fact about the system but is an inference about it, and an inference
+survives right up until one member of the category starts doing both things. The controller's
+`LiveActuator` had this right all along and we did not notice: it sets `_unsaved_work` from the
+WRITE INTENT it actually dispatched and clears it on navigation — the actor reporting what it did,
+never a reader guessing from what it was called. **When two code paths share a name and differ in
+behaviour, the one that acted has to say so; anything downstream reading the name is guessing.** And
+the failure mode is the quiet one, twice over now: withholding a remedy fails as surely as proposing
+a destructive one, and it never announces itself.

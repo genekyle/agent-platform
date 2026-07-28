@@ -396,7 +396,26 @@ def _staleness_for(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
 
 #: Apply rungs that only LOOK. A step that has done nothing but these has staged no input, so a
 #: reload costs it nothing — it re-opens the pane and carries on.
+#:
+#: This is a FALLBACK, consulted only when a mini-step does not state `staged` for itself. A rung
+#: id is a category, and some categories do both: `account` types credentials in "auto"/"fill" and
+#: types nothing whatever in "handoff". It cannot be split by adding a rung id — the ladder settles
+#: rungs BY NAME (see `_ACCOUNT_RUNG`), so a second name would leave `account` unsettled forever.
 _READ_ONLY_RUNGS = frozenset({"open_pane", "verify_identity", "classify", "orient"})
+
+
+def _mini_staged_input(m: Any) -> bool:
+    """Did this one mini-step put something INTO the page?
+
+    When the mini-step SAYS so, that answer wins: the code that drove the page is the only thing
+    that knows whether it typed, and it is the one place that can say so without inference. Silence
+    falls back to the rung, which is what every mini-step recorded before the field existed.
+    """
+    if isinstance(m, dict):
+        staged, rung = m.get("staged"), m.get("rung", "")
+    else:
+        staged, rung = getattr(m, "staged", None), getattr(m, "rung", "")
+    return bool(staged) if staged is not None else rung not in _READ_ONLY_RUNGS
 
 
 def _queue_in_progress(bb: Any) -> bool:
@@ -407,12 +426,18 @@ def _queue_in_progress(bb: Any) -> bool:
     suppressed a refresh it should have offered. Withholding the remedy is as much a failure as
     proposing a destructive one; it just fails quietly. A step counts only once it has run a rung
     that puts something INTO the page.
+
+    The SECOND version was still too broad, and in the same shape. Session 21 again (Teradyne /
+    SuccessFactors, 2026-07-28): 18.4 hours idle, red, on a verifiably EMPTY SAP signup form — and
+    the refresh withheld to protect nothing, because the `account` rung had run. It had run in
+    HANDOFF mode, where it types nothing at all and only surfaces the credential to the operator.
+    Judging by rung could not see that; a mini-step that reports for itself can. A manual reload
+    fixed the session that the panel had talked itself out of offering.
     """
     try:
         queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
         return any(
-            not s.done and any((m.get("rung") if isinstance(m, dict) else getattr(m, "rung", ""))
-                               not in _READ_ONLY_RUNGS for m in (s.minis or ()))
+            not s.done and any(_mini_staged_input(m) for m in (s.minis or ()))
             for s in (queue.steps or ())
         )
     except Exception:  # noqa: BLE001 — a malformed queue must not break the panel's read model
@@ -1561,20 +1586,27 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     An ATS with no entry in `_CREATE_ACCOUNT_FORM` is refused BY NAME rather than driven on
     Workday's field names and left to fail as "could not fill 'Email Address'" — an unmapped
     platform and a moved field are different problems and only one of them is a stale recipe.
+
+    EVERY return carries `staged`: did anything land in the page? Only this function knows — half
+    of its refusals happen before a keystroke and half after — and the panel's reload remedy hangs
+    on the answer. It is tracked, never inferred from the reason: a caller reading `no_value` has
+    no way to tell the first field from the fourth.
     """
     import ats_accounts
+
+    staged = False   # nothing is in the page until a fill is dispatched
 
     username = creds.get("username") or ""
     password = creds.get("suggested_password") or ""
     if not username or not password:
-        return {"ok": False, "reason": "no_credentials",
+        return {"ok": False, "reason": "no_credentials", "staged": staged,
                 "detail": "No username or generated password available (is ATS_ACCOUNT_PW_SUFFIX "
                           "configured?). Cannot fill the form."}
 
     by_ats = _ACCOUNT_FORMS.get((leg or "").strip().lower()) or {}
     form = by_ats.get((ats or "").strip().lower())
     if form is None:
-        return {"ok": False, "reason": "no_form_recipe",
+        return {"ok": False, "reason": "no_form_recipe", "staged": staged,
                 "detail": f"No {leg} form mapped for {ats!r} (mapped: "
                           f"{', '.join(sorted(by_ats)) or 'none'}). Scan the form and add it to "
                           f"apply_fields + _ACCOUNT_FORMS — do not drive it blind."}
@@ -1587,7 +1619,7 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     if leg == "create_account":
         violations = apply_fields.check_password(ats, password)
         if violations:
-            return {"ok": False, "reason": "password_policy",
+            return {"ok": False, "reason": "password_policy", "staged": staged,
                     "detail": f"The derived password does not satisfy {ats}'s stated rules: "
                               f"{'; '.join(violations)}. Nothing was typed. Adjust "
                               f"ATS_ACCOUNT_PW_SUFFIX (it applies to every account) or set this "
@@ -1619,28 +1651,32 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
         if not value:
             # A blank identity is a missing .env value, not a field to leave empty on a real
             # application — say which one, and stop before submitting a half-formed profile.
-            return {"ok": False, "reason": "no_value",
+            return {"ok": False, "reason": "no_value", "staged": staged,
                     "detail": f"No value for {field!r} (source {source!r}) — set "
                               f"ATS_ACCOUNT_{source.upper()} in .env. Nothing was submitted."}
+        # Set BEFORE the await, not after: a fill that reports a bad outcome may still have put
+        # characters in the box, and the safe error here is claiming input we did not leave.
+        staged = True
         r = await _fill(field, value)
         if r.get("outcome") not in ("ok", "committed_unconfirmed"):
-            return {"ok": False, "reason": "fill_failed",
+            return {"ok": False, "reason": "fill_failed", "staged": staged,
                     "detail": f"Could not fill {field!r} ({r.get('outcome') or r.get('detail')})."}
 
     # SELECTS — a dropdown the form insists on before it will accept the rest.
     for field, source in form.get("selects", ()):
         value = values.get(source) or ""
         if not value:
-            return {"ok": False, "reason": "no_value",
+            return {"ok": False, "reason": "no_value", "staged": staged,
                     "detail": f"No value for the {field!r} dropdown (source {source!r}). Store it "
                               f"as an application answer first; nothing was submitted."}
         addr = apply_fields.addressing_for(ats, field)
+        staged = True
         res = await _capture_post("/execute", {
             "browser_url": browser_url, "tab_id": tab_id, "action_id": "select",
             "target_bbox": {}, "target_role": addr["role"], "target_name": addr["name"],
             "value": value, "driver": "humanized"})
         if res.get("outcome") not in ("ok", "committed_unconfirmed"):
-            return {"ok": False, "reason": "select_failed",
+            return {"ok": False, "reason": "select_failed", "staged": staged,
                     "detail": f"Could not set {field!r} to {value!r} "
                               f"({res.get('outcome') or res.get('detail')})."}
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
@@ -1649,12 +1685,13 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     # against a field somebody wrote down, never a checkbox swept up by a fill-everything pass.
     for field in form.get("confirms", ()):
         addr = apply_fields.addressing_for(ats, field)
+        staged = True
         res = await _capture_post("/execute", {
             "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
             "target_bbox": {}, "target_role": addr["role"], "target_name": addr["name"],
             "driver": "humanized"})
         if res.get("outcome") not in ("ok", "committed_unconfirmed"):
-            return {"ok": False, "reason": "confirm_failed",
+            return {"ok": False, "reason": "confirm_failed", "staged": staged,
                     "detail": f"Could not accept {field!r} "
                               f"({res.get('outcome') or res.get('detail')})."}
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
@@ -1662,7 +1699,7 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     submit_addr = apply_fields.addressing_for(ats, form["submit"])
     button = submit_addr["name"] or submit_addr["selector"]
     if not submit:
-        return {"ok": True, "submitted": False, "button": button,
+        return {"ok": True, "submitted": False, "button": button, "staged": staged,
                 "detail": f"Filled the create-account form. Confirm to click {button!r}."}
 
     click_payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
@@ -1675,10 +1712,10 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     click = await _capture_post("/execute", click_payload)
     await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
     if click.get("outcome") not in ("ok", "committed_unconfirmed"):
-        return {"ok": False, "reason": "submit_failed",
+        return {"ok": False, "reason": "submit_failed", "staged": staged,
                 "detail": f"Filled the form but could not click {button!r} "
                           f"({click.get('outcome') or click.get('detail')})."}
-    return {"ok": True, "submitted": True, "button": button,
+    return {"ok": True, "submitted": True, "button": button, "staged": staged,
             "detail": f"Submitted the create-account form ({button!r})."}
 
 
@@ -1740,7 +1777,10 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         step.record(_ACCOUNT_RUNG, aps.OK,
                     f"handoff leg: {company} {step.platform} account created by the operator"
                     + (", credential stored" if saved else ", CREDENTIAL NOT STORED"),
-                    initiator=body.initiator)
+                    initiator=body.initiator,
+                    # The OPERATOR typed this form, in their own browser, and it is already
+                    # submitted. Nothing of ours is staged in the page.
+                    staged=False)
         _save_queue(bb, queue)
         bb.world.pop("account_handoff", None)   # the handoff is resolved
         _persist(bb, ledger)
@@ -1782,7 +1822,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         if block and block.get("strength") == "active":
             step.record(_ACCOUNT_RUNG, aps.BLOCKED,
                         f"create leg: active {block.get('provider')} on signup",
-                        initiator=body.initiator)
+                        initiator=body.initiator,
+                        # We bail before `_drive_account_form`; not a keystroke was dispatched.
+                        staged=False)
             _save_queue(bb, queue); _persist(bb, ledger)
             return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
                          awaiting="operator_challenge",
@@ -1808,7 +1850,13 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                           submit=(body.mode == "auto"), extra=extra)
         if not drive.get("ok"):
             step.record(_ACCOUNT_RUNG, aps.FAILED, f"create leg: {drive.get('detail', '')}"[:200],
-                        initiator=body.initiator)
+                        initiator=body.initiator,
+                        # HALF of these refusals happen before a keystroke (no credential, no form
+                        # recipe, a password the site's own rules reject) and half after (a fill
+                        # that errored on field four). The driver tracked which; a missing answer
+                        # means an older driver, so assume it typed — over-protecting the page is
+                        # the recoverable mistake.
+                        staged=bool(drive.get("staged", True)))
             _save_queue(bb, queue); _persist(bb, ledger)
             obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
@@ -1819,7 +1867,10 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
             step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
                         f"create leg: filled the form, awaiting the operator's "
                         f"{drive.get('button') or 'submit'!r} click",
-                        initiator=body.initiator)
+                        initiator=body.initiator,
+                        # THE case the flag protects: a filled, unsubmitted credential form. A
+                        # reload here throws away the fill and the operator's review of it.
+                        staged=True)
             _save_queue(bb, queue); _persist(bb, ledger)
             obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
@@ -1838,7 +1889,11 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
             step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
                         "verify leg: signup needs an email/2FA verification code — a real gate, "
                         "escalated",
-                        initiator=body.initiator)
+                        initiator=body.initiator,
+                        # Not typed input — the form is already submitted — but a signup waiting on
+                        # a one-time code is a transaction in flight, and a reload is exactly how
+                        # you lose the half of it the site is holding. Protected deliberately.
+                        staged=True)
             _save_queue(bb, queue); _persist(bb, ledger)
             obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
@@ -1873,7 +1928,11 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                     ((f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
                       f"create leg: created the {company} {step.platform} account automatically")
                      + (", credential stored" if saved else ", CREDENTIAL NOT STORED")),
-                    initiator="auto")
+                    initiator="auto",
+                    # Through the wall: the site accepted the form and we are signed in. What we
+                    # typed lives on the site now, not in the page, so a reload costs nothing —
+                    # and this is the state an application sits in longest before the form rung.
+                    staged=False)
         bb.world.pop("account_handoff", None)
         _save_queue(bb, queue)
         bb.log("account_signin" if signing_in else "account_create",
@@ -1893,7 +1952,11 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
                 f"{action.get('leg')} leg: {company} {step.platform}, operator creates it "
                 f"(button {action.get('button')!r})",
-                initiator=body.initiator)
+                initiator=body.initiator,
+                # THE HANDOFF. This leg types NOTHING — it surfaces the credential on a card and
+                # waits. The form on screen is untouched, and saying otherwise is what withheld a
+                # reload from an 18-hour-old, verifiably empty SAP signup (session 21, 2026-07-28).
+                staged=False)
     _save_queue(bb, queue)
     handoff = {
         "job_id": step.job_id, "leg": action.get("leg"), "button": action.get("button"),

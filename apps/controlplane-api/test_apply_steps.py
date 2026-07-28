@@ -226,6 +226,30 @@ def test_the_queue_round_trips_through_its_json_shape():
     assert back.current().job_id == "indeed:a1"
 
 
+def test_whether_a_mini_step_staged_input_survives_the_round_trip():
+    """The panel's reload remedy is decided from a PERSISTED queue — a marker that lives only in
+    the request that wrote it decides nothing. Three states, and the third is the point: None means
+    UNSTATED, and it must come back as None rather than collapsing into False, because a reader
+    that cannot tell "typed nothing" from "did not say" will un-protect every mini-step written
+    before the field existed."""
+    q = _queue()
+    q.steps[0].record("account", aps.HUMAN_REQUIRED, "handoff", staged=False)
+    q.steps[0].record("account", aps.HUMAN_REQUIRED, "filled", staged=True)
+    q.steps[0].record("open_pane", aps.OK, "opened")
+
+    back = aps.Queue.from_dict(q.as_dict())
+    assert [m.staged for m in back.steps[0].minis] == [False, True, None]
+
+
+def test_a_mini_step_persisted_before_the_staged_field_still_loads():
+    """The rows already in the blackboards. `staged` is absent from every one of them."""
+    step = aps.ApplyStep.from_dict({
+        "job_id": "indeed:a1",
+        "minis": [{"rung": "account", "outcome": aps.HUMAN_REQUIRED, "detail": "d",
+                   "at": "2026-07-28T00:00:00+00:00", "initiator": "operator"}]})
+    assert step.minis[0].staged is None
+
+
 def test_from_dict_survives_an_empty_or_missing_queue():
     assert aps.Queue.from_dict(None).steps == []
     assert aps.Queue.from_dict({}).blocks_page() is False

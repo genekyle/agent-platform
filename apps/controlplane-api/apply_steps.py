@@ -125,10 +125,16 @@ class MiniStep:
     detail: str = ""
     at: str = field(default_factory=_utcnow)
     initiator: str = "operator"
+    #: Did THIS mini-step put input into the page? The rung alone cannot say: `account` types
+    #: credentials in "auto"/"fill" and types nothing at all in "handoff", and the two are
+    #: distinguishable only by prose in `detail` — which is not something a reader may depend on.
+    #: None means UNSTATED, which is every mini-step written before this field existed and every
+    #: rung whose answer is the same every time; readers fall back to judging by rung there.
+    staged: Optional[bool] = None
 
     def as_dict(self) -> dict[str, Any]:
         return {"rung": self.rung, "outcome": self.outcome, "detail": self.detail,
-                "at": self.at, "initiator": self.initiator}
+                "at": self.at, "initiator": self.initiator, "staged": self.staged}
 
 
 @dataclass
@@ -178,8 +184,9 @@ class ApplyStep:
         return None
 
     def record(self, rung: str, outcome: str, detail: str = "",
-               initiator: str = "operator") -> MiniStep:
-        mini = MiniStep(rung=rung, outcome=outcome, detail=detail, initiator=initiator)
+               initiator: str = "operator", staged: Optional[bool] = None) -> MiniStep:
+        mini = MiniStep(rung=rung, outcome=outcome, detail=detail, initiator=initiator,
+                        staged=staged)
         self.minis.append(mini)
         if self.status == STATUS_QUEUED:
             self.status = STATUS_OPEN
@@ -228,7 +235,11 @@ class ApplyStep:
         self.status = STATUS_QUEUED
         self.platform = None
         self.landing_state = None
-        self.record("reopened", OK, reason, initiator=initiator)
+        # `staged=False` because a reopened step has just had its rungs archived away: it is back
+        # at the top of the ladder with nothing of ours in any page. Left unstated it would read as
+        # a rung that typed (the fallback's default for anything not obviously read-only), and a
+        # step that has typed nothing must not suppress the panel's reload remedy.
+        self.record("reopened", OK, reason, initiator=initiator, staged=False)
 
     def as_dict(self) -> dict[str, Any]:
         return {"job_id": self.job_id, "title": self.title, "company": self.company,

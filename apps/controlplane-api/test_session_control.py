@@ -2116,6 +2116,10 @@ def test_account_handoff_surfaces_credentials_and_never_drives(monkeypatch):
     assert "create_account leg" in step.minis[-1].detail
     assert step.minis[-1].outcome == aps.HUMAN_REQUIRED
     assert step.needs_operator() is True         # paused for the operator
+    # ...and it says so structurally: the leg that drives nothing staged nothing. Asserted HERE,
+    # on the endpoint that writes it, because the rung id is the same one the auto path records
+    # and the two differ in the detail only by prose — which no reader may key off.
+    assert step.minis[-1].staged is False
 
 
 def test_the_password_is_never_written_to_the_event_log(monkeypatch):
@@ -2285,6 +2289,10 @@ def test_fill_mode_stops_before_the_outward_facing_submit(monkeypatch):
     assert "Create Account" not in clicked          # did NOT submit
     assert r["awaiting"] == "operator_account"
     assert "confirm" in r["last_step"]["detail"].lower()
+    # A filled, unsubmitted credential form is the case the unsaved-work flag exists for. Same
+    # rung id as the handoff that stages nothing — the mini-step is where they part.
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].rung == "account" and step.minis[-1].staged is True
 
 
 def test_a_captcha_on_signup_escalates_and_never_auto_solves(monkeypatch):
@@ -2648,6 +2656,61 @@ def test_a_half_filled_form_does_hold_unsaved_work(monkeypatch):
         _teardown()
     assert r["staleness"]["verdict"] == "continue"
     assert "withheld" in r["staleness"]["why"]
+
+
+# The SAME rung, both ways. `account` types credentials in "auto"/"fill" and types nothing at all
+# in "handoff", so no set of rung ids can separate them — and it may not be split into two rungs,
+# because the ladder settles rungs BY NAME (see _ACCOUNT_RUNG). The mini-step says which it was.
+def _stale_panel(monkeypatch, *minis):
+    """A session idle 14.5 hours whose open step has walked exactly `minis`."""
+    import time as _t
+    from datetime import datetime, timezone
+
+    bb = _at_start_line()
+    queue = aps.Queue(page=1)
+    queue.enqueue([{"job_id": "indeed:aaa", "title": "A Job"}])
+    for rung, staged in minis:
+        queue.steps[0].record(rung, aps.HUMAN_REQUIRED, "", staged=staged)
+    bb.world = dict(bb.world or {})
+    bb.world["apply_queue"] = queue.as_dict()
+    bb.events.clear()
+    bb.log("review", "page 1")
+    bb.events[-1].ts = datetime.fromtimestamp(_t.time() - 14.5 * 3600,
+                                              tz=timezone.utc).isoformat()
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        return client.get("/api/session_control/1").json()["staleness"]
+    finally:
+        _teardown()
+
+
+def test_an_account_handoff_is_not_unsaved_work(monkeypatch):
+    """Found live on session 21 (Teradyne / SuccessFactors, 2026-07-28): 18.4 hours idle, red, and
+    the SAP signup form verifiably EMPTY on the screenshot — yet the panel read "a reload cures
+    this, but the page holds unsaved work, so refresh is withheld". The handoff leg surfaces the
+    credential on a card and waits; it puts nothing in the page. The refresh was being withheld to
+    protect nothing, and a manual reload fixed the session."""
+    s = _stale_panel(monkeypatch, ("open_pane", None), ("account", False))
+    assert s["verdict"] == "refresh", "the handoff typed nothing — the reload is free"
+    assert "withheld" not in s["why"]
+
+
+def test_a_filled_account_form_is_still_unsaved_work(monkeypatch):
+    """The other half, and the reason the rung is not simply read-only: in auto/fill the same rung
+    puts real credentials in the boxes, and a reload throws them away."""
+    s = _stale_panel(monkeypatch, ("open_pane", None), ("account", True))
+    assert s["verdict"] == "continue"
+    assert "withheld" in s["why"]
+
+
+def test_a_mini_step_that_says_nothing_is_still_judged_by_its_rung(monkeypatch):
+    """Backwards compatibility, which here means every queue already persisted in a blackboard:
+    those mini-steps predate the field and carry no answer. They must keep the rung's verdict
+    rather than defaulting to "typed nothing", which would silently un-protect real work."""
+    assert _stale_panel(monkeypatch, ("fill_form", None))["verdict"] == "continue"
+    assert _stale_panel(monkeypatch, ("open_pane", None))["verdict"] == "refresh"
 
 
 # --- the selection is a STEP ------------------------------------------------------------
