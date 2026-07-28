@@ -1245,6 +1245,12 @@ class ApplyAccountBody(BaseModel):
     #   "handoff" — surface the credentials for the operator to type themselves
     mode: str = "auto"
     mark_created: bool = False     # completes the "handoff" leg once the operator has made it
+    # What the operator ACTUALLY signed up with, when they made the account themselves and departed
+    # from the suggested pair (a site rule we had not read, a password already in use). Recorded
+    # into the vault by the mark_created leg. Omitted, that leg stores the derived pair the handoff
+    # card showed them — which is right far more often than not, and wrong silently if we assumed it.
+    username: str = ""
+    password: str = ""
 
 
 #: THE RUNG THIS ENDPOINT WALKS. It must be the ladder's own id (`apply_steps.PREFIX`), because a
@@ -1493,8 +1499,24 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         res = ats_accounts.mark_created(company, step.platform)
         if not res.get("ok"):
             raise HTTPException(status_code=409, detail=res.get("detail", "could not mark created"))
+        # Store the credential on THIS leg too. An account the operator typed themselves is no
+        # more recoverable from the derivation than one we typed — it is the same two drifting
+        # inputs — and this is the leg that runs whenever the create is human-required, which is
+        # every captcha, every verification wall, and every account the agent may not make itself.
+        # Leaving it unstored here would mean the accounts most likely to need a password later are
+        # exactly the ones that never got one written down.
+        #
+        # `body.credentials` is what the operator ACTUALLY used, for the case where they departed
+        # from the suggestion (a site-specific rule, a password already in use). Absent, we record
+        # the derived pair the handoff card showed them.
+        used_pw = body.password or (ats_accounts.suggested_credentials(company, step.platform)
+                                    .get("suggested_password") or "")
+        used_user = body.username or ats_accounts.default_username()
+        stored = ats_accounts.record_credentials(company, step.platform, used_user, used_pw)
+        saved = bool(stored.get("ok"))
         step.record(_ACCOUNT_RUNG, aps.OK,
-                    f"handoff leg: {company} {step.platform} account created by the operator",
+                    f"handoff leg: {company} {step.platform} account created by the operator"
+                    + (", credential stored" if saved else ", CREDENTIAL NOT STORED"),
                     initiator=body.initiator)
         _save_queue(bb, queue)
         bb.world.pop("account_handoff", None)   # the handoff is resolved
@@ -1502,8 +1524,12 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         obs = await _observe(_session_browser_url(session), bb.search_state.query)
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                           "credentials_stored": saved,
                            "detail": f"{company} account marked created. The application can "
-                                     f"continue — orient, then work the next rung."})
+                                     f"continue — orient, then work the next rung."
+                                     + ("" if saved else
+                                        f" CREDENTIAL NOT STORED ({stored.get('detail')}) — save "
+                                        f"it in the Accounts panel before this session ends.")})
 
     # Register the account record; next_account_action decides the leg (create vs sign-in) and
     # derives the credentials.

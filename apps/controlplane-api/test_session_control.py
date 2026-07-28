@@ -3780,3 +3780,60 @@ def test_a_credential_we_failed_to_store_is_as_loud_as_a_failed_step(monkeypatch
     # erase the fact that the login now exists on the site.
     assert accounts.get_account(
         ats_accounts.ats_account_id("Teradyne", "successfactors"))["status"] == "active"
+
+
+def test_an_operator_created_account_stores_its_credential_too(monkeypatch):
+    """The handoff leg is the one that runs whenever the create is human-required — every captcha,
+    every verification wall, every account the agent may not make itself. An account typed by hand
+    is no more recoverable from the derivation than one we typed, so leaving this leg unstored
+    would mean the accounts most likely to need a password later are exactly the ones without one."""
+    import secrets_vault
+
+    import ats_accounts
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"}},
+             blackboard=bb)
+    try:
+        out = client.post("/api/session_control/1/apply_account",
+                          json={"mark_created": True}).json()
+    finally:
+        _teardown()
+
+    assert out["last_step"]["credentials_stored"] is True
+    # The derived pair the handoff card showed them, since they did not say otherwise.
+    assert secrets_vault.get_secret(aid) == {"username": "operator@example.com",
+                                             "password": "Tabcde1!"}
+    assert accounts.get_account(aid)["status"] == "active"
+
+
+def test_the_operator_can_record_a_password_they_chose_themselves(monkeypatch):
+    """A site rule we had not read, or a password already in use, and the suggestion is not what
+    is on the account. Storing the derived pair anyway would be a confident wrong answer — the
+    exact failure this whole change exists to stop."""
+    import secrets_vault
+
+    import ats_accounts
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"}},
+             blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_account",
+                    json={"mark_created": True, "username": "someone.else@example.com",
+                          "password": "WhatTheyActuallyUsed1!"}).json()
+    finally:
+        _teardown()
+
+    assert secrets_vault.get_secret(aid) == {"username": "someone.else@example.com",
+                                             "password": "WhatTheyActuallyUsed1!"}
