@@ -417,6 +417,82 @@ def known_ats() -> list[str]:
     return sorted(_BY_ATS)
 
 
+# --- password policies ------------------------------------------------------------------
+#: What each ATS will ACCEPT as a password, as data rather than prose.
+#:
+#: These rules were already written down — three times, in `ats_registry`, in `apply_recipe`'s
+#: lessons, and in the `password` field's own note — and no code read any of them. The
+#: credential we type is DERIVED (company initials + a shared suffix), so whether it satisfies
+#: a given ATS is a property of the COMPANY NAME, not of anything the operator chose: Teradyne
+#: has one initial, so its password is exactly 8 characters, which is SAP's floor. A company
+#: whose name yields a single initial and a shorter suffix produces a password that is rejected
+#: at submit — and a rejected password is not a free retry. It costs a submit, and leaves a
+#: half-made account that the next run has no way to tell from a made one.
+#:
+#: So the check runs BEFORE anything is typed. Absent = no stated rules; that means "we have not
+#: read this form's rules", not "anything goes", and `check_password` says so by returning no
+#: violations while `has_policy` stays False.
+PASSWORD_POLICIES: dict[str, dict[str, Any]] = {
+    # Stated on the live create-account form (career41.sapsf.com, Teradyne tenant, 2026-07-28).
+    "successfactors": {
+        "min_length": 8, "max_length": 18,
+        "require_upper": True, "require_lower": True, "require_digit_or_punct": True,
+        "no_whitespace": True, "ascii_only": True,
+        "source": "stated on the form: 8-18 characters, at least one upper and one lower, at "
+                  "least one number or punctuation, no spaces or unicode",
+    },
+    # WORKDAY_LESSONS: min 8, >=1 alphabetic, >=1 lower, >=1 upper, >=1 numeric, >=1 special.
+    "workday": {
+        "min_length": 8,
+        "require_upper": True, "require_lower": True,
+        "require_digit": True, "require_punct": True,
+        "no_whitespace": True,
+        "source": "WORKDAY_LESSONS password_rules",
+    },
+}
+
+
+def has_policy(ats: str) -> bool:
+    """Whether we have actually read this ATS's stated password rules. Distinct from 'the
+    password passes': an unread policy must not read as a clean bill of health."""
+    return (ats or "").strip().lower() in PASSWORD_POLICIES
+
+
+def check_password(ats: str, password: str) -> list[str]:
+    """Every way `password` violates this ATS's stated rules, in the form's own terms.
+
+    Returns ALL violations rather than the first, because the caller's job is to tell a human
+    what to change about the derivation, and one at a time turns that into a guessing game.
+    The password itself is never included in a message — these strings end up in an operator-
+    facing detail and in a mini-step, and §4 does not have a "but it was rejected" exemption.
+    """
+    p = PASSWORD_POLICIES.get((ats or "").strip().lower())
+    if not p:
+        return []
+    pw = password or ""
+    bad: list[str] = []
+    if len(pw) < p.get("min_length", 0):
+        bad.append(f"shorter than the {p['min_length']}-character minimum (it is {len(pw)})")
+    if p.get("max_length") and len(pw) > p["max_length"]:
+        bad.append(f"longer than the {p['max_length']}-character maximum (it is {len(pw)})")
+    if p.get("require_upper") and not any(c.isupper() for c in pw):
+        bad.append("no uppercase letter")
+    if p.get("require_lower") and not any(c.islower() for c in pw):
+        bad.append("no lowercase letter")
+    if p.get("require_digit") and not any(c.isdigit() for c in pw):
+        bad.append("no digit")
+    if p.get("require_punct") and not any(not c.isalnum() and not c.isspace() for c in pw):
+        bad.append("no punctuation character")
+    if p.get("require_digit_or_punct") and not any(
+            c.isdigit() or (not c.isalnum() and not c.isspace()) for c in pw):
+        bad.append("no number or punctuation character")
+    if p.get("no_whitespace") and any(c.isspace() for c in pw):
+        bad.append("contains whitespace")
+    if p.get("ascii_only") and not pw.isascii():
+        bad.append("contains non-ASCII characters")
+    return bad
+
+
 def addressing_for(ats: str, field: str) -> dict[str, Any]:
     """Just the addressing half — what a tier-2 protocol endpoint needs passed to it.
 

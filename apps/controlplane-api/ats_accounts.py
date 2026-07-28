@@ -16,11 +16,19 @@ of each word in the company name, uppercased — "U.S. Bank National Association
 by a shared suffix kept in the gitignored .env (ATS_ACCOUNT_PW_SUFFIX). derive_password() computes
 it on demand so the operator can SEE the exact credentials at the create-account step.
 
-IMPORTANT — the boundary: this module GENERATES + ORGANIZES credentials and can drive the flow up to
-the signup/login form. It does NOT (and the agent does not) type a password into a site or submit an
-account creation — that one step is the operator's (the "pause at the creation point"). The account
-starts `status="pending"` (registered, not yet created) and the operator flips it to active once the
-login exists.
+IMPORTANT — the boundary, as the operator drew it (2026-07-24): account creation IS automated. This
+is their own account, for their own job search, on their own machine. What holds are the REAL
+external gates and only those — a CAPTCHA (never auto-solved, on any form) and an email/2FA
+verification code (not ours to fabricate). The earlier "the agent never types a password, the
+operator creates every account by hand" was MY caution hardcoded as their architecture, and it is
+gone; `session_control.apply_account` defaults to `mode="auto"`. An account starts `status="pending"`
+(registered, not yet created) and becomes `active` when a create run actually lands.
+
+A created account's credential is also STORED, not just derived. Derivation (initials + suffix) is
+how we CHOOSE a password; it is not a reliable way to recover one, because it depends on
+ATS_ACCOUNT_PW_SUFFIX and on a company string that arrives from a job board and can come back
+spelled differently. The site remembers what we typed, so we have to as well — `record_credentials`
+puts the pair in the encrypted vault at the moment it is proven.
 """
 
 from __future__ import annotations
@@ -165,6 +173,31 @@ def next_account_action(company: str, ats_id: str) -> dict[str, Any]:
         "next": "hand to the apply spine (e.g. WORKDAY_APPLY_RECIPE) once authenticated",
         "note": "One loop, run by the operator/Account Manager — the agent never enters the creds.",
     }
+
+
+def record_credentials(company: str, ats_id: str, username: str, password: str) -> dict[str, Any]:
+    """Store the credential this company↔ATS account was ACTUALLY created (or signed in) with,
+    encrypted in the secrets vault.
+
+    Why store what we can derive: `derive_password` is how we CHOOSE a password, and it is not a
+    dependable way to RECOVER one. It is a pure function of two inputs that both drift —
+    ATS_ACCOUNT_PW_SUFFIX is one operator edit away from changing every account's answer at once,
+    and the company name comes from a job board, so "Teradyne" today can be "Teradyne, Inc."
+    tomorrow and derive a different password for the same login. Either way the derivation keeps
+    returning something plausible; it is the site that disagrees, at a sign-in, weeks later, with
+    nothing to say except that the password is wrong.
+
+    So the pair is written down at the one moment it is known to be true: the site just accepted it.
+    Called on the sign-in leg too — that is the same proof arriving a second time, and it repairs
+    accounts made before this existed.
+    """
+    aid = ats_account_id(company, ats_id)
+    if not accounts_mod.get_account(aid):
+        return {"ok": False, "detail": f"no account {aid}"}
+    if not (username and password):
+        return {"ok": False, "detail": "nothing to store: username and password are both required"}
+    rec = accounts_mod.set_credentials(aid, username, password)
+    return {"ok": True, "account_id": aid, "account": rec}
 
 
 def mark_created(company: str, ats_id: str) -> dict[str, Any]:

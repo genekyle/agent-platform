@@ -52,10 +52,42 @@ def _isolate_accounts(tmp_path, monkeypatch):
     # Scoped to those prefixes rather than blanking the reader: the per-employer ATS accounts
     # DERIVE their password from `ATS_ACCOUNT_PW_SUFFIX`, read through the same function, so a
     # blanket stub silently un-credentialed the account rungs too.
+    # The DOMAIN logins are hidden and the ATS ones are FAKED — the reader never reaches the real
+    # .env either way. The domain half was already here: on the machine this is developed on,
+    # `has_creds` was true and the auth rung drove a real login instead of taking the
+    # no-credential path most of these tests are about.
+    #
+    # The ATS half used to fall through to the operator's actual ATS_ACCOUNT_* values, which is
+    # the same mistake pointed the other way: seven tests here passed only on a checkout that HAS
+    # that file, and a worktree — which never does, because it is gitignored — opened on a red
+    # suite it had not caused. That is worse than a flaky test. A session either spends an hour
+    # bisecting it (2026-07-27) or learns to read failures as background noise, and the second
+    # habit is the one that lets a real regression through. The values below are fixed, so the
+    # derivation they feed is checkable: "Teradyne" has ONE initial, so the password is suffix + 1
+    # = exactly 8 characters, which is SAP's stated floor and the boundary the policy check exists
+    # for. A test whose result depends on the developer's .env is not a test.
+    _fake_env = {"ATS_ACCOUNT_USERNAME": "operator@example.com",
+                 "ATS_ACCOUNT_PW_SUFFIX": "abcde1!",
+                 "ATS_ACCOUNT_FIRST_NAME": "Gene",
+                 "ATS_ACCOUNT_LAST_NAME": "Magsipoc"}
     _real_env = accounts._read_env_value
     _hidden = ("INDEED_", "LINKEDIN_", "FB_", "GMAIL_")
-    monkeypatch.setattr(accounts, "_read_env_value",
-                        lambda key: "" if key.startswith(_hidden) else _real_env(key))
+
+    def _env(key: str) -> str:
+        if key in _fake_env:
+            return _fake_env[key]
+        return "" if key.startswith(_hidden) else _real_env(key)
+
+    monkeypatch.setattr(accounts, "_read_env_value", _env)
+    # The SECRETS VAULT, for the same reason one file up. The account rung now stores the
+    # credential it created an account with, so these tests write secrets — and without this they
+    # write them into the operator's real lockbox under fake company names, encrypted with the real
+    # key. Redirecting only the registry would have made that pollution invisible rather than absent.
+    import secrets_vault
+    monkeypatch.setenv("AGENT_VAULT_KEY_PATH", str(tmp_path / "vault.key"))
+    monkeypatch.setenv("VAULT_KEY_PROVIDER", "local")
+    monkeypatch.setattr(secrets_vault, "_vault_path", lambda: tmp_path / "secrets_vault.json")
+    secrets_vault.reset_provider_cache()
 
 SEARCH_URL = "https://www.indeed.com/jobs?q=reporting+analyst&l=Nashua%2C+NH"
 
@@ -3644,3 +3676,107 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
     # the marketing opt-ins are never addressed at all
     assert not any(n and ("Notification:" in n or "Hear more" in n) for n in names)
     assert names[-1] == "Create Account"                       # submit is last
+
+
+def _sap_step(bb):
+    """A Teradyne/SuccessFactors step, classified and standing at the account wall."""
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].platform = "successfactors"
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://career41.sapsf.com/careers"}
+    return bb
+
+
+class _Answer:
+    def __init__(self, k, v): self.answer_key, self.value = k, v
+
+
+def test_a_password_that_breaks_the_ats_rules_is_refused_before_a_keystroke(monkeypatch):
+    """A rejected password is not a free retry: it costs a submit and leaves a half-made account
+    that reads, from the outside, exactly like a made one. So the check runs before anything is
+    typed — and the refusal never quotes the password."""
+    acted = []
+    monkeypatch.setattr(accounts, "_read_env_value",
+                        lambda key: "ab1!" if key == "ATS_ACCOUNT_PW_SUFFIX" else "")
+
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": lambda p: acted.append(p.get("target_name")) or {"outcome": "ok"},
+              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert acted == []                                     # nothing was typed at all
+    detail = out["last_step"]["detail"]
+    assert "shorter than the 8-character minimum" in detail
+    assert "Tab1!" not in detail                           # the credential is never quoted
+    assert accounts.get_account(
+        ats_accounts.ats_account_id("Teradyne", "successfactors"))["status"] == "pending"
+
+
+def test_creating_an_account_stores_the_credential_it_used(monkeypatch):
+    """Derivation is how we CHOOSE a password, not how we recover one: the shared suffix and the
+    company string both drift, and both keep returning a plausible wrong answer when they do. So
+    the pair is written to the vault at the moment the site accepts it."""
+    import ats_accounts
+    import secrets_vault
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    assert not secrets_vault.has_secret(aid)
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert out["last_step"]["credentials_stored"] is True
+    assert secrets_vault.get_secret(aid) == {"username": "operator@example.com",
+                                             "password": "Tabcde1!"}
+    assert accounts.get_account(aid)["status"] == "active"
+    # And the registry itself still holds no secret — only the vault does.
+    assert "Tabcde1!" not in accounts._path().read_text()
+
+
+def test_a_credential_we_failed_to_store_is_as_loud_as_a_failed_step(monkeypatch):
+    """The account is real either way. The one that is unrecoverable is the quiet one."""
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    monkeypatch.setattr(ats_accounts, "record_credentials",
+                        lambda *a, **k: {"ok": False, "detail": "vault key unreadable"})
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert out["last_step"]["credentials_stored"] is False
+    assert "CREDENTIAL NOT STORED" in out["last_step"]["detail"]
+    assert "vault key unreadable" in out["last_step"]["detail"]
+    # The account was still made, and the record still says so — a storage failure must not
+    # erase the fact that the login now exists on the site.
+    assert accounts.get_account(
+        ats_accounts.ats_account_id("Teradyne", "successfactors"))["status"] == "active"

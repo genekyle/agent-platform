@@ -105,3 +105,58 @@ def test_addressing_for_returns_what_a_tier2_endpoint_needs():
     assert set(a) == {"addressed_by", "selector", "role", "name", "widget_type", "commit"}
     # No answer_key/vocabulary: those are the INTENT tier's business, not the protocol's.
     assert "vocabulary" not in a
+
+
+# --- password policies -----------------------------------------------------------------
+def test_sap_password_rules_are_checked_as_data_not_prose():
+    """SAP states five rules on its create-account form. They lived as prose in three files and
+    nothing read any of them — so a derived password that violated one was discovered by SAP, at
+    submit, after an account was half-made."""
+    ok = apply_fields.check_password("successfactors", "Tabcd12!")
+    assert ok == []
+    assert apply_fields.check_password("successfactors", "Tabc1!") == [
+        "shorter than the 8-character minimum (it is 6)"]
+    assert apply_fields.check_password("successfactors", "T" + "abcdefg1" * 3) == [
+        "longer than the 18-character maximum (it is 25)"]
+    assert "no uppercase letter" in apply_fields.check_password("successfactors", "abcdefg1")
+    assert "no lowercase letter" in apply_fields.check_password("successfactors", "ABCDEFG1")
+    assert "no number or punctuation character" in apply_fields.check_password(
+        "successfactors", "Abcdefgh")
+    assert "contains whitespace" in apply_fields.check_password("successfactors", "Ab cdef1")
+    assert "contains non-ASCII characters" in apply_fields.check_password(
+        "successfactors", "Abcdefg1é")
+
+
+def test_every_violation_is_reported_not_just_the_first():
+    # The caller's job is to tell a human what to change about the derivation. One at a time
+    # turns that into a guessing game.
+    bad = apply_fields.check_password("successfactors", "abc")
+    assert len(bad) >= 3
+
+
+def test_a_violation_message_never_quotes_the_password():
+    # These strings reach an operator-facing detail and a mini-step. §4 has no "but it was
+    # rejected" exemption.
+    secret = "hunter2hunter2hunter2hunter2"
+    for msg in apply_fields.check_password("successfactors", secret):
+        assert secret not in msg
+
+
+def test_teradyne_is_the_boundary_case_the_check_exists_for():
+    # The password is INITIALS + a shared suffix, so its length is a property of the COMPANY
+    # NAME. "Teradyne" yields one initial, so the whole credential is suffix + 1 — and SAP's
+    # floor is 8. One character shorter anywhere and this account cannot be made.
+    assert apply_fields.check_password("successfactors", "T" + "abcde1!") == []
+    assert apply_fields.check_password("successfactors", "T" + "abcd1!") != []
+
+
+def test_an_unread_policy_is_not_a_clean_bill_of_health():
+    # Absent means "we have not read this form's rules", not "anything goes" — and the two must
+    # be distinguishable, or an unchecked ATS looks exactly like a checked one.
+    assert apply_fields.check_password("greenhouse", "x") == []
+    assert apply_fields.has_policy("greenhouse") is False
+    assert apply_fields.has_policy("successfactors") is True
+
+
+def test_every_policy_names_an_ats_we_actually_have_fields_for():
+    assert set(apply_fields.PASSWORD_POLICIES) <= set(known_ats())

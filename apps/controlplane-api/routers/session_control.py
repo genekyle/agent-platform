@@ -1350,6 +1350,20 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
                           f"{', '.join(sorted(by_ats)) or 'none'}). Scan the form and add it to "
                           f"apply_fields + _ACCOUNT_FORMS — do not drive it blind."}
 
+    # Does the password we are about to type satisfy the rules this ATS states? Checked BEFORE a
+    # keystroke, and only on the CREATE leg — on sign-in the password is whatever the account was
+    # made with, and refusing to type it because a policy has since been read differently would
+    # lock us out of our own account. A rejected password costs a submit and leaves a half-made
+    # account that reads, from the outside, exactly like a made one.
+    if leg == "create_account":
+        violations = apply_fields.check_password(ats, password)
+        if violations:
+            return {"ok": False, "reason": "password_policy",
+                    "detail": f"The derived password does not satisfy {ats}'s stated rules: "
+                              f"{'; '.join(violations)}. Nothing was typed. Adjust "
+                              f"ATS_ACCOUNT_PW_SUFFIX (it applies to every account) or set this "
+                              f"account's password by hand in the Accounts panel."}
+
     values = {"username": username, "password": password,
               "first_name": ats_accounts.default_first_name(),
               "last_name": ats_accounts.default_last_name()}
@@ -1576,26 +1590,46 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                          "(a Gmail errand we can automate next), then continue."})
 
         signing_in = action.get("leg") == "sign_in"
+        # STORE THE CREDENTIAL, at the one moment it is proven: the site just took it. Derivation
+        # is how we chose this password, not a dependable way to recover it — the shared suffix and
+        # the company string both drift, and both keep returning a plausible wrong answer when they
+        # do. Stored before `mark_created` so an account can never be marked usable while its
+        # credential exists nowhere but in this request. If the vault write fails the account still
+        # exists on the site, so that fact is still recorded — the failure rides along in the detail
+        # rather than being swallowed or being allowed to erase what happened.
+        stored = ats_accounts.record_credentials(company, step.platform,
+                                                 creds.get("username") or "",
+                                                 creds.get("suggested_password") or "")
         if not signing_in:
             # Only a CREATE makes the account exist. Signing in must not re-stamp that — the
             # lifecycle flag is what tells the next session which leg is due.
             ats_accounts.mark_created(company, step.platform)
+        saved = bool(stored.get("ok"))
+        # A credential we did not manage to store is worth as much noise as a step that failed —
+        # the account is real either way, and the one that is unrecoverable is the quiet one.
+        vault_note = ("" if saved else
+                      f" CREDENTIAL NOT STORED ({stored.get('detail')}) — save it in the Accounts "
+                      f"panel before this session ends.")
         step.record(_ACCOUNT_RUNG, aps.OK,
-                    (f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
-                     f"create leg: created the {company} {step.platform} account automatically"),
+                    ((f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
+                      f"create leg: created the {company} {step.platform} account automatically")
+                     + (", credential stored" if saved else ", CREDENTIAL NOT STORED")),
                     initiator="auto")
         bb.world.pop("account_handoff", None)
         _save_queue(bb, queue)
         bb.log("account_signin" if signing_in else "account_create",
                f"{company} {step.platform}: "
-               + ("signed in automatically" if signing_in else "account created automatically"))
+               + ("signed in automatically" if signing_in else "account created automatically")
+               + (" (credential stored in the vault)" if saved else " (CREDENTIAL NOT STORED)"))
         _persist(bb, ledger)
         obs2 = await _observe(browser_url, bb.search_state.query)
         return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                           "credentials_stored": saved,
                            "detail": (f"Signed in to {company} automatically. " if signing_in else
                                       f"Created the {company} account automatically. ")
-                                     + "The application can continue — orient, then the form."})
+                                     + "The application can continue — orient, then the form."
+                                     + vault_note})
 
     step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
                 f"{action.get('leg')} leg: {company} {step.platform}, operator creates it "
