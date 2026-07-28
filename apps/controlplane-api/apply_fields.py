@@ -348,20 +348,41 @@ SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
     # REQUIRED consent. The operator's stored consents_ok includes privacy_policy, which is what
     # this is; it is still recorded as its own field so the acceptance is deliberate and visible
     # rather than a checkbox swept up by a fill-everything pass.
+    #
+    # NOT VERIFIED TO ACCEPT IN ONE CLICK. On the live page it renders as an underlined LINK
+    # ("Read and accept the data privacy statement.") whose AX role is button, and SAP names it
+    # 'Read AND ACCEPT' — which reads like it opens a statement to be read and accepted, not like a
+    # toggle. Nobody has clicked it: accepting a data-privacy agreement is the operator's to give,
+    # so the create leg stops before it. If it does open a modal, `confirms` clicking it once will
+    # leave that modal open and the submit will fail — treat that as expected until someone
+    # watches it happen and writes down what they saw.
     "terms": _f(ats="successfactors", role="button",
                 name="Terms of Use Read and accept the data privacy statement.",
                 widget_type=WidgetType.CHECKBOX_GROUP,
-                note="REQUIRED. Rendered as a button, not a checkbox."),
-    # MARKETING, both default-off. Named here so they are refused BY NAME rather than skipped by
-    # luck — the same reason Workday's honeypot is in this table.
-    "opt_in_job_notifications": _f(ats="successfactors", role="checkbox", name="Notification:",
+                note="REQUIRED. Renders as a LINK; AX calls it a button. Whether one click "
+                     "accepts, or opens a modal that must then be accepted, is UNVERIFIED "
+                     "(id fbclc_dpcsId)."),
+    # MARKETING — and they arrive CHECKED. This said "both default-off" until 2026-07-28, when the
+    # live form was actually looked at: both boxes are ticked on first render. That made the whole
+    # protection backwards. The design here was "a field this driver never names is one it can
+    # never tick by accident" — true, and useless, because the danger was never that we would tick
+    # them. It was that SAP already had. Omitting them meant CONSENTING by default, against the
+    # operator's stored marketing_contact_consent=No, and nothing would ever have said so: the
+    # account gets made, the application goes through, and the marketing email starts arriving.
+    #
+    # So they are REFUSED ACTIVELY now (_ACCOUNT_FORMS "refusals"), driven through /check_group with
+    # an empty value set, which unticks by click and re-reads the DOM to confirm. Addressed by
+    # SELECTOR because that is what /check_group takes, and because the accessible name of the
+    # first one is "Notification:" — the label of the row, not of the control.
+    "opt_in_job_notifications": _f(ats="successfactors", selector="#fbclc_emailEnabled",
                                    widget_type=WidgetType.CHECKBOX_GROUP, optional=True,
                                    note="MARKETING — 'Receive new job posting notifications'. "
-                                        "Leave OFF (marketing_contact_consent=No)."),
-    "opt_in_career_news": _f(ats="successfactors", role="checkbox",
-                             name="Hear more about career opportunities",
+                                        "ARRIVES CHECKED; must be actively unticked "
+                                        "(marketing_contact_consent=No)."),
+    "opt_in_career_news": _f(ats="successfactors", selector="#fbclc_campaignEmailEnabled",
                              widget_type=WidgetType.CHECKBOX_GROUP, optional=True,
-                             note="MARKETING — leave OFF."),
+                             note="MARKETING — 'Hear more about career opportunities'. ARRIVES "
+                                  "CHECKED; must be actively unticked."),
     "create_account_submit": _f(ats="successfactors", role="button", name="Create Account",
                                 widget_type=WidgetType.UNKNOWN),
     # The sign-in leg, on the gate that precedes this form.

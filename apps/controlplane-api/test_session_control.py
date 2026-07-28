@@ -3928,3 +3928,61 @@ def test_the_account_records_where_the_login_actually_lives(monkeypatch):
     rec = accounts.get_account(ats_accounts.ats_account_id("Teradyne", "successfactors"))
     assert "sapsf.com" in rec["login_url"]
     assert "jobs.teradyne.com" not in rec["login_url"]
+
+
+def test_an_optin_that_arrives_checked_is_switched_off_not_merely_left_alone(monkeypatch):
+    """SAP's two marketing boxes render CHECKED. The old protection was to name them and never
+    touch them — which protects nothing, because the danger was never that we would tick them. It
+    was that the site already had. Leaving them alone consents by default, against the operator's
+    stored marketing_contact_consent=No, and says nothing about it."""
+    calls = []
+
+    def _check_group(payload):
+        calls.append((payload.get("selector"), tuple(payload.get("values") or ())))
+        return {"ok": True, "detail": "checked [] (verified)"}
+
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              "/check_group": _check_group,
+              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    # Both boxes addressed, both set to the EMPTY set — /check_group unticks and re-reads to
+    # confirm, because a refusal we cannot verify is not a refusal.
+    assert ("#fbclc_emailEnabled", ()) in calls
+    assert ("#fbclc_campaignEmailEnabled", ()) in calls
+
+
+def test_a_refusal_we_could_not_make_stops_the_submit(monkeypatch):
+    """Consenting to marketing on someone's behalf is not a best-effort matter."""
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    clicked = []
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": lambda p: clicked.append(p.get("target_name")) or {"outcome": "ok"},
+              "/check_group": {"ok": False, "code": "not_staged"},
+              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert "Create Account" not in clicked            # never submitted
+    assert "would opt you in" in out["last_step"]["detail"]
+    assert accounts.get_account(
+        ats_accounts.ats_account_id("Teradyne", "successfactors"))["status"] == "pending"

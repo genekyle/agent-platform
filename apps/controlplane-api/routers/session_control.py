@@ -1555,6 +1555,9 @@ _ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
             # The two MARKETING opt-ins on the same page are deliberately absent from every list
             # here: a field this driver never names is one it can never tick by accident.
             "selects": (("country", "country"),),
+            # Both arrive CHECKED on the live form — see the refusals loop. Naming them so they
+            # are never touched was the old protection, and it was pointed the wrong way.
+            "refusals": ("opt_in_job_notifications", "opt_in_career_news"),
             "confirms": ("terms",),
             "submit": "create_account_submit",
         },
@@ -1679,6 +1682,32 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
             return {"ok": False, "reason": "select_failed", "staged": staged,
                     "detail": f"Could not set {field!r} to {value!r} "
                               f"({res.get('outcome') or res.get('detail')})."}
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    # REFUSALS — opt-ins that arrive ALREADY ON, unticked before the form is submitted.
+    #
+    # This exists because naming a field so we never touch it protects nothing when the site has
+    # already ticked it. SAP's two marketing boxes were recorded as "default-off" and simply left
+    # out of every list; on the live form (2026-07-28) both render CHECKED, so leaving them alone
+    # meant consenting by default — against the operator's stored marketing_contact_consent=No,
+    # and silently: the account is made, the application goes through, and the only symptom is
+    # marketing email arriving weeks later with nothing to trace it to.
+    #
+    # Driven through /check_group with an EMPTY value set, which unticks by click (so the page's
+    # own handlers fire) and then RE-READS the DOM to confirm — a refusal we cannot verify is not
+    # a refusal. A failure here stops the submit: consenting to marketing on someone's behalf is
+    # not a thing to do on a best-effort basis.
+    for field in form.get("refusals", ()):
+        addr = apply_fields.addressing_for(ats, field)
+        staged = True
+        res = await _capture_post("/check_group", {
+            "browser_url": browser_url, "tab_id": tab_id,
+            "selector": addr["selector"], "values": []})
+        if not res.get("ok"):
+            return {"ok": False, "reason": "refusal_failed", "staged": staged,
+                    "detail": f"Could not switch OFF {field!r} "
+                              f"({res.get('code') or res.get('detail')}). It arrives checked, so "
+                              f"submitting now would opt you in — nothing was submitted."}
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
     # CONFIRMS — required consents, clicked BY NAME so an acceptance is always a deliberate act
