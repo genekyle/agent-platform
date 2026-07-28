@@ -151,3 +151,50 @@ def test_ensure_account_does_not_undo_mark_created(monkeypatch):
     ats_accounts.ensure_account("Joslin Diabetes Center", "icims", login_url="https://x/apply")
     assert accounts.get_account(aid)["status"] == "active"      # survived the re-register
     assert ats_accounts.next_account_action("Joslin Diabetes Center", "icims")["leg"] == "sign_in"
+
+
+# --- reveal: the one deliberate exception to the golden rule ---------------------------------
+# Added 2026-07-28 at the operator's request. "Did I type the right password?" is unanswerable
+# when the value is write-only, and a wrong stored password surfaces much later as a confusing
+# login failure rather than as the typo it is. These tests pin the SHAPE of that exception so it
+# stays one endpoint and does not leak back into the general account views.
+
+def test_reveal_returns_the_plaintext_for_one_account(_isolate):
+    _isolate["INDEED_USERNAME"] = "gene@example.com"
+    _isolate["INDEED_PASSWORD"] = "s3cret"
+    out = accounts.reveal_credentials("indeed_default")
+    assert out == {"username": "gene@example.com", "password": "s3cret", "backend": "env"}
+
+
+def test_reveal_is_the_only_leak_the_list_view_still_masks(_isolate):
+    """WRONG ANSWER PREVENTED: the reveal is implemented by loosening `_public()`, so every account
+    list starts shipping passwords. The exception has to stay a separate call."""
+    _isolate["INDEED_USERNAME"] = "gene@example.com"
+    _isolate["INDEED_PASSWORD"] = "s3cret"
+    assert "s3cret" not in str(accounts.list_accounts())
+    assert "s3cret" not in str(accounts.get_account("indeed_default"))
+
+
+def test_reveal_round_trips_a_vault_backed_login(tmp_path):
+    """The vault path decrypts. This is what the operator actually types in the UI."""
+    accounts.put_account("fb_alt", {"domain_id": "facebook_marketplace"})
+    accounts.set_credentials("fb_alt", "seller@example.com", "hunter2")
+    out = accounts.reveal_credentials("fb_alt")
+    assert out["password"] == "hunter2"
+    assert out["backend"] == "vault"
+
+
+def test_reveal_is_none_when_nothing_is_stored():
+    assert accounts.reveal_credentials("indeed_default") is None
+    assert accounts.reveal_credentials("no_such_account") is None
+
+
+def test_a_disabled_account_still_reveals(_isolate):
+    """`resolve_creds` refuses a disabled account — "do not run as this". Reveal deliberately does
+    NOT, because checking a login before re-enabling it is exactly when the operator needs to see
+    it. Two different questions; only one of them is about running."""
+    _isolate["INDEED_USERNAME"] = "gene@example.com"
+    _isolate["INDEED_PASSWORD"] = "s3cret"
+    accounts.put_account("indeed_default", {"status": "disabled"})
+    assert accounts.resolve_creds("indeed_default") is None
+    assert accounts.reveal_credentials("indeed_default")["password"] == "s3cret"

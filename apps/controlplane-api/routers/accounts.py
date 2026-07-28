@@ -3,11 +3,16 @@
 Extracted from main.py (router split — docs/PLAN_main-split.md). Self-contained:
 handlers defer `import accounts` inside the function. Credentials typed in the UI are
 encrypted into the secrets vault by the accounts module — never stored on the account
-record, never returned, never logged (responses only reflect has_creds + a masked hint).
+record, never logged, and never included in any account response (those carry only
+has_creds + a masked hint).
+
+The ONE exception is `POST /api/accounts/{id}/credentials/reveal`, added deliberately so the
+operator can read back a login they typed and check it. It returns a single account's plaintext,
+only when explicitly asked for that account. Everything else here still holds the line.
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -99,6 +104,29 @@ def set_account_credentials_ep(account_id: str, body: CredentialsBody):
     if acct is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return acct
+
+
+@router.post("/api/accounts/{account_id}/credentials/reveal")
+def reveal_account_credentials_ep(account_id: str, response: Response):
+    """Return an account's stored login IN PLAINTEXT so the operator can check it.
+
+    The only endpoint in the app that returns a secret. See `accounts.reveal_credentials` for why
+    it exists and what it does and doesn't change.
+
+    POST, not GET, for two reasons: revealing is a deliberate act rather than a view (it should
+    read as one in the network log), and a GET is the thing browsers, proxies and history are
+    happiest to cache. `no-store` says the same thing again for anything that only reads headers.
+    """
+    import accounts as accounts_mod
+
+    creds = accounts_mod.reveal_credentials(accounts_mod._slugify(account_id))
+    if creds is None:
+        # Deliberately one status for both "no such account" and "no credentials set": the caller
+        # is the operator's own panel, which already knows which accounts exist, and collapsing
+        # them keeps this endpoint from answering "does this account exist?" for anything else.
+        raise HTTPException(status_code=404, detail="No stored login for this account.")
+    response.headers["Cache-Control"] = "no-store"
+    return creds
 
 
 @router.delete("/api/accounts/{account_id}/credentials")

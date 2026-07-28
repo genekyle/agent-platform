@@ -1161,14 +1161,143 @@ select,
 textarea,
 .form-input,
 .form-select {
+  /* `appearance: none` is the load-bearing line. Without it Safari paints its NATIVE control on
+     top — a white, inset, system-styled box — and silently ignores the background/border set
+     below. Chrome mostly honours them, so the form looked passable there and like an unstyled
+     1997 page in Safari, which is where this was actually being used. */
+  appearance: none;
+  -webkit-appearance: none;
   color: var(--text);
   background: var(--surface-2);
-  border-color: var(--line);
+  border: 1px solid var(--line);
   border-radius: 8px;
 }
 
 input::placeholder,
 textarea::placeholder { color: var(--text-subtle); }
+
+/* ---- form controls -------------------------------------------------------------------
+   `.input` is used 34 times across 7 components and was never defined — every one of those
+   fields was rendering as a bare browser default. Defining it here fixes all of them at once;
+   that is the reason this is a class and not inline styles on one form. */
+.input {
+  width: 100%;
+  /* Colour and border are repeated here rather than inherited from the element-level rule above,
+     because a CLASS outranks an element selector: anything that later re-adds a `.input {}` block
+     elsewhere would otherwise silently win, which is exactly how the old light-theme white box
+     survived the dark redesign. A self-contained rule cannot be undone by import order. */
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  min-height: 38px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.input:hover:not(:disabled):not(:focus) { border-color: var(--line-strong); }
+
+.input:focus,
+.input:focus-visible {
+  background: var(--surface-1);
+  border-color: var(--accent);
+  outline: none;                       /* replaced by the ring below — offset outlines clip inside grids */
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.input:disabled {
+  color: var(--text-subtle);
+  background: var(--surface-1);
+  cursor: not-allowed;
+}
+
+/* A select loses its native chevron along with the native appearance, so draw one back in.
+   Inlined SVG (no external asset — the artifact CSP and offline dev both need it self-contained). */
+select.input {
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' fill='none' stroke='%23b2b6aa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+textarea.input { min-height: 72px; resize: vertical; }
+
+/* Label + control as one unit. The old markup nested the input INSIDE a 12px label, so the
+   control inherited the label's tiny type and the two had no separation. */
+.form-field { display: grid; gap: 5px; min-width: 0; }
+
+.form-field__label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.form-field__hint { color: var(--text-subtle); font-size: 10.5px; }
+
+.form-grid { display: grid; gap: 12px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .form-row { grid-template-columns: 1fr; } }
+
+/* A grouped sub-section of a form (the credentials block). */
+.form-fieldset {
+  padding: 12px 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.form-fieldset__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 4px;
+}
+
+/* Password field: the input and its reveal toggle share one bordered box, so the eye reads as
+   part of the control rather than a button that happens to sit next to it. */
+.input-affix { position: relative; display: flex; align-items: center; }
+.input-affix .input { padding-right: 38px; }
+
+.input-affix__btn {
+  position: absolute;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-subtle);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.input-affix__btn:hover { color: var(--text); background: var(--surface-3); }
+.input-affix__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* A revealed secret is monospaced — you are reading it to CHECK it, and proportional type makes
+   l/1/I and O/0 ambiguous at exactly the moment that matters. */
+.input--revealed {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
 
 button:focus-visible,
 a:focus-visible,

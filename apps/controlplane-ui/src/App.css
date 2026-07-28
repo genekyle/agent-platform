@@ -4236,17 +4236,11 @@ input[type="checkbox"] {
 
 .btn-sm { min-height: 30px; padding: 5px 10px; font-size: 12px; border-radius: 8px; }
 
-.input {
-  width: 100%;
-  padding: 8px 11px;
-  min-height: 38px;
-  border: 1px solid #cfd9e8;
-  border-radius: 10px;
-  background: #fff;
-  color: #343b30;
-  font-size: 13px;
-}
-.input:focus { border-color: var(--cc-accent); outline: none; }
+/* `.input` used to live here with `background: #fff` and a light-grey border — a relic of the
+   theme this app had BEFORE the AI Ops dark redesign. It outlived that theme because a class
+   selector quietly outranks the element-level `input {}` rule in ai-ops.css, so every form field
+   in the app rendered as a white box on a near-black page no matter what the dark theme said.
+   The real definition now lives in styles/ai-ops.css alongside the rest of the form controls. */
 textarea.input { min-height: unset; line-height: 1.45; }
 
 .error-banner {

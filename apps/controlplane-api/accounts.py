@@ -258,6 +258,45 @@ def resolve_creds(account_id: str) -> Optional[tuple[str, str]]:
     return _resolve_secret_ref(rec.get("secret_ref", ""))
 
 
+def reveal_credentials(account_id: str) -> Optional[dict[str, str]]:
+    """The stored login IN PLAINTEXT, for the operator to read back and check. Returns None when
+    the account is unknown or has no credentials set.
+
+    **This is the one function here that deliberately breaks `_public()`'s guarantee**, so it is
+    named to be greppable and is called from exactly one endpoint. The reasoning, written down so
+    the next session does not have to re-litigate it:
+
+    * The operator asked for it, for the obvious reason — "did I type the right password?" is
+      unanswerable when the value is write-only, and a wrong stored password fails later as a
+      confusing login error rather than as a typo.
+    * It exposes nothing the operator cannot already reach on their own machine: an `env:` account's
+      password sits in plaintext in `.env`, and a `vault:` account decrypts with a key in their home
+      directory. This is a localhost, single-operator app.
+    * What it DOES change is reach: the value now crosses HTTP and lands in browser memory, so it
+      can end up in a screenshot, a screen-share, or devtools. That is why it is a deliberate
+      per-account request rather than a field on the account list — nothing reveals a secret unless
+      someone asks for that one account, right then.
+
+    Unlike `resolve_creds`, a DISABLED account still reveals: "don't run as this" and "don't let me
+    read my own password" are different statements, and the operator checking a login before
+    re-enabling it is exactly when they need this.
+    """
+    rec = _merged().get(account_id)
+    if not rec:
+        return None
+    creds = _resolve_secret_ref(rec.get("secret_ref", ""))
+    if not creds:
+        return None
+    username, password = creds
+    return {
+        "username": username,
+        "password": password,
+        # Where it came from, because the two backends have different blast radii and the operator
+        # should be able to see which one they are looking at.
+        "backend": rec.get("secret_ref", "").partition(":")[0] or "env",
+    }
+
+
 def put_account(account_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     """Create or update an account's METADATA (never its secret). Returns the public view.
 

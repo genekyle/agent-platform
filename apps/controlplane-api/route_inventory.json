@@ -109,6 +109,7 @@
   "PATCH /api/training/scenarios/{scenario_id}",
   "PATCH /api/training/tasks/{task_id}",
   "POST /api/accounts",
+  "POST /api/accounts/{account_id}/credentials/reveal",
   "POST /api/accounts/{account_id}/login",
   "POST /api/application-answers",
   "POST /api/application-answers/match",
