@@ -3527,3 +3527,60 @@ in the recipe would be the workaround this codebase keeps refusing. Named, not w
 trusting the return value: the value probe after `type`, the screenshot after the click, the AX
 scan after the focus. Three drives in a row now, the same lesson — an action's report of itself is
 not evidence.
+
+---
+
+## 2026-07-28 (2) — Testing the SAP account creation, and the consent nobody typed
+
+**The ask.** "Check to see if our account creation now works for SAP."
+
+**The answer was no, and the reason is worth more than the fix.** The two marketing opt-ins on
+SAP's signup form **arrive CHECKED**. The field table recorded them as "MARKETING, both default-off"
+and the driver's protection was to name them and drive them in no list — *"a field this driver never
+names is one it can never tick by accident."* Both statements are true, and together they were
+pointed the wrong way: **the danger was never that we would tick them. It was that SAP already
+had.** "Never touch them" therefore meant consenting by default, against the operator's own stored
+`marketing_contact_consent=No` — and silently, in the worst way available: the account is made, the
+application goes through, every check passes, and the only symptom is marketing email arriving weeks
+later with nothing to trace it to.
+
+**The general shape: a default is part of a form's behaviour.** A recipe that writes down what a
+control IS without writing down what it ARRIVES AS has recorded half the field. Every `optional=True`
+entry in `apply_fields` is now suspect in the same way — none of them record an initial state, and
+they were all transcribed from a *reading* of the page rather than an *observation* of it. The
+distinction is the whole lesson: the earlier session mapped this form accurately from the AX tree and
+still got the fact that mattered wrong, because the AX tree does not say "checked".
+
+Refused actively now via `/check_group` with an empty value set — it unticks by click so the page's
+handlers fire, then **re-reads the DOM to confirm, because a refusal we cannot verify is not a
+refusal**. A failure stops the submit: opting someone into marketing is not a best-effort matter.
+
+**What is verified, and what is still not.** Driven live against the form: the country dropdown was
+set through the real executor and returned verdict `element:select:native` — the EXACT-match branch
+of yesterday's fix, on the real list where "United States" and "United States Minor Outlying Islands"
+both exist. `/scan_required` then independently confirmed it, listing 6 unanswered required fields
+with country no longer among them. Two witnesses, one from the driver and one from a scanner that
+knows nothing about what the driver did.
+
+**Still unverified: the consent control.** It renders as an underlined LINK whose AX role is
+`button`, and SAP's own words are "Read **and accept** the data privacy statement" — which reads
+like something that opens to be read, not like a toggle. Nobody has clicked it, because accepting a
+data-privacy agreement belongs to the operator. If it opens a modal, the `confirms` click leaves that
+modal open and the submit fails; that is now written down as the expected failure rather than left
+to be rediscovered as a mystery. **`id fbclc_dpcsId`** for whoever gets there.
+
+**Infrastructure, and a claim I had to withdraw.** The capture server answering our probes was a
+process from **Sunday**. `scripts/dev-up.sh` had been failing to bind for two days — the new instance
+logs `[Errno 48] Address already in use` and exits, leaving the pidfile pointing at a corpse while
+the old process keeps serving. So "restarted the capture server with the fix" was wrong when I said
+it: the `health: ok` came from the stale process. The API was fine, but only by luck — it runs with
+`--reload`, so it had been hot-loading edits all along, which I confirmed against the live OpenAPI
+schema rather than assuming. **Two lessons: a health check proves something is listening, not that it
+is what you just started; and `.dev-pids/*.pid` can point at nothing while the servers are days
+old.** Worth a `dev-up` that fails loudly, or reclaims the port.
+
+**Element ids, mined from the capture rather than guessed:** `fbclc_userName`, `fbclc_emailConf`,
+`fbclc_pwd`, `fbclc_pwdConf`, `fbclc_fName`, `fbclc_lName`, `fbclc_country`,
+`fbclc_emailEnabled` (marketing), `fbclc_campaignEmailEnabled` (marketing), `fbclc_dpcsId`
+(consent), `fbclc_createAccountButton`. The observation artifact already held them — a reminder that
+a capture is a queryable record, not just a training row.
