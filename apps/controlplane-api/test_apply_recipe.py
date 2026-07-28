@@ -60,3 +60,38 @@ def test_successfactors_apply_is_a_staged_menu():
                      if s["state"] == "successfactors_apply_menu")
     assert menu_step["controls"]["apply_now"]["role"] == "link"
     assert "linkedin" in ar.SUCCESSFACTORS_LESSONS["linkedin_path_is_a_detour"].lower()
+
+
+def test_the_successfactors_account_legs_say_which_one_has_been_walked():
+    """Mapped and driven are different claims. The create leg was driven to the form on Teradyne
+    (2026-07-28); the returning-candidate leg was only read off the gate. A leg we have not walked
+    must read as unknown, not as covered — the same rule that keeps iCIMS's sign_in absent."""
+    from apply_recipe import SUCCESSFACTORS_ACCOUNT_LOOP as loop
+    assert loop["needs_creation"]["button"] == "Create Account"
+    assert loop["needs_creation"]["state"] == "successfactors_create_account"
+    assert "NOT YET DRIVEN" in loop["created"]["note"]
+
+
+def test_the_create_form_is_a_state_of_its_own_in_the_recipe():
+    # The gate and the form are confusable — both SAP-chrome "Career Opportunities" pages with an
+    # email and a password box. Collapsing them is how a recipe drives the wrong one.
+    from apply_recipe import SUCCESSFACTORS_APPLY_RECIPE as steps
+    states = [s["state"] for s in steps]
+    assert "successfactors_account_gate" in states
+    assert "successfactors_create_account" in states
+    gate = next(s for s in steps if s["state"] == "successfactors_account_gate")
+    assert "successfactors_create_account" in gate["expect"]
+    # Every step still numbered in order after the insertion.
+    assert [s["step"] for s in steps] == list(range(len(steps)))
+
+
+def test_the_password_rules_lesson_matches_the_policy_that_enforces_it():
+    """The rules lived as prose in three files and nothing read them. Now that code does, the prose
+    and the data must not be able to drift apart."""
+    import apply_fields
+    from apply_recipe import SUCCESSFACTORS_LESSONS
+    policy = apply_fields.PASSWORD_POLICIES["successfactors"]
+    lesson = SUCCESSFACTORS_LESSONS["password_rules"]
+    assert str(policy["min_length"]) in lesson
+    assert str(policy["max_length"]) in lesson
+    assert "apply_fields.PASSWORD_POLICIES" in lesson

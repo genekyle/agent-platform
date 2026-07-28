@@ -599,6 +599,30 @@ SUCCESSFACTORS_LESSONS = {
         "no decline — Close dismisses without consenting, so Close is the privacy-preserving choice.",
     "linkedin_path_is_a_detour": "'Start applying with LinkedIn' hands off to LinkedIn auth — a "
         "different flow with its own account wall. Prefer the plain 'Apply Now'.",
+    "the_account_is_on_a_different_host": "The job page is on the EMPLOYER's domain "
+        "(jobs.teradyne.com); the account and the application are on career<N>.sapsf.com. Two hosts, "
+        "one application. So an account's login_url must come from the LIVE TAB at the account rung, "
+        "never from orient.url or a blackboard apply_tab.url — both of those still said "
+        "jobs.teradyne.com while the tab was already on sapsf.com (2026-07-28), and a wrong "
+        "login_url fails nothing now and opens a job ad at a sign-in weeks later.",
+    "password_rules": "STATED ON THE FORM and tighter than most: 8-18 chars, >=1 upper, >=1 lower, "
+        ">=1 number or punctuation, no space or unicode. Encoded in "
+        "apply_fields.PASSWORD_POLICIES['successfactors'] and checked BEFORE typing. This bites the "
+        "derived credential specifically: the password is company INITIALS + a shared suffix, so a "
+        "one-word employer ('Teradyne' -> 'T') lands at suffix+1 characters — exactly 8, on SAP's "
+        "floor. A rejected password is not a free retry; it costs a submit and leaves a half-made "
+        "account that looks exactly like a made one.",
+    "consent_is_a_button_and_its_name_drifts": "The required data-privacy acceptance renders as a "
+        "BUTTON, not a checkbox. Its live accessible name carries the required-marker text — "
+        "'Terms of Use Read and accept the data privacy statement. Required' — while the field "
+        "table stores it without the trailing ' Required'. It resolves because _resolve_ax_node "
+        "falls back from exact match to substring; that fallback is load-bearing here, not "
+        "decorative.",
+    "create_form_is_its_own_state": "The gate and the signup form are two states, not one, and they "
+        "are confusable: both are SAP-chrome 'Career Opportunities' pages with an email and a "
+        "password box. The form's tells are the DOUBLED fields (Retype Email Address, Retype "
+        "Password), the First/Last Name pair, the Country/Region dropdown, and the password-rules "
+        "callout. The gate has none of those and offers a 'Please sign in' link instead.",
 }
 
 SUCCESSFACTORS_APPLY_RECIPE = [
@@ -618,19 +642,41 @@ SUCCESSFACTORS_APPLY_RECIPE = [
                   "apply_linkedin": {"role": "link", "name": "Apply with LinkedIn"}},
      "expect": ["successfactors_account_gate", "successfactors_apply_form"]},
     {"step": 2, "state": "successfactors_account_gate",
-     "action": "UNDRIVEN. SAP career sites are account-gated (auth='account'); the site header "
-               "carries 'View Profile', which suggests a candidate profile/sign-in. Seed this from "
-               "the first capture that reaches it rather than guessing the fields now.",
-     "expect": ["successfactors_apply_form"]},
-    {"step": 3, "state": "successfactors_apply_form",
+     "action": "The sign-in wall, on career<N>.sapsf.com — a DIFFERENT HOST from the job page. "
+               "Email Address / Password, plus a create-an-account path. With an active account, "
+               "the `account` rung's sign_in leg drives it (apply_fields signin_email / "
+               "signin_password / sign_in_submit). Without one, take the create path to step 3.",
+     "controls": {"sign_in": {"role": "button", "name": "Sign In"}},
+     "expect": ["successfactors_create_account", "successfactors_apply_form"]},
+    {"step": 3, "state": "successfactors_create_account",
+     "action": "The signup form. Driven by the `account` rung's create_account leg, which resolves "
+               "every field from apply_fields.SUCCESSFACTORS_FIELDS — both email boxes, both "
+               "password boxes, first/last name, the Country/Region dropdown (required before the "
+               "form will take anything), and the data-privacy consent, which is a BUTTON, not a "
+               "checkbox. The two marketing opt-ins are named in the field table for one reason: so "
+               "they are refused BY NAME rather than skipped by luck. Check the password against "
+               "apply_fields.check_password FIRST — see the password_rules lesson.",
+     "controls": {"submit": {"role": "button", "name": "Create Account"}},
+     "expect": ["successfactors_apply_form", "successfactors_account_verify"]},
+    {"step": 4, "state": "successfactors_apply_form",
      "action": "UNDRIVEN. The application itself.", "expect": ["successfactors_submitted"]},
 ]
 
 SUCCESSFACTORS_ACCOUNT_LOOP = {
-    "needs_creation": {"state": "successfactors_account_gate", "recipe": None,
-                       "button": "(undriven — capture it first)"},
-    "created": {"state": "successfactors_sign_in", "recipe": None, "button": "(undriven)"},
-    "then": "hand to SUCCESSFACTORS_APPLY_RECIPE step 3",
+    # Driven live to the form on Teradyne 2026-07-28: every field resolves, the country dropdown
+    # takes "United States", the consent resolves despite the AX-name drift below. What has NOT
+    # been walked is the far side of the Create Account click — whether SAP mails a verification
+    # code, and what state it lands on. Left as an `expect` on step 3, not asserted here: a leg we
+    # have not walked reads as unknown, not as covered.
+    "needs_creation": {"state": "successfactors_create_account",
+                       "recipe": "apply_fields.SUCCESSFACTORS_FIELDS (create_account leg)",
+                       "button": "Create Account"},
+    "created": {"state": "successfactors_account_gate",
+                "recipe": "apply_fields.SUCCESSFACTORS_FIELDS (sign_in leg)",
+                "button": "Sign In",
+                "note": "MAPPED FROM THE GATE, NOT YET DRIVEN — the returning-candidate leg has "
+                        "never run."},
+    "then": "hand to SUCCESSFACTORS_APPLY_RECIPE step 4",
     "runs_as": "the apply ladder's `account` rung, automated by default; captcha / email code escalate",
 }
 

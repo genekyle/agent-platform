@@ -153,7 +153,13 @@ def next_account_action(company: str, ats_id: str) -> dict[str, Any]:
                # iCIMS has no sign-in RECIPE yet — the returning-candidate leg has not been
                # driven. Absent rather than pointed at the create recipe: a leg we have not
                # walked should read as unknown, not as covered.
-               "icims": {"create_account": "ICIMS_CREATE_PROFILE_RECIPE"}}
+               "icims": {"create_account": "ICIMS_CREATE_PROFILE_RECIPE"},
+               # SuccessFactors: the create form was mapped field-by-field off the live page
+               # (Teradyne, 2026-07-28) and its sign-in leg off the gate that precedes it. Both
+               # legs resolve through apply_fields, so both are named — but see the account loop
+               # in apply_recipe for which of them has actually been WALKED.
+               "successfactors": {"create_account": "SUCCESSFACTORS_ACCOUNT_LOOP.needs_creation",
+                                  "sign_in": "SUCCESSFACTORS_ACCOUNT_LOOP.created"}}
     # The BUTTON is the ATS's own words, and a wrong label here becomes a wrong instruction in the
     # operator's handoff card. iCIMS says "Submit Profile" (it creates the account and commits step
     # 1 of the application at once) and "Log back in!"; the Workday-flavoured pair is the default
