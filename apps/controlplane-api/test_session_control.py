@@ -9,9 +9,13 @@ What is being pinned, in order of how expensive it is to get wrong:
   1. A session runs ONE query. Re-pointing it at a different one is refused.
   2. A lapsed consuming rung RECOVERS; `/execute` is never called a second time for the query.
   3. An unproven query submission leaves the rung UNMARKED rather than claiming it.
-  4. The credential wall hands to the operator — we never type a password.
+  4. The credential wall hands to the operator. We may sign in with a login the
+     operator stored, and may click a route AROUND a credential (SSO, an emailed
+     code) — but the credential screen itself, and any second factor, is never ours.
   5. An active captcha stops the crank before anything else is decided.
 """
+
+import json
 
 import accounts
 import apply_state_store as store
@@ -3504,3 +3508,90 @@ def test_orient_does_not_downgrade_a_named_platform_to_company_site(monkeypatch)
     finally:
         _teardown()
     assert aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0].platform == "workday"
+
+
+# --- where the two login processes MEET -------------------------------------------------------
+# The domain's login (LinkedIn's wall, its SSO button) and the identity's login (Google's chooser,
+# consent, credentials) are separate processes that meet at the popup. These pin the seam: the
+# ladder asks google_recipe what the popup is, and reports whose turn it is in the survey's shape.
+_GOOGLE_CHOOSER = "https://accounts.google.com/gsi/select?client_id=linkedin"
+_GOOGLE_PASSWORD = "https://accounts.google.com/v3/signin/challenge/pwd"
+
+
+def _popup_open(popup_url, ax):
+    return {"/list_tabs": _tabs("https://www.linkedin.com/jobs/", popup_url),
+            "/auth_state": {"ok": True, "logged_in": False},
+            "/ax_scan": ax}
+
+
+def test_the_account_chooser_is_offered_as_a_click_not_a_wall(monkeypatch, tmp_path):
+    """The one-click login. Picking among your own signed-in accounts is a tile click — refusing it
+    would turn SSO into a human interruption for no safety gain."""
+    _with_domain_login(monkeypatch, tmp_path, domain_id="indeed_jobs", account_id="indeed_default")
+    _install(monkeypatch,
+             _popup_open(_GOOGLE_CHOOSER,
+                         _ax(("link", "Personal\nperson@example.com"), page_text="Choose an account")),
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert login["state"] == "sso:google_account_chooser"
+    assert login["can_drive"] is True and login["policy"] == "auto"
+    assert login["options"][0]["name"].endswith("person@example.com")
+
+
+def test_the_google_password_screen_is_still_never_ours(monkeypatch, tmp_path):
+    """Same popup, same host, different state — and the answer flips. This is the whole reason the
+    boundary is per-state rather than per-host."""
+    _with_domain_login(monkeypatch, tmp_path, domain_id="indeed_jobs", account_id="indeed_default")
+    _install(monkeypatch,
+             _popup_open(_GOOGLE_PASSWORD, _ax(("textbox", "Enter your password"),
+                                               page_text="Enter your password")),
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert login["state"] == "sso:google_signin_password"
+    assert login["can_drive"] is False and login["policy"] == "human"
+    assert login["options"] == []
+
+
+def test_the_popup_is_surveyed_instead_of_the_engines_tab(monkeypatch, tmp_path):
+    """When the provider's window is open it IS the thing waiting. Surveying the engine's tab
+    underneath would report LinkedIn's wall while Google holds the screen."""
+    _with_domain_login(monkeypatch, tmp_path, domain_id="indeed_jobs", account_id="indeed_default")
+    _install(monkeypatch,
+             _popup_open(_GOOGLE_CHOOSER, _ax(("link", "a@example.com"), page_text="Choose an account")),
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["login"]["url"].startswith("https://accounts.google.com")
+
+
+def test_the_real_username_is_used_for_matching_and_never_returned(monkeypatch, tmp_path):
+    """`username_hint` is masked BY DESIGN — it exists to be displayed, not compared, so matching a
+    chooser tile needs the real address from the vault. It is resolved server-side for the
+    comparison only: the survey's own fields must not carry it."""
+    _with_domain_login(monkeypatch, tmp_path, domain_id="indeed_jobs", account_id="indeed_default")
+    _install(monkeypatch,
+             _popup_open(_GOOGLE_CHOOSER,
+                         _ax(("link", "Personal\nperson@example.com"), page_text="Choose an account")),
+             blackboard=_ready_for_provisioned())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    login = r["last_step"]["login"]
+    assert login["can_drive"] is True          # it matched, so the real address WAS used
+    # The address does appear in the option label — but only because that label is QUOTED from the
+    # tile Google is rendering on the operator's own screen. What must never appear is the secret.
+    assert login["options"][0]["name"].endswith("person@example.com")
+    assert "not-a-real-password" not in json.dumps(r)
+    # And the registry still only ever exposes the masked form.
+    assert accounts.get_account("indeed_default")["username_hint"] == "p***@example.com"

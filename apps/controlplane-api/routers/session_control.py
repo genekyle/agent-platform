@@ -40,6 +40,7 @@ from starlette.concurrency import run_in_threadpool
 import applied_index
 import apply_fields
 import apply_steps as aps
+import google_recipe
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
@@ -649,6 +650,17 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
         # 2026-07-24).
         ledger.release("authenticated")
 
+        # A PROVIDER'S WINDOW BEATS EVERYTHING. If Google (or Apple, or Microsoft) already has a
+        # sign-in window open, that window IS the state — driving the engine's own credential form
+        # underneath it would be answering a question nobody asked, on a page that is not in front.
+        # Checked before the credential drive for exactly that reason.
+        if find_sso_popup(obs.get("tabs") or []) is not None:
+            login = await _login_survey(browser_url, obs, engine)
+            bb.log("handoff", f"provider window open ({login['state']}) — {login['detail'][:80]}")
+            return {"ok": False, "action": action,
+                    "awaiting": "operator_login" if not login["can_drive"] else "operator_pick",
+                    "login": login, "detail": login["detail"]}
+
         # FIRST, TRY THE LOGIN WE WERE GIVEN. If this domain has an account with credentials the
         # operator stored in the vault, sign in with them — that is what the credentials are FOR,
         # and it is the same reasoning loop `/api/accounts/{id}/login` already runs for ATS logins
@@ -1038,8 +1050,9 @@ async def _drive_login(*, engine: dict[str, Any], bb: Any, browser_url: str, obs
 
 #: Hosts that mean "another site's sign-in window is open and waiting". An SSO popup is its own
 #: CDP page target on the SAME port, so it shows up in /list_tabs beside the engine's tab.
-_SSO_POPUP_HOSTS = ("accounts.google.com", "appleid.apple.com", "login.microsoftonline.com",
-                    "www.facebook.com/v", "login.yahoo.com")
+#: Google's are owned by `google_recipe`; the rest are named but not yet driven.
+_SSO_POPUP_HOSTS = tuple(google_recipe.SSO_HOSTS) + (
+    "appleid.apple.com", "login.microsoftonline.com", "login.yahoo.com")
 
 
 def find_sso_popup(tabs: list[dict]) -> Optional[dict]:
@@ -1049,6 +1062,38 @@ def find_sso_popup(tabs: list[dict]) -> Optional[dict]:
         if any(h in url for h in _SSO_POPUP_HOSTS):
             return t
     return None
+
+
+async def _survey_sso_popup(browser_url: str, popup: dict[str, Any],
+                            username: str = "") -> dict[str, Any]:
+    """What the identity provider is asking, and whose turn it is.
+
+    THE BOUNDARY IS THE STATE, NOT THE HOST. Refusing everything on accounts.google.com is what
+    turns a one-click SSO login into a human interruption: picking which of your own signed-in
+    accounts to use is a click on a tile, not a credential. `google_recipe` owns that judgement —
+    this just asks it, and reports the answer in the survey's shape so the panel renders it the
+    same way as any other login screen.
+    """
+    scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                            "tab_id": popup.get("tab_id", "")}, timeout=25.0)
+    candidates = scan.get("candidates") or []
+    url = popup.get("url", "") or ""
+    state = google_recipe.classify(url, str(scan.get("page_text") or ""))
+    plan = google_recipe.next_action(state, candidates, username=username)
+    drivable = plan["action"] == "click"
+    return {
+        "state": f"sso:{state}", "url": url, "seen": len(candidates),
+        "can_drive": drivable,
+        "provider": "google" if google_recipe.is_sso_url(url) else "unknown",
+        "policy": plan["policy"],
+        "needs_approval": bool(plan.get("needs_approval")),
+        "options": ([{"name": plan["target"].get("name"), "role": plan["target"].get("role"),
+                      "why": plan["why"]}] if drivable else []),
+        "detail": (f"{plan['why']} — I can click "
+                   f"{(plan['target'] or {}).get('name')!r} for you." if drivable else
+                   f"{plan['why']} Finish it in the window, then press Re-check. Once it is done "
+                   f"this browser profile stays signed in, so it is a one-time step."),
+    }
 
 
 async def _login_survey(browser_url: str, obs: dict[str, Any],
@@ -1075,11 +1120,21 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
     # states, not in who typed.
     popup = find_sso_popup(tabs)
     if popup is not None:
-        return {"state": "sso_popup", "url": popup.get("url", ""), "options": [],
-                "can_drive": False, "seen": 0,
-                "detail": "A sign-in window for another account is open. Finish it there — that "
-                          "credential is yours, not ours — then press Re-check. Once it is done "
-                          "this browser profile stays signed in, so it is a one-time step."}
+        # THE HINT IS MASKED AND CANNOT MATCH A TILE. `username_hint` is "p***@example.com" by
+        # design — it exists to be displayed, not compared. Matching a chooser tile needs the real
+        # address, so it is resolved SERVER-SIDE from the vault and used only for the comparison;
+        # it never enters the response. (The option label comes from the tile's own accessible
+        # name, which is already on the operator's screen.)
+        acct = _domain_account(engine) if engine else None
+        username = ""
+        if acct:
+            try:
+                import accounts as accounts_mod
+                creds = accounts_mod.resolve_creds(acct["account_id"])
+                username = creds[0] if creds else ""
+            except Exception:  # noqa: BLE001 — no credential is a normal state, not an error
+                username = ""
+        return await _survey_sso_popup(browser_url, popup, username=username)
 
     # Otherwise survey the ENGINE's own tab, never "whichever came first".
     tab = obs.get("search_tab") or (_find_site_tab(tabs, engine) if engine else None) \
