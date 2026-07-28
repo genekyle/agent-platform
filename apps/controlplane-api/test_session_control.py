@@ -3837,3 +3837,31 @@ def test_the_operator_can_record_a_password_they_chose_themselves(monkeypatch):
 
     assert secrets_vault.get_secret(aid) == {"username": "someone.else@example.com",
                                              "password": "WhatTheyActuallyUsed1!"}
+
+
+def test_the_account_records_where_the_login_actually_lives(monkeypatch):
+    """SAP serves the application from sapsf.com while the posting sits on the employer's own
+    domain, so an account_url taken from the job page is wrong by construction — and quietly: it
+    fails nothing today and opens a job ad at the sign-in leg weeks later."""
+    import ats_accounts
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    # What the blackboard believes: the ORIENT rung's last look, and an apply_tab whose url went
+    # stale when the tab navigated without a rung writing it back (live, Teradyne 2026-07-28).
+    job_url = "https://jobs.teradyne.com/Teradyne/job/1385295400/"
+    bb.world["orient"] = {"url": job_url}
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": job_url}
+
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/career?company=teradynein"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "handoff"}).json()
+    finally:
+        _teardown()
+
+    rec = accounts.get_account(ats_accounts.ats_account_id("Teradyne", "successfactors"))
+    assert "sapsf.com" in rec["login_url"]
+    assert "jobs.teradyne.com" not in rec["login_url"]

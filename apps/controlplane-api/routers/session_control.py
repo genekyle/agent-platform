@@ -1531,10 +1531,21 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                         f" CREDENTIAL NOT STORED ({stored.get('detail')}) — save "
                                         f"it in the Accounts panel before this session ends.")})
 
+    # Observe FIRST, because the account record wants a URL and the only trustworthy source of it
+    # is the live tab. `orient.url` — what this used to record — is where the ORIENT rung last
+    # looked, which is the employer's job page, and the blackboard's own `apply_tab.url` goes stale
+    # the moment the tab navigates without a rung writing it back (verified live on Teradyne
+    # 2026-07-28: same tab_id, url still saying jobs.teradyne.com while the tab was on
+    # career41.sapsf.com). Recording either one gives the account a login_url pointing at a job
+    # posting — and this is precisely the ATS family where that is wrong by construction, since SAP
+    # serves the application from sapsf.com while the posting lives on the employer's own domain.
+    # A wrong login_url is quiet: nothing fails now, and the sign-in leg weeks later opens a job ad.
+    obs = await _observe(browser_url, bb.search_state.query)
+    live_url = _apply_tab_url(bb, obs) or (bb.world or {}).get("orient", {}).get("url", "")
+
     # Register the account record; next_account_action decides the leg (create vs sign-in) and
     # derives the credentials.
-    ensure = ats_accounts.ensure_account(company, step.platform,
-                                         login_url=(bb.world or {}).get("orient", {}).get("url", ""))
+    ensure = ats_accounts.ensure_account(company, step.platform, login_url=live_url)
     if not ensure.get("ok"):
         raise HTTPException(status_code=409, detail=ensure.get("detail", "could not open account"))
     action = ats_accounts.next_account_action(company, step.platform)
@@ -1544,7 +1555,6 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     # form itself. A CAPTCHA or an email/2FA verification prompt still escalates: those are real
     # external gates, not the manual-handoff boundary, and they hold regardless of mode.
     if body.mode in ("auto", "fill") and action.get("leg") in ("create_account", "sign_in"):
-        obs = await _observe(browser_url, bb.search_state.query)
         block = obs.get("block")
         if block and block.get("strength") == "active":
             step.record(_ACCOUNT_RUNG, aps.BLOCKED,
