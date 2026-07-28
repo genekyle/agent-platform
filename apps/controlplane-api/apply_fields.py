@@ -316,11 +316,69 @@ ICIMS_FIELDS: dict[str, dict[str, Any]] = {
     "eeo_submit": _f(ats="icims", role="button", name="Submit", widget_type=WidgetType.UNKNOWN),
 }
 
+# --- SAP SUCCESSFACTORS ---------------------------------------------------------------
+# Transcribed from the live create-account form on career41.sapsf.com (Teradyne tenant),
+# 2026-07-28. Reached from the employer's own job page via Apply now -> Apply Now; the SIGN-IN
+# gate comes first and offers "Create an account".
+#
+# THE REAL SAP HOST IS sapsf.com. The job page lives on the employer's domain (jobs.teradyne.com)
+# and hands off here, so the two halves of one application sit on two different hosts.
+#
+# Password rules are stated ON the form and are tighter than most: 8-18 characters, at least one
+# upper and one lower, at least one number OR punctuation, no spaces or unicode. Verified that the
+# derived credential satisfies all five BEFORE submitting — a rejected password costs a submit and
+# leaves a half-made account.
+SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
+    "email": _f(ats="successfactors", role="textbox", name="Email Address: *",
+                widget_type=WidgetType.TEXT, answer_key="email"),
+    "verify_email": _f(ats="successfactors", role="textbox", name="Retype Email Address: *",
+                       widget_type=WidgetType.TEXT, answer_key="email"),
+    "password": _f(ats="successfactors", role="textbox", name="Choose Password: *",
+                   widget_type=WidgetType.TEXT,
+                   note="8-18 chars, >=1 upper, >=1 lower, >=1 number or punctuation, no space "
+                        "or unicode — the form states the rules; check before submitting"),
+    "verify_password": _f(ats="successfactors", role="textbox", name="Retype Password: *",
+                          widget_type=WidgetType.TEXT),
+    "first_name": _f(ats="successfactors", role="textbox", name="First Name: *",
+                     widget_type=WidgetType.TEXT, answer_key="first_name"),
+    "last_name": _f(ats="successfactors", role="textbox", name="Last Name: *",
+                    widget_type=WidgetType.TEXT, answer_key="last_name"),
+    "country": _f(ats="successfactors", role="combobox", name="Country/Region of Residence",
+                  widget_type=WidgetType.NATIVE_SELECT, answer_key="country"),
+    # REQUIRED consent. The operator's stored consents_ok includes privacy_policy, which is what
+    # this is; it is still recorded as its own field so the acceptance is deliberate and visible
+    # rather than a checkbox swept up by a fill-everything pass.
+    "terms": _f(ats="successfactors", role="button",
+                name="Terms of Use Read and accept the data privacy statement.",
+                widget_type=WidgetType.CHECKBOX_GROUP,
+                note="REQUIRED. Rendered as a button, not a checkbox."),
+    # MARKETING, both default-off. Named here so they are refused BY NAME rather than skipped by
+    # luck — the same reason Workday's honeypot is in this table.
+    "opt_in_job_notifications": _f(ats="successfactors", role="checkbox", name="Notification:",
+                                   widget_type=WidgetType.CHECKBOX_GROUP, optional=True,
+                                   note="MARKETING — 'Receive new job posting notifications'. "
+                                        "Leave OFF (marketing_contact_consent=No)."),
+    "opt_in_career_news": _f(ats="successfactors", role="checkbox",
+                             name="Hear more about career opportunities",
+                             widget_type=WidgetType.CHECKBOX_GROUP, optional=True,
+                             note="MARKETING — leave OFF."),
+    "create_account_submit": _f(ats="successfactors", role="button", name="Create Account",
+                                widget_type=WidgetType.UNKNOWN),
+    # The sign-in leg, on the gate that precedes this form.
+    "signin_email": _f(ats="successfactors", role="textbox", name="Email Address:",
+                       widget_type=WidgetType.TEXT, answer_key="email"),
+    "signin_password": _f(ats="successfactors", role="textbox", name="Password:",
+                          widget_type=WidgetType.TEXT),
+    "sign_in_submit": _f(ats="successfactors", role="button", name="Sign In",
+                         widget_type=WidgetType.UNKNOWN),
+}
+
 _BY_ATS: dict[str, dict[str, dict[str, Any]]] = {
     "greenhouse": GREENHOUSE_FIELDS,
     "workday": WORKDAY_FIELDS,
     "indeed": INDEED_FIELDS,
     "icims": ICIMS_FIELDS,
+    "successfactors": SUCCESSFACTORS_FIELDS,
 }
 
 

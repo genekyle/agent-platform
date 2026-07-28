@@ -1293,10 +1293,25 @@ _ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
                        ("password", "password"), ("verify_password", "password")),
             "submit": "create_account_submit",
         },
+        "successfactors": {
+            "fields": (("email", "username"), ("verify_email", "username"),
+                       ("password", "password"), ("verify_password", "password"),
+                       ("first_name", "first_name"), ("last_name", "last_name")),
+            # SAP wants a country before it will take the form, and a data-privacy acceptance.
+            # The two MARKETING opt-ins on the same page are deliberately absent from every list
+            # here: a field this driver never names is one it can never tick by accident.
+            "selects": (("country", "country"),),
+            "confirms": ("terms",),
+            "submit": "create_account_submit",
+        },
     },
     "sign_in": {
         "workday": {
             "fields": (("email", "username"), ("password", "password")),
+            "submit": "sign_in_submit",
+        },
+        "successfactors": {
+            "fields": (("signin_email", "username"), ("signin_password", "password")),
             "submit": "sign_in_submit",
         },
     },
@@ -1304,7 +1319,8 @@ _ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
 
 
 async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
-                              ats: str, leg: str, submit: bool) -> dict[str, Any]:
+                              ats: str, leg: str, submit: bool,
+                              extra: Optional[dict[str, str]] = None) -> dict[str, Any]:
     """Fill (and optionally submit) this ATS's account form for `leg` — create_account or sign_in.
 
     Credential-safe by construction: fields are addressed by their exact accessible name, so the
@@ -1337,6 +1353,9 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     values = {"username": username, "password": password,
               "first_name": ats_accounts.default_first_name(),
               "last_name": ats_accounts.default_last_name()}
+    # Non-credential answers the form needs (a country, a state). Passed IN rather than read here,
+    # because this function is about credentials and the answer store is the caller's business.
+    values.update({k: v for k, v in (extra or {}).items() if v})
 
     style = xs.pick_style()
 
@@ -1364,6 +1383,38 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
         if r.get("outcome") not in ("ok", "committed_unconfirmed"):
             return {"ok": False, "reason": "fill_failed",
                     "detail": f"Could not fill {field!r} ({r.get('outcome') or r.get('detail')})."}
+
+    # SELECTS — a dropdown the form insists on before it will accept the rest.
+    for field, source in form.get("selects", ()):
+        value = values.get(source) or ""
+        if not value:
+            return {"ok": False, "reason": "no_value",
+                    "detail": f"No value for the {field!r} dropdown (source {source!r}). Store it "
+                              f"as an application answer first; nothing was submitted."}
+        addr = apply_fields.addressing_for(ats, field)
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": "select",
+            "target_bbox": {}, "target_role": addr["role"], "target_name": addr["name"],
+            "value": value, "driver": "humanized"})
+        if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+            return {"ok": False, "reason": "select_failed",
+                    "detail": f"Could not set {field!r} to {value!r} "
+                              f"({res.get('outcome') or res.get('detail')})."}
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    # CONFIRMS — required consents, clicked BY NAME so an acceptance is always a deliberate act
+    # against a field somebody wrote down, never a checkbox swept up by a fill-everything pass.
+    for field in form.get("confirms", ()):
+        addr = apply_fields.addressing_for(ats, field)
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+            "target_bbox": {}, "target_role": addr["role"], "target_name": addr["name"],
+            "driver": "humanized"})
+        if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+            return {"ok": False, "reason": "confirm_failed",
+                    "detail": f"Could not accept {field!r} "
+                              f"({res.get('outcome') or res.get('detail')})."}
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
     submit_addr = apply_fields.addressing_for(ats, form["submit"])
     button = submit_addr["name"] or submit_addr["selector"]
@@ -1466,9 +1517,22 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                "detail": "A challenge is up on the signup form — clear it yourself. "
                                          "We never auto-solve, on any form."})
         tab_id = _apply_tab(bb, obs).get("tab_id", "")
+        # Answers the form needs beyond the credential — resolved here, where the DB is.
+        from sqlalchemy import select as _select
+
+        from models import ApplicationAnswer
+        wanted = {src for _f, src in
+                  (_ACCOUNT_FORMS.get(action.get("leg") or "", {})
+                   .get(step.platform, {}).get("selects", ()))}
+        extra = {}
+        if wanted:
+            rows = db.scalars(_select(ApplicationAnswer).where(
+                ApplicationAnswer.answer_key.in_(tuple(wanted)))).all()
+            extra = {r.answer_key: str(r.value or "") for r in rows
+                     if getattr(r, "answer_key", None) in wanted}
         drive = await _drive_account_form(browser_url, tab_id, creds, ats=step.platform,
                                           leg=action.get("leg") or "create_account",
-                                          submit=(body.mode == "auto"))
+                                          submit=(body.mode == "auto"), extra=extra)
         if not drive.get("ok"):
             step.record(_ACCOUNT_RUNG, aps.FAILED, f"create leg: {drive.get('detail', '')}"[:200],
                         initiator=body.initiator)

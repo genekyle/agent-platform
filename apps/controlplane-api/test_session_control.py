@@ -3595,3 +3595,52 @@ def test_the_real_username_is_used_for_matching_and_never_returned(monkeypatch, 
     assert "not-a-real-password" not in json.dumps(r)
     # And the registry still only ever exposes the masked form.
     assert accounts.get_account("indeed_default")["username_hint"] == "p***@example.com"
+
+
+def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
+    """SAP's create-account form wants a country dropdown and a data-privacy acceptance before it
+    will take the form. Both are driven BY NAME from the recipe, and the two MARKETING opt-ins on
+    the same page are absent from every list — a field this driver never names is one it can never
+    tick by accident."""
+    acted = []
+
+    def _execute(payload):
+        acted.append((payload.get("action_id"), payload.get("target_name")))
+        return {"outcome": "ok"}
+
+    class _Answer:
+        def __init__(self, k, v): self.answer_key, self.value = k, v
+
+    import accounts, ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    accounts.put_account(ats_accounts.ats_account_id("Teradyne", "successfactors"),
+                         {"status": "pending"})
+
+    bb = _with_queue(("indeed:a1", "Pricing Analyst", "Teradyne"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].platform = "successfactors"
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://career41.sapsf.com/careers"}
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/execute": _execute,
+         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+        blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    kinds = [a for a, _ in acted]
+    names = [n for _, n in acted]
+    assert "select" in kinds                                   # the country dropdown ran
+    assert "Country/Region of Residence" in names
+    assert "Terms of Use Read and accept the data privacy statement." in names   # consent, by name
+    # the marketing opt-ins are never addressed at all
+    assert not any(n and ("Notification:" in n or "Hear more" in n) for n in names)
+    assert names[-1] == "Create Account"                       # submit is last
