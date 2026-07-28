@@ -3265,3 +3265,24 @@ its confusable neighbour spelled out (vs `successfactors_account_gate`: the doub
 the name pair, the country dropdown, the consent rendered as a BUTTON, the rules callout). Capture
 341, 36 AX candidates, human-labeled; L3 independently classified it `successfactors_create_account`
 at 0.95 and correctly declined to overwrite the human label.
+
+**Addendum, same session — the dropdown that was right by luck.** Reading SAP's country list before
+letting it be driven turned up both `United States` AND `United States Minor Outlying Islands`.
+`_select_option` matched option text with `includes()` only, so it picked correctly for exactly one
+reason: **the exact option sorts first alphabetically.** Reorder that list, or meet a site sorting by
+ISO code, and the drive files an application against the wrong country — returning `ok`, with
+nothing anywhere recording the substitution. Exact-then-substring now, matching what
+`_resolve_ax_node` already does for names, with the fallback reported as `native_contains` /
+`picked_contains` so a loose match is visible before it becomes a wrong answer. Tested by running
+the SHIPPED `functionDeclaration` in node against a stub select — captured from the driver, not
+retyped, since a test that re-implements the JS only proves the re-implementation works. **The
+general shape: a matcher that is right because of the order it happens to receive is not right, and
+it will not announce the day the order changes.**
+
+**Also: this checkout had a second session live in it.** `google_recipe.py`,
+`test_google_identity.py`, `routers/session_control.py` and `route_inventory.json` were modified by
+work that was not mine (the LinkedIn→Google identity policy, flipping `EMAIL` from HUMAN to AUTO),
+and its test was mid-update, so `test_google_identity` was red for reasons unrelated to anything
+here. Staging explicit paths is what kept the two apart — `git add -A` would have swept an in-flight
+policy change into a commit about ATS credentials. **A red suite is not automatically yours: check
+`git status` before you believe a failure belongs to your change.**
