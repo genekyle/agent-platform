@@ -43,12 +43,12 @@ def test_successfactors_records_the_native_dialog_that_blocked_the_window():
     """The blocker is the whole reason this ATS got a recipe before it was driven: a native browser
     dialog is invisible to CDP, so the click returns ok and nothing moves. The recipe must SAY that,
     and must not claim the notification-permission fix that was already in place and did not help."""
-    lessons = ar.SUCCESSFACTORS_LESSONS
-    note = lessons["native_dialog_blocked_the_window"]
-    assert "invisible to cdp" in note.lower()
-    assert "already block" in note.lower()          # the wrong fix is named as wrong
-    assert any("native dialog" in (s.get("action") or "").lower()
-               for s in ar.SUCCESSFACTORS_APPLY_RECIPE)
+    note = ar.SUCCESSFACTORS_LESSONS["alert_blocks_the_tab"]
+    assert "alert()" in note                         # the MECHANISM, not "some native dialog"
+    assert "dialog_guard" in note                    # and the only thing that actually works
+    assert "cannot be dismissed after" in note.lower()
+    # The recipe must start the guard BEFORE driving — after the fact is too late, by construction.
+    assert "dialog_guard" in (ar.SUCCESSFACTORS_APPLY_RECIPE[0].get("action") or "")
 
 
 def test_successfactors_apply_is_a_staged_menu():

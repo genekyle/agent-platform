@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -2813,6 +2814,250 @@ async def native_dialog(body: NativeDialogRequest):
     except Exception as exc:  # noqa: BLE001
         logger.warning("native_dialog failed: %s", exc)
         return {"ok": False, "detail": str(exc)[:200]}
+
+
+# --- the dialog guard: be listening BEFORE the dialog opens ---------------------------------------
+#: tab_id -> {"task": asyncio.Task, "seen": [ {...} ], "accept": bool, "started_at": str}
+#: A guard is the ONLY thing that reliably clears a page alert, because Chrome hands a dialog to a
+#: CDP client only if that client had `Page.enable` active WHEN THE DIALOG OPENED. Connect after the
+#: fact — which every other probe in this file does, one websocket per request — and the dialog is
+#: unowned: `handle` answers "No dialog is showing" while it sits on screen blocking the renderer,
+#: and even `Page.enable` times out because commands queue behind the block. Measured on Teradyne
+#: 2026-07-27, where all three recovery strategies failed against a plain alert().
+_DIALOG_GUARDS: dict[str, dict[str, Any]] = {}
+
+
+async def _guard_loop(browser_url: str, target: dict, accept: bool, record: dict) -> None:
+    """Hold a Page-enabled socket open and answer dialogs the moment they appear."""
+    import websockets
+
+    ws_url = target["webSocketDebuggerUrl"]
+    try:
+        async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as ws:
+            await ws.send(json.dumps({"id": 1, "method": "Page.enable", "params": {}}))
+            record["attached"] = True
+            while True:
+                raw = await ws.recv()
+                msg = json.loads(raw)
+                if msg.get("method") != "Page.javascriptDialogOpening":
+                    continue
+                params = msg.get("params") or {}
+                # ANSWER FIRST, record second: every millisecond this sits open is a millisecond
+                # the renderer is frozen and the drive is blind.
+                await ws.send(json.dumps({"id": 0, "method": "Page.handleJavaScriptDialog",
+                                          "params": {"accept": bool(accept)}}))
+                record["seen"].append({
+                    "type": params.get("type"),
+                    "message": str(params.get("message") or "")[:300],
+                    "url": str(params.get("url") or "")[:200],
+                    "accepted": bool(accept),
+                    "at": _utcnow_iso(),
+                })
+                logger.info("dialog guard dismissed a %s: %s", params.get("type"),
+                            str(params.get("message"))[:120])
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        record["attached"] = False
+        record["error"] = str(exc)[:200]
+        logger.warning("dialog guard detached: %s", exc)
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+class DialogGuardRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    action: str = "start"        # start | stop | status
+    accept: bool = True          # an alert() has one button; accepting IS dismissing it
+
+
+@app.post("/dialog_guard")
+async def dialog_guard(body: DialogGuardRequest):
+    """Watch a tab for JavaScript dialogs and dismiss them the instant they open.
+
+    This is the PREVENTION half of the native-dialog problem, and the only half that works. See
+    `_DIALOG_GUARDS` for why after-the-fact dismissal cannot: ownership is decided at open time.
+
+    Start one on any tab BEFORE driving a site that throws alerts — SAP SuccessFactors greets you
+    with `jobs.<tenant>.com says — Join our talent community…` on the job page. Every dialog the
+    guard answers is recorded with its MESSAGE, which is how a site's dialogs stop being folklore
+    and start being data: `status` returns the list.
+    """
+    import asyncio
+
+    import websockets  # noqa: F401 — imported for the guard task's own use
+    from app.observer.ax_proposer import _discover_target
+
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"no such tab: {exc}"}
+    tid = target.get("id") or ""
+
+    if body.action == "status":
+        rec = _DIALOG_GUARDS.get(tid)
+        return {"ok": True, "tab_id": tid, "guarded": bool(rec),
+                "attached": bool((rec or {}).get("attached")),
+                "dismissed_count": len((rec or {}).get("seen") or []),
+                "seen": (rec or {}).get("seen") or []}
+
+    if body.action == "stop":
+        rec = _DIALOG_GUARDS.pop(tid, None)
+        if rec and rec.get("task"):
+            rec["task"].cancel()
+        return {"ok": True, "tab_id": tid, "stopped": bool(rec),
+                "dismissed_count": len((rec or {}).get("seen") or [])}
+
+    if tid in _DIALOG_GUARDS:
+        rec = _DIALOG_GUARDS[tid]
+        return {"ok": True, "tab_id": tid, "already_guarded": True,
+                "dismissed_count": len(rec.get("seen") or [])}
+
+    record: dict[str, Any] = {"seen": [], "accept": bool(body.accept),
+                              "started_at": _utcnow_iso(), "attached": False,
+                              "url": (target.get("url") or "")[:200]}
+    record["task"] = asyncio.create_task(
+        _guard_loop(body.browser_url, target, bool(body.accept), record))
+    _DIALOG_GUARDS[tid] = record
+    await asyncio.sleep(0.4)     # let Page.enable land so `attached` is meaningful to the caller
+    return {"ok": True, "tab_id": tid, "guarding": True, "attached": record.get("attached"),
+            "url": record["url"],
+            "note": "dialogs opening from now on are dismissed automatically and recorded; a "
+                    "dialog already on screen cannot be taken over — that one is the operator's."}
+
+
+class DismissDialogRequest(BaseModel):
+    """Clear a JS dialog that is already open, then PROVE the tab came back."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    accept: bool = True          # these are alert()s with one OK button; Cancel does not exist
+    settle_seconds: float = 1.0
+
+
+@app.post("/dismiss_dialog")
+async def dismiss_dialog(body: DismissDialogRequest):
+    """Dismiss an OPEN JavaScript dialog, and verify the renderer answers afterwards.
+
+    WHY THIS IS NOT JUST `Page.handleJavaScriptDialog`. Chrome hands a dialog to a CDP client only
+    if that client had `Page.enable` ACTIVE WHEN THE DIALOG OPENED. Every probe in this server
+    connects fresh per request, so by the time we enable Page the dialog is already up and
+    unowned — the call comes back "No dialog is showing" even though one is plainly on screen.
+    Measured on Teradyne 2026-07-27, where the dialog was `jobs.teradyne.com says — Join our talent
+    community…`, a plain alert() that this server first mis-reported as browser-level.
+
+    So the strategies escalate, and each one REPORTS rather than silently falling through:
+
+      1. enable-then-handle on a page-target session   — works if Chrome still routes it to us
+      2. enable-then-handle on a Target.attachToTarget session — a different session identity, which
+         some Chrome builds treat as a fresh Page client
+      3. give up honestly, naming what is left (close the tab and re-reach the page by clicking)
+
+    VERIFICATION IS PART OF THE ACT, not a separate courtesy. A dialog dismissal that is not
+    confirmed is exactly the "returned ok and nothing moved" failure this whole endpoint exists to
+    end, so the response carries `responsive_before` / `responsive_after` and a `verified` flag that
+    is true only when a dead renderer became a live one.
+
+    `accept` defaults TRUE here, unlike /native_dialog: an alert() has a single OK button, and
+    "cancel" on a one-button dialog is not a safer answer, it is a no-op that leaves the tab wedged.
+    """
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    async def _responsive(cdp, timeout: float = 3.0) -> bool:
+        try:
+            await asyncio.wait_for(
+                cdp.send("Runtime.evaluate", {"expression": "1", "returnByValue": True}),
+                timeout=timeout)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"no such tab: {exc}"}
+
+    out: dict[str, Any] = {"ok": True, "tab_id": target.get("id"),
+                           "url": (target.get("url") or "")[:200], "attempts": []}
+    try:
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            out["responsive_before"] = await _responsive(cdp)
+
+            # 1 — the direct route.
+            try:
+                await asyncio.wait_for(cdp.send("Page.enable", {}), timeout=3.0)
+            except Exception as exc:  # noqa: BLE001
+                out["attempts"].append({"strategy": "page_enable", "ok": False,
+                                        "detail": str(exc)[:120]})
+            try:
+                await asyncio.wait_for(
+                    cdp.send("Page.handleJavaScriptDialog", {"accept": bool(body.accept)}),
+                    timeout=3.0)
+                out["attempts"].append({"strategy": "handle_on_page_session", "ok": True})
+            except Exception as exc:  # noqa: BLE001
+                out["attempts"].append({"strategy": "handle_on_page_session", "ok": False,
+                                        "detail": str(exc)[:120]})
+
+            # 2 — a flattened Target session: a different Page client identity.
+            if not any(a.get("ok") for a in out["attempts"] if "handle" in a["strategy"]):
+                try:
+                    att = await asyncio.wait_for(
+                        cdp.send("Target.attachToTarget",
+                                 {"targetId": target.get("id"), "flatten": True}), timeout=3.0)
+                    sid = (att or {}).get("sessionId")
+                    if sid:
+                        await asyncio.wait_for(cdp.send("Page.enable", {}, session_id=sid)
+                                               if _cdp_takes_session(cdp) else
+                                               cdp.send("Page.enable", {}), timeout=3.0)
+                        await asyncio.wait_for(
+                            cdp.send("Page.handleJavaScriptDialog", {"accept": bool(body.accept)},
+                                     session_id=sid)
+                            if _cdp_takes_session(cdp) else
+                            cdp.send("Page.handleJavaScriptDialog", {"accept": bool(body.accept)}),
+                            timeout=3.0)
+                        out["attempts"].append({"strategy": "handle_on_attached_session", "ok": True})
+                except Exception as exc:  # noqa: BLE001
+                    out["attempts"].append({"strategy": "handle_on_attached_session", "ok": False,
+                                            "detail": str(exc)[:120]})
+
+            await asyncio.sleep(body.settle_seconds)
+            out["responsive_after"] = await _responsive(cdp)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("dismiss_dialog failed: %s", exc)
+        return {"ok": False, "detail": str(exc)[:200], **out}
+
+    out["verified"] = bool(out.get("responsive_after")) and not out.get("responsive_before")
+    out["still_blocked"] = not out.get("responsive_after")
+    if out["verified"]:
+        out["verdict"] = "dialog dismissed and the renderer answers again — confirmed"
+    elif out.get("responsive_after") and out.get("responsive_before"):
+        out["verdict"] = "the tab was never blocked; nothing to dismiss"
+    else:
+        out["verdict"] = ("STILL BLOCKED. CDP could not take ownership of this dialog. It has to be "
+                          "closed by hand, or the tab closed and the page re-reached by clicking. "
+                          "Prevent the next one by keeping Page.enable active BEFORE the dialog "
+                          "opens (see /native_dialog).")
+    return out
+
+
+def _cdp_takes_session(cdp: Any) -> bool:
+    """Does this CDP helper accept a `session_id` kwarg? Kept as a probe rather than an assumption
+    so the attached-session strategy degrades to the flat one instead of raising TypeError."""
+    import inspect
+    try:
+        return "session_id" in inspect.signature(cdp.send).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 @app.post("/close_tab")

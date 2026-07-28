@@ -88,9 +88,9 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
      # shape and the page's own furniture are the tells; see `_SUCCESSFACTORS_PATH_TELLS`.
      "hosts": ["successfactors.com", "successfactors.eu", "rmkcdn.successfactors.com"],
      "recipe": "apply_recipe.SUCCESSFACTORS_APPLY_RECIPE", "auth": "account",
-     "notes": "SAP ATS, usually on the employer's OWN domain. A NATIVE CHROME DIALOG blocked the "
-              "whole window here (operator-observed 2026-07-27) — invisible to CDP, and NOT the "
-              "notification prompt, which this profile already blocks. Apply is a STAGED MENU "
+     "notes": "SAP ATS, usually on the employer's OWN domain. RAISES A BLOCKING alert() on the job "
+              "page ('Join our talent community…') that freezes the tab's renderer and cannot be "
+              "dismissed once open — start /dialog_guard BEFORE driving. Apply is a STAGED MENU "
               "('Apply Now' vs 'Start applying with LinkedIn'), not a direct link.",
      "seed_companies": ["Teradyne"]},
     {"ats_id": "smartrecruiters", "display_name": "SmartRecruiters", "icon": "🟢",

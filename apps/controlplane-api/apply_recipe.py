@@ -551,37 +551,43 @@ ICIMS_ACCOUNT_LOOP = {
 # Room made for it at the operator's request after it stopped a drive dead.
 #
 # ==================================================================================================
-# THE BLOCKER, FIRST, BECAUSE IT STOPS EVERYTHING: A NATIVE CHROME DIALOG, NOT PAGE CONTENT.
+# THE BLOCKER, FIRST, BECAUSE IT STOPS EVERYTHING: SAP THROWS A JAVASCRIPT alert().
 # ==================================================================================================
-# Operator, 2026-07-27: *"the SAP integration sent me a google chrome notification that was blocking
-# the entire application."*
+# On the job page, jobs.<tenant>.com raises:
 #
-# WHAT IS CERTAIN. Something rendered by the BROWSER (or macOS on the browser's behalf) sat over the
-# window and blocked interaction. It is invisible to everything we have: no DOM node, no AX node,
-# and a CDP screenshot captures the PAGE, not the browser's own chrome. The failure therefore looks
-# like nothing at all — `/execute` re-resolved "Apply Now", dispatched, returned `ok`, and the page
-# was unchanged. We only learned it happened because a human was sitting in front of it.
+#     jobs.teradyne.com says
+#     Join our talent community, receive job alerts, and start the apply process.   [ OK ]
 #
-# WHAT IS NOT YET KNOWN: which dialog. The obvious guess is a notification-permission prompt, and
-# that guess is WRONG or at least incomplete — the training profile already launches with
-# `--disable-notifications` AND `default_content_setting_values.notifications = 2`, and the live
-# profile was verified as blocking with zero per-site exceptions while this happened. So do not
-# "fix" this by denying notifications; that is already done. Candidates still open: a macOS
-# notification banner from Chrome overlaying the window, a protocol-handler prompt ("open in
-# another application"), or a download/beforeunload dialog. PIN IT WHEN IT RECURS by reading the
-# dialog's actual wording — that is evidence only the operator can collect.
+# It is a plain `alert()` — page-owned, one button. But it BLOCKS THAT TAB'S RENDERER, and our whole
+# observation stack reads the page: no DOM node, no AX node, and `Page.captureScreenshot` hangs
+# along with everything else. So the drive goes blind in the most misleading way possible —
+# `/execute` re-resolves its target, dispatches, returns `ok`, and nothing moves.
 #
-# THE GENERAL LESSON, worth more than the SAP case: a native browser dialog is a class of blocker
-# our whole stack is blind to — permission prompts, the OS file picker, basic-auth, beforeunload,
-# print, protocol handlers. Every one of them makes a click return `ok` and change nothing. When an
-# action reports ok and the page is byte-identical, "is something NATIVE on top of the window"
-# belongs in the diagnosis next to the captcha check — and it is the one cause we cannot confirm
-# from inside the page, so it has to be asked of the human.
+# MEASURED SIGNATURE (2026-07-27): the blocked tab answered NO CDP command while the Indeed tab
+# beside it returned 8731 characters in the same second. "This tab stopped talking and its sibling
+# did not" is the tell, and `/native_dialog` reports it.
+#
+# YOU CANNOT DISMISS IT AFTER THE FACT. Chrome hands a dialog to a CDP client only if that client
+# had `Page.enable` ACTIVE WHEN THE DIALOG OPENED. Connect afterwards — as every per-request probe
+# does — and `Page.handleJavaScriptDialog` answers "No dialog is showing" about a dialog that is
+# plainly on screen; even `Page.enable` times out, queued behind the block. All three recovery
+# strategies in `/dismiss_dialog` were tried live and all three failed.
+#
+# SO THE ANSWER IS PREVENTION: start `/dialog_guard` on the tab BEFORE driving SAP. It holds a
+# Page-enabled socket open, answers `Page.javascriptDialogOpening` the instant it fires, and records
+# the message. Verified end to end on a live alert: dismissed_count 1, message captured verbatim,
+# renderer never blocked.
+#
+# THE GENERAL LESSON: a dialog is the one blocker that makes the page unreadable INSTEAD of wrong,
+# and it must be prevented rather than detected — by the time you can see the problem, you have
+# already lost the ability to act on it.
 SUCCESSFACTORS_LESSONS = {
-    "native_dialog_blocked_the_window": "A browser/OS-level dialog blocked the whole window while "
-        "driving Teradyne (operator-observed 2026-07-27). Invisible to CDP; a click returns ok and "
-        "nothing moves. NOT fixed by denying notifications — the profile already blocks those. "
-        "Wording unknown; capture it the next time it appears.",
+    "alert_blocks_the_tab": "The job page raises a JS alert() — 'Join our talent community, "
+        "receive job alerts, and start the apply process.' It blocks the tab's renderer, so every "
+        "probe hangs and a click returns ok while nothing moves. It CANNOT be dismissed after the "
+        "fact (CDP only owns dialogs that open while Page.enable is already active). START "
+        "/dialog_guard ON THE TAB BEFORE DRIVING. Not a notification prompt — the profile already "
+        "blocks those, and that guess cost an hour.",
     "branded_by_default": "The career site runs on the EMPLOYER's domain (jobs.teradyne.com) with no "
         "SAP string in the url. Recognised by path shape — /<Tenant>/job/<Location>-<Title>-<id>/ "
         "and /<Tenant>/search/ (ats_registry._SUCCESSFACTORS_PATH_TELLS).",
@@ -597,10 +603,11 @@ SUCCESSFACTORS_LESSONS = {
 
 SUCCESSFACTORS_APPLY_RECIPE = [
     {"step": 0, "state": "successfactors_job_posting",
-     "action": "Dismiss the cookie notice with 'Close Cookies Notice' (never Accept), then click "
-               "'Apply now' to OPEN THE MENU. If a click reports ok and the page does not move, "
-               "SUSPECT A NATIVE DIALOG over the window and ask the operator what they can see — "
-               "see SUCCESSFACTORS_LESSONS.native_dialog_blocked_the_window.",
+     "action": "FIRST: POST /dialog_guard {action:'start'} on this tab — SAP raises a blocking "
+               "alert() here and it cannot be cleared once open. Then dismiss the cookie notice "
+               "with 'Close Cookies Notice' (never Accept), and click 'Apply now' to OPEN THE MENU. "
+               "If a click reports ok and the page does not move, run /native_dialog: an "
+               "unresponsive renderer beside a healthy sibling tab means a dialog has it.",
      "controls": {"cookie_close": {"role": "button", "name": "Close Cookies Notice"},
                   "apply_menu": {"role": "button", "name": "Apply now"}},
      "expect": ["successfactors_apply_menu"]},
