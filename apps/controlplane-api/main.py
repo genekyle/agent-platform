@@ -15,7 +15,6 @@ import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
@@ -56,6 +55,7 @@ from schemas import (
     ScenarioWrite,
     StepLeaseResponse,
     StepResultIn,
+    StrictModel,
     TaskRead,
     TaskUpdate,
     TaskWrite,
@@ -1089,7 +1089,7 @@ def _page_state_dict(s: PageStateRegistry) -> dict:
     }
 
 
-class PageStateWrite(BaseModel):
+class PageStateWrite(StrictModel):
     display_name: str
     scope: str = "global"  # global | domain | goal | scenario
     domain_id: Optional[str] = None
@@ -1101,7 +1101,7 @@ class PageStateWrite(BaseModel):
     state_id: Optional[str] = None  # optional explicit slug; else derived from display_name
 
 
-class PageStateUpdate(BaseModel):
+class PageStateUpdate(StrictModel):
     display_name: Optional[str] = None
     scope: Optional[str] = None
     domain_id: Optional[str] = None
@@ -1249,7 +1249,7 @@ def list_page_states(
     return result
 
 
-class JobExtractRequest(BaseModel):
+class JobExtractRequest(StrictModel):
     training_session_id: int
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
@@ -1257,7 +1257,7 @@ class JobExtractRequest(BaseModel):
     platform: str = "indeed"
 
 
-class JobStatusUpdate(BaseModel):
+class JobStatusUpdate(StrictModel):
     application_status: Optional[str] = None  # seen|viewed|applied|skipped|rejected
     notes: Optional[str] = None
 
@@ -1528,7 +1528,7 @@ async def captcha_gate(training_session_id: int, db: Session = Depends(get_db)):
     return gate
 
 
-class AwaitCaptchaRequest(BaseModel):
+class AwaitCaptchaRequest(StrictModel):
     training_session_id: int
     timeout_s: int = 240        # how long to wait for the human to solve it
     interval_s: float = 3.0     # poll cadence
@@ -1729,14 +1729,14 @@ def apply_recipe_spec():
     return apply_recipe.recipe_spec()
 
 
-class SearchTargetCreate(BaseModel):
+class SearchTargetCreate(StrictModel):
     query: str
     location: str = ""
     status: str = "active"  # active | paused
     radius_miles: int = 50  # floored at 50 by the sweep regardless
 
 
-class SearchOutcome(BaseModel):
+class SearchOutcome(StrictModel):
     query: str
     location: str = ""
     status: Optional[str] = None    # e.g. 'searched' to close a query out
@@ -1847,7 +1847,7 @@ def jobs_dashboard(domain_id: str, platform: Optional[str] = None, db: Session =
     }
 
 
-class FetchDescriptionsRequest(BaseModel):
+class FetchDescriptionsRequest(StrictModel):
     training_session_id: int
     job_ids: list[str] = []   # specific jobs; if empty, fetch the N most-seen unfetched
     limit: int = 8
@@ -1923,7 +1923,7 @@ async def _capture_post(path: str, payload: dict, timeout: float = 40.0) -> dict
         return {"ok": False, "detail": str(exc)}
 
 
-class SearchSweepRequest(BaseModel):
+class SearchSweepRequest(StrictModel):
     training_session_id: int
     # WHICH aggregator to sweep. Defaults to Indeed so every existing caller is unchanged; the
     # capture server picks its readers off the live tab's host, so this only has to name the right
@@ -2204,7 +2204,7 @@ def _action_dict(a: ActionRegistry) -> dict:
     }
 
 
-class ActionWrite(BaseModel):
+class ActionWrite(StrictModel):
     label: str
     value_label: Optional[str] = None
     action_id: Optional[str] = None  # optional explicit slug; else from label
@@ -2620,7 +2620,7 @@ def post_step_result(step_id: int, body: StepResultIn, db: Session = Depends(get
 _SELF_URL_PATTERNS = ("localhost:5173", "localhost:3000", "127.0.0.1:5173", "127.0.0.1:3000")
 
 
-class CaptureRequest(BaseModel):
+class CaptureRequest(StrictModel):
     training_session_id: int
     # tab_url is the REAL handle: chrome-devtools-mcp's list_pages exposes only an index + URL, no
     # CDP targetId, so a tab_id cannot address a page (see the 2026-07-15 capture entry). Requiring
@@ -2730,7 +2730,7 @@ async def trigger_capture(body: CaptureRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-class ExecuteActionRequest(BaseModel):
+class ExecuteActionRequest(StrictModel):
     """Drive one action against a session's live tab via the interim CDP executor.
     Provide a target either explicitly (target_bbox in screenshot px) or by resolving
     it from a prior capture (filename + candidate_id, looked up in the .ax.json sidecar)."""
@@ -3061,7 +3061,7 @@ def runtime_run(filename: str, task_goal: str, max_steps: int = 1):
     }
 
 
-class RunLiveRequest(BaseModel):
+class RunLiveRequest(StrictModel):
     """Drive the runtime loop against a session's LIVE tab, re-observing between steps.
 
     Unlike `/api/runtime/run` (a single static capture, record-only), this observes the
@@ -4627,7 +4627,7 @@ def delete_observation(filename: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-class BulkDeleteRequest(BaseModel):
+class BulkDeleteRequest(StrictModel):
     filenames: list[str]
 
 
@@ -4644,7 +4644,7 @@ def bulk_delete_observations(body: BulkDeleteRequest, db: Session = Depends(get_
     return {"ok": True, "deleted": deleted}
 
 
-class UpdateMetaRequest(BaseModel):
+class UpdateMetaRequest(StrictModel):
     group: Optional[str] = None
     status: Optional[str] = None
     label: Optional[str] = None
@@ -4732,7 +4732,7 @@ def update_observation_meta(filename: str, body: UpdateMetaRequest, db: Session 
     return {"ok": True, **meta}
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(StrictModel):
     rebuild_dataset: bool = True
 
 
