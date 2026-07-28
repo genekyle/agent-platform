@@ -3007,27 +3007,21 @@ async def dismiss_dialog(body: DismissDialogRequest):
                 out["attempts"].append({"strategy": "handle_on_page_session", "ok": False,
                                         "detail": str(exc)[:120]})
 
-            # 2 — a flattened Target session: a different Page client identity.
+            # 2 — attach from the BROWSER endpoint with session routing. The previous version of
+            # this strategy was a silent no-op: it asked whether `_CDPSession.send` takes a
+            # `session_id` (it does not) and then sent the same flat command twice, so the
+            # "attached session" path was never actually exercised. A dead strategy that reports
+            # `ok: false` looks exactly like a live one that failed, which is the worst kind of
+            # test result — it retires an idea without trying it.
+            #
+            # The real attempt goes through /devtools/browser/<id>, which is served by the BROWSER
+            # process and therefore answers while the tab's renderer is frozen. Whether Chrome will
+            # hand an already-open dialog to a session created after the fact is the open question;
+            # this is the one route that can ask it.
             if not any(a.get("ok") for a in out["attempts"] if "handle" in a["strategy"]):
-                try:
-                    att = await asyncio.wait_for(
-                        cdp.send("Target.attachToTarget",
-                                 {"targetId": target.get("id"), "flatten": True}), timeout=3.0)
-                    sid = (att or {}).get("sessionId")
-                    if sid:
-                        await asyncio.wait_for(cdp.send("Page.enable", {}, session_id=sid)
-                                               if _cdp_takes_session(cdp) else
-                                               cdp.send("Page.enable", {}), timeout=3.0)
-                        await asyncio.wait_for(
-                            cdp.send("Page.handleJavaScriptDialog", {"accept": bool(body.accept)},
-                                     session_id=sid)
-                            if _cdp_takes_session(cdp) else
-                            cdp.send("Page.handleJavaScriptDialog", {"accept": bool(body.accept)}),
-                            timeout=3.0)
-                        out["attempts"].append({"strategy": "handle_on_attached_session", "ok": True})
-                except Exception as exc:  # noqa: BLE001
-                    out["attempts"].append({"strategy": "handle_on_attached_session", "ok": False,
-                                            "detail": str(exc)[:120]})
+                out["attempts"].append(
+                    await _handle_dialog_via_browser_session(
+                        body.browser_url, target.get("id") or "", bool(body.accept)))
 
             await asyncio.sleep(body.settle_seconds)
             out["responsive_after"] = await _responsive(cdp)
@@ -3048,6 +3042,59 @@ async def dismiss_dialog(body: DismissDialogRequest):
                           "Prevent the next one by keeping Page.enable active BEFORE the dialog "
                           "opens (see /native_dialog).")
     return out
+
+
+async def _handle_dialog_via_browser_session(browser_url: str, target_id: str,
+                                             accept: bool) -> dict[str, Any]:
+    """Attach to a page target from the BROWSER-level CDP endpoint and answer its dialog.
+
+    Session-routed CDP: every message carries `sessionId`, and the browser process — not the frozen
+    renderer — is the one that replies. That is the only reason this can be tried at all while the
+    tab is blocked.
+    """
+    import urllib.request
+
+    import websockets
+
+    try:
+        with urllib.request.urlopen(f"{browser_url.rstrip('/')}/json/version", timeout=6) as r:
+            ws_url = json.load(r).get("webSocketDebuggerUrl")
+        if not ws_url:
+            return {"strategy": "handle_via_browser_session", "ok": False,
+                    "detail": "browser endpoint exposed no webSocketDebuggerUrl"}
+
+        async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as ws:
+            async def rpc(mid: int, method: str, params: dict, session: Optional[str] = None):
+                msg = {"id": mid, "method": method, "params": params}
+                if session:
+                    msg["sessionId"] = session
+                await ws.send(json.dumps(msg))
+                deadline = asyncio.get_event_loop().time() + 5.0
+                while True:
+                    remaining = deadline - asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        raise TimeoutError(f"{method}: no reply in 5s")
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                    m = json.loads(raw)
+                    if m.get("id") != mid:
+                        continue
+                    if "error" in m:
+                        raise RuntimeError(f"{method}: {m['error'].get('message')}")
+                    return m.get("result", {})
+
+            att = await rpc(1, "Target.attachToTarget", {"targetId": target_id, "flatten": True})
+            sid = att.get("sessionId")
+            if not sid:
+                return {"strategy": "handle_via_browser_session", "ok": False,
+                        "detail": "attachToTarget returned no sessionId"}
+            try:
+                await rpc(2, "Page.enable", {}, session=sid)
+            except Exception as exc:  # noqa: BLE001 — enable may queue behind the block; try anyway
+                pass
+            await rpc(3, "Page.handleJavaScriptDialog", {"accept": accept}, session=sid)
+            return {"strategy": "handle_via_browser_session", "ok": True, "session_id": sid}
+    except Exception as exc:  # noqa: BLE001
+        return {"strategy": "handle_via_browser_session", "ok": False, "detail": str(exc)[:160]}
 
 
 def _cdp_takes_session(cdp: Any) -> bool:
