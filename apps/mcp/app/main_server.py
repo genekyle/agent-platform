@@ -2723,6 +2723,98 @@ async def list_tabs(body: ListTabsRequest):
     return {"ok": True, "tabs": tabs, "count": len(tabs)}
 
 
+class NativeDialogRequest(BaseModel):
+    """Address ONE tab and ask whether a native dialog owns it (and optionally dismiss it)."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    dismiss: bool = False        # try to close a JS dialog; False = diagnose only
+    accept: bool = False         # if dismissing: False = Cancel/stay (the safe answer)
+    probe_timeout: float = 4.0
+
+
+@app.post("/native_dialog")
+async def native_dialog(body: NativeDialogRequest):
+    """Is this tab blocked by a NATIVE dialog — and can we clear it?
+
+    THE BLIND SPOT THIS FILLS. A native dialog is browser chrome, not page content: no DOM node, no
+    AX node, and `Page.captureScreenshot` shows the page beneath it (or hangs). Every probe we own
+    looks at the page, so a blocked tab reads as a page that simply did not change — `/execute`
+    re-resolves its target, dispatches, returns `ok`, and nothing moves. Driving Teradyne's SAP site
+    on 2026-07-27 we only learned a dialog existed because the operator was watching the screen.
+
+    THE SIGNATURE, which is what makes this diagnosable at all: a modal dialog BLOCKS THAT TAB'S
+    RENDERER. `Runtime.evaluate` never returns for it while sibling tabs answer instantly. So
+    "this tab stopped talking and its neighbour did not" is strong evidence of a native dialog, and
+    needs no sight of the dialog itself. That is what the probe below measures.
+
+    WHAT CAN BE CLEARED, AND WHAT CANNOT. A page-owned JS dialog (alert / confirm / prompt /
+    beforeunload) is dismissible via `Page.handleJavaScriptDialog` — and a "No dialog is showing"
+    error back from it is itself informative: the blocker is then BROWSER-level (a permission
+    prompt, a protocol-handler prompt, a download bar), which CDP cannot dismiss and only the
+    operator can clear. Reporting which of the two it is turns an invisible stall into a fact.
+
+    Dismissal defaults to accept=False — Cancel, stay, do not confirm. An automated `accept` on an
+    unread dialog is a click on a button nobody looked at.
+    """
+    import asyncio
+
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"no such tab: {exc}"}
+
+    out: dict[str, Any] = {"ok": True, "tab_id": target.get("id"),
+                           "url": (target.get("url") or "")[:200]}
+    try:
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+
+            # 1. Does the renderer answer at all? A blocked tab never replies to this.
+            responsive = True
+            try:
+                await asyncio.wait_for(
+                    cdp.send("Runtime.evaluate", {"expression": "1", "returnByValue": True}),
+                    timeout=body.probe_timeout)
+            except (asyncio.TimeoutError, Exception):   # noqa: BLE001
+                responsive = False
+            out["renderer_responsive"] = responsive
+
+            if not body.dismiss:
+                out["verdict"] = ("clear" if responsive else
+                                  "blocked: the renderer is not answering — a native dialog owns "
+                                  "this tab (compare a sibling tab before believing it)")
+                return out
+
+            # 2. Try to clear a PAGE-owned dialog. Page.enable first so Chrome routes it to us.
+            try:
+                await asyncio.wait_for(cdp.send("Page.enable", {}), timeout=body.probe_timeout)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await asyncio.wait_for(
+                    cdp.send("Page.handleJavaScriptDialog", {"accept": bool(body.accept)}),
+                    timeout=body.probe_timeout)
+                out["dismissed"] = True
+                out["dialog_kind"] = "javascript"
+                out["verdict"] = "a page JS dialog was dismissed; the tab should answer again"
+            except Exception as exc:  # noqa: BLE001
+                out["dismissed"] = False
+                out["dialog_kind"] = "browser_level_or_none"
+                out["detail"] = str(exc)[:200]
+                out["verdict"] = (
+                    "no page dialog to dismiss. If the renderer is also unresponsive the blocker is "
+                    "BROWSER-level (permission / protocol-handler / download) — CDP cannot clear "
+                    "that one; the operator has to.")
+            return out
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("native_dialog failed: %s", exc)
+        return {"ok": False, "detail": str(exc)[:200]}
+
+
 @app.post("/close_tab")
 async def close_tab(body: CloseTabRequest):
     """Close the identified tab via the CDP HTTP endpoint (GET /json/close/<id>), then optionally

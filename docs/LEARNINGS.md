@@ -2973,7 +2973,53 @@ place to get this wrong is exactly where nobody would notice.
 
 ---
 
-## 2026-07-27 (5) — The Google domain existed as three declarations and no code; and evidence that cites a secret
+## 2026-07-27 (5) — SAP SuccessFactors, and a blocker the whole stack is blind to
+
+Page 2's first pick (Teradyne) landed on a careers site that classified as `company_site`. It is SAP
+SuccessFactors — on the employer's own domain, with no SAP string anywhere in the url. It now has a
+registry entry, a recipe, lessons and an account loop, recognised by path shape
+(`/<Tenant>/job/<Location>-<Title>-<id>/`).
+
+### The blocker: a native dialog is invisible to everything we have
+
+Operator: *"the SAP integration sent me a google chrome notification that was blocking the entire
+application."*
+
+A dialog rendered by the BROWSER (or by macOS on its behalf) sat over the window. Our whole
+observation stack looks at the PAGE: no DOM node, no AX node, and a CDP screenshot captures the
+page, not the browser's chrome. So the failure presents as nothing at all — `/execute` re-resolved
+"Apply Now", dispatched, returned `ok`, and the page never moved. **We only learned it had happened
+because a human was sitting in front of it.**
+
+This is now the third distinct cause of "ok and nothing moved", after the frame-misaddressed writes
+and the overlay/staged-widget cases. The others are diagnosable from inside the page. This one is
+not, which makes it the first failure mode where **asking the operator what they can see is the
+diagnostic**, not a fallback.
+
+### The fix I nearly wrote down was already in place
+
+The obvious guess is a notification-permission prompt, and the obvious fix is to deny notifications
+on the profile. Both wrong: the training profile already launches with `--disable-notifications` AND
+`default_content_setting_values.notifications = 2`, and the live profile was verified blocking with
+zero per-site exceptions *while this happened*. Recording "deny notifications" as the remedy would
+have cost the next session the same hour to rediscover.
+
+So the recipe records what is certain (a native dialog blocked the window; it is invisible to CDP),
+names the wrong fix AS wrong, and leaves the mechanism open with an instruction to capture the
+dialog's wording next time — evidence only the operator can collect. **A lesson that overstates what
+it knows is worse than one that admits a gap**, because the next session stops looking.
+
+### A tell that was too greedy, caught before it shipped
+
+Branded SuccessFactors needed a path tell. `/<Tenant>/search/` looked as good as the job-page shape
+until the suite failed: it claimed `linkedin.com/jobs/search`, turning a platform we KNOW into a
+confident wrong answer — exactly the trap facebook.com fell into in the facet vocabulary. Dropped
+it; the job-page shape is the one the apply flow needs anyway. **A tell is only worth having if it
+cannot claim something we already classify correctly.**
+
+---
+
+## 2026-07-27 (6) — The Google domain existed as three declarations and no code; and evidence that cites a secret
 
 **The ask.** Start a Google domain so cross-domain **errands have a home** — and make it *open*, so
 the domains that need Gmail can call it.
