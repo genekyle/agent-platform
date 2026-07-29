@@ -164,4 +164,7 @@ def test_the_title_stage_asserts_which_search_it_committed():
     operator's hand-driven run of the same-looking control landed on origin=JOBS_HOME_SEARCH.
     Nothing errored. `origin=` is the cheapest check that we committed the search we meant."""
     title = next(s for s in lr.SEARCH_CADENCE if s["stage"] == "title")
-    assert title["lands_with"] == "origin=JOBS_HOME_SEARCH"
+    # The success condition is the PATH: two routes reach it (JOBS_HOME_SEARCH direct, and
+    # BLENDED_SEARCH via the global box + the Jobs section's "Show all"). Asserting one origin
+    # would have failed a route the operator confirmed works.
+    assert title["lands_on_path"] == "/jobs/search-results/"

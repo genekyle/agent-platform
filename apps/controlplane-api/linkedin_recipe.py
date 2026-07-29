@@ -50,32 +50,25 @@ Recorded end to end by `/observe` on 2026-07-28 while the operator drove it by h
 So: **click to open, type, and press ENTER.** There is no submit button and no suggestion tile to
 click — Enter is the commit, and the signature of a successful one is `Enter -> change -> blur`.
 
-**BUT THE BOX AT THE TOP IS THE GLOBAL SEARCH, AND IT COMMITS SOMEWHERE ELSE.** Driven by the
-system on 2026-07-28 the three steps all reported ok, the value read back as "Reporting Analyst",
-and the page navigated — to
+**THERE ARE TWO ROUTES TO THE JOBS RESULTS, AND BOTH WORK.** Measured 2026-07-28:
 
-    /search/results/all/?keywords=Reporting%20Analyst&origin=GLOBAL_SEARCH_HEADER
+    A. jobs-home box -> Enter                       -> /jobs/search-results/?...&origin=JOBS_HOME_SEARCH
+    B. global header box -> Enter -> blended page
+       -> click the JOBS section's "Show all"       -> /jobs/search-results/?...&origin=BLENDED_SEARCH
 
-while the operator's hand-driven run of what looks like the same control landed on
+Route B is one step longer and is what the system drove first; the operator confirmed it is a
+legitimate way through, and it lands on the same page. There is no single golden path here — the
+golden path is the least-steps route actually OBSERVED to work, and both of these have been.
 
-    /jobs/search-results/?keywords=reporting analyst&origin=JOBS_HOME_SEARCH
+**Assert the PATH, not the origin.** `origin=` is useful provenance (it names which affordance was
+used: JOBS_HOME_SEARCH, BLENDED_SEARCH, GLOBAL_SEARCH_HEADER) but it is not the success condition.
+The success condition is landing on `/jobs/search-results/`. An earlier version asserted
+`origin=JOBS_HOME_SEARCH` and would have failed route B, which works.
 
-LinkedIn names the affordance in `origin=`, which is the cheapest possible check that we committed
-the search we meant. A run that reports ok three times and returns people-and-posts is exactly the
-silent-wrong-result this whole cadence exists to avoid: nothing errors, and the corpus fills with
-the wrong page.
-
-UNRESOLVED: whether these are two different inputs (a global header box and a jobs box that AX
-names identically) or one box whose destination depends on the panel being open. Not guessed at —
-the next recording should scan for EVERY textbox matching "looking for" and compare their boxes,
-and the assertion to build on afterwards is `origin=JOBS_HOME_SEARCH` in the landed URL.
-A caller can verify the commit from that pair without waiting on a navigation, which matters
-because this is a SPA and there is no load to wait for.
-
-Retracted here, all disproven by that recording: "the humanized type blurs the field and inserts
-nothing" (it does neither — 17 trusted keystrokes landed and the value built cleanly), "the
-accessible name changes on focus" (it does not), "the node is boxless", "the centre measurement is
-broken". Four mechanisms, none of which survived one 13-second window.
+**The trap on the blended page:** FIVE links share the accessible name "Show all" — one per section
+(jobs, posts, courses, people, groups). Picking by document order happens to be right today and is
+the exact mistake that clicked the wrong company on 2026-07-26. Choose by HREF: the jobs one is the
+only one pointing at `/jobs/`.
 
 THE ONE REMAINING GAP, now precisely defined: **the executor cannot send Enter.** The interaction
 vocabulary (`interaction/contract.py`) has no `press`/key intent — an earlier attempt dispatched
@@ -138,7 +131,13 @@ QUERY_ROLES: tuple[str, ...] = ("combobox", "textbox", "searchbox")
 #: The location box is not ABSENT from the jobs home — it does not exist YET. Operator, 2026-07-28:
 #: LinkedIn's search is STAGED, and that is the real difference from Indeed, not a missing field.
 #: I had recorded the measurement ("no location box here") and drawn the wrong conclusion from it.
-LOCATION_NAME_HINTS: tuple[str, ...] = ("city", "location", "where")
+#: MEASURED on the results page 2026-07-28: the control is a BUTTON, not a textbox —
+#: `button "Location Greater Boston"`, i.e. the accessible name CARRIES THE CURRENT VALUE. So a
+#: matcher must key on the "location" stem and read the rest as state, and the control is opened
+#: (a filter popup) rather than typed into. It was already set to Greater Boston without us doing
+#: anything, so the stage must CHECK before it acts — re-applying a filter re-queries for nothing.
+LOCATION_NAME_HINTS: tuple[str, ...] = ("location", "city", "where")
+LOCATION_IS_BUTTON = True
 
 #: MEASURED: no submit button exists on the jobs home, and the generic "search" hint matches the
 #: `Skip to search` SKIP-LINK. So the engine declares that it has none, and anything looking for a
@@ -229,13 +228,19 @@ SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
         "commit_signature": ("change", "blur"),
         # MEASURED: the landed URL must carry this, or we committed the GLOBAL search instead of
         # the jobs one — same-looking control, different destination, and nothing errors.
-        "lands_with": "origin=JOBS_HOME_SEARCH",
+        # MEASURED: the success condition is the PATH. `origin=` names WHICH route was taken
+        # (JOBS_HOME_SEARCH direct, or BLENDED_SEARCH via the global box + "Show all") and both
+        # land here — asserting one origin would have failed a route that works.
+        "lands_on_path": "/jobs/search-results/",
         "lands_on": SEARCH_RESULTS,
         "why": "LinkedIn asks for the job title by itself. The city is not on this page and cannot "
                "be typed here — putting it in the title box searches for a place, not a role.",
     },
     {
         "stage": STAGE_LOCATION,
+        # MEASURED: a filter BUTTON whose name carries the value ("Location Greater Boston"), not
+        # a text field. Read it first — it may already hold what we want.
+        "control_kind": "filter_button",
         "on_state": SEARCH_RESULTS,
         "value_from": "location",           # e.g. "Greater Boston"
         "control": "location",

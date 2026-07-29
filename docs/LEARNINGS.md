@@ -3960,3 +3960,38 @@ SCAN immediately before acting rather than from a name I retyped — three earli
 purely because the apostrophe was curly instead of straight and the ellipsis was three dots instead
 of one character. Tight scan -> act is not an optimisation here; hand-transcribed accessible names
 are simply wrong.
+
+---
+
+## 2026-07-28 (8) — Two routes to the jobs results, and the operator was right that mine works
+
+**The correction.** I reported driving the global search box as a failure ("committed the wrong
+search"). The operator: it works, and it is a way to get where we want — you just click the Jobs
+section's **Show all**. That is right, and the framing matters: there is no single golden path here.
+The golden path is the least-steps route actually OBSERVED to work, and both of these have been.
+
+    A. jobs-home box -> Enter                  -> /jobs/search-results/?...&origin=JOBS_HOME_SEARCH
+    B. global box -> Enter -> blended page
+       -> Jobs section "Show all"              -> /jobs/search-results/?...&origin=BLENDED_SEARCH
+
+Route B is one step longer and lands on the same page. Driven end to end by the system: click,
+type, Enter, then Show all — all four ok, and the URL confirms `/jobs/search-results/`.
+
+**So the assertion was wrong, not the route.** I had recorded `lands_with: origin=JOBS_HOME_SEARCH`,
+which would have failed route B. `origin=` is PROVENANCE — it names which affordance was used — and
+the success condition is the PATH, `/jobs/search-results/`. Corrected.
+
+**The trap on the blended page.** FIVE links share the accessible name "Show all", one per section
+(jobs, posts, courses, people, groups). Document order happens to put jobs first today; choosing
+that way is the exact mistake that clicked the wrong company on 2026-07-26. Chosen by HREF instead
+— the jobs one is the only one pointing at `/jobs/`.
+
+**Stage 2 is not what the scaffold assumed.** The location control on the results page is a BUTTON
+whose accessible name CARRIES ITS VALUE — `button "Location Greater Boston"` — not a text field.
+And it was already set to Greater Boston without us touching it, so the stage has to READ BEFORE IT
+ACTS: re-applying a filter that already holds the wanted value re-queries for nothing.
+
+**Still failing: the extractor returns 0 on the real jobs results page.** `_LINKEDIN_JOBS_JS`
+expects `data-occludable-job-id` / `data-job-id` / `.job-card-container` and the page has none of
+them. That scaffold was labelled UNVERIFIED and is now measured wrong — the next recording should
+be a hand-scroll of the results list so the mutation stream shows what a card actually is.
