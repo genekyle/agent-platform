@@ -3696,6 +3696,20 @@ def test_the_real_username_is_used_for_matching_and_never_returned(monkeypatch, 
     assert accounts.get_account("indeed_default")["username_hint"] == "p***@example.com"
 
 
+
+def _scan_seq(accepted_from: int = 1):
+    """An /ax_scan stub whose page CHANGES: unconsented on the first read, accepted afterwards."""
+    calls = {"n": 0}
+
+    def _scan(_payload):
+        n = calls["n"]
+        calls["n"] += 1
+        text = "Data privacy statement has been accepted." if n >= accepted_from else ""
+        return {"ok": True, "page_text": text, "candidates": []}
+
+    return _scan
+
+
 def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
     """SAP's create-account form wants a country dropdown and a data-privacy acceptance before it
     will take the form. Both are driven BY NAME from the recipe, and the two MARKETING opt-ins on
@@ -3729,8 +3743,10 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
         {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/execute": _execute,
-         "/ax_scan": {"ok": True, "page_text": "Data privacy statement has been accepted.",
-                      "candidates": []}},
+         # The consent proof appears only AFTER Accept — the first scan is the idempotence
+         # pre-check and must read as "not yet accepted", or the driver rightly skips the whole
+         # consent. Modelling both states is the point: one value could only ever test one path.
+         "/ax_scan": _scan_seq()},
         blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
@@ -4008,3 +4024,68 @@ def test_a_refusal_we_could_not_make_stops_the_submit(monkeypatch):
     assert "would opt you in" in out["last_step"]["detail"]
     assert accounts.get_account(
         ats_accounts.ats_account_id("Teradyne", "successfactors"))["status"] == "pending"
+
+
+def test_a_consent_already_accepted_is_not_clicked_again(monkeypatch):
+    """A re-run must CONVERGE, not thrash. The account rung is re-entered constantly — the operator
+    presses the button again, a drive resumes after a captcha, a later session picks the step back
+    up — and on SAP the consent opener is the most dangerous control on the page: its sibling
+    addressing navigated away and destroyed a filled form. So if the page already says the
+    statement is accepted, the opener is never touched."""
+    acted = []
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": lambda p: acted.append(p.get("target_name") or p.get("selector"))
+                                    or {"outcome": "ok"},
+              "/check_group": {"ok": True},
+              # Accepted from the very first read — the page was already consented.
+              "/ax_scan": _scan_seq(accepted_from=0)},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert "#dataPrivacyId" not in acted        # the dialog was never re-opened
+    assert "Accept" not in acted
+    assert acted[-1] == "Create Account"        # and the drive still completed
+    assert out["last_step"]["ok"] is True
+
+
+def test_the_card_shows_what_the_page_still_needs_not_the_whole_plan(monkeypatch):
+    """By the time an operator reads the card the form is usually part-filled — by a previous run
+    or by them. A card showing only the plan reads as twelve things to do in front of a page that
+    needs two. The refused marketing box must NOT appear: the scanner reports an unticked box as an
+    unanswered required field, and listing it would ask them to undo the refusal."""
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    scan = {"ok": True, "unanswered": [
+        {"field": "Choose Password: *", "selector": "#fbclc_pwd"},
+        {"field": "Retype Password: *", "selector": "#fbclc_pwdConf"},
+        {"field": "x", "selector": "#fbclc_campaignEmailEnabled"},          # a refusal, not work
+        {"field": "Email Address: * Retype Email Address: * Choose Password: * Password must be "
+                  "at least 8 ch", "selector": "#junk"},                     # a run-together caption
+    ]}
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              "/scan_required": scan},
+             blackboard=bb)
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "handoff"}).json()
+    finally:
+        _teardown()
+
+    remaining = out["account_handoff"]["remaining"]
+    assert remaining == ["Choose Password: *", "Retype Password: *"]
+    # The plan is still the full sequence — the two answer different questions.
+    assert len(out["account_handoff"]["plan"]) == 12

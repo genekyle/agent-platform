@@ -1810,6 +1810,9 @@ textarea:focus-visible {
 /* What "automatically" means, spelled out before it is pressed. Collapsed by default — the
    operator who already trusts it should not have to scroll past eleven steps every time, and the
    one deciding whether to trust it needs them on the first read. */
+.sc-account__remaining { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 4px;
+  font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }
+.sc-account__remaining svg { flex-shrink: 0; margin-top: 2px; }
 .sc-account__plan { margin: 8px 0 4px; font-size: 12.5px; }
 .sc-account__plan summary { cursor: pointer; color: var(--text-muted); }
 .sc-account__plan summary:hover { color: var(--text); }

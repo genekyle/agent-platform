@@ -1677,6 +1677,20 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     #   proof  — text that appears on the page OUTSIDE the dialog once consent is recorded. The
     #            dialog closing proves nothing: Decline and the X close it too.
     for opener, commit, proof in form.get("confirms", ()):
+        # ALREADY ACCEPTED? Then leave it alone. A re-run has to CONVERGE, not thrash: the account
+        # rung is re-entered constantly — the operator presses the button again, a drive resumes
+        # after a captcha, a session picks the step back up hours later — and on SAP the opener is
+        # the single most dangerous control on the page. Clicking it a second time asks a dialog to
+        # re-open over a consent that is already recorded, on the row whose sibling addressing
+        # navigated away and destroyed a filled form. The cheap read comes first.
+        if proof:
+            before = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                                      "tab_id": tab_id}, timeout=20.0)
+            seen = (str(before.get("page_text") or "")
+                    + " ".join(c.get("name", "") for c in (before.get("candidates") or [])))
+            if proof.lower() in seen.lower():
+                continue
+
         staged = True
         open_addr = apply_fields.addressing_for(ats, opener)
         open_payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
@@ -1739,6 +1753,48 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
                           f"({click.get('outcome') or click.get('detail')})."}
     return {"ok": True, "submitted": True, "button": button, "staged": staged,
             "detail": f"Submitted the create-account form ({button!r})."}
+
+
+async def _remaining_required(browser_url: str, tab_id: str, ats: str, leg: str) -> list[str]:
+    """What the LIVE form still needs, in the site's own words.
+
+    The plan says what a drive would do from scratch. This says what is actually left — and by the
+    time an operator is reading the card those are rarely the same, because the form is usually
+    part-filled already, by a previous run or by them.
+
+    Two things are filtered out, both of them scanner artifacts rather than work:
+      * the fields this leg deliberately REFUSES. `/scan_required` sees an unticked marketing box
+        and reports an unanswered required field; it is neither. Listing it would ask the operator
+        to undo the refusal the whole `refusals` loop exists to make.
+      * labels that are really a run-together of the whole form. The scanner occasionally captions
+        a control with every label above it ("Email Address: * Retype Email Address: * Choose
+        Password: * Password must be at least 8 ch…"), which is noise in a list meant to be read.
+
+    Best-effort: a probe that fails returns nothing rather than raising. This decorates a card.
+    """
+    if not tab_id:
+        return []
+    form = account_forms.form_for(ats, leg) or {}
+    refused = set()
+    for field in form.get("refusals", ()):
+        try:
+            refused.add(apply_fields.resolve(ats, field).get("selector"))
+        except apply_fields.FieldNotFound:
+            continue
+    try:
+        scan = await _capture_post("/scan_required",
+                                   {"browser_url": browser_url, "tab_id": tab_id}, timeout=25.0)
+    except Exception:  # noqa: BLE001 — a card decoration must not fail the rung
+        return []
+    out = []
+    for row in (scan.get("unanswered") or []):
+        if row.get("selector") in refused:
+            continue
+        label = str(row.get("field") or "").strip()
+        if not label or len(label) > 60:      # a run-together caption, not a field
+            continue
+        out.append(label)
+    return out
 
 
 @router.post("/api/session_control/{session_id}/apply_account")
@@ -1980,6 +2036,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                 # reload from an 18-hour-old, verifiably empty SAP signup (session 21, 2026-07-28).
                 staged=False)
     _save_queue(bb, queue)
+    tab_id = _apply_tab(bb, obs).get("tab_id", "")
     handoff = {
         "job_id": step.job_id, "leg": action.get("leg"), "button": action.get("button"),
         "company": company, "ats": step.platform,
@@ -1992,6 +2049,13 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         # do it; that choice is not informed while the second option is an unlabelled button.
         "plan": account_forms.program_steps(step.platform, action.get("leg") or "create_account"),
         "policy_checked": apply_fields.has_policy(step.platform),
+        # WHAT THE PAGE STILL NEEDS, read from the live form. The plan says what a drive WOULD do
+        # from scratch; this says what is actually left, and the two are rarely the same by the
+        # time an operator is looking at the card — a form is usually part-filled by then, by a
+        # previous run or by them. A card that shows only the plan reads as "twelve things to do"
+        # in front of a page that needs two.
+        "remaining": await _remaining_required(browser_url, tab_id, step.platform,
+                                               action.get("leg") or "create_account"),
         "boundary": f"Do it yourself, or have the system do it. Either way a captcha or an "
                     f"email/2FA code stops for you, and the marketing opt-ins are switched OFF "
                     f"rather than left as the site set them.",

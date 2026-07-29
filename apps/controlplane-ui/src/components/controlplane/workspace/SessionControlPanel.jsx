@@ -731,6 +731,18 @@ export function SessionControlPanel({ domain }) {
                                 system can create it for you — a captcha or an email verification
                                 code still stops for you, and the honeypot is never touched.
                               </p>
+                              {/* WHAT THE PAGE STILL NEEDS. Read from the live form, so it is the
+                                  state of the world rather than the shape of the plan — by the
+                                  time this card is read the form is usually part-filled, and a
+                                  card showing only the plan reads as twelve things to do in front
+                                  of a page that needs two. */}
+                              {Array.isArray(accountHandoff.remaining) && (
+                                <p className="sc-account__remaining">
+                                  {accountHandoff.remaining.length === 0
+                                    ? <><AppIcon name="check" size={13} /> The form on screen is complete — nothing left but the button.</>
+                                    : <><AppIcon name="alert" size={13} /> Still needed on the page: {accountHandoff.remaining.join(" · ")}</>}
+                                </p>
+                              )}
                               {/* WHAT "AUTOMATICALLY" MEANS, before you press it. The steps come
                                   from the same table the driver executes, so this cannot describe
                                   a drive that doesn't happen — and choosing between doing it
