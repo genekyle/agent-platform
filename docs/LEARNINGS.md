@@ -3641,3 +3641,65 @@ convenient and explains the symptom.
 **And the habit, three drives running:** every one of these was found by reading the result back —
 the value probe, the bounding-box probe, the screenshot. `ok` has now been wrong about a click, a
 key press, and a type, in three different ways.
+
+---
+
+## 2026-07-28 (3) — Journaled, complete, and useless: the row that never said where it happened
+
+**The ask.** Handle account creation end to end, get the UI caught up, and *"make sure every action
+you do is a learning point and is usable for training as well as the execution layer itself"* — plus
+a framework the inner layers can step through.
+
+**The uncomfortable finding: everything I drove today was journaled, and none of it could teach.**
+Every `set_text`, `select_option` and `check_group` of the SAP account drive is in
+`intent_journal.jsonl` — right intent, right field, right outcome, password correctly redacted —
+with **`url: null` and `route: ""`**. And `route` is half the key an intent program is compiled and
+looked up under. So `compile_from_journal` had no `(task, state)` to file them under, rung 0 had
+nothing to replay, and the rows are archaeology rather than training data. **The flywheel was
+turning and the belt was off.**
+
+The cause is worth generalising. `url` was read only from the request body, and I had addressed the
+tab by `tab_id` — which is the *more* robust address, not a mistake: a url goes stale the moment the
+page navigates, which is exactly why the executor prefers the id. A rule saying "also pass tab_url"
+is a rule every call site has to remember, and the ones that forget fail **silently and invisibly** —
+the action works, the row appears, and only a later question about why nothing compiles reveals it.
+So the decorator resolves it now: the endpoint's own result first, else `/json/list` over the local
+CDP socket. Best-effort by construction — a request that raised while enriching a log line is worth
+nothing. **The check that found it: read your own journal rows after a drive and ask whether a
+model could learn from them, not whether they exist.**
+
+**What the redaction check found, which was the good news.** Before building anything that types a
+credential end to end, the question is whether the journal would hold it. `redact()` keys off the
+field NAME: `Choose Password: *` and `Retype Password: *` both match `_SENSITIVE_FIELD` →
+`[redacted:8]`. The email is not redacted, which is a defensible line (it is the login identifier,
+already stored as `username_hint`) and worth knowing rather than assuming. **§4 holds on the path
+that matters.**
+
+**The framework gap, stated plainly.** `_drive_account_form` is four loops and a submit inside an
+HTTP handler. It never passes through `decide()`, so it writes no DecisionRecords, compiles into no
+program, and leaves rung 0 nothing to replay. Every other rung gets cheaper the second time it runs;
+**the account rung — the flow that most needs repeating, one account per company across dozens of
+companies — cost exactly the same forever.** The fix was not to rewrite the executor but to stop
+keeping the sequence only in control flow: `account_forms.program_steps()` renders the same table
+the driver executes into ordered `{intent, params}` steps.
+
+The invariant that makes this safe is the anti-drift test, and it is the one to keep: **the program
+is asserted against the driver's own source** (`inspect.getsource`), so reordering the loops or
+adding a fifth fails the suite. A program that has drifted from its driver is worse than no program,
+because rung 0 replays it without asking anyone.
+
+**A detail with teeth:** steps name a FIELD, never a selector — which is why the marketing refusals
+travel as `opt_in_job_notifications` even though `apply_fields` addresses them by `#fbclc_...`. A
+stored program that pinned a DOM id would die the first time SAP re-rendered. And the credential
+refs are `account.username` / `account.password` rather than answer-store keys, because **a
+credential is not an application answer**; they resolve from the vault at replay, so a committed
+program holds nothing that reads like the secret.
+
+**The UI lesson.** The handoff card offered "do it yourself or let the system do it" where the second
+option was an unlabelled button — not a choice anyone can make well, on the one card in the app that
+shows a credential. It now renders the plan from the same table the driver executes. Two things
+become visible that prose was never going to carry: a value's SOURCE rather than its value, and
+"switched OFF — it arrives checked" on the marketing steps, which is the whole of today's bug in six
+words, sitting where a regression would be noticed. Also corrected: the card's boundary line had
+claimed since 2026-07-24 that the agent never creates an account — directly above the button that
+does.
