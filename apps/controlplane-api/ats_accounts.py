@@ -217,6 +217,29 @@ def mark_created(company: str, ats_id: str) -> dict[str, Any]:
     return {"ok": True, "account": rec}
 
 
+def reset_account(company: str, ats_id: str) -> dict[str, Any]:
+    """Un-say `mark_created`: back to `pending`, and the stored credential deleted.
+
+    Marking an account created is a CLAIM ABOUT ANOTHER SYSTEM — that a login now exists on the
+    ATS — and this one was made on a report that turned out to be wrong (Teradyne, 2026-07-28: the
+    step ledger said `account failed: could not click Accept`, the account was marked created
+    anyway, and nothing on SAP had been made). An account wrongly marked active is worse than one
+    wrongly marked pending, because `next_account_action` then offers the SIGN-IN leg forever and
+    the create leg becomes unreachable — the system will keep trying to log in to something that
+    does not exist, and read every rejection as a bad password.
+
+    The credential goes with it, deliberately. It is derived, so nothing is lost — `derive_password`
+    reproduces it on demand — and leaving it behind would keep `has_creds` true for an account that
+    does not exist, which is the exact confusion the pending/active split is for.
+    """
+    aid = ats_account_id(company, ats_id)
+    if not accounts_mod.get_account(aid):
+        return {"ok": False, "detail": f"no account {aid}"}
+    cleared = accounts_mod.clear_credentials(aid)
+    rec = accounts_mod.put_account(aid, {"status": "pending"})
+    return {"ok": True, "account": rec, "credential_cleared": cleared}
+
+
 def list_by_company() -> dict[str, Any]:
     """Company-first view: every registered ATS account grouped by company, each with its ATS,
     login status, has_creds, and the suggested login id (never the password)."""

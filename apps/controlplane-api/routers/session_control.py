@@ -1610,6 +1610,11 @@ class ApplyAccountBody(BaseModel):
     #   "handoff" — surface the credentials for the operator to type themselves
     mode: str = "auto"
     mark_created: bool = False     # completes the "handoff" leg once the operator has made it
+    # UN-SAY IT. `mark_created` is a claim about ANOTHER system — that a login now exists on the
+    # ATS — and a claim made on a wrong report needs a way back. Wrongly-active is the worse of the
+    # two errors: next_account_action then offers the sign-in leg forever, the create leg becomes
+    # unreachable, and every rejection reads as a bad password.
+    reset: bool = False
     # What the operator ACTUALLY signed up with, when they made the account themselves and departed
     # from the suggested pair (a site rule we had not read, a password already in use). Recorded
     # into the vault by the mark_created leg. Omitted, that leg stores the derived pair the handoff
@@ -1824,6 +1829,39 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
         await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
 
         commit_addr = apply_fields.addressing_for(ats, commit)
+        # DID THE DIALOG ACTUALLY OPEN? The opener's `ok` does not say so — it never did. It says a
+        # click was dispatched at a node, and on SAP the same click ALSO does nothing visible when
+        # the form is not yet valid: it just paints the required-field errors. So the run of
+        # 2026-07-28 reported "Opened the 'terms' consent but could not click 'Accept'", which named
+        # the wrong step as the failure. The dialog had never opened, and the reason was elsewhere
+        # on the form entirely.
+        #
+        # Polled rather than slept-on, because a dialog is a rendering race and one fixed pause is
+        # either too short on a slow paint or wasted on a fast one.
+        appeared = False
+        for _ in range(6):
+            scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                       timeout=20.0)
+            names = [str(c.get("name") or "") for c in (scan.get("candidates") or [])]
+            if any((commit_addr["name"] or "").lower() == n.strip().lower() for n in names):
+                appeared = True
+                break
+            await asyncio.sleep(0.6)
+        if not appeared:
+            # Say WHY, with the page's own answer rather than a guess. An unanswered required field
+            # is the known cause: SAP will not raise the consent dialog over an invalid form.
+            blocking = await _remaining_required(browser_url, tab_id, ats, leg)
+            unmet = [f["label"] for f in blocking.get("system", [])] + blocking.get("operator", [])
+            return {"ok": False, "reason": "consent_did_not_open", "staged": staged,
+                    "detail": (f"Clicked the {opener!r} consent and no dialog appeared — so there "
+                               f"was no {commit_addr['name']!r} to press. "
+                               + (f"The form still has unanswered required fields "
+                                  f"({', '.join(unmet)}), and this site will not raise the consent "
+                                  f"over an invalid form — fix those first."
+                                  if unmet else
+                                  "The form reads as complete, so this is the consent widget "
+                                  "itself: re-scan it before driving again.")
+                               + " Nothing was submitted.")}
         res = await _capture_post("/execute", {
             "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
             "target_bbox": {}, "target_role": commit_addr["role"],
@@ -1867,8 +1905,33 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
         return {"ok": False, "reason": "submit_failed", "staged": staged,
                 "detail": f"Filled the form but could not click {button!r} "
                           f"({click.get('outcome') or click.get('detail')})."}
+    # DID THE FORM GO THROUGH? A click that dispatched is not a form that was accepted. On the
+    # sign-in leg this is not a nicety: a wrong password re-renders the SAME login form with an
+    # error, which looks identical to success from here, and on 2026-07-28 the ledger recorded
+    # "sign_in leg: signed in to Teradyne successfactors" for an account that did not exist. A rung
+    # that reports a login it never got is worse than one that fails — the next rung reads every
+    # gate as some other problem.
+    #
+    # The proof is the submit control's ABSENCE. It is the one signal that needs no new site
+    # knowledge: every one of these forms replaces itself on success and keeps itself on failure.
+    after = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                timeout=20.0)
+    still_there = any((submit_addr["name"] or "").strip().lower() == str(c.get("name") or "").strip().lower()
+                      for c in (after.get("candidates") or []))
+    if still_there and submit_addr["name"]:
+        text = str(after.get("page_text") or "")
+        said = next((ln.strip() for ln in text.splitlines()
+                     if ln.strip() and any(w in ln.lower() for w in
+                                           ("invalid", "incorrect", "not match", "error",
+                                            "required", "try again", "does not exist"))), "")
+        return {"ok": False, "reason": "submit_not_accepted", "staged": staged,
+                "detail": (f"Clicked {button!r} and the form is still on screen, so it was not "
+                           f"accepted. " + (f"The page says: {said!r}. " if said else "")
+                           + "Nothing here counts as a completed "
+                           + ("sign-in." if leg == "sign_in" else "account.")),
+                "button": button}
     return {"ok": True, "submitted": True, "button": button, "staged": staged,
-            "detail": f"Submitted the create-account form ({button!r})."}
+            "detail": f"Submitted the {leg.replace('_', ' ')} form ({button!r}) and it was taken."}
 
 
 async def _remaining_required(browser_url: str, tab_id: str, ats: str, leg: str) -> dict[str, Any]:
@@ -1980,6 +2043,29 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     if not company:
         raise HTTPException(status_code=422,
                             detail="No company on this step to open an account for.")
+
+    if body.reset:
+        res = ats_accounts.reset_account(company, step.platform)
+        if not res.get("ok"):
+            raise HTTPException(status_code=409, detail=res.get("detail", "could not reset"))
+        # RECORDED, not silently undone. The ledger already holds the claim that the account was
+        # created; a correction that leaves no trace turns the ledger into a thing that is only
+        # true when nobody was wrong. Both entries stay — §10: keep both sides of a correction.
+        step.record(_ACCOUNT_RUNG, aps.FAILED,
+                    f"reset: the {company} {step.platform} account was marked created and was not "
+                    f"— back to pending, stored credential cleared",
+                    initiator=body.initiator, staged=False)
+        _save_queue(bb, queue)
+        bb.world.pop("account_handoff", None)
+        bb.log("account_reset",
+               f"{company} {step.platform}: marked-created retracted; the create leg is due again")
+        _persist(bb, ledger)
+        obs = await _observe(_session_browser_url(session), bb.search_state.query,
+                             session_id=session.id)
+        return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                     last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                           "detail": f"{company}: back to 'pending' and the credential cleared. "
+                                     f"The create leg is due again."})
 
     if body.mark_created:
         res = ats_accounts.mark_created(company, step.platform)

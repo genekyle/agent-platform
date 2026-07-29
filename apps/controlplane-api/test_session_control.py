@@ -3697,15 +3697,20 @@ def test_the_real_username_is_used_for_matching_and_never_returned(monkeypatch, 
 
 
 
-def _scan_seq(accepted_from: int = 1):
-    """An /ax_scan stub whose page CHANGES: unconsented on the first read, accepted afterwards."""
+def _scan_seq(accepted_from: int = 1, dialog: bool = True):
+    """An /ax_scan stub whose page CHANGES: unconsented on the first read, accepted afterwards.
+
+    `dialog` controls whether the consent dialog's Accept is visible — the driver now polls for it
+    rather than trusting the opener's `ok`, so a stub with no Accept is how the did-not-open path
+    gets exercised."""
     calls = {"n": 0}
 
     def _scan(_payload):
         n = calls["n"]
         calls["n"] += 1
         text = "Data privacy statement has been accepted." if n >= accepted_from else ""
-        return {"ok": True, "page_text": text, "candidates": []}
+        cands = [{"role": "button", "name": "Accept"}] if dialog else []
+        return {"ok": True, "page_text": text, "candidates": cands}
 
     return _scan
 
@@ -4169,3 +4174,119 @@ def test_the_account_state_says_create_while_the_account_does_not_exist(monkeypa
     st = out["account_state"]
     assert st["leg"] == "create_account"
     assert st["has_creds"] is False
+
+
+def test_a_consent_whose_dialog_never_opened_names_the_real_cause(monkeypatch):
+    """The opener's `ok` never meant the dialog opened — it means a click was dispatched. On SAP
+    that same click does nothing visible while the form is invalid; it just paints the required
+    errors. The run of 2026-07-28 reported "Opened the consent but could not click Accept", which
+    blamed the wrong step: the dialog had never opened and the cause was elsewhere on the form."""
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    clicked = []
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": lambda p: clicked.append(p.get("target_name") or p.get("selector"))
+                                    or {"outcome": "ok"},
+              "/check_group": {"ok": True},
+              # No Accept anywhere: the dialog did not open.
+              "/ax_scan": _scan_seq(accepted_from=99, dialog=False),
+              "/scan_required": {"ok": True, "unanswered": [
+                  {"field": "Choose Password: *", "selector": "#fbclc_pwd"}]}},
+             blackboard=bb, answers=[_Answer("country", "United States")])
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    detail = out["last_step"]["detail"]
+    assert "no dialog appeared" in detail
+    assert "Choose Password: *" in detail          # the page's own answer, not a guess
+    assert "Accept" not in clicked                 # never reached for a control that was not there
+    assert "Create Account" not in clicked         # and nothing was submitted
+
+
+def test_reset_retracts_a_wrong_mark_created_and_keeps_both_sides_on_the_ledger(monkeypatch):
+    """`mark_created` is a claim about ANOTHER system — that a login now exists on the ATS — and
+    this one was made on a report that was wrong (Teradyne, 2026-07-28: the ledger said the create
+    leg FAILED, the account was marked created anyway, and nothing on SAP had been made).
+
+    Wrongly-active is the worse error: next_account_action then offers the sign-in leg forever, the
+    create leg is unreachable, and every rejection reads as a bad password."""
+    import accounts as accounts_mod
+    import secrets_vault
+
+    import ats_accounts
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        # The wrong claim, made the way it was really made — through the endpoint, so it lands on
+        # the ledger — and then retracted.
+        client.post("/api/session_control/1/apply_account",
+                    json={"mark_created": True, "initiator": "operator"}).json()
+        assert ats_accounts.next_account_action("Teradyne", "successfactors")["leg"] == "sign_in"
+        assert secrets_vault.has_secret(aid)
+        out = client.post("/api/session_control/1/apply_account",
+                          json={"reset": True, "initiator": "operator"}).json()
+    finally:
+        _teardown()
+
+    assert out["last_step"]["ok"] is True
+    assert accounts_mod.get_account(aid)["status"] == "pending"
+    # The credential goes with it: leaving it would keep has_creds true for an account that does
+    # not exist, which is the exact confusion the pending/active split is for. Nothing is lost —
+    # it is derived, and derive_password reproduces it.
+    assert not secrets_vault.has_secret(aid)
+    assert ats_accounts.next_account_action("Teradyne", "successfactors")["leg"] == "create_account"
+    # BOTH SIDES stay on the ledger. A correction that leaves no trace turns the ledger into a
+    # thing that is only true when nobody was wrong.
+    minis = out["queue"]["steps"][0]["minis"]
+    assert any("created by the operator" in (m.get("detail") or "") for m in minis)
+    assert any("was marked created and was not" in (m.get("detail") or "") for m in minis)
+
+
+def test_a_form_still_on_screen_after_submit_is_not_a_completed_account(monkeypatch):
+    """A click that dispatched is not a form that was accepted. A wrong password re-renders the
+    SAME login form with an error, which from the driver's side looks exactly like success — and
+    on 2026-07-28 the ledger recorded "sign_in leg: signed in to Teradyne successfactors" for an
+    account that did not exist. A rung that reports a login it never got is worse than one that
+    fails: the next rung reads every gate as some other problem."""
+    import accounts as accounts_mod
+
+    import ats_accounts
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    accounts_mod.set_credentials(aid, "operator@example.com", "Tabcde1!")
+    ats_accounts.mark_created("Teradyne", "successfactors")     # the sign_in leg is due
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              # The Sign In button is STILL THERE afterwards, with SAP's complaint beside it.
+              "/ax_scan": {"ok": True,
+                           "page_text": "Invalid email address or password.",
+                           "candidates": [{"role": "button", "name": "Sign In"}]}},
+             blackboard=bb)
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    detail = out["last_step"]["detail"]
+    assert "still on screen" in detail
+    assert "Invalid email address or password." in detail    # the site's own words
+    assert out["last_step"]["ok"] is False
+    # And the account is NOT left claiming a session it never had.
+    assert "signed in" not in " ".join(
+        (m.get("detail") or "") for m in out["queue"]["steps"][0]["minis"])
