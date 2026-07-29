@@ -1807,6 +1807,16 @@ textarea:focus-visible {
 .sc-account__creds dd { margin: 0; }
 .sc-account__creds code { font-size: 12.5px; padding: 2px 7px; border-radius: 4px; background: rgba(127,127,127,0.15); user-select: all; }
 
+/* What "automatically" means, spelled out before it is pressed. Collapsed by default — the
+   operator who already trusts it should not have to scroll past eleven steps every time, and the
+   one deciding whether to trust it needs them on the first read. */
+.sc-account__plan { margin: 8px 0 4px; font-size: 12.5px; }
+.sc-account__plan summary { cursor: pointer; color: var(--text-muted); }
+.sc-account__plan summary:hover { color: var(--text); }
+.sc-account__plan ol { margin: 7px 0 0; padding-left: 20px; display: grid; gap: 3px; }
+.sc-account__plan li { line-height: 1.5; }
+.sc-account__plan code { font-size: 12px; padding: 1px 5px; border-radius: 3px; background: rgba(127,127,127,0.15); }
+
 /* Staleness chip — the freshness datapoint on the session header. Level and remedy read as two
    things because they ARE two things: how suspect the view is, and what would fix it. */
 .sc-stale { display: inline-flex; align-items: center; gap: 5px; }

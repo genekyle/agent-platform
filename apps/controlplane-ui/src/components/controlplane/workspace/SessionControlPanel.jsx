@@ -731,6 +731,34 @@ export function SessionControlPanel({ domain }) {
                                 system can create it for you — a captcha or an email verification
                                 code still stops for you, and the honeypot is never touched.
                               </p>
+                              {/* WHAT "AUTOMATICALLY" MEANS, before you press it. The steps come
+                                  from the same table the driver executes, so this cannot describe
+                                  a drive that doesn't happen — and choosing between doing it
+                                  yourself and delegating it isn't a real choice while the second
+                                  option is an unlabelled button. */}
+                              {Array.isArray(accountHandoff.plan) && accountHandoff.plan.length > 0 && (
+                                <details className="sc-account__plan">
+                                  <summary>
+                                    {accountHandoff.plan.length} steps if the system does it
+                                    {accountHandoff.policy_checked && " · password checked against the site's rules first"}
+                                  </summary>
+                                  <ol>
+                                    {accountHandoff.plan.map((st, i) => (
+                                      <li key={i}>
+                                        <code>{st.intent}</code> {st.params?.field}
+                                        {/* The value's SOURCE, never the value. A credential ref
+                                            reads account.* and resolves from the vault. */}
+                                        {st.params?.value_ref && (
+                                          <span className="rung__meta"> ← {st.params.value_ref}</span>
+                                        )}
+                                        {st.intent === "check_group" && (
+                                          <span className="rung__meta"> (switched OFF — it arrives checked)</span>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ol>
+                                </details>
+                              )}
                               <dl className="sc-account__creds">
                                 <dt>Username</dt>
                                 <dd><code>{accountHandoff.username || "—"}</code></dd>

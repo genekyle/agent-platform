@@ -1946,8 +1946,15 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         "username": creds.get("username"),
         "suggested_password": creds.get("suggested_password"),
         "suffix_configured": creds.get("suffix_configured"),
-        "boundary": f"You type these into the form and click {action.get('button')!r}. The agent "
-                    "never enters a password or creates an account — that is yours.",
+        # WHAT THE AUTOMATION WOULD DO, in the order it would do it — rendered from the same table
+        # the driver executes, so the card cannot describe a drive that does not happen. The
+        # operator is being asked to choose between doing this themselves and letting the system
+        # do it; that choice is not informed while the second option is an unlabelled button.
+        "plan": account_forms.program_steps(step.platform, action.get("leg") or "create_account"),
+        "policy_checked": apply_fields.has_policy(step.platform),
+        "boundary": f"Do it yourself, or have the system do it. Either way a captcha or an "
+                    f"email/2FA code stops for you, and the marketing opt-ins are switched OFF "
+                    f"rather than left as the site set them.",
     }
     # Persist the handoff in world so it survives a poll or a page reload — the same durability the
     # proposal has. `last_step` alone is transient, and an operator who refreshed lost the panel.
