@@ -175,3 +175,82 @@ def test_unjournaled_keys_pass_through_to_the_caller(corpus):
     out = run(ep(Body(value="United States")))
     assert out["value"] == {"count": 63}            # the probe's result reached the caller
     assert rows(corpus)[0]["value"] == "United States"   # the column still holds the argument
+
+
+# --- the url a tab_id caller never supplied -----------------------------------------------
+def test_a_tab_id_caller_still_journals_where_it_happened(monkeypatch):
+    """`url` is not decoration — `route` derives from it, and route+state is the key an intent
+    program is compiled and replayed under. A row without it journals the action perfectly and
+    teaches nothing. Every action of the SuccessFactors account drive landed that way on
+    2026-07-28: correct, complete, unusable.
+
+    And the caller was right to use tab_id: a url goes stale the moment the page navigates, which
+    is why the executor addresses by id. So the resolution belongs in one place, not in a rule
+    every call site has to remember."""
+    import asyncio
+
+    from app import intent_api
+
+    class _Body:
+        browser_url = "http://127.0.0.1:9322"
+        tab_id = "TAB-1"
+        tab_url = None
+
+    class _Resp:
+        @staticmethod
+        def json():
+            return [{"id": "OTHER", "url": "https://example.com/other"},
+                    {"id": "TAB-1", "url": "https://career41.sapsf.com/career?company=teradynein"}]
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, _url): return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: _Client())
+
+    got = asyncio.run(intent_api._resolve_url_for_journal(_Body(), {}))
+    assert "career41.sapsf.com" in got
+
+
+def test_the_endpoints_own_answer_is_preferred_over_asking_the_browser(monkeypatch):
+    # Cheapest source first: if the endpoint already resolved a target it knows the url, and
+    # asking the browser again is a round trip for an answer we hold.
+    import asyncio
+
+    from app import intent_api
+
+    class _Body:
+        browser_url = "http://127.0.0.1:9322"
+        tab_id = "TAB-1"
+        tab_url = None
+
+    def _boom(**_kw):
+        raise AssertionError("must not ask the browser when the result carries the url")
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _boom)
+    got = asyncio.run(intent_api._resolve_url_for_journal(
+        _Body(), {"url": "https://career41.sapsf.com/career"}))
+    assert got == "https://career41.sapsf.com/career"
+
+
+def test_journaling_never_fails_the_action_it_is_describing():
+    """A request that raised while enriching a log line is worth nothing at all."""
+    import asyncio
+
+    from app import intent_api
+
+    class _Body:
+        browser_url = "http://127.0.0.1:9322"
+        tab_id = "TAB-1"
+        tab_url = None
+
+    # No monkeypatching: the browser at that port is not answering in a test run.
+    assert asyncio.run(intent_api._resolve_url_for_journal(_Body(), {})) == ""
+
+    class _Bare:
+        pass
+
+    assert asyncio.run(intent_api._resolve_url_for_journal(_Bare(), {})) == ""

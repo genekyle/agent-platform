@@ -60,6 +60,36 @@ def _body_attr(body: Any, *names: str) -> Optional[Any]:
     return None
 
 
+async def _resolve_url_for_journal(body: Any, result: dict) -> str:
+    """Where did this action happen, for a caller that addressed the tab by id?
+
+    Two sources, cheapest first. The endpoint may already know — several resolve a CDP target and
+    can hand the url back in their result. Otherwise ask the browser: `/json/list` over a local
+    socket, which costs no bandwidth (it never leaves the machine) and a millisecond or two.
+
+    Best-effort by construction. Journaling must never be the reason an action fails, so every
+    error here resolves to "" — a row with no url is worth less, and a request that raised while
+    trying to enrich a log line is worth nothing at all.
+    """
+    reported = result.get("url") or result.get("tab_url")
+    if reported:
+        return str(reported)
+    browser_url = _body_attr(body, "browser_url")
+    tab_id = _body_attr(body, "tab_id")
+    if not browser_url or not tab_id:
+        return ""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f"{str(browser_url).rstrip('/')}/json/list")
+            for t in r.json():
+                if t.get("id") == tab_id:
+                    return str(t.get("url") or "")
+    except Exception:  # noqa: BLE001 — see the docstring: never fail an action to enrich a log
+        return ""
+    return ""
+
+
 def journaled(intent: Intent | Callable[[Any], Intent], *,
               sensitive: Optional[bool] = None) -> Callable:
     """Journal this endpoint's intent — on every path, including exceptions.
@@ -114,6 +144,24 @@ def journaled(intent: Intent | Callable[[Any], Intent], *,
 
             if not isinstance(result, dict):
                 raise TypeError(f"{fn.__name__} must return a dict, got {type(result).__name__}")
+
+            # BACKFILL THE URL when the caller addressed the tab by id instead of by url.
+            #
+            # `url` is not decoration: `route` is derived from it, and route+state is the key an
+            # intent PROGRAM is compiled and looked up under. A row with no url journals the action
+            # perfectly and still teaches nothing, because nothing can say WHERE it happened —
+            # `compile_from_journal` has no (task, state) to file it under, and rung 0 has nothing
+            # to replay. Every set_text, select_option and check_group of the SuccessFactors
+            # account drive landed in the journal that way (2026-07-28): correct, complete, and
+            # unusable as training data.
+            #
+            # And the caller was not doing anything wrong. `tab_id` is the MORE robust address —
+            # a url goes stale the moment the page navigates, which is why the executor prefers
+            # the id. So the fix belongs here, once, rather than as a rule every call site has to
+            # remember: ask the endpoint what it landed on, and failing that ask the browser.
+            if not ctx.get("url"):
+                ctx["url"] = await _resolve_url_for_journal(body, result)
+                ctx["route"] = route_template(ctx["url"]) if ctx["url"] else ""
 
             outcome = result.get("outcome")
             if outcome is None:
