@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+import account_forms
 import applied_index
 import apply_fields
 import apply_steps as aps
@@ -1520,59 +1521,11 @@ _ACCOUNT_VERIFY_MARKERS = ("verification code", "verify your email", "check your
                            "enter the code", "one-time", "two-step", "two-factor", "authenticator")
 
 
-#: WHICH fields a create-account form has, per ATS, and where each value comes from. The
-#: ADDRESSING is not here — it is in `apply_fields`, resolved by (ats, field), because a second
-#: place that says where a field lives is a second place that can be wrong about it.
-#:
-#: This table exists because the driver below used to BE Workday: three hardcoded accessible names
-#: and a "Create Account" button. iCIMS wants six fields, calls the button "Submit Profile", and
-#: puts a username field beside the email — so the first genuinely different ATS could not be
-#: driven at all, which is the reverse of what a recipe system is for.
-#: Keyed by LEG then ATS. Signing in was the missing half: the system could CREATE an account by
-#: typing a generated password and then could not USE it, because only the create leg was wired —
-#: so an ATS we already had an active account for still stopped at a manual handoff. Nothing about
-#: the operator's directive distinguishes the two (their account, their machine, their job search);
-#: the gates that hold are the same ones either way, a captcha or a verification code.
-_ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
-    "create_account": {
-        "workday": {
-            "fields": (("email", "username"), ("password", "password"),
-                       ("verify_password", "password")),
-            "submit": "create_account_submit",
-        },
-        "icims": {
-            # Step 1 of 4 IS the account form: identity and credential on one page (ICIMS_FIELDS).
-            "fields": (("first_name", "first_name"), ("last_name", "last_name"),
-                       ("email", "username"), ("login", "username"),
-                       ("password", "password"), ("verify_password", "password")),
-            "submit": "create_account_submit",
-        },
-        "successfactors": {
-            "fields": (("email", "username"), ("verify_email", "username"),
-                       ("password", "password"), ("verify_password", "password"),
-                       ("first_name", "first_name"), ("last_name", "last_name")),
-            # SAP wants a country before it will take the form, and a data-privacy acceptance.
-            # The two MARKETING opt-ins on the same page are deliberately absent from every list
-            # here: a field this driver never names is one it can never tick by accident.
-            "selects": (("country", "country"),),
-            # Both arrive CHECKED on the live form — see the refusals loop. Naming them so they
-            # are never touched was the old protection, and it was pointed the wrong way.
-            "refusals": ("opt_in_job_notifications", "opt_in_career_news"),
-            "confirms": ("terms",),
-            "submit": "create_account_submit",
-        },
-    },
-    "sign_in": {
-        "workday": {
-            "fields": (("email", "username"), ("password", "password")),
-            "submit": "sign_in_submit",
-        },
-        "successfactors": {
-            "fields": (("signin_email", "username"), ("signin_password", "password")),
-            "submit": "sign_in_submit",
-        },
-    },
-}
+#: The account form table now lives in `account_forms`, because a router is the wrong home for a
+#: recipe: nothing outside an HTTP handler could read it, which is why the account rung produced no
+#: program the controller could step (see that module's header). This name stays as the local alias
+#: the driver already reads.
+_ACCOUNT_FORMS = account_forms.ACCOUNT_FORMS
 
 
 async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
