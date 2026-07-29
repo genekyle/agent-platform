@@ -24,6 +24,10 @@ import { useOrderedPicks } from "./useOrderedPicks";
 //: so this costs no bandwidth — the number is about how quickly the operator should see the world
 //: change, not about load.
 const PING_MS = 5000;
+//: How often the interval wakes, and how long a press keeps it reading at that speed. The panel
+//: reads at PING_MS at rest and at SETTLE_MS while the page is settling from something we did.
+const SETTLE_MS = 1000;
+const SETTLE_WINDOW_MS = 12000;
 
 const RUNG_TONE = { held: "ready", next: "accent", pending: "muted", regressed: "warn", lapsed: "warn" };
 const RUNG_MARK = { held: "check", next: "play", pending: "circle", regressed: "refresh", lapsed: "alert" };
@@ -183,6 +187,10 @@ export function SessionControlPanel({ domain }) {
   // A ref, not the state, because the interval closes over its first render.
   const busyRef = useRef(false);
   busyRef.current = busy;
+  // When the last read landed, and how long to keep watching closely. Refs, not state: the
+  // interval must see the current values without being torn down and rebuilt on every read.
+  const lastLoadRef = useRef(0);
+  const settleUntilRef = useRef(0);
 
   // Find this domain's live session. Everything below hangs off one session id.
   useEffect(() => {
@@ -201,6 +209,7 @@ export function SessionControlPanel({ domain }) {
   // local CDP sockets, so this is free even in low-data mode.
   const load = useCallback(() => {
     if (!sessionId) return;
+    lastLoadRef.current = Date.now();
     getJSON(`/api/session_control/${sessionId}`)
       .then((d) => {
         // A poll carries no last_step; keep the one the operator is still reading rather than
@@ -218,9 +227,24 @@ export function SessionControlPanel({ domain }) {
 
   useEffect(() => {
     load();
-    // Paused while an action is in flight: a ping landing mid-step would render a half-applied
-    // world, and the action's own response is fresher than anything a poll could fetch.
-    const t = setInterval(() => { if (!busyRef.current) load(); }, PING_MS);
+    // Two cadences, because the world moves at two speeds.
+    //
+    // An action's own response is a snapshot taken WHILE it was still happening — the drive
+    // returns, and the browser is often still navigating, still raising a dialog, still landing.
+    // So the panel renders a world that has already moved on, and at a 5s cadence it can sit
+    // wrong for most of a breath. That is the "the UI needs to catch up" everyone keeps hitting,
+    // and it is not fixed by pressing harder or reloading the page.
+    //
+    // So: normal cadence at rest, and a FAST one for a short window after anything is pressed —
+    // the seconds when the page is actually settling are exactly the seconds worth watching. It
+    // costs nothing that matters; the read model is local CDP sockets.
+    const tick = () => {
+      if (busyRef.current) return;            // an in-flight action's response is fresher
+      const now = Date.now();
+      const settling = now < settleUntilRef.current;
+      if (settling || now - lastLoadRef.current >= PING_MS) load();
+    };
+    const t = setInterval(tick, SETTLE_MS);
     return () => clearInterval(t);
   }, [load]);
 
@@ -252,6 +276,12 @@ export function SessionControlPanel({ domain }) {
       return null;
     } finally {
       setBusy(false);
+      // WATCH CLOSELY FOR A MOMENT. The response above was taken while the action was still
+      // happening — the drive returns and the browser is often still navigating, still raising a
+      // dialog, still landing — so it is a true picture of a world that has already moved. The
+      // next few seconds are the ones worth reading, and re-reading them is how a press ends with
+      // the panel showing what actually became true rather than what was true mid-press.
+      settleUntilRef.current = Date.now() + SETTLE_WINDOW_MS;
     }
   };
 
@@ -347,9 +377,16 @@ export function SessionControlPanel({ domain }) {
           </div>
           <span className="layer__sub">
             {atLine ? "At the start line — stop and go" : "Climbing to the start line"}
-            <span className="sc-live" title={`Re-reading the session every ${PING_MS / 1000}s`}>
-              <span className="sc-live__dot" /> live
-            </span>
+            {/* The panel's own freshness, and a way to demand a read. The dot alone said "live"
+                whether the last read was half a second or half a minute ago — which is the same
+                shape of claim as an `ok` that only means a call was dispatched. */}
+            <button type="button" className="sc-live" disabled={busy}
+                    onClick={() => { settleUntilRef.current = 0; load(); }}
+                    title={`Reads every ${PING_MS / 1000}s, and every ${SETTLE_MS / 1000}s for `
+                           + `${SETTLE_WINDOW_MS / 1000}s after anything is pressed. Click to read now.`}>
+              <span className="sc-live__dot" />
+              {busy ? "working" : "live"}
+            </button>
           </span>
         </div>
 

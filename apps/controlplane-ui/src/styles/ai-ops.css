@@ -1751,7 +1751,11 @@ textarea:focus-visible {
 
 /* The panel pings the session, so say so — a cockpit that looks identical whether it is live or
    frozen is how you end up trusting a stale reading. */
-.sc-live { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; font-size: 11.5px; color: var(--text-subtle); }
+.sc-live { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; font-size: 11.5px;
+  color: var(--text-subtle); background: none; border: 0; padding: 0; cursor: pointer; font: inherit;
+  font-size: 11.5px; }
+.sc-live:hover:not(:disabled) { color: var(--text); }
+.sc-live:disabled { cursor: default; opacity: 0.7; }
 .sc-live__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); animation: sc-pulse 2s ease-in-out infinite; }
 @keyframes sc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .sc-live__dot { animation: none; } }
