@@ -298,6 +298,36 @@ async def _detect_block(browser_url: str, _page_urls: list[str]) -> Optional[dic
 
 
 # --- the panel read model ---------------------------------------------------------------------
+def _account_state(bb: Any) -> Optional[dict[str, Any]]:
+    """Which account leg is due for the step being worked, and whether we can run it.
+
+    Read-only and cheap — registry + vault metadata, no browser and no secret. Returns None when
+    the current step has no company/ATS to have an account with, which is most of them.
+    """
+    try:
+        import accounts as accounts_mod
+        import ats_accounts
+        step = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
+        if step is None or not step.company or not step.platform:
+            return None
+        action = ats_accounts.next_account_action(step.company, step.platform)
+        rec = accounts_mod.get_account(action["account_id"]) or {}
+        return {
+            "job_id": step.job_id,
+            "company": step.company,
+            "ats": step.platform,
+            "leg": action.get("leg"),               # create_account | sign_in
+            "button": action.get("button"),
+            "status": action.get("account_status"),
+            # Whether a credential is stored to run the leg WITH. `suffix_configured` is not the
+            # same question: the password is derivable long before the account exists.
+            "has_creds": bool(rec.get("has_creds")),
+            "login_url": rec.get("login_url") or "",
+        }
+    except Exception:  # noqa: BLE001 — a read model must not break the panel
+        return None
+
+
 def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, Any], *,
           page: int, results: Optional[list[dict]] = None,
           awaiting: Optional[str] = None, last: Optional[dict] = None) -> dict[str, Any]:
@@ -333,6 +363,14 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "proposal": (bb.world or {}).get("apply_proposal"),
         # A pending account-creation handoff (durable, survives reloads like the proposal).
         "account_handoff": (bb.world or {}).get("account_handoff"),
+        # THE ACCOUNT'S STANDING STATE for the step being worked — which leg is due, and whether a
+        # credential exists to run it. Separate from `account_handoff`, which is a pending REQUEST
+        # and is cleared the moment the account is made. Without this the panel went blank at
+        # exactly the wrong moment: the Teradyne account was created, `mark_created` cleared the
+        # handoff, the browser was sitting on SAP's sign-in wall, and the cockpit offered nothing
+        # to press (2026-07-28). A settled create rung is not the end of the account's business —
+        # the sign-in leg is what comes next, and it needs a surface.
+        "account_state": _account_state(bb),
         # What the OPEN PANE says the application is. Read at open_pane and surfaced here so a
         # proposal is made against the observed apply type rather than an assumed one — on
         # 2026-07-24 a proposal cited "apply_type=indeed_apply" as evidence for a posting whose

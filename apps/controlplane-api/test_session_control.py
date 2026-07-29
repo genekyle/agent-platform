@@ -4121,3 +4121,51 @@ def test_a_field_the_recipe_cannot_supply_is_the_only_thing_that_reads_as_a_requ
     remaining = out["account_handoff"]["remaining"]
     assert remaining["operator"] == ["Employee referral code: *"]
     assert [f["label"] for f in remaining["system"]] == ["Choose Password: *"]
+
+
+def test_the_panel_keeps_offering_the_account_after_the_handoff_is_cleared(monkeypatch):
+    """The moment the create leg settles, `mark_created` clears the handoff — and on an ATS that
+    then demands a sign-in the cockpit went blank in front of the wall (Teradyne, 2026-07-28). A
+    settled create rung is not the end of the account's business."""
+    import accounts as accounts_mod
+
+    import ats_accounts
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    accounts_mod.set_credentials(aid, "operator@example.com", "Tabcde1!")
+    ats_accounts.mark_created("Teradyne", "successfactors")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        out = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+
+    st = out["account_state"]
+    assert st["leg"] == "sign_in" and st["button"] == "Sign In"
+    assert st["has_creds"] is True          # there is a credential to run the leg WITH
+    assert st["company"] == "Teradyne" and st["job_id"] == "indeed:a1"
+
+
+def test_the_account_state_says_create_while_the_account_does_not_exist(monkeypatch):
+    # And it must not offer a sign-in we cannot perform: no account, no credential, create leg.
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        out = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+
+    st = out["account_state"]
+    assert st["leg"] == "create_account"
+    assert st["has_creds"] is False

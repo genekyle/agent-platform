@@ -300,6 +300,11 @@ export function SessionControlPanel({ domain }) {
 
   const proposal = p.proposal || null;
   const accountHandoff = p.account_handoff || null;
+  // The account's STANDING state, as opposed to a pending handoff request. The two are different
+  // moments: the handoff is cleared the instant the account is made, and the sign-in leg that
+  // follows still needs somewhere to be pressed.
+  const accountState = p.account_state || null;
+  const signInDue = accountState && accountState.leg === "sign_in" && accountState.has_creds;
 
   const flagStep = (jobId, flag, detail = "") =>
     call("/apply_flag", { job_id: jobId, flag, detail, initiator: "operator" });
@@ -820,6 +825,37 @@ export function SessionControlPanel({ domain }) {
                                 <button className="btn btn-sm btn-ghost" disabled={busy}
                                         onClick={() => flagStep(s.job_id, "parked:account_wall", "operator chose not to create the account")}>
                                   Park it
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* THE SIGN-IN LEG. The account exists and its credential is in the
+                              vault, so this is not a handoff — there is nothing to hand over.
+                              It appears only once the create leg is settled, which is exactly the
+                              moment the handoff card disappears and the cockpit used to go blank
+                              in front of an ATS sign-in wall. */}
+                          {!accountHandoff && signInDue && accountState.job_id === s.job_id && !s.done && (
+                            <div className="sc-account">
+                              <div className="sc-account__head">
+                                <AppIcon name="key" size={14} />
+                                Sign in — {accountState.company} ({accountState.ats})
+                              </div>
+                              <p className="sc-account__remaining">
+                                <AppIcon name="check" size={13} />
+                                <span>The account exists and its login is stored. Nothing to type —
+                                  a captcha or a 2FA code still stops for you.</span>
+                              </p>
+                              <div className="cv-actions">
+                                <button className="btn btn-sm btn-primary" disabled={busy}
+                                        title="Fills the sign-in form from the stored credential and clicks Sign In."
+                                        onClick={() => call("/apply_account", { mode: "auto", initiator: "operator" })}>
+                                  Sign in automatically
+                                </button>
+                                <button className="btn btn-sm" disabled={busy}
+                                        title="Fill the sign-in form but leave the click to you"
+                                        onClick={() => call("/apply_account", { mode: "fill", initiator: "operator" })}>
+                                  Fill, I'll click
                                 </button>
                               </div>
                             </div>
