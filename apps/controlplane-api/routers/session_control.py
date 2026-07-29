@@ -1348,6 +1348,84 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
             "detail": detail, "seen": len(candidates)}
 
 
+class ObserveBody(BaseModel):
+    note: str = ""
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/observe/start")
+async def observe_start(session_id: int, body: ObserveBody,
+                        db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Turn the page recorder ON for this session's active tab.
+
+    Explicitly operator-toggled. It is a diagnostic — a MutationObserver on a busy SPA is real
+    overhead — so it is never started implicitly and never left on by something else finishing.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    engine = engine_for(session)
+    res = await _capture_post("/observe/start",
+                              {"browser_url": browser_url, "tab_url": engine["search_tab"]},
+                              timeout=30.0)
+    if res.get("ok"):
+        bb.log("observe", f"recording started{(' — ' + body.note) if body.note else ''}")
+        _persist(bb, ledger)
+    return {"recording": bool(res.get("ok")), "tab_url": res.get("url"),
+            "detail": res.get("detail") or "Recording DOM, focus, input and key events."}
+
+
+@router.post("/api/session_control/{session_id}/observe/stop")
+async def observe_stop(session_id: int, body: ObserveBody,
+                       db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Turn it off, drain the buffer, and KEEP the window as an artifact.
+
+    Storing it is the point: a recording that exists only in one reply is a screenshot nobody
+    saved. Stored whole and unfiltered — summaries are a view computed on read.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    engine = engine_for(session)
+    res = await _capture_post("/observe/stop",
+                              {"browser_url": browser_url, "tab_url": engine["search_tab"]},
+                              timeout=60.0)
+    if not res.get("ok"):
+        return {"recording": False, "stored": None,
+                "detail": res.get("detail") or "Nothing was recording on this tab."}
+    import observe_log
+    head = observe_log.record(session_id, res, note=body.note)
+    bb.log("observe", f"recording stopped — {head.get('count')} event(s) kept")
+    _persist(bb, ledger)
+    return {"recording": False, "stored": head,
+            "detail": f"Kept {head.get('count')} event(s) over "
+                      f"{round((head.get('duration_ms') or 0) / 1000, 1)}s."}
+
+
+@router.get("/api/session_control/{session_id}/observe")
+def observe_list(session_id: int) -> dict[str, Any]:
+    """Every window kept for this session, newest first."""
+    import observe_log
+    return {"recordings": observe_log.list_for(session_id)}
+
+
+@router.get("/api/session_control/{session_id}/observe/{recording_id}")
+def observe_detail(session_id: int, recording_id: str, full: bool = False) -> dict[str, Any]:
+    """One window. `full=true` returns every event; otherwise the INTERACTION SPINE — the clicks,
+    focus moves, keys and value changes — because that is what a human reads first and the DOM
+    mutations are the bulk without being the story. The full record is always there underneath."""
+    import observe_log
+    rec = observe_log.get(session_id, recording_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="No such recording for this session.")
+    out = observe_log.header(rec)
+    if full:
+        out["events"] = rec.get("events") or []
+    else:
+        out.update(observe_log.summarize(rec))
+    return out
+
+
 @router.get("/api/session_control/{session_id}/windows")
 def session_windows_view(session_id: int, limit: int = 100) -> dict[str, Any]:
     """What this session's browser has DONE — windows opened, closed and navigated, in order.

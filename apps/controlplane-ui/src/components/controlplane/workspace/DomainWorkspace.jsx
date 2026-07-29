@@ -9,6 +9,7 @@ import { LiveDrivePanel } from "./LiveDrivePanel";
 import { SessionControlPanel } from "./SessionControlPanel";
 import { ActivityFeed } from "./ActivityFeed";
 import { DomainTerminal } from "./DomainTerminal";
+import { ObserveRecorder } from "./ObserveRecorder";
 import { TrainingReadiness } from "./TrainingReadiness";
 import { AccountsPanel } from "./AccountsPanel";
 import { ErrandsPanel } from "./ErrandsPanel";
@@ -32,12 +33,19 @@ const TAB_TO_SECTION = {
   facebook_marketplace: { inventory: "inventory", queue: "queue", listings: "listings", messages: "messages" },
 };
 
-function DataTab({ domain, tab, onOpenTraining }) {
+function DataTab({ domain, tab, onOpenTraining, sessionId }) {
   if (tab === "control") return <SessionControlPanel domain={domain} />;
   if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
   if (tab === "errands") return <ErrandsPanel domain={domain} />;
-  if (tab === "terminal") return <div className="section-body"><DomainTerminal domain={domain} /></div>;
+  if (tab === "terminal") {
+    return (
+      <div className="section-body">
+        <ObserveRecorder domain={domain} sessionId={sessionId} />
+        <DomainTerminal domain={domain} />
+      </div>
+    );
+  }
   if (tab === "accounts") {
     // WHICH accounts a domain has is a property OF the domain, declared in the catalog — an ATS
     // sub-domain has one login per employer (`accounts: "ats"`), an aggregator or channel has a
@@ -158,6 +166,20 @@ function GroupWorkspace({ domain, activeTab, onChangeTab, onOpenDomain }) {
 export function DomainWorkspace({ domain, activeTab, onChangeTab, onOpenTraining, onOpenDomain }) {
   const [settings, setSettings] = useState({ automation_mode: "manual", goals: {} });
   const [saving, setSaving] = useState(false);
+  // The active session for this domain — the recorder needs one to attach to, and it is the same
+  // lookup StatusCard already does (match on the domain's host, not its id: session domain_ids
+  // carry vendor spellings).
+  const [sessionId, setSessionId] = useState(null);
+  useEffect(() => {
+    if (domain.kind !== "jobs") return undefined;
+    const poll = () => getJSON("/api/training/sessions")
+      .then((rows) => setSessionId(
+        (rows || []).find((s) => (s.domain_id || "").includes(domain.host) && s.status === "active")?.id ?? null))
+      .catch(() => {});
+    poll();
+    const t = setInterval(poll, 10000);
+    return () => clearInterval(t);
+  }, [domain.kind, domain.host]);
 
   useEffect(() => {
     getJSON(`/api/domains/${domain.id}/settings`).then(setSettings).catch(() => {});
@@ -214,7 +236,7 @@ export function DomainWorkspace({ domain, activeTab, onChangeTab, onOpenTraining
 
       {tab === "overview"
         ? <Overview domain={domain} mode={settings.automation_mode} goalState={settings.goals || {}} onToggleGoal={onToggleGoal} />
-        : <DataTab domain={domain} tab={tab} onOpenTraining={onOpenTraining} />}
+        : <DataTab domain={domain} tab={tab} onOpenTraining={onOpenTraining} sessionId={sessionId} />}
     </div>
   );
 }
