@@ -3619,11 +3619,24 @@ and the commit says so — but writing to the element we resolved rather than to
 is correct on its own terms, and the focused-element path stays for the coordinate route that has no
 node to hold.
 
-**The general lesson, which is not about LinkedIn.** An accessible name is only an identifier if
-it is *derived from something stable*. A name that comes from a placeholder, a value, or any state
-that our own interaction changes is a handle that breaks when used. Before addressing a control by
-name, ask what the name is derived from — and when it is the thing you are about to change, hold
-the node instead.
+**RETRACTED, same day.** The re-scan disproves it: after focusing, AX still returns BOTH nodes
+under their original names (`textbox "I'm looking for…"` #3794, `combobox "I'm looking for..."`
+#31). The names do not change. The visible placeholder does, and I inferred the AX name from it
+without re-scanning — which is the same error as the diagnosis it was correcting.
+
+**What is actually measured, and where it stops.** A real click focuses the box and OPENS A
+SUGGESTION PANEL (operator screenshot) — so it is a staged widget, not a plain input. Typing then
+fails identically against both nodes, and `/execute` reports `css_point: [0.0, 0.0]` for both while
+the DOM says the real input is 280x34 and on screen. That contradiction — a centre of (0,0) for a
+visibly boxed element — is the lead, and it points at node resolution / centre measurement in
+`executor/driver._element_act`, not at the value write.
+
+**The lesson that survives, and it is about me, not LinkedIn.** Three diagnoses were committed for
+this one control in a day; two were wrong and both were written as findings. The failure mode is
+consistent: I measured ONE thing, inferred a mechanism, and wrote the mechanism down as if it had
+been measured. The measurement each time was real; the story around it was not. A fact is what was
+read back. Everything else is a hypothesis and must be labelled one — especially when it is
+convenient and explains the symptom.
 
 **And the habit, three drives running:** every one of these was found by reading the result back —
 the value probe, the bounding-box probe, the screenshot. `ok` has now been wrong about a click, a

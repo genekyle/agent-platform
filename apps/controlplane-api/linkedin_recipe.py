@@ -21,21 +21,32 @@ MEASURED
   then radius on the RESULTS page. Indeed asks for what+where together and then the radius; that
   ordering difference is the cadence, see SEARCH_CADENCE.
 * **The jobs home has one search box and NO submit button.**
-* **THE BOX'S ACCESSIBLE NAME IS ITS PLACEHOLDER, AND THE PLACEHOLDER CHANGES ON FOCUS.** Corrected
-  2026-07-28, having first been recorded here BACKWARDS ("the placeholder is not an identifier; the
-  AX name is"). There is exactly one real input — `<input>`, 280x34, no aria-label — so AX derives
-  its name from the placeholder:
+* **THE SEARCH BOX IS A WIDGET, AND FOCUSING IT OPENS A PANEL** (operator screenshot, 2026-07-28).
+  A real click focuses the field, changes the visible placeholder to "Describe the job you want",
+  and opens a suggestion overlay ("Search for more than just job titles"). So it is a staged
+  control, not a plain input — the widget-protocol shape this codebase already knows.
+* **AX exposes TWO nodes for it**: `textbox "I'm looking for…"` and `combobox "I'm looking for..."`
+  (curly apostrophe). They do NOT change name on focus — a re-scan after focusing returns both,
+  unchanged.
 
-      unfocused -> "I'm looking for…"        focused -> "Describe the job you want"
+--------------------------------------------------------------------------------------
+WHAT IS STILL UNEXPLAINED — do not build on a guess here
+--------------------------------------------------------------------------------------
+Two wrong diagnoses have already been committed about this one control ("a typeahead steals focus
+and defeats the React write"; "the accessible name changes on focus"). Both were written as
+findings and neither survived the next measurement. So what follows is only what has actually been
+read back:
 
-  Which means addressing this control by accessible name is unstable BY CONSTRUCTION: the act of
-  focusing it renames it. Resolving the stale name afterwards finds a boxless node — `/execute`
-  reported `css_point: [0.0, 0.0]`, drove nothing, and returned ok. That, not the React write, is
-  why the field stayed empty.
-  The honest consequence: this control needs an addressing scheme that is not the name. It has no
-  aria-label and no data-* to use, so the candidate is the node id from a scan taken IMMEDIATELY
-  before the act (the tight scan->act window `project_fb_listing_schema` already describes), or a
-  driver that holds the node it focused instead of re-resolving.
+    trusted click        -> outcome ok, focused TRUE,  value ""      (the widget opens)
+    type (combobox #31)  -> outcome ok, focused FALSE, value ""
+    type (textbox #3794) -> outcome ok, focused FALSE, value ""
+    /execute css_point   -> [0.0, 0.0] for BOTH nodes
+    DOM getBoundingClientRect on the real input -> 280 x 34, visible
+
+The last two lines are the contradiction worth chasing: the executor measures a centre of (0,0)
+for an element the DOM says is 280x34 and on screen. Whatever is wrong is in the centre
+measurement / node resolution in `executor/driver._element_act`, not in the value write — and
+until that is understood, any "fix" here is a third guess.
 * **`_SUBMIT_HINTS` matching "search" picks `Skip to search`** — a skip-link, not a submit.
   Clicking it would jump the caret to a landmark and report a submitted query. This is why the
   engine declares its own control profile instead of inheriting Indeed's matcher.
@@ -107,8 +118,8 @@ def classify(url: str = "", page_text: str = "") -> str:
 # --- the search controls ----------------------------------------------------------------------
 #: MEASURED. The query box's ACCESSIBLE NAME — matched as a substring because the apostrophe is
 #: curly and the ellipsis is three dots, and neither survives being retyped by hand.
-#: BOTH spellings, because the name flips on focus (see the module note). A matcher that knows only
-#: one of them finds the box exactly once and then loses it.
+#: Both spellings, because AX exposes the box twice (textbox + combobox, curly vs straight
+#: apostrophe). The names do NOT change on focus — that was a wrong diagnosis, now retracted.
 QUERY_NAME_HINTS: tuple[str, ...] = ("looking for", "describe the job", "search by title")
 QUERY_ROLES: tuple[str, ...] = ("combobox", "textbox", "searchbox")
 
