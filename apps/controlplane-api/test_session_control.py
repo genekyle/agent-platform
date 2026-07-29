@@ -4086,6 +4086,38 @@ def test_the_card_shows_what_the_page_still_needs_not_the_whole_plan(monkeypatch
         _teardown()
 
     remaining = out["account_handoff"]["remaining"]
-    assert remaining == ["Choose Password: *", "Retype Password: *"]
+    # BOTH password boxes are blank on the page and ANSWERED in the system: the credential scheme
+    # derived them, checked them against the site's rules and vaults them on use. Listing them as
+    # work asked the operator to think of a password that had already been decided.
+    assert remaining["operator"] == []
+    assert [f["label"] for f in remaining["system"]] == ["Choose Password: *", "Retype Password: *"]
+    assert {f["source"] for f in remaining["system"]} == {"account.password"}
     # The plan is still the full sequence — the two answer different questions.
     assert len(out["account_handoff"]["plan"]) == 12
+
+
+def test_a_field_the_recipe_cannot_supply_is_the_only_thing_that_reads_as_a_request(monkeypatch):
+    """The split has to earn its keep in the other direction too: something genuinely unanswerable
+    must still reach the operator, or the card has just learned to say 'nothing needed'."""
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    scan = {"ok": True, "unanswered": [
+        {"field": "Choose Password: *", "selector": "#fbclc_pwd"},          # the system's
+        {"field": "Employee referral code: *", "selector": "#fbclc_ref"},   # nobody's
+    ]}
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              "/scan_required": scan},
+             blackboard=bb)
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "handoff"}).json()
+    finally:
+        _teardown()
+
+    remaining = out["account_handoff"]["remaining"]
+    assert remaining["operator"] == ["Employee referral code: *"]
+    assert [f["label"] for f in remaining["system"]] == ["Choose Password: *"]

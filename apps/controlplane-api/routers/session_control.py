@@ -1755,45 +1755,77 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
             "detail": f"Submitted the create-account form ({button!r})."}
 
 
-async def _remaining_required(browser_url: str, tab_id: str, ats: str, leg: str) -> list[str]:
-    """What the LIVE form still needs, in the site's own words.
+async def _remaining_required(browser_url: str, tab_id: str, ats: str, leg: str) -> dict[str, Any]:
+    """What the LIVE form still needs, split by WHO SUPPLIES IT.
 
-    The plan says what a drive would do from scratch. This says what is actually left — and by the
+    The plan says what a drive from scratch would do. This says what is actually left — and by the
     time an operator is reading the card those are rarely the same, because the form is usually
     part-filled already, by a previous run or by them.
 
-    Two things are filtered out, both of them scanner artifacts rather than work:
-      * the fields this leg deliberately REFUSES. `/scan_required` sees an unticked marketing box
-        and reports an unanswered required field; it is neither. Listing it would ask the operator
-        to undo the refusal the whole `refusals` loop exists to make.
-      * labels that are really a run-together of the whole form. The scanner occasionally captions
-        a control with every label above it ("Email Address: * Retype Email Address: * Choose
-        Password: * Password must be at least 8 ch…"), which is noise in a list meant to be read.
+    But "what is left" is the wrong question to put in front of a person on its own, and putting it
+    there was a mistake: the card listed "Choose Password" and "Retype Password" as though the
+    operator had to think of a password, when the credential scheme has ALREADY decided it —
+    derived from the company initials plus the shared suffix, checked against the site's stated
+    rules, and stored in the vault the moment it is used (`ats_accounts`). Those fields are empty
+    on the page and answered in the system. Presenting them as work is asking someone to redo what
+    the account system exists to do.
 
-    Best-effort: a probe that fails returns nothing rather than raising. This decorates a card.
+    So each remaining field is attributed to its source, by matching the live control back to the
+    step that would fill it:
+      * `system`   — the program names it and knows where its value comes from (`value_ref`:
+                     `account.password` from the vault, `first_name` from the answer store).
+      * `operator` — nothing in the recipe supplies it. THIS is the only list that is a request.
+
+    Two kinds of row are dropped as scanner artifacts rather than work: the fields this leg
+    deliberately REFUSES (an unticked marketing box reads as an unanswered required field, and
+    listing it would ask the operator to undo the refusal the `refusals` loop exists to make), and
+    run-together captions, where the scanner labels a control with every label above it.
+
+    Best-effort: a probe that fails reports nothing rather than raising. This decorates a card.
     """
+    empty: dict[str, Any] = {"operator": [], "system": [], "checked": False}
     if not tab_id:
-        return []
+        return empty
     form = account_forms.form_for(ats, leg) or {}
-    refused = set()
+    refused, by_label = set(), {}
     for field in form.get("refusals", ()):
         try:
             refused.add(apply_fields.resolve(ats, field).get("selector"))
         except apply_fields.FieldNotFound:
             continue
+    # The site's own label for each field the program would fill -> where its value comes from.
+    for stp in account_forms.program_steps(ats, leg):
+        field = stp["params"].get("field")
+        ref = stp["params"].get("value_ref")
+        if not field or not ref:
+            continue
+        try:
+            entry = apply_fields.resolve(ats, field)
+        except apply_fields.FieldNotFound:
+            continue
+        for key in (entry.get("name"), entry.get("selector")):
+            if key:
+                by_label[str(key).strip().lower()] = {"field": field, "source": ref}
+
     try:
         scan = await _capture_post("/scan_required",
                                    {"browser_url": browser_url, "tab_id": tab_id}, timeout=25.0)
     except Exception:  # noqa: BLE001 — a card decoration must not fail the rung
-        return []
-    out = []
+        return empty
+
+    out: dict[str, Any] = {"operator": [], "system": [], "checked": True}
     for row in (scan.get("unanswered") or []):
-        if row.get("selector") in refused:
+        selector = row.get("selector")
+        if selector in refused:
             continue
         label = str(row.get("field") or "").strip()
         if not label or len(label) > 60:      # a run-together caption, not a field
             continue
-        out.append(label)
+        known = by_label.get(label.lower()) or by_label.get(str(selector or "").strip().lower())
+        if known:
+            out["system"].append({"label": label, **known})
+        else:
+            out["operator"].append(label)
     return out
 
 

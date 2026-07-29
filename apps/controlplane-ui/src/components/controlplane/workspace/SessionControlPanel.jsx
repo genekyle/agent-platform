@@ -736,11 +736,27 @@ export function SessionControlPanel({ domain }) {
                                   time this card is read the form is usually part-filled, and a
                                   card showing only the plan reads as twelve things to do in front
                                   of a page that needs two. */}
-                              {Array.isArray(accountHandoff.remaining) && (
+                              {accountHandoff.remaining?.checked && (
                                 <p className="sc-account__remaining">
-                                  {accountHandoff.remaining.length === 0
-                                    ? <><AppIcon name="check" size={13} /> The form on screen is complete — nothing left but the button.</>
-                                    : <><AppIcon name="alert" size={13} /> Still needed on the page: {accountHandoff.remaining.join(" · ")}</>}
+                                  {accountHandoff.remaining.operator.length > 0 ? (
+                                    <><AppIcon name="alert" size={13} />
+                                      <span><b>Needs you:</b> {accountHandoff.remaining.operator.join(" · ")}
+                                        {accountHandoff.remaining.system.length > 0 &&
+                                          ` — the system supplies the other ${accountHandoff.remaining.system.length}.`}
+                                      </span></>
+                                  ) : accountHandoff.remaining.system.length > 0 ? (
+                                    /* Empty on the page, ANSWERED in the system. Listing these as
+                                       work asked the operator to think of a password the credential
+                                       scheme had already derived, checked and vaulted. */
+                                    <><AppIcon name="check" size={13} />
+                                      <span>Nothing needed from you. {accountHandoff.remaining.system.length} field
+                                        {accountHandoff.remaining.system.length === 1 ? " is" : "s are"} still blank on
+                                        the page — {accountHandoff.remaining.system.map((f) => f.label).join(" · ")} —
+                                        and the account system fills {accountHandoff.remaining.system.length === 1 ? "it" : "them"} from
+                                        the stored credential.</span></>
+                                  ) : (
+                                    <><AppIcon name="check" size={13} /> The form on screen is complete — nothing left but the button.</>
+                                  )}
                                 </p>
                               )}
                               {/* WHAT "AUTOMATICALLY" MEANS, before you press it. The steps come
