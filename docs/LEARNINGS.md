@@ -3830,3 +3830,47 @@ single time. Build the instrument instead of the theory.
 
 `SEARCH_FILL_READY` is now True — MEASURED. `SEARCH_SUBMIT_READY` stays False, because nothing has
 committed the query and read back a results page, and "we can type" is not "we can search".
+
+---
+
+## 2026-07-28 (4) — The ledger was right and I wasn't: three rungs that reported success without checking
+
+**The correction that matters most.** The operator said the account had been created; I ran
+`mark_created` on that. The step ledger, two lines above, said
+`account failed — create leg: Opened the 'terms' consent but could not click 'Accept' (not_found)`.
+**Nothing had been created on SAP.** I marked an account active on a report, against a record that
+plainly contradicted it, and then reported "everything is stored" about a credential for an account
+that did not exist. The ledger was the reliable witness and I treated it as background. **When a
+human report and the system's own record disagree, the record is evidence and the report is a
+claim — reconcile them before acting, and say so.**
+
+Three failures came out of pulling that thread, and all three are the same bug wearing different
+clothes: **an `ok` that means "a call was dispatched", read as "the thing happened".**
+
+**1. The consent dialog never opened.** The run blamed the Accept click, but the dialog had never
+appeared — on SAP, clicking the consent opener over an *invalid* form does nothing visible except
+paint the required-field errors. So the failure named the wrong step and pointed the next session at
+the wrong widget. The driver now POLLS for the commit control before reaching for it, and when it
+does not appear it reports the page's own answer: which required fields are unanswered, and that
+this site will not raise the consent over an invalid form.
+
+**2. The submit was never verified.** A click that dispatched is not a form that was accepted, and a
+wrong password re-renders the SAME login form with an error — indistinguishable from success at that
+layer. Hence a ledger line reading `sign_in leg: signed in to Teradyne successfactors` for an
+account that had never been made. The proof used is the submit control's **absence**, which needs no
+new site knowledge: these forms replace themselves on success and keep themselves on failure. The
+site's own complaint is quoted back when there is one.
+
+**3. `mark_created` had no way back.** It is a claim about ANOTHER system, and wrongly-active is the
+worse of the two errors — `next_account_action` then offers the sign-in leg forever, the create leg
+becomes unreachable, and every rejection reads as a bad password. `reset` retracts it and clears the
+stored credential with it (leaving it would keep `has_creds` true for an account that does not
+exist), **recording the retraction as its own mini-step so both sides stay on the ledger.** A
+correction that leaves no trace turns the ledger into a thing that is only true when nobody was
+wrong.
+
+**A UI shape worth keeping.** The account card was gated on `account_handoff` — a pending REQUEST —
+so the cockpit had a surface only in the moments someone had just asked for one, and went blank both
+after `mark_created` (in front of a sign-in wall) and after `reset` (in front of an empty signup
+form). **An entity's state is continuous; a request is an event, and a panel keyed to the event has
+nothing to say the rest of the time.** The card now renders from `account_state` and reads the leg.
