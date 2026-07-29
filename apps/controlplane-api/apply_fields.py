@@ -379,6 +379,17 @@ SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
                             "Print. Not disabled by a scroll gate — the statement fits the dialog "
                             "— but confirm from OUTSIDE afterwards: the row must read 'Data "
                             "privacy statement has been accepted.'"),
+    # The SAME dialog, arriving on its own after a successful sign-in — see
+    # `successfactors_policy_gate`. Same control, named separately because the two are different
+    # MOMENTS: one is staged by a click we made, this one interrupts us, and a recipe that cannot
+    # tell them apart will wait for an opener that is never coming.
+    "policy_gate_accept": _f(ats="successfactors", role="button", name="Accept",
+                             widget_type=WidgetType.UNKNOWN,
+                             note="Post-sign-in policy gate. UNPROMPTED — no opener precedes it. "
+                                  "Left unaccepted it drops the session back to the sign-in wall "
+                                  "(observed 2026-07-29: dialog gone, logged_in false, "
+                                  "loginFlowRequired=true), so it must be cleared immediately "
+                                  "after the sign-in submit, before any other rung."),
     # MARKETING — and they arrive CHECKED. This said "both default-off" until 2026-07-28, when the
     # live form was actually looked at: both boxes are ticked on first render. That made the whole
     # protection backwards. The design here was "a field this driver never names is one it can

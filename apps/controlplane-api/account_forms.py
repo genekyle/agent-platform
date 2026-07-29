@@ -102,6 +102,17 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
         "successfactors": {
             "fields": (("signin_email", "username"), ("signin_password", "password")),
             "submit": "sign_in_submit",
+            # AN INTERSTITIAL, not a step of the form: the Data Privacy Consent dialog arrives on
+            # its own once the sign-in lands, with no opener to click and nothing on the form that
+            # predicts it. It is the same dialog the signup raises, at a different MOMENT — and a
+            # recipe that could not tell those apart would sit waiting for an opener that is never
+            # coming.
+            #
+            # It has to be cleared immediately, because leaving it drops the whole session: observed
+            # 2026-07-29 — dialog dismissed unaccepted, and the tab was back at the sign-in wall
+            # with logged_in false and loginFlowRequired=true. An authenticated session is not a
+            # thing you can come back to later here.
+            "interstitials": (("policy_gate_accept", "successfactors_policy_gate"),),
         },
     },
 }
@@ -150,6 +161,11 @@ def program_steps(ats: str, leg: str) -> list[dict[str, Any]]:
         steps.append({"intent": "click", "params": {"field": opener}})
         steps.append({"intent": "click", "params": {"field": commit}})
     steps.append({"intent": "click", "params": {"field": form["submit"]}})
+    for control, _state in form.get("interstitials", ()):
+        # Conditional by nature — it fires only if the gate actually appears — but it belongs in
+        # the program, because a sequence that stops at the submit describes a leg that ends one
+        # dialog short of an authenticated session.
+        steps.append({"intent": "click", "params": {"field": control}})
     return steps
 
 

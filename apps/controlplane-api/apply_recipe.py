@@ -618,6 +618,21 @@ SUCCESSFACTORS_LESSONS = {
         "table stores it without the trailing ' Required'. It resolves because _resolve_ax_node "
         "falls back from exact match to substring; that fallback is load-bearing here, not "
         "decorative.",
+    "the_policy_gate_comes_back_after_sign_in": "A successful sign-in does NOT land on the career "
+        "site — SAP raises the Data Privacy Consent dialog again, unprompted, over the sign-in "
+        "page (state successfactors_policy_gate, 2026-07-29). Same dialog as the signup's, same "
+        "Accept/Decline/Print, but no opener precedes it, so a recipe waiting for a click it must "
+        "make first will wait forever. LEAVING IT COSTS THE SESSION, not the rung: observed with "
+        "the dialog gone unaccepted and the tab back at the sign-in wall, logged_in false, "
+        "loginFlowRequired=true. Clear it in the same breath as the sign-in submit "
+        "(_ACCOUNT_FORMS 'interstitials'). It is CONDITIONAL — a session SAP does not re-ask must "
+        "not be treated as a failure.",
+    "an_existing_account_makes_create_look_broken": "Submitting Create Account for an email that "
+        "already has an account bounces to the sign-in page — no error naming the cause. Every "
+        "symptom points at the last thing you did instead: on 2026-07-28 the whole create form "
+        "filled cleanly, the consent click was followed by the sign-in gate, and the drive read it "
+        "as a broken consent widget. It was a registered email. Before diagnosing a create flow "
+        "that keeps returning to sign-in, TRY THE CREDENTIALS.",
     "create_form_is_its_own_state": "The gate and the signup form are two states, not one, and they "
         "are confusable: both are SAP-chrome 'Career Opportunities' pages with an email and a "
         "password box. The form's tells are the DOUBLED fields (Retype Email Address, Retype "
@@ -658,7 +673,14 @@ SUCCESSFACTORS_APPLY_RECIPE = [
                "apply_fields.check_password FIRST — see the password_rules lesson.",
      "controls": {"submit": {"role": "button", "name": "Create Account"}},
      "expect": ["successfactors_apply_form", "successfactors_account_verify"]},
-    {"step": 4, "state": "successfactors_apply_form",
+    {"step": 4, "state": "successfactors_policy_gate",
+     "action": "INTERSTITIAL, not a step you navigate to — it arrives on its own the moment a "
+               "sign-in lands, over the sign-in page, with no opener. Click Accept immediately. "
+               "Leaving it costs the SESSION: the dialog goes, the tab returns to the sign-in wall "
+               "and logged_in reads false. Conditional — a session it does not interrupt is normal.",
+     "controls": {"accept": {"role": "button", "name": "Accept"}},
+     "expect": ["successfactors_apply_form", "successfactors_account_gate"]},
+    {"step": 5, "state": "successfactors_apply_form",
      "action": "UNDRIVEN. The application itself.", "expect": ["successfactors_submitted"]},
 ]
 

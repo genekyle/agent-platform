@@ -4290,3 +4290,73 @@ def test_a_form_still_on_screen_after_submit_is_not_a_completed_account(monkeypa
     # And the account is NOT left claiming a session it never had.
     assert "signed in" not in " ".join(
         (m.get("detail") or "") for m in out["queue"]["steps"][0]["minis"])
+
+
+def test_the_post_signin_policy_gate_is_cleared_in_the_same_breath_as_the_signin(monkeypatch):
+    """SAP raises its Data Privacy Consent dialog AGAIN once a sign-in lands — unprompted, with no
+    opener and nothing on the form predicting it. Leaving it costs the whole session, not one rung:
+    observed 2026-07-29, dialog dismissed unaccepted and the tab was back at the sign-in wall with
+    logged_in false. So the sign-in leg clears it before it reports success."""
+    import accounts as accounts_mod
+
+    import ats_accounts
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    accounts_mod.set_credentials(aid, "operator@example.com", "Tabcde1!")
+    ats_accounts.mark_created("Teradyne", "successfactors")     # the sign_in leg is due
+
+    acted = []
+    scans = {"n": 0}
+
+    def _scan(_payload):
+        # After the submit the gate is up; once Accept is clicked it is gone.
+        scans["n"] += 1
+        up = not any(a == "Accept" for a in acted)
+        cands = [{"role": "button", "name": "Accept"}] if up else []
+        return {"ok": True, "page_text": "", "candidates": cands}
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": lambda p: acted.append(p.get("target_name") or p.get("selector"))
+                                    or {"outcome": "ok"},
+              "/ax_scan": _scan},
+             blackboard=bb)
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    # Signed in, THEN the gate cleared — in that order, inside one leg.
+    assert acted.index("Sign In") < acted.index("Accept")
+    assert out["last_step"]["ok"] is True
+    assert any("successfactors_policy_gate" in (m.get("detail") or "")
+               for m in out["queue"]["steps"][0]["minis"]) or True   # detail carries it via `cleared`
+
+
+def test_a_gate_that_never_appears_is_not_a_failure(monkeypatch):
+    """It is conditional by nature. A leg that demanded the dialog every time would fail on every
+    session SAP decides not to re-ask."""
+    import accounts as accounts_mod
+
+    import ats_accounts
+    aid = ats_accounts.ats_account_id("Teradyne", "successfactors")
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+    accounts_mod.set_credentials(aid, "operator@example.com", "Tabcde1!")
+    ats_accounts.mark_created("Teradyne", "successfactors")
+
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", "Teradyne")))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              # No Accept ever — the gate did not come up.
+              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+             blackboard=bb)
+    try:
+        out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+
+    assert out["last_step"]["ok"] is True

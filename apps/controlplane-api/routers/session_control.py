@@ -1930,8 +1930,42 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
                            + "Nothing here counts as a completed "
                            + ("sign-in." if leg == "sign_in" else "account.")),
                 "button": button}
+    # INTERSTITIALS — a gate that arrives ON ITS OWN once the form lands, with no opener and
+    # nothing on the page that predicted it. SAP raises its Data Privacy Consent dialog again right
+    # after a successful sign-in, and leaving it costs the whole session rather than one rung:
+    # observed 2026-07-29, dialog dismissed unaccepted and the tab was back at the sign-in wall
+    # with logged_in false. So it is cleared here, in the same breath as the submit, rather than
+    # left for a later rung to be surprised by.
+    cleared = []
+    for control, state_id in form.get("interstitials", ()):
+        addr = apply_fields.addressing_for(ats, control)
+        seen = False
+        for _ in range(5):
+            scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                       timeout=20.0)
+            if any((addr["name"] or "").strip().lower() == str(c.get("name") or "").strip().lower()
+                   for c in (scan.get("candidates") or [])):
+                seen = True
+                break
+            await asyncio.sleep(0.6)
+        if not seen:
+            continue          # it did not appear this time; that is normal, not a failure
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+            "target_bbox": {}, "target_role": addr["role"], "target_name": addr["name"],
+            "driver": "humanized"})
+        if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+            return {"ok": False, "reason": "interstitial_failed", "staged": staged,
+                    "detail": f"{state_id}: the gate appeared and {addr['name']!r} could not be "
+                              f"clicked ({res.get('outcome') or res.get('detail')}). It drops the "
+                              f"session if it is left, so nothing here counts as signed in."}
+        cleared.append(state_id)
+        await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+
     return {"ok": True, "submitted": True, "button": button, "staged": staged,
-            "detail": f"Submitted the {leg.replace('_', ' ')} form ({button!r}) and it was taken."}
+            "cleared": cleared,
+            "detail": f"Submitted the {leg.replace('_', ' ')} form ({button!r}) and it was taken."
+                      + (f" Cleared on the way through: {', '.join(cleared)}." if cleared else "")}
 
 
 async def _remaining_required(browser_url: str, tab_id: str, ats: str, leg: str) -> dict[str, Any]:
