@@ -29,32 +29,6 @@ MEASURED
   (curly apostrophe). They do NOT change name on focus — a re-scan after focusing returns both,
   unchanged.
 
---------------------------------------------------------------------------------------
-WHAT IS STILL UNEXPLAINED — do not build on a guess here
---------------------------------------------------------------------------------------
-Two wrong diagnoses have already been committed about this one control ("a typeahead steals focus
-and defeats the React write"; "the accessible name changes on focus"). Both were written as
-findings and neither survived the next measurement. So what follows is only what has actually been
-read back:
-
-    trusted click        -> outcome ok, focused TRUE,  value ""      (the widget opens)
-    type (combobox #31)  -> outcome ok, focused FALSE, value ""
-    type (textbox #3794) -> outcome ok, focused FALSE, value ""
-    the real input, asked about itself -> INPUT, 510x34 at (78,9), isConnected true,
-                                          ownerDocument === document (NOT in a frame)
-
-`css_point: [0.0, 0.0]` in those replies is NOT evidence of anything — chased and killed as a red
-herring on 2026-07-28. `driver.target_css_point()` derives it from the REQUEST's `target_bbox`, and
-those calls sent `target_bbox: {}`, so it reports (0,0) by construction on the element path. It
-describes the payload, not the page. Two hypotheses built on it (a cross-realm node, a stale
-detached node) were both falsified by one read: the element is laid out, connected and in the top
-document.
-
-WHAT REMAINS UNEXPLAINED: a trusted click focuses the field and opens the panel, and the very next
-`type` leaves it empty with focus gone — against BOTH ax nodes. No mechanism for that has survived
-a test yet, so none is written here. The next measurement to take is the one nobody has: watch
-`document.activeElement` and the field's value DURING the per-character key dispatch, rather than
-only after it, and find the exact keystroke at which focus leaves.
 * **`_SUBMIT_HINTS` matching "search" picks `Skip to search`** — a skip-link, not a submit.
   Clicking it would jump the caret to a landmark and report a submitted query. This is why the
   engine declares its own control profile instead of inheriting Indeed's matcher.
@@ -62,22 +36,32 @@ only after it, and find the exact keystroke at which focus leaves.
   `/await_results`; nothing here may treat a navigation (or its absence) as proof.
 
 --------------------------------------------------------------------------------------
-THE OPEN BLOCKER (measured, unsolved)
+THE FULL TITLE-STAGE CADENCE — MEASURED, from the operator's own recording
 --------------------------------------------------------------------------------------
-The humanized `type` DOES NOT FILL this combobox, and says `ok` while doing nothing:
+Recorded end to end by `/observe` on 2026-07-28 while the operator drove it by hand:
 
-    click  -> outcome ok, focused: True,  value ""
-    type   -> outcome ok, focused: FALSE, value ""
+    3082ms  focus    "Describe the job you want"
+    3255ms  click    trusted, at [261,29]
+    4611ms  keydown  'R'  -> input value='R'   ... 17 keys ... value='Reporting Analyst'
+    7684ms  keydown  'Enter'            <-- THE COMMIT
+    7685ms  change   value='Reporting Analyst'
+    7686ms  blur
 
-So `type` blurs the element and inserts nothing. `/execute` ok means "the node resolved and CDP
-dispatched", never "the page accepted it" — the tier-1/tier-2 split its own docstring describes —
-and here the gap is total. Until a focus-preserving fill exists, `SEARCH_SUBMIT_READY` is False and
-the cadence must not claim it can run a LinkedIn query.
+So: **click to open, type, and press ENTER.** There is no submit button and no suggestion tile to
+click — Enter is the commit, and the signature of a successful one is `Enter -> change -> blur`.
+A caller can verify the commit from that pair without waiting on a navigation, which matters
+because this is a SPA and there is no load to wait for.
 
-The likely fix is the one the body driver already documents for React inputs: type for timing but
-set the value authoritatively, then dispatch input/change so the framework's model updates. That is
-a DRIVER change (`apps/mcp`), not a recipe change, which is exactly why it is named here and not
-worked around with a bespoke selector.
+Retracted here, all disproven by that recording: "the humanized type blurs the field and inserts
+nothing" (it does neither — 17 trusted keystrokes landed and the value built cleanly), "the
+accessible name changes on focus" (it does not), "the node is boxless", "the centre measurement is
+broken". Four mechanisms, none of which survived one 13-second window.
+
+THE ONE REMAINING GAP, now precisely defined: **the executor cannot send Enter.** The interaction
+vocabulary (`interaction/contract.py`) has no `press`/key intent — an earlier attempt dispatched
+`action_id="press"` and it went nowhere, silently. Filling the box is solved; COMMITTING it needs a
+key-press capability in the driver. That is a driver change, justified now by a measurement rather
+than by the guess that preceded it.
 """
 
 from __future__ import annotations
@@ -219,6 +203,10 @@ SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
         "value_from": "query",              # SearchState.query — the job title only
         "control": "query",                 # find_query_box
         "commits": True,                    # this is the CONSUMING act
+        # MEASURED: Enter. No submit button, no suggestion tile — and the commit is confirmable
+        # from `change` + `blur` without waiting on a navigation there is none of.
+        "commit_key": "Enter",
+        "commit_signature": ("change", "blur"),
         "lands_on": SEARCH_RESULTS,
         "why": "LinkedIn asks for the job title by itself. The city is not on this page and cannot "
                "be typed here — putting it in the title box searches for a place, not a role.",

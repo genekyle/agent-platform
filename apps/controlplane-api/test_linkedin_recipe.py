@@ -137,3 +137,22 @@ def test_filling_and_submitting_are_tracked_separately():
     query and read back a results page."""
     assert lr.SEARCH_FILL_READY is True
     assert lr.SEARCH_SUBMIT_READY is False
+
+
+def test_the_commit_is_enter_and_is_confirmable_without_a_navigation():
+    """MEASURED from the operator's own /observe recording (2026-07-28): click, 17 keystrokes,
+    then `keydown Enter` -> `change` -> `blur`. There is no submit button and no suggestion tile.
+    The change+blur pair matters because this is a SPA — there is no load to wait for, so the
+    commit has to be confirmable from events."""
+    title = next(s for s in lr.SEARCH_CADENCE if s["stage"] == "title")
+    assert title["commit_key"] == "Enter"
+    assert title["commit_signature"] == ("change", "blur")
+
+
+def test_the_disproven_mechanisms_are_gone_from_the_record():
+    """Four mechanisms were written down as findings about this one control and all four were
+    disproven by a single 13-second recording. None may survive in the docstring as current."""
+    doc = lr.__doc__
+    for dead in ("blurs the element", "the accessible name changes on focus",
+                 "THE OPEN BLOCKER"):
+        assert dead not in doc, dead

@@ -3874,3 +3874,45 @@ so the cockpit had a surface only in the moments someone had just asked for one,
 after `mark_created` (in front of a sign-in wall) and after `reset` (in front of an empty signup
 form). **An entity's state is continuous; a request is an event, and a panel keyed to the event has
 nothing to say the rest of the time.** The card now renders from `account_state` and reads the leg.
+
+---
+
+## 2026-07-28 (6) — The operator recorded the search by hand, and it settled everything at once
+
+**What happened.** With the record button built, the operator toggled it on, typed "Reporting
+Analyst" into LinkedIn's jobs-home search by hand, and toggled it off. 3,659 events, 0 dropped,
+13.5 seconds. That one window answered every open question about the title stage AND retired four
+mechanisms I had invented across three days.
+
+**The cadence, measured end to end:**
+
+    3082ms  focus    "Describe the job you want"
+    3255ms  click    trusted, at [261,29]
+    4611ms  keydown  'R' -> input value='R'  ... 17 keys ... value='Reporting Analyst'
+    7684ms  keydown  'Enter'          <-- THE COMMIT
+    7685ms  change   value='Reporting Analyst'
+    7686ms  blur
+
+**Enter is the submit.** No button, no suggestion tile — which is why every search for a submit
+control found only `Skip to search`. And the commit is confirmable from `change` + `blur`, which
+matters because this is a SPA: there is no navigation to wait for, so the events ARE the proof.
+
+**Retracted, all four, by one recording:** "the humanized type blurs the field and inserts nothing"
+(17 trusted keystrokes landed and the value built cleanly), "the accessible name changes on focus",
+"the node is boxless", "the centre measurement is broken". The recipe's stale sections carrying
+those claims are deleted, and a test now asserts they cannot come back — a disproven mechanism
+left in a docstring reads as current to whoever arrives next.
+
+**The one remaining gap, and it is now precisely defined.** The executor cannot send Enter: there is
+no `press`/key intent in `interaction/contract.py`. An earlier attempt dispatched
+`action_id="press"` and it went nowhere, silently — which at the time I read as "Enter does not
+submit" and wrote down as a per-stack fact. It was neither. Filling the box is solved; committing
+needs a key-press capability in the driver, and that change is now justified by a measurement
+rather than by the guess that preceded it.
+
+**Why this entry matters beyond LinkedIn.** The operator's instinct — build the listener, hand the
+interaction to a human, read what the page actually did — beat three days of my snapshot-and-infer
+by about thirteen seconds. Every wrong turn had the same shape: a real measurement, an invented
+mechanism to join it to the symptom, and the mechanism written down as though it too had been
+measured. The instrument is what ended it, not more reasoning. PRINCIPLES §13 says this; this is
+the entry that paid for it.
