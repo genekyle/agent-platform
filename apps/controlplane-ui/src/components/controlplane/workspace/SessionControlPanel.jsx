@@ -835,28 +835,50 @@ export function SessionControlPanel({ domain }) {
                               It appears only once the create leg is settled, which is exactly the
                               moment the handoff card disappears and the cockpit used to go blank
                               in front of an ATS sign-in wall. */}
-                          {!accountHandoff && signInDue && accountState.job_id === s.job_id && !s.done && (
+                          {!accountHandoff && accountState && accountState.job_id === s.job_id && !s.done && (
                             <div className="sc-account">
                               <div className="sc-account__head">
                                 <AppIcon name="key" size={14} />
-                                Sign in — {accountState.company} ({accountState.ats})
+                                {signInDue ? "Sign in" : "Account"} — {accountState.company} ({accountState.ats})
                               </div>
                               <p className="sc-account__remaining">
-                                <AppIcon name="check" size={13} />
-                                <span>The account exists and its login is stored. Nothing to type —
-                                  a captcha or a 2FA code still stops for you.</span>
+                                <AppIcon name={signInDue ? "check" : "alert"} size={13} />
+                                <span>
+                                  {signInDue
+                                    ? "The account exists and its login is stored. Nothing to type — a captcha or a 2FA code still stops for you."
+                                    : `No account here yet (${accountState.status}). The credential is derived on demand and stored the moment it works.`}
+                                </span>
                               </p>
                               <div className="cv-actions">
                                 <button className="btn btn-sm btn-primary" disabled={busy}
-                                        title="Fills the sign-in form from the stored credential and clicks Sign In."
+                                        title={signInDue
+                                          ? "Fills the sign-in form from the stored credential and clicks Sign In."
+                                          : "Fills the whole create-account form and submits it. A captcha or email code still stops for you."}
                                         onClick={() => call("/apply_account", { mode: "auto", initiator: "operator" })}>
-                                  Sign in automatically
+                                  {signInDue ? "Sign in automatically" : `${accountState.button} automatically`}
                                 </button>
                                 <button className="btn btn-sm" disabled={busy}
-                                        title="Fill the sign-in form but leave the click to you"
+                                        title="Fill the form but leave the click to you"
                                         onClick={() => call("/apply_account", { mode: "fill", initiator: "operator" })}>
                                   Fill, I'll click
                                 </button>
+                                {/* The card with the credential on it and the step-by-step plan.
+                                    Kept behind a press rather than shown by default: it reads the
+                                    live form to say what is left, and it puts a password on screen. */}
+                                <button className="btn btn-sm" disabled={busy}
+                                        title="Show the credential and the exact steps, and read the live form"
+                                        onClick={() => call("/apply_account", { mode: "handoff", initiator: "operator" })}>
+                                  Show details
+                                </button>
+                                {/* Retract a create that did not happen. `mark_created` is a claim
+                                    about the ATS, and a wrong one makes the create leg unreachable. */}
+                                {signInDue && (
+                                  <button className="btn btn-sm btn-ghost" disabled={busy}
+                                          title="This account was marked created but does not exist — back to pending and clear the stored login"
+                                          onClick={() => call("/apply_account", { reset: true, initiator: "operator" })}>
+                                    It was never created
+                                  </button>
+                                )}
                               </div>
                             </div>
                           )}
