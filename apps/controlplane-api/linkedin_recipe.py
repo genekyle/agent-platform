@@ -142,10 +142,10 @@ LOCATION_NAME_HINTS: tuple[str, ...] = ("city", "location", "where")
 SUBMIT_NAME_HINTS: tuple[str, ...] = ()
 FORBIDDEN_SUBMIT_NAMES: tuple[str, ...] = ("skip to", "keyboard shortcut", "close jump menu")
 
-#: The blocker above. Flip to True only when a drive has typed into the box AND read the value back.
-#: Still False: the cause is now known (name-based addressing resolves a boxless node once focus
-#: renames the control) but the fix — hold the focused node, or re-scan immediately before acting —
-#: is not built.
+#: FILLING the box is now MEASURED to work (click to open, then type — see the module note and the
+#: `/observe` trace that produced it). SUBMITTING it is not: nothing has yet committed the query and
+#: read back a results page. Two flags, because "we can type" is not "we can search".
+SEARCH_FILL_READY = True
 SEARCH_SUBMIT_READY = False
 
 
@@ -212,6 +212,10 @@ SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
     {
         "stage": STAGE_TITLE,
         "on_state": HOME,
+        # MEASURED: the box must be CLICKED OPEN before it accepts text — it is a staged widget,
+        # not a plain input. A bare type filled nothing four separate times; click-then-type filled
+        # it first try, and `/observe` recorded the whole chain.
+        "open_first": True,
         "value_from": "query",              # SearchState.query — the job title only
         "control": "query",                 # find_query_box
         "commits": True,                    # this is the CONSUMING act

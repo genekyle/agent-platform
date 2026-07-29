@@ -122,3 +122,18 @@ def test_a_state_with_no_outstanding_stage_answers_none():
     stage onto the wrong screen."""
     assert lr.stage_for_state(lr.JOB_DETAIL) is None
     assert lr.stage_for_state(lr.SEARCH_RESULTS, done=("title", "location", "radius")) is None
+
+
+def test_the_title_stage_must_open_the_widget_before_typing():
+    """MEASURED via /observe: a bare `type` filled nothing four times; click-then-type filled it on
+    the first try, and the recorder caught six trusted keystrokes building R -> Report. The box is a
+    staged widget, so opening it is part of the step, not a nicety."""
+    title = next(s for s in lr.SEARCH_CADENCE if s["stage"] == "title")
+    assert title["open_first"] is True
+
+
+def test_filling_and_submitting_are_tracked_separately():
+    """'We can type' is not 'we can search'. The fill is measured; nothing has yet committed the
+    query and read back a results page."""
+    assert lr.SEARCH_FILL_READY is True
+    assert lr.SEARCH_SUBMIT_READY is False

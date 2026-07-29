@@ -637,6 +637,218 @@ class ProbeRequest(BaseModel):
     field: Optional[str] = None
 
 
+# --- OBSERVE MODE: watch the page change, on purpose and only when asked ------------------------
+# THE GAP THIS FILLS. Every probe we own is a SNAPSHOT: /ax_scan, /probe, /screenshot each answer
+# "what is true now". When an interaction fails, the question is never about a moment — it is "what
+# happened BETWEEN the click and the empty field", and no number of snapshots answers it. Driving
+# LinkedIn's search box we watched a trusted click focus the control and the very next `type` leave
+# it empty with focus gone, and three separate mechanisms were invented to explain that gap because
+# nothing could see into it.
+#
+# So: a page-side RECORDER, explicitly started and stopped. While it runs it buffers DOM mutations,
+# focus movement, input/change events and keystrokes into a global array; `stop` drains it. The
+# buffer lives in the page rather than on a held CDP connection, so nothing is lost if we
+# disconnect between start and stop, and a drive can run for thirty seconds without us sitting on a
+# websocket.
+#
+# OFF BY DEFAULT, AND LOUDLY SO. It is a diagnostic, not a background service: a MutationObserver on
+# a busy SPA is real overhead and an always-on recorder is one more thing to forget is running.
+#
+# NEVER RECORDS A SECRET (PRINCIPLES §4). Password inputs are recorded as their IDENTITY and never
+# their value — not truncated, not masked-after-the-fact, simply never read. Same for anything whose
+# autocomplete says it is a credential or a one-time code. Values elsewhere are capped, because a
+# recorder that quietly accumulates whatever was typed into a page is a credential leak with a
+# friendly name.
+_OBSERVE_START_JS = r"""
+(cfg) => {
+  const KEY = '__agentObserve';
+  if (window[KEY] && window[KEY].stop) { try { window[KEY].stop(); } catch (e) {} }
+
+  const started = Date.now();
+  const events = [];
+  const LIMIT = cfg.limit || 4000;
+  let dropped = 0;
+
+  const push = (rec) => {
+    if (events.length >= LIMIT) { dropped++; return; }
+    rec.t = Date.now() - started;
+    events.push(rec);
+  };
+
+  // A field whose value we must never read. Checked by TYPE first (authoritative), then by the
+  // hints the page itself gives about what it is collecting.
+  const isSecret = (el) => {
+    if (!el || el.tagName !== 'INPUT') return false;
+    if ((el.type || '').toLowerCase() === 'password') return true;
+    const ac = ((el.getAttribute('autocomplete') || '') + ' ' + (el.name || '') + ' ' +
+                (el.id || '')).toLowerCase();
+    return /password|passwd|otp|one-time|cvc|cvv|card-number|ssn/.test(ac);
+  };
+
+  // Enough to RECOGNISE an element later without dragging its markup along. Deliberately not a
+  // selector: LinkedIn's classes are build-hashed, so a class-based path is noise (LEARNINGS
+  // 2026-07-28).
+  const desc = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    const d = {
+      tag: el.tagName,
+      role: el.getAttribute && el.getAttribute('role') || null,
+      label: el.getAttribute && el.getAttribute('aria-label') || null,
+      ph: el.placeholder || null,
+      id: el.id || null,
+      type: el.type || null,
+    };
+    if (el.getBoundingClientRect) {
+      const r = el.getBoundingClientRect();
+      d.box = [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+    }
+    return d;
+  };
+
+  const valueOf = (el) => {
+    if (!el || !('value' in el)) return undefined;
+    if (isSecret(el)) return '<secret: not read>';
+    return String(el.value == null ? '' : el.value).slice(0, cfg.max_value || 120);
+  };
+
+  // --- DOM mutations ---------------------------------------------------------------------
+  const mo = new MutationObserver((records) => {
+    for (const m of records) {
+      if (m.type === 'attributes') {
+        const el = m.target;
+        push({ k: 'attr', target: desc(el), attr: m.attributeName,
+               from: (m.oldValue == null ? null : String(m.oldValue).slice(0, 80)),
+               to: (el.getAttribute ? String(el.getAttribute(m.attributeName)).slice(0, 80) : null) });
+      } else if (m.type === 'childList') {
+        const named = [...m.addedNodes].filter(n => n.nodeType === 1).slice(0, 3).map(desc);
+        push({ k: 'dom', target: desc(m.target), added: m.addedNodes.length,
+               removed: m.removedNodes.length, addedEls: named });
+      } else if (m.type === 'characterData') {
+        push({ k: 'text', target: desc(m.target.parentElement),
+               to: String(m.target.data || '').slice(0, 80) });
+      }
+    }
+  });
+  mo.observe(document, { subtree: true, childList: true, attributes: true,
+                         attributeOldValue: true, characterData: cfg.text !== false });
+
+  // --- what the user/driver does, and where focus is -------------------------------------
+  const on = [];
+  const listen = (type, fn) => {
+    document.addEventListener(type, fn, true);   // capture phase: we see it before the app does
+    on.push([type, fn]);
+  };
+  listen('focusin',  (e) => push({ k: 'focus', target: desc(e.target) }));
+  listen('focusout', (e) => push({ k: 'blur',  target: desc(e.target) }));
+  listen('input',    (e) => push({ k: 'input', target: desc(e.target), value: valueOf(e.target) }));
+  listen('change',   (e) => push({ k: 'change', target: desc(e.target), value: valueOf(e.target) }));
+  listen('click',    (e) => push({ k: 'click', target: desc(e.target),
+                                   trusted: e.isTrusted, at: [Math.round(e.clientX), Math.round(e.clientY)] }));
+  // Keys carry the CHARACTER only for non-secret fields; for a password field the key identity is
+  // the whole point (did anything arrive at all?) and the character is never the point.
+  const keyRec = (e, kind) => push({ k: kind, key: (isSecret(e.target) ? '<secret>' : e.key),
+                                     trusted: e.isTrusted, target: desc(e.target) });
+  listen('keydown', (e) => keyRec(e, 'keydown'));
+  listen('keyup',   (e) => keyRec(e, 'keyup'));
+
+  window[KEY] = {
+    started, events, cfg,
+    activeAtStart: desc(document.activeElement),
+    stop() {
+      try { mo.disconnect(); } catch (e) {}
+      for (const [type, fn] of on) document.removeEventListener(type, fn, true);
+      this.stopped = Date.now();
+      return true;
+    },
+    drain() { return { started, stopped: this.stopped || null, dropped, events }; },
+  };
+  return { ok: true, started, limit: LIMIT };
+}
+"""
+
+_OBSERVE_STOP_JS = r"""
+() => {
+  const rec = window.__agentObserve;
+  if (!rec) return { ok: false, detail: 'observe mode was not running on this tab' };
+  try { rec.stop(); } catch (e) {}
+  const out = rec.drain();
+  out.ok = true;
+  out.activeAtStart = rec.activeAtStart || null;
+  out.activeAtStop = (() => {
+    const el = document.activeElement;
+    if (!el || el.nodeType !== 1) return null;
+    const r = el.getBoundingClientRect();
+    return { tag: el.tagName, role: el.getAttribute('role'), label: el.getAttribute('aria-label'),
+             ph: el.placeholder || null, id: el.id || null,
+             box: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
+  })();
+  delete window.__agentObserve;
+  return out;
+}
+"""
+
+
+class ObserveStartRequest(BaseModel):
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    #: Ring size. A busy SPA can emit thousands of mutations a second; past this we count drops
+    #: rather than grow without bound, and `dropped` is reported so a truncated record says so.
+    limit: int = 4000
+    max_value: int = 120
+    text: bool = True
+
+
+@app.post("/observe/start")
+async def observe_start(body: ObserveStartRequest):
+    """Begin recording what CHANGES on this tab: DOM mutations, focus movement, input/change
+    events and keystrokes. Explicit start/stop — it is a diagnostic, never a background service.
+
+    Values from password/OTP-shaped inputs are NEVER read (PRINCIPLES §4): the event is recorded,
+    the value is not.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        cfg = {"limit": body.limit, "max_value": body.max_value, "text": body.text}
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+            res = await _CDPSession(ws).send(
+                "Runtime.evaluate",
+                {"expression": f"({_OBSERVE_START_JS})({json.dumps(cfg)})", "returnByValue": True})
+        val = (res.get("result") or {}).get("value") or {}
+        return {"ok": bool(val.get("ok")), "tab_id": target.get("id"),
+                "url": target.get("url", "")[:200], **val}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("observe/start failed: %s", exc)
+        return {"ok": False, "detail": str(exc)[:200]}
+
+
+@app.post("/observe/stop")
+async def observe_stop(body: ObserveStartRequest):
+    """Stop recording and DRAIN the buffer: every event, in order, with a millisecond offset from
+    start. Also reports where focus was at start and at stop — the pair that answers "when did it
+    leave?" without replaying anything."""
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    try:
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"], max_size=32 * 1024 * 1024) as ws:
+            res = await _CDPSession(ws).send(
+                "Runtime.evaluate",
+                {"expression": f"({_OBSERVE_STOP_JS})()", "returnByValue": True})
+        val = (res.get("result") or {}).get("value") or {}
+        events = val.get("events") or []
+        kinds: dict[str, int] = {}
+        for e in events:
+            kinds[e.get("k", "?")] = kinds.get(e.get("k", "?"), 0) + 1
+        return {**val, "count": len(events), "kinds": kinds,
+                "duration_ms": (val.get("stopped") or 0) - (val.get("started") or 0)}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("observe/stop failed: %s", exc)
+        return {"ok": False, "detail": str(exc)[:200]}
+
+
 @app.post("/probe")
 @journaled(Intent.PROBE)
 async def probe(body: ProbeRequest):

@@ -3778,3 +3778,55 @@ read **Oman** (value `OM`, index 155 of 230) before anything touched it. I could
 so it is recorded rather than rationalised — and it is exactly the wrong-country failure flagged the
 day before, caught only because the value was read back from the DOM instead of trusted from an
 `ok`. **Every set is now verified by reading the committed value, and this is why.**
+
+---
+
+## 2026-07-28 (5) — Observe mode, and the four diagnoses it retired in one 22-second window
+
+**Why it exists.** Every probe we owned was a SNAPSHOT — `/ax_scan`, `/probe`, `/screenshot` each
+answer "what is true now". The LinkedIn search box failed in the GAP between two snapshots: a
+trusted click focused it, the next `type` left it empty. Four mechanisms were invented to explain
+that gap (focus-stealing typeahead, renaming control, boxless node, broken centre measurement) and
+all four were wrong, because nothing could see into the gap. The operator's own hand-written
+automations solved this years ago with a listener; this is that, as a first-class endpoint.
+
+**What it is.** `/observe/start` injects a page-side recorder — a MutationObserver plus
+capture-phase listeners for focus/blur, input/change, keydown/keyup and click — buffering into a
+global array. `/observe/stop` drains it. Explicitly on and off, never a background service: a
+MutationObserver on a busy SPA is real overhead, and an always-on recorder is one more thing to
+forget is running. The buffer lives IN THE PAGE, so nothing is lost if we drop the CDP connection
+between start and stop, and a thirty-second window costs no held websocket.
+
+**It never records a secret** (PRINCIPLES §4). A password/OTP-shaped input has its EVENTS recorded
+and its value never read — not masked afterwards, never read. Keystrokes into such a field record
+`<secret>` for the key, because "did anything arrive at all" is the diagnostic and the character
+never is.
+
+**Its first window answered everything.** 94 events, 0 dropped, and the typing had been working the
+whole time:
+
+    8763ms  focus                          I'm looking for…
+    8918ms  click   trusted=True [331,27]  I'm looking for…
+   20308ms  input   value=''               (the clear step)
+   20390ms  keydown 'R' trusted -> input 'R' ... six trusted keystrokes ... 'Report'
+   21200ms  input/change value='Report'    (the authoritative write)
+
+Field focused at stop, holding `Report`, one matching input on the page.
+
+**The difference from every failure: this one CLICKED THE BOX OPEN FIRST.** The failures typed
+without opening the widget in the same sequence. That matches what the control visibly is — a
+staged widget whose panel opens on click — and it is the protocol already written down here
+(precondition → open → stage → commit). Recorded as `open_first: True` on the title stage.
+
+**Retracted, all of them:** "the humanized type blurs the field and inserts nothing" (it does
+neither), "the name changes on focus" (it does not), "the node is boxless" (510x34), "the centre
+measurement is broken" (`css_point` echoes the request's `target_bbox`, which I sent empty). Four
+stories, one recording.
+
+**The lesson, and it is the same one §13 states from the other side.** Snapshots answer *what*; only
+a recording answers *when* and *in what order*. When a failure lives between two observations, more
+observations of the same kind will not find it — and the mind fills that gap with a mechanism every
+single time. Build the instrument instead of the theory.
+
+`SEARCH_FILL_READY` is now True — MEASURED. `SEARCH_SUBMIT_READY` stays False, because nothing has
+committed the query and read back a results page, and "we can type" is not "we can search".
