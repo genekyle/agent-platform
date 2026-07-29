@@ -325,3 +325,48 @@ states are structurally undriveable, BLOCKED hands straight over, a challenge is
 - **Falsifier:** if the mode mix never shifts across drives, the ladder is not climbing — suspect
   the certification requirements before the thresholds. If `park_expired` dominates, that is an
   operator-availability problem, not a capability one, which is why it is a separate status.
+
+---
+
+## §13 — In a novel domain, a hypothesis is not a finding until a prediction survives a test
+
+**The failure this exists to stop.** On 2026-07-28 the same LinkedIn search box got THREE diagnoses
+in one day: "a typeahead steals focus and beats the React write", "the accessible name is the
+placeholder and changes on focus", and finally the honest "we do not know yet". The first two were
+written into the recipe and the log **as measured facts**. Neither survived the next measurement.
+
+The measurements themselves were real every time. What was invented was the MECHANISM around them:
+one observation, an inferred cause, and the cause recorded as though it too had been observed. A
+plausible story that explains the symptom is the most dangerous artifact in a novel domain, because
+it *feels* like knowledge and it stops the search.
+
+**The rule.** In a domain with no skeleton — no recipe, no captures, nothing driven before — every
+claim carries its evidence class, and only one class is allowed into the recipe:
+
+* **MEASURED** — read back from the live surface. A value probed after a write; a rect; a URL; a
+  screenshot. Quote the reading.
+* **HYPOTHESIS** — anything that explains a measurement. Labelled as such, never in a docstring
+  that reads like fact, and it must state **what would falsify it** before anything is built on it.
+* **UNVERIFIED** — a scaffold copied from a sibling domain to be replaced by the first real drive.
+
+**The loop, and the step that keeps getting skipped.** Plan → **predict** → act → **read back** →
+record what worked, what did not, and *why* → improve. The skipped step is PREDICT: say, in advance,
+what you expect to see if the hypothesis is right AND what you would see if it is wrong. A test that
+cannot come back negative is not a test, and three of the four wrong turns above would have been
+caught by one sentence written before the action.
+
+**Change one thing at a time.** Two of the retractions were unfalsifiable because a role, a name and
+a driver path had all moved between attempts, so nothing could be attributed. In a novel domain the
+diff between attempts is the only instrument there is.
+
+**A negative result is a result, and it is cheap.** "The click focuses but the type does not fill,
+against both nodes" is worth more than a fix that might work, because it narrows. Record what did
+NOT work and why — the next session pays for it again otherwise.
+
+- **Enforced by:** the `MEASURED` / `UNVERIFIED` / `THE OPEN BLOCKER` headings in
+  `linkedin_recipe.py`, `google_recipe.py`'s policy comments citing the drive that produced each
+  one, and `SEARCH_SUBMIT_READY`-style capability flags that stay False until a drive has read the
+  result back. `docs/LEARNINGS.md` keeps the retractions alongside the claims — both sides of a
+  correction, the same rule §10 applies to the teacher's reasoning.
+- **Falsifier:** if a recipe's comments cannot be traced to a drive that produced them, or a
+  capability flag is True with no read-back behind it, this principle is not being followed.

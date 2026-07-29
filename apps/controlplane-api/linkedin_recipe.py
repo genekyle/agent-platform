@@ -40,13 +40,21 @@ read back:
     trusted click        -> outcome ok, focused TRUE,  value ""      (the widget opens)
     type (combobox #31)  -> outcome ok, focused FALSE, value ""
     type (textbox #3794) -> outcome ok, focused FALSE, value ""
-    /execute css_point   -> [0.0, 0.0] for BOTH nodes
-    DOM getBoundingClientRect on the real input -> 280 x 34, visible
+    the real input, asked about itself -> INPUT, 510x34 at (78,9), isConnected true,
+                                          ownerDocument === document (NOT in a frame)
 
-The last two lines are the contradiction worth chasing: the executor measures a centre of (0,0)
-for an element the DOM says is 280x34 and on screen. Whatever is wrong is in the centre
-measurement / node resolution in `executor/driver._element_act`, not in the value write — and
-until that is understood, any "fix" here is a third guess.
+`css_point: [0.0, 0.0]` in those replies is NOT evidence of anything — chased and killed as a red
+herring on 2026-07-28. `driver.target_css_point()` derives it from the REQUEST's `target_bbox`, and
+those calls sent `target_bbox: {}`, so it reports (0,0) by construction on the element path. It
+describes the payload, not the page. Two hypotheses built on it (a cross-realm node, a stale
+detached node) were both falsified by one read: the element is laid out, connected and in the top
+document.
+
+WHAT REMAINS UNEXPLAINED: a trusted click focuses the field and opens the panel, and the very next
+`type` leaves it empty with focus gone — against BOTH ax nodes. No mechanism for that has survived
+a test yet, so none is written here. The next measurement to take is the one nobody has: watch
+`document.activeElement` and the field's value DURING the per-character key dispatch, rather than
+only after it, and find the exact keystroke at which focus leaves.
 * **`_SUBMIT_HINTS` matching "search" picks `Skip to search`** — a skip-link, not a submit.
   Clicking it would jump the caret to a landmark and report a submitted query. This is why the
   engine declares its own control profile instead of inheriting Indeed's matcher.

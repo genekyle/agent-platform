@@ -3703,3 +3703,44 @@ become visible that prose was never going to carry: a value's SOURCE rather than
 words, sitting where a regression would be noticed. Also corrected: the card's boundary line had
 claimed since 2026-07-24 that the agent never creates an account — directly above the button that
 does.
+
+---
+
+## 2026-07-28 (4) — The lead was a red herring, and the discipline caught it before it became a fix
+
+**The operator's instruction, after three wrong diagnoses of one control:** in extremely novel
+domains — no skeleton, nothing driven before — everything must be carefully planned, executed,
+verified, then reviewed for what worked, what did not, and *why*, and only then improved. Encoded
+as **PRINCIPLES §13**.
+
+**Its first use, immediately.** The standing lead was: `/execute` reports `css_point: [0.0, 0.0]`
+for an element the DOM says is on screen, so node resolution or centre measurement must be broken.
+Following §13 it was written down as a HYPOTHESIS with two variants and, crucially, with what would
+FALSIFY each *before* anything was run:
+
+    A: the node resolves in another realm/frame  -> if true, it reports 0x0 about itself
+    B: the backend_node_id is stale/detached      -> if true, isConnected is false
+
+One read-only probe, one thing changed, no clicking or typing. **Both came back negative**: the
+input reports `510x34 at (78,9)`, `isConnected: true`, `ownerDocument === document`.
+
+**Then the actual explanation, which was in our own code.** `driver.target_css_point()` computes
+that value from the REQUEST's `target_bbox` — and every one of those calls sent `target_bbox: {}`.
+So `(0,0)` was my own payload echoed back. It describes the request, not the page, and it was never
+evidence of anything.
+
+**What that is worth.** A third fix was about to be built on it. The cost of not building it was
+one probe and two sentences of prediction. The three previous diagnoses each cost a live drive and
+a retraction — because each began with a mechanism that explained the symptom and skipped the step
+where it could have been shown wrong.
+
+**Still unexplained, and deliberately left so.** A trusted click focuses the field and opens the
+suggestion panel; the very next `type` leaves it empty with focus gone, against BOTH AX nodes. No
+mechanism has survived a test, so none is recorded. The next measurement is the one nobody has
+taken: watch `document.activeElement` and the value DURING the per-character dispatch instead of
+only after it, and find the keystroke at which focus leaves.
+
+**And the pattern in `ok`.** `/execute` has now reported `ok` for a click that did not land, a key
+press with no such intent in the vocabulary, and a type that filled nothing — three shapes in three
+days. Tier-1 `ok` means "resolved and dispatched". It has never meant "the page accepted it", and
+the docstring said so the whole time.
