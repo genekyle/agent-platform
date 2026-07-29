@@ -194,7 +194,24 @@ class TrajectoryDriver(ABC):
         elif request.action_id == "clear":
             await call("function(){ this.focus(); if(this.select)this.select(); }")
             await self._apply_value(cdp, request)
-        else:  # click / submit / default
+        elif request.action_id == "submit":
+            # SUBMIT IS A KEY, NOT A CLICK. The vocabulary already has `submit` and it fell through
+            # to _element_click, which is right for a form with a button and wrong for every
+            # control that commits on Enter. LinkedIn's job search has NO submit button at all —
+            # measured from the operator's own recording: click, type, `keydown Enter`, then
+            # `change` + `blur`. Dispatching a click there hits whatever is under the caret.
+            #
+            # Focus first, because the key goes to the browser's real focus and not to the node we
+            # resolved: a submit sent at an unfocused field lands somewhere else entirely and
+            # reports ok, which is the failure shape this codebase keeps meeting.
+            await call("function(){ this.focus(); }")
+            for typ in ("rawKeyDown", "char", "keyUp"):
+                ev = {"type": typ, "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13,
+                      "nativeVirtualKeyCode": 13}
+                if typ == "char":
+                    ev = {"type": "char", "text": "\r", "key": "Enter"}
+                await cdp.send("Input.dispatchKeyEvent", ev)
+        else:  # click / default
             await self._element_click(cdp, object_id, pt)
         return "element"
 

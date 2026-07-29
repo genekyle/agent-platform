@@ -156,3 +156,12 @@ def test_the_disproven_mechanisms_are_gone_from_the_record():
     for dead in ("blurs the element", "the accessible name changes on focus",
                  "THE OPEN BLOCKER"):
         assert dead not in doc, dead
+
+
+def test_the_title_stage_asserts_which_search_it_committed():
+    """MEASURED: the system drove click/type/Enter, all three reported ok, and it landed on
+    /search/results/all/?...origin=GLOBAL_SEARCH_HEADER — LinkedIn's GLOBAL search — while the
+    operator's hand-driven run of the same-looking control landed on origin=JOBS_HOME_SEARCH.
+    Nothing errored. `origin=` is the cheapest check that we committed the search we meant."""
+    title = next(s for s in lr.SEARCH_CADENCE if s["stage"] == "title")
+    assert title["lands_with"] == "origin=JOBS_HOME_SEARCH"

@@ -49,6 +49,26 @@ Recorded end to end by `/observe` on 2026-07-28 while the operator drove it by h
 
 So: **click to open, type, and press ENTER.** There is no submit button and no suggestion tile to
 click — Enter is the commit, and the signature of a successful one is `Enter -> change -> blur`.
+
+**BUT THE BOX AT THE TOP IS THE GLOBAL SEARCH, AND IT COMMITS SOMEWHERE ELSE.** Driven by the
+system on 2026-07-28 the three steps all reported ok, the value read back as "Reporting Analyst",
+and the page navigated — to
+
+    /search/results/all/?keywords=Reporting%20Analyst&origin=GLOBAL_SEARCH_HEADER
+
+while the operator's hand-driven run of what looks like the same control landed on
+
+    /jobs/search-results/?keywords=reporting analyst&origin=JOBS_HOME_SEARCH
+
+LinkedIn names the affordance in `origin=`, which is the cheapest possible check that we committed
+the search we meant. A run that reports ok three times and returns people-and-posts is exactly the
+silent-wrong-result this whole cadence exists to avoid: nothing errors, and the corpus fills with
+the wrong page.
+
+UNRESOLVED: whether these are two different inputs (a global header box and a jobs box that AX
+names identically) or one box whose destination depends on the panel being open. Not guessed at —
+the next recording should scan for EVERY textbox matching "looking for" and compare their boxes,
+and the assertion to build on afterwards is `origin=JOBS_HOME_SEARCH` in the landed URL.
 A caller can verify the commit from that pair without waiting on a navigation, which matters
 because this is a SPA and there is no load to wait for.
 
@@ -207,6 +227,9 @@ SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
         # from `change` + `blur` without waiting on a navigation there is none of.
         "commit_key": "Enter",
         "commit_signature": ("change", "blur"),
+        # MEASURED: the landed URL must carry this, or we committed the GLOBAL search instead of
+        # the jobs one — same-looking control, different destination, and nothing errors.
+        "lands_with": "origin=JOBS_HOME_SEARCH",
         "lands_on": SEARCH_RESULTS,
         "why": "LinkedIn asks for the job title by itself. The city is not on this page and cannot "
                "be typed here — putting it in the title box searches for a place, not a role.",

@@ -3916,3 +3916,47 @@ by about thirteen seconds. Every wrong turn had the same shape: a real measureme
 mechanism to join it to the symptom, and the mechanism written down as though it too had been
 measured. The instrument is what ended it, not more reasoning. PRINCIPLES §13 says this; this is
 the entry that paid for it.
+
+---
+
+## 2026-07-28 (7) — The commit worked and committed the wrong search
+
+**What was built.** `submit` already existed in the interaction vocabulary and fell through to a
+click, which is right for a form with a button and wrong for every control that commits on Enter.
+It now dispatches Enter to the focused element — no new intent, the vocabulary stays closed.
+
+**What worked.** Driven by the system, on the jobs home, with the recorder on:
+
+    resolved "I'm looking for…" (node 20387)   <- from a fresh scan, not a typed string
+    click  -> ok
+    type   -> ok        value read back: "Reporting Analyst"
+    submit -> ok        page navigated
+
+Three greens and a real navigation. Filling and committing both work.
+
+**What it actually did.** Landed on
+
+    /search/results/all/?keywords=Reporting%20Analyst&origin=GLOBAL_SEARCH_HEADER
+
+LinkedIn's GLOBAL search — people, posts, companies. The operator's hand-driven run of what looks
+like the same control landed on `/jobs/search-results/?...&origin=JOBS_HOME_SEARCH`.
+
+**Why this is the important kind of failure.** Nothing errored. Three `ok`s, a value read back
+correctly, a navigation that happened. Every check we had said success, and the result is the wrong
+page — which would have filled the corpus with people-and-posts labelled as a job search. It is the
+same shape as every other trap this week: the system reporting on itself rather than on the world.
+
+**The cheap check that catches it.** LinkedIn names the affordance in the URL. `origin=` is a
+free, unambiguous assertion that we committed the search we meant, and it is now recorded on the
+title stage as `lands_with: "origin=JOBS_HOME_SEARCH"`.
+
+**Deliberately unresolved.** Whether these are two different inputs (a global header box and a jobs
+box that AX names identically) or one box whose destination depends on the suggestion panel being
+open. Not guessed at — the next recording scans for EVERY textbox matching "looking for", compares
+their boxes, and the assertion to build on afterwards is the `origin=`.
+
+**One thing that did work first try, and is worth keeping.** The control was resolved from a FRESH
+SCAN immediately before acting rather than from a name I retyped — three earlier attempts failed
+purely because the apostrophe was curly instead of straight and the ellipsis was three dots instead
+of one character. Tight scan -> act is not an optimisation here; hand-transcribed accessible names
+are simply wrong.
