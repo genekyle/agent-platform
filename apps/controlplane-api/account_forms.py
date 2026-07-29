@@ -84,7 +84,13 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
             # Both arrive CHECKED on the live form. Naming them so they are never touched was the
             # old protection, and it was pointed the wrong way — the site had already ticked them.
             "refusals": ("opt_in_job_notifications", "opt_in_career_news"),
-            "confirms": ("terms",),
+            # A STAGED consent: (opener, commit, proof). The opener raises a dialog, the commit is
+            # the Accept inside it, and the proof is text that only appears on the page OUTSIDE the
+            # dialog once it has been accepted. Three parts because each one failed differently on
+            # the way to learning it — the opener had to stop being an accessible name, the commit
+            # lives in a widget AX does not connect to its opener, and the dialog closing is not
+            # evidence of consent (Decline closes it too).
+            "confirms": (("terms", "terms_accept", "Data privacy statement has been accepted."),),
             "submit": "create_account_submit",
         },
     },
@@ -138,8 +144,11 @@ def program_steps(ats: str, leg: str) -> list[dict[str, Any]]:
         # An opt-in that ARRIVES checked. `check_group` with an empty value set is the refusal, and
         # it re-reads the DOM to confirm — a refusal we cannot verify is not a refusal.
         steps.append({"intent": "check_group", "params": {"field": field}})
-    for field in form.get("confirms", ()):
-        steps.append({"intent": "click", "params": {"field": field}})
+    for opener, commit, _proof in form.get("confirms", ()):
+        # Two steps, because it is two acts against two different widgets — and a program that
+        # showed one would replay one and consent to nothing.
+        steps.append({"intent": "click", "params": {"field": opener}})
+        steps.append({"intent": "click", "params": {"field": commit}})
     steps.append({"intent": "click", "params": {"field": form["submit"]}})
     return steps
 

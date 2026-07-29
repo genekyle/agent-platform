@@ -356,12 +356,29 @@ SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
     # so the create leg stops before it. If it does open a modal, `confirms` clicking it once will
     # leave that modal open and the submit will fail — treat that as expected until someone
     # watches it happen and writes down what they saw.
-    "terms": _f(ats="successfactors", role="button",
-                name="Terms of Use Read and accept the data privacy statement.",
+    # REQUIRED, and a STAGED WIDGET: the link OPENS a "Data Privacy Consent Statement" dialog, and
+    # the acceptance happens on the Accept button INSIDE it. Driven live 2026-07-28.
+    #
+    # ADDRESSED BY SELECTOR, and that is the whole lesson. The accessible name AX offers for this
+    # row is the composite "Terms of Use Read and accept the data privacy statement. Required" —
+    # the label, the control and the required-marker fused into one node. Clicking THAT node does
+    # not open the dialog: it NAVIGATES BACK TO THE SIGN-IN GATE and takes the whole half-filled
+    # form with it, while /execute reports `outcome: ok`. The real control is a child anchor,
+    # `<a id="dataPrivacyId" role="button">` with no href, and only the selector reaches it.
+    # This is the AX-finds-elements-not-widgets case in its most expensive form.
+    "terms": _f(ats="successfactors", selector="#dataPrivacyId",
                 widget_type=WidgetType.CHECKBOX_GROUP,
-                note="REQUIRED. Renders as a LINK; AX calls it a button. Whether one click "
-                     "accepts, or opens a modal that must then be accepted, is UNVERIFIED "
-                     "(id fbclc_dpcsId)."),
+                commit="Accept",
+                note="OPENER. Clicking it opens the consent dialog — and ONLY once the rest of "
+                     "the form validates; on an incomplete form the same click just paints the "
+                     "required-field errors. So this step must run AFTER every other field, "
+                     "password included. Never address it by accessible name (see above)."),
+    "terms_accept": _f(ats="successfactors", role="button", name="Accept",
+                       widget_type=WidgetType.UNKNOWN,
+                       note="The COMMIT, inside the consent dialog. Beside it sit Decline and "
+                            "Print. Not disabled by a scroll gate — the statement fits the dialog "
+                            "— but confirm from OUTSIDE afterwards: the row must read 'Data "
+                            "privacy statement has been accepted.'"),
     # MARKETING — and they arrive CHECKED. This said "both default-off" until 2026-07-28, when the
     # live form was actually looked at: both boxes are ticked on first render. That made the whole
     # protection backwards. The design here was "a field this driver never names is one it can

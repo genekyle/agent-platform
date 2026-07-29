@@ -1663,19 +1663,59 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
                               f"submitting now would opt you in — nothing was submitted."}
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
-    # CONFIRMS — required consents, clicked BY NAME so an acceptance is always a deliberate act
-    # against a field somebody wrote down, never a checkbox swept up by a fill-everything pass.
-    for field in form.get("confirms", ()):
-        addr = apply_fields.addressing_for(ats, field)
+    # CONFIRMS — required consents, always a deliberate act against a field somebody wrote down,
+    # never a control swept up by a fill-everything pass.
+    #
+    # A consent is a STAGED WIDGET, and each of its three parts is here because the other shapes
+    # failed live (SuccessFactors, 2026-07-28):
+    #   opener — raises the dialog. Addressed however apply_fields says, which for SAP means BY
+    #            SELECTOR: the accessible name AX offers is the whole row fused into one node, and
+    #            clicking that navigates back to the sign-in gate, taking the half-filled form with
+    #            it, while /execute reports ok.
+    #   commit — the Accept INSIDE the dialog. A separate widget; AX does not connect it to its
+    #            opener, so nothing infers it.
+    #   proof  — text that appears on the page OUTSIDE the dialog once consent is recorded. The
+    #            dialog closing proves nothing: Decline and the X close it too.
+    for opener, commit, proof in form.get("confirms", ()):
         staged = True
-        res = await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
-            "target_bbox": {}, "target_role": addr["role"], "target_name": addr["name"],
-            "driver": "humanized"})
+        open_addr = apply_fields.addressing_for(ats, opener)
+        open_payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+                        "target_bbox": {}, "driver": "humanized"}
+        if open_addr["addressed_by"] == apply_fields.ADDRESSED_BY_SELECTOR:
+            open_payload["selector"] = open_addr["selector"]
+        else:
+            open_payload["target_role"], open_payload["target_name"] = (open_addr["role"],
+                                                                       open_addr["name"])
+        res = await _capture_post("/execute", open_payload)
         if res.get("outcome") not in ("ok", "committed_unconfirmed"):
             return {"ok": False, "reason": "confirm_failed", "staged": staged,
-                    "detail": f"Could not accept {field!r} "
+                    "detail": f"Could not open the {opener!r} consent "
                               f"({res.get('outcome') or res.get('detail')})."}
+        await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+
+        commit_addr = apply_fields.addressing_for(ats, commit)
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+            "target_bbox": {}, "target_role": commit_addr["role"],
+            "target_name": commit_addr["name"], "driver": "humanized"})
+        if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+            return {"ok": False, "reason": "confirm_failed", "staged": staged,
+                    "detail": f"Opened the {opener!r} consent but could not click "
+                              f"{commit_addr['name']!r} in it "
+                              f"({res.get('outcome') or res.get('detail')})."}
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+        # CONFIRM FROM OUTSIDE. Without this the drive submits an unconsented form and reads the
+        # site's rejection as some other failure.
+        after = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                    timeout=20.0)
+        page_text = (str(after.get("page_text") or "")
+                     + " ".join(c.get("name", "") for c in (after.get("candidates") or [])))
+        if proof and proof.lower() not in page_text.lower():
+            return {"ok": False, "reason": "confirm_unverified", "staged": staged,
+                    "detail": f"Clicked Accept on the {opener!r} consent, but the page never said "
+                              f"{proof!r}. The dialog closing is not consent — Decline closes it "
+                              f"too. Nothing was submitted."}
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
     submit_addr = apply_fields.addressing_for(ats, form["submit"])

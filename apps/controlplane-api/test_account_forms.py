@@ -107,6 +107,11 @@ def test_the_program_matches_what_the_driver_actually_does(leg):
 
     # And the rendered program follows that same shape for a leg that uses every stage.
     if leg == "create_account":
-        kinds = [s["intent"] for s in account_forms.program_steps("successfactors", leg)]
+        steps = account_forms.program_steps("successfactors", leg)
+        kinds = [s["intent"] for s in steps]
+        # The consent is TWO clicks — open the dialog, then Accept inside it — before the submit.
+        # A program that showed one would replay one and consent to nothing.
         assert kinds == (["set_text"] * 6 + ["select_option", "check_group", "check_group",
-                                             "click", "click"])
+                                             "click", "click", "click"])
+        assert [s["params"]["field"] for s in steps][-3:] == ["terms", "terms_accept",
+                                                              "create_account_submit"]

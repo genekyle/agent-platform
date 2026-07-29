@@ -2106,7 +2106,11 @@ def test_account_handoff_surfaces_credentials_and_never_drives(monkeypatch):
     acct = r["last_step"]["account"]
     assert acct["leg"] == "create_account" and acct["button"] == "Create Account"
     assert acct["username"]                      # a username to use is surfaced
-    assert "never enters a password" in acct["boundary"]
+    # The boundary text used to promise the agent "never enters a password or creates an account",
+    # which stopped being true the day mode="auto" shipped (2026-07-24) and left this test pinning
+    # a claim the product contradicted. What must hold is not that sentence but the GATES.
+    assert "captcha" in acct["boundary"] and "2FA" in acct["boundary"]
+    assert "switched OFF" in acct["boundary"]      # the marketing opt-ins are refused, not left
     assert r["awaiting"] == "operator_account"
     assert "/execute" not in harness.paths()     # nothing was driven
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
@@ -3700,7 +3704,8 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
     acted = []
 
     def _execute(payload):
-        acted.append((payload.get("action_id"), payload.get("target_name")))
+        acted.append((payload.get("action_id"),
+                      payload.get("target_name") or payload.get("selector")))
         return {"outcome": "ok"}
 
     class _Answer:
@@ -3724,7 +3729,8 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
         {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/execute": _execute,
-         "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+         "/ax_scan": {"ok": True, "page_text": "Data privacy statement has been accepted.",
+                      "candidates": []}},
         blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
@@ -3735,8 +3741,13 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
     names = [n for _, n in acted]
     assert "select" in kinds                                   # the country dropdown ran
     assert "Country/Region of Residence" in names
-    assert "Terms of Use Read and accept the data privacy statement." in names   # consent, by name
-    # the marketing opt-ins are never addressed at all
+    # THE CONSENT IS TWO ACTS. The opener is addressed BY SELECTOR — its accessible name is the
+    # whole row fused into one node, and clicking that navigates back to the sign-in gate with the
+    # half-filled form (live, 2026-07-28) — and the Accept lives inside the dialog it raises.
+    assert "#dataPrivacyId" in names
+    assert names.index("#dataPrivacyId") < names.index("Accept")
+    assert "Terms of Use Read and accept the data privacy statement." not in names
+    # the marketing opt-ins are never addressed through /execute at all
     assert not any(n and ("Notification:" in n or "Hear more" in n) for n in names)
     assert names[-1] == "Create Account"                       # submit is last
 
@@ -3802,7 +3813,10 @@ def test_creating_an_account_stores_the_credential_it_used(monkeypatch):
              {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
               "/auth_state": {"ok": True, "logged_in": True},
               "/execute": {"outcome": "ok"},
-              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+              # The consent proof — the driver confirms the acceptance from OUTSIDE the dialog.
+              "/ax_scan": {"ok": True,
+                           "page_text": "Data privacy statement has been accepted.",
+                           "candidates": []}},
              blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
@@ -3829,7 +3843,10 @@ def test_a_credential_we_failed_to_store_is_as_loud_as_a_failed_step(monkeypatch
              {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
               "/auth_state": {"ok": True, "logged_in": True},
               "/execute": {"outcome": "ok"},
-              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+              # The consent proof — the driver confirms the acceptance from OUTSIDE the dialog.
+              "/ax_scan": {"ok": True,
+                           "page_text": "Data privacy statement has been accepted.",
+                           "candidates": []}},
              blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
@@ -3918,7 +3935,10 @@ def test_the_account_records_where_the_login_actually_lives(monkeypatch):
              {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/career?company=teradynein"),
               "/auth_state": {"ok": True, "logged_in": True},
               "/execute": {"outcome": "ok"},
-              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+              # The consent proof — the driver confirms the acceptance from OUTSIDE the dialog.
+              "/ax_scan": {"ok": True,
+                           "page_text": "Data privacy statement has been accepted.",
+                           "candidates": []}},
              blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         client.post("/api/session_control/1/apply_account", json={"mode": "handoff"}).json()
@@ -3975,7 +3995,9 @@ def test_a_refusal_we_could_not_make_stops_the_submit(monkeypatch):
               "/auth_state": {"ok": True, "logged_in": True},
               "/execute": lambda p: clicked.append(p.get("target_name")) or {"outcome": "ok"},
               "/check_group": {"ok": False, "code": "not_staged"},
-              "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
+              "/ax_scan": {"ok": True,
+                           "page_text": "Data privacy statement has been accepted.",
+                           "candidates": []}},
              blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
