@@ -3744,3 +3744,37 @@ only after it, and find the keystroke at which focus leaves.
 press with no such intent in the vocabulary, and a type that filled nothing — three shapes in three
 days. Tier-1 `ok` means "resolved and dispatched". It has never meant "the page accepted it", and
 the docstring said so the whole time.
+
+**Addendum — the consent, and an `ok` that cost the whole form.** The operator described the flow:
+click the link, a modal opens, accept. Driving it produced three findings, in ascending order of
+cost.
+
+**The accessible name AX offers for that row is a trap.** It is `"Terms of Use Read and accept the
+data privacy statement. Required"` — label, control and required-marker fused into one node.
+Clicking it does not open the dialog. It **navigates back to the sign-in gate and takes the entire
+half-filled form with it** — six fields, the country, both refusals — while `/execute` returns
+`outcome: ok`. The real control is a child anchor, `<a id="dataPrivacyId" role="button">` with no
+href, reachable only by selector. **This is the sharpest instance yet of "AX finds elements, not
+widgets": the name resolved, the click landed, the outcome was ok, and the page threw everything
+away.** Found by `/probe` — the sanctioned discovery hole — which is exactly what it is for.
+
+**A consent is TWO acts.** Opener raises the dialog; Accept lives inside it beside Decline and
+Print; AX connects neither to the other. A recipe modelling it as one click opens a dialog, consents
+to nothing, and submits into a form still saying Terms of Use is required.
+
+**And the dialog closing is not consent** — Decline closes it, the X closes it. So the confirm now
+proves itself from OUTSIDE: the row must read "Data privacy statement has been accepted." That
+string lives in the table as the third element of the confirm tuple, not in code, because it is
+site knowledge.
+
+**The ordering fact that made it look unopenable.** The dialog only opens once the rest of the form
+validates; on an incomplete form the same click just paints the required-field errors. I had
+deliberately tried the consent on an EMPTY form to make a mistake cheap — a good instinct that hid
+the real behaviour, because "nothing happened" and "nothing happened *yet*" look identical. Worth
+generalising: **when a control does nothing, ask whether it is refusing or waiting.**
+
+**Unexplained, and left unexplained on purpose.** On a freshly reloaded form the country `<select>`
+read **Oman** (value `OM`, index 155 of 230) before anything touched it. I could not determine how,
+so it is recorded rather than rationalised — and it is exactly the wrong-country failure flagged the
+day before, caught only because the value was read back from the DOM instead of trusted from an
+`ok`. **Every set is now verified by reading the committed value, and this is why.**
