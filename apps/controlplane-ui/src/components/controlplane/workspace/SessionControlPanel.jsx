@@ -738,17 +738,26 @@ export function SessionControlPanel({ domain }) {
                     onChange={(e) => setNote(e.target.value)}
                   />
                   <div className="cv-actions">
-                    {/* Not disabled at 0 picks: "nothing on this page" is a real answer, and the
-                        page still counts as reviewed. Taking that away would strand a page of
+                    {/* APPLYING COMES FIRST, LEFT TO RIGHT. Operator, 2026-07-30: "i would rather
+                        apply than to just jump to the next page". Advancing was the primary button
+                        and sat first, which reads as the expected move — but picking jobs and then
+                        leaving the page is the odd one: the picks only mean anything if we work
+                        them. So `stay` leads and carries the emphasis; advancing stays available
+                        beside it, because "these, and move on" is still a real intent.
+
+                        Neither is disabled at 0 picks: "nothing on this page" is a real answer and
+                        the page still counts as reviewed. Taking that away would strand a page of
                         nothing-for-me behind a button that refuses to move. */}
                     <button className="btn btn-sm btn-primary" disabled={busy}
-                            onClick={() => doChoose(true)}>
+                            onClick={() => doChoose(false)}>
                       {busy ? "…" : picks.length
+                        ? `Take ${picks.length} · apply here`
+                        : "Take none · stay"}
+                    </button>
+                    <button className="btn btn-sm" disabled={busy} onClick={() => doChoose(true)}>
+                      {picks.length
                         ? `Take ${picks.length} · next page`
                         : "Nothing here · next page"}
-                    </button>
-                    <button className="btn btn-sm" disabled={busy} onClick={() => doChoose(false)}>
-                      Take {picks.length} · stay
                     </button>
                   </div>
                   <p className="cv-blocked">
