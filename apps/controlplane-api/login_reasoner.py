@@ -42,7 +42,8 @@ _ERROR = ("incorrect", "invalid", "wrong password", "does not match", "doesn't m
           "could not find", "no account", "authentication failed", "password you entered",
           "unable to sign", "check your", "not recognized")
 
-# States: authenticated | captcha | mfa | account_exists | login_error | signin_form | create_form | unknown
+# States: authenticated | captcha | mfa | account_exists | login_error | signin_form | create_form
+#         | identifier_form (email now, secret on the next screen) | unknown
 LoginState = str
 
 # Actions: done | fill_credentials | click | escalate
@@ -99,6 +100,17 @@ def _has_verify_field(candidates) -> bool:
                or "re-enter" in (c.get("name") or "").lower() for c in candidates)
 
 
+#: What an identifier box calls itself when the password is on the NEXT screen.
+_IDENTIFIER_HINTS = ("email", "e-mail", "username", "user name", "phone", "mobile number")
+
+
+def _has_identifier_field(candidates) -> bool:
+    """A box asking WHO you are, as opposed to proving it."""
+    return any((c.get("role") or "").lower() in ("textbox", "searchbox")
+               and any(h in (c.get("name") or "").lower() for h in _IDENTIFIER_HINTS)
+               for c in candidates)
+
+
 def classify_login_state(candidates: list[dict], page_text: str, logged_in: Optional[bool] = None) -> LoginState:
     """The true login state, by strongest-signal-first precedence. This is the intelligence the old
     `gone` probe lacked: it tells 'authenticated' apart from 'account already exists' apart from a
@@ -119,6 +131,16 @@ def classify_login_state(candidates: list[dict], page_text: str, logged_in: Opti
         return "create_form"
     if has_pw:
         return "signin_form"
+    # IDENTIFIER-FIRST, and it used to fall straight through to `unknown`. Every state above this
+    # line is gated on a password field, so the whole modern login shape — ask for the email now,
+    # password or emailed code on the NEXT screen — was unclassifiable by construction. Indeed,
+    # Google, Microsoft and LinkedIn's code flow all do this. Measured live on
+    # secure.indeed.com/auth 2026-07-30: `textbox "Email address"` + `button "Continue"` + SSO
+    # buttons, no password anywhere, and the cockpit answered "I can't confidently classify this
+    # login screen (unknown)" over a perfectly ordinary sign-in page while offering nothing to
+    # press. Naming it is what lets the policy below say something true about it.
+    if _has_identifier_field(candidates):
+        return "identifier_form"
     return "unknown"
 
 
@@ -218,7 +240,7 @@ def find_signin_entries(candidates: list[dict], *, alternates_only: bool = False
         for c in candidates:
             role = (c.get("role") or "").lower()
             name = (c.get("name") or "").strip()
-            if role not in ("link", "button", "menuitem") or not name:
+            if role not in ("link", "button", "menuitem", "iframe") or not name:
                 continue
             if hint not in name.lower() or name.lower() in seen:
                 continue
@@ -227,8 +249,22 @@ def find_signin_entries(candidates: list[dict], *, alternates_only: bool = False
             if c.get("backend_node_id") is None:
                 continue
             seen.add(name.lower())
-            out.append({"name": name, "role": role, "alternate": alternate,
-                        "backend_node_id": c.get("backend_node_id"), "why": why})
+            # AN SSO BUTTON INSIDE AN IFRAME IS STILL A WAY IN — it just is not one WE can press.
+            # Google Identity Services renders its button in a cross-origin frame, so the AX tree
+            # offers the frame (`Iframe "Sign in with Google Button"`) and never the button inside
+            # it. This finder only accepted link/button/menuitem, so on Indeed's auth screen the
+            # cockpit listed Apple alone and silently omitted the big blue Google button the
+            # operator was looking straight at (measured 2026-07-30). Clicking the frame NODE does
+            # nothing — a click has to land on a POINT inside it — so it is offered with
+            # `operator_only`, named rather than hidden. Silently dropping a visible route is the
+            # failure; being honest that it needs a human hand is not.
+            entry = {"name": name, "role": role, "alternate": alternate,
+                     "backend_node_id": c.get("backend_node_id"), "why": why}
+            if role == "iframe":
+                entry["operator_only"] = True
+                entry["why"] = (f"{why}. Rendered inside a cross-origin iframe, so I cannot click "
+                                f"it for you — press it yourself in the window.")
+            out.append(entry)
     return out
 
 
@@ -276,7 +312,8 @@ def _deterministic_policy(state: LoginState, candidates: list[dict],
             return LoginStep(state, "fill_credentials", rung="recipe",
                              rationale="a sign-in form (email + password) is visible and we hold a "
                                        "stored credential — fill it and submit")
-        alternates = find_signin_entries(candidates, alternates_only=True)
+        alternates = [a for a in find_signin_entries(candidates, alternates_only=True)
+                      if not a.get("operator_only")]
         if alternates:
             entry = alternates[0]
             return LoginStep(state, "click", control=entry, rung="recipe",
@@ -289,6 +326,36 @@ def _deterministic_policy(state: LoginState, candidates: list[dict],
                          reason="This site wants a password I do not have, and there is no "
                                 "'Continue with…' route beside it. Sign in on your side, or add "
                                 "the credential in the Account Manager. I never type passwords.")
+    if state == "identifier_form":
+        # The password is on the NEXT screen, so there is nothing here to fill from the vault even
+        # when we hold one — `fill_credentials` is structurally tied to a password field and would
+        # be refused downstream anyway. Two honest moves: take a route AROUND the credential if the
+        # page offers one, or hand over saying exactly what this screen is.
+        # operator_only routes are excluded from anything we CLICK — an iframe'd SSO button
+        # cannot be pressed by node, so choosing it would be a no-op reported as an action taken.
+        # It stays in the survey's option list; it just is not something we do on our own.
+        alternates = [a for a in find_signin_entries(candidates, alternates_only=True)
+                      if not a.get("operator_only")]
+        # AND WE ONLY TAKE ONE WHEN WE HOLD NOTHING — the same rail as `signin_form`. Holding a
+        # credential means the identifier box IS our route, so wandering off into a third-party
+        # provider would pick an identity nobody chose. It is a live hazard, not a hypothetical:
+        # on Indeed's auth screen the Google button is iframe'd and therefore un-clickable, so
+        # "first drivable alternate" resolves to APPLE — a provider this account may have no
+        # relationship with, clicked against a real account because the preferred one happened to
+        # be unreachable. Escalating is the honest answer there.
+        if alternates and not has_creds:
+            entry = alternates[0]
+            return LoginStep(state, "click", control=entry, rung="recipe",
+                             rationale=("an identifier-first screen (email now, secret later), no "
+                                        f"stored credential, and a route around one: "
+                                        f"{entry['name']!r} — {entry['why']}"))
+        return LoginStep(state, "escalate", escalate=True, escalate_status="identifier_form",
+                         rung="recipe",
+                         rationale="identifier-first screen; no SSO alternative we can address",
+                         reason="This is the email-first step — it wants your address now and the "
+                                "password or a code on the next screen. I can see the box but I "
+                                "don't drive a credential entry, so type it here and press "
+                                "\"I've signed in — re-check\" when you land.")
     if state in ("account_exists", "create_form"):
         ctrl = find_control(candidates, ("sign in", "log in", "already have", "sign-in"))
         if ctrl and ctrl.get("backend_node_id") is not None:

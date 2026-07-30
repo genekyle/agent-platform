@@ -250,3 +250,66 @@ def test_a_reasoner_cannot_invent_a_fill_from_no_credential():
                           reasoner=lambda _obs: {"action": "fill_credentials", "rationale": "just do it"})
     assert step.action != "fill_credentials"
     assert step.control["name"] == "Continue with google"
+
+
+# ---------------------------------------------------------------------------------------------
+# IDENTIFIER-FIRST SCREENS. Every state above `signin_form` is gated on a password field, so the
+# most common modern login shape — email now, secret on the next screen — was unclassifiable by
+# construction and arrived as "unknown". Verbatim from secure.indeed.com/auth, 2026-07-30.
+# ---------------------------------------------------------------------------------------------
+
+_INDEED_AUTH = [
+    {"role": "heading", "name": "Ready to take the next step?", "backend_node_id": 1},
+    {"role": "button", "name": "Continue with Apple", "backend_node_id": 1716},
+    {"role": "region", "name": "Google sign in", "backend_node_id": 1837},
+    {"role": "button", "name": "Continue", "backend_node_id": 1707},
+    {"role": "textbox", "name": "Email address", "backend_node_id": 1703},
+    # Google Identity Services renders its button in a cross-origin frame: AX offers the FRAME and
+    # never the button inside it. This is the node the cockpit was silently dropping.
+    {"role": "Iframe", "name": "Sign in with Google Button", "backend_node_id": 1718},
+]
+
+
+def test_an_email_first_screen_is_not_unknown():
+    # It has no password field anywhere, and that used to be the end of the story.
+    assert not lr._has_password_field(_INDEED_AUTH)
+    assert lr.classify_login_state(_INDEED_AUTH, "create an account or sign in") == "identifier_form"
+
+
+def test_a_password_screen_still_outranks_the_identifier_box():
+    # Both boxes on one screen must stay `signin_form` — identifier-first is the state where the
+    # secret is ABSENT, not merely accompanied.
+    both = _INDEED_AUTH + [{"role": "textbox", "name": "Password", "backend_node_id": 9}]
+    assert lr.classify_login_state(both, "") == "signin_form"
+
+
+def test_an_iframed_sso_button_is_offered_but_marked_as_ours_to_press():
+    # Named, not hidden: the operator is looking straight at it. Flagged, not clickable: a click
+    # on the frame node lands on nothing and would come back ok.
+    entries = {e["name"]: e for e in lr.find_signin_entries(_INDEED_AUTH)}
+    assert "Sign in with Google Button" in entries, "a visible route must never be silently dropped"
+    assert entries["Sign in with Google Button"]["operator_only"] is True
+    assert "cannot click it for you" in entries["Sign in with Google Button"]["why"]
+    assert not entries["Continue with Apple"].get("operator_only")
+
+
+def test_holding_a_credential_does_not_detour_through_someone_elses_provider():
+    # THE HAZARD THIS GUARDS. Google is iframe'd and un-clickable here, so "first drivable
+    # alternate" resolves to Apple — a provider this account may have no relationship with, on a
+    # real account, chosen only because the preferred one was unreachable. With a credential in
+    # hand the identifier box is our route, so the honest move is to hand over.
+    step = lr._deterministic_policy("identifier_form", _INDEED_AUTH, has_creds=True)
+    assert step.action == "escalate" and step.escalate_status == "identifier_form"
+    assert "email-first" in step.reason
+    step_no_creds = lr._deterministic_policy("identifier_form", _INDEED_AUTH, has_creds=False)
+    assert step_no_creds.action == "click"
+    assert step_no_creds.control["name"] == "Continue with Apple"
+
+
+def test_the_unknown_escalation_is_still_there_for_genuinely_unreadable_screens():
+    # Naming identifier-first must not swallow the real catch-all: a page with neither a secret
+    # nor an identifier is still something we refuse to guess at.
+    blank = [{"role": "heading", "name": "Something went wrong", "backend_node_id": 1}]
+    assert lr.classify_login_state(blank, "something went wrong") == "unknown"
+    step = lr._deterministic_policy("unknown", blank, has_creds=True)
+    assert step.escalate_status == "unknown_state"

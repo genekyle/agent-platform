@@ -549,20 +549,39 @@ export function SessionControlPanel({ domain }) {
               </div>
               {last.login.options?.length > 0 ? (
                 <>
-                  <div className="rung__meta">I can click any of these for you:</div>
+                  {/* Three cases, because "I can click any of these" over a route that needs the
+                      operator's own hand is exactly the kind of small lie this panel avoids. */}
+                  <div className="rung__meta">
+                    {last.login.options.every((o) => o.operator_only)
+                      ? "Ways in on this screen — all of them need your hand:"
+                      : last.login.options.some((o) => o.operator_only)
+                        ? "Ways in on this screen — I can click the buttons; the greyed one is yours:"
+                        : "I can click any of these for you:"}
+                  </div>
                   <div className="sc-login__opts">
+                    {/* An operator_only route is REAL and VISIBLE on the page — an SSO button
+                        inside a cross-origin iframe — but a click from here lands on the frame
+                        and does nothing. Showing it as a live button would offer an action that
+                        refuses; hiding it would leave the operator staring at a big blue Google
+                        button the cockpit never mentions. So: named, disabled, and told why. */}
                     {last.login.options.map((o) => (
-                      <button
-                        key={o.name}
-                        className="btn btn-sm"
-                        disabled={busy}
-                        title={o.why}
-                        onClick={() => call("/login_action", {
-                          control_name: o.name, role: o.role, initiator: "operator",
-                        })}
-                      >
-                        {o.name}
-                      </button>
+                      o.operator_only ? (
+                        <span key={o.name} className="badge badge--muted" title={o.why}>
+                          {o.name} — press it yourself
+                        </span>
+                      ) : (
+                        <button
+                          key={o.name}
+                          className="btn btn-sm"
+                          disabled={busy}
+                          title={o.why}
+                          onClick={() => call("/login_action", {
+                            control_name: o.name, role: o.role, initiator: "operator",
+                          })}
+                        >
+                          {o.name}
+                        </button>
+                      )
                     ))}
                   </div>
                   <p className="cv-blocked">
@@ -590,9 +609,14 @@ export function SessionControlPanel({ domain }) {
                                                  { initiator: "operator",
                                                    ats: accountState?.ats || "successfactors",
                                                    ...(what ? { expand: what } : {}) })} />
-          <FillPlan plan={last?.fill_plan} summary={last?.fill_summary} busy={busy}
-                    onPlan={() => call("/apply_fill", { initiator: "operator", execute: false })}
-                    onFill={() => call("/apply_fill", { initiator: "operator", execute: true })} />
+          {/* Only where there is a form to fill. /apply_fill 409s with "No open application to
+              fill" when the queue has no current step, so offering it on a session still climbing
+              to the start line is a button whose only outcome is an error. */}
+          {(last?.fill_plan || (p.queue_summary?.remaining ?? 0) > 0) && (
+            <FillPlan plan={last?.fill_plan} summary={last?.fill_summary} busy={busy}
+                      onPlan={() => call("/apply_fill", { initiator: "operator", execute: false })}
+                      onFill={() => call("/apply_fill", { initiator: "operator", execute: true })} />
+          )}
 
           {/* The inherited window. Shown in full and never cleared silently — a persistent
               profile's restored tabs can include somebody's half-finished application. */}

@@ -1250,6 +1250,18 @@ async def _drive_login(*, engine: dict[str, Any], bb: Any, browser_url: str, obs
            "awaiting": _LOGIN_AWAITING.get(result.status, "operator_login"),
            "detail": result.detail or result.status}
     if not result.ok:
+        # HANDING OVER MEANS HANDING OVER SOMETHING. This path returns the loop's verdict and
+        # nothing else — no state, no options — so the cockpit rendered a sentence and a single
+        # "I've signed in — re-check" button while the operator sat looking at three visible ways
+        # in. Surveying here costs one local AX scan (a socket, no bandwidth) and is the difference
+        # between "we stopped" and "we stopped, and here is what is on the screen". The loop's own
+        # `detail` is kept: it says why we stopped, which the survey cannot know.
+        try:
+            survey = await _login_survey(browser_url, obs, engine, bb)
+            out.update({k: survey[k] for k in ("state", "options", "can_drive", "seen")
+                        if k in survey})
+        except Exception as exc:  # noqa: BLE001 — a survey that fails must not sink the handoff
+            bb.log("login", f"could not survey the stopped sign-in screen: {exc}"[:180])
         # A stop here is a real "agent needs help" event, so it goes to the handoff log and the
         # activity feed rather than dying inside a JSON field nobody is watching.
         bb.log("handoff", f"sign-in stopped at {result.status} — {result.detail}"[:180])
@@ -1489,14 +1501,26 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
                 "detail": detail, "seen": len(candidates)}
 
     # A password form with a clickable alternative is a CHOICE, not a dead end.
+    drivable = [e for e in entries if not e.get("operator_only")]
     detail = (f"Not signed in. {len(entries)} way(s) in from here — pick one and I'll click it; "
               f"you take over at the password.")
     if state == "signin_form":
         detail = (f"A password form is up, and so are {len(entries)} route(s) that are clicks "
                   f"rather than credentials. Pick one and I'll click it — or type the password "
                   f"yourself and press Re-check.")
-    return {"state": state, "url": tab.get("url", ""), "can_drive": True,
-            "options": [{"name": e["name"], "role": e["role"], "why": e["why"]} for e in entries],
+    elif state == "identifier_form":
+        # Say what this screen IS. It used to arrive as "unknown", which told the operator nothing
+        # and made an ordinary email-first page look like a fault in the page.
+        detail = (f"This is the email-first step — your address now, the password or an emailed "
+                  f"code on the next screen. {len(entries)} way(s) in"
+                  + (f", {len(entries) - len(drivable)} of which I can only point at, not press"
+                     if len(drivable) != len(entries) else "")
+                  + ". Type the address here, or pick a route and I'll click it.")
+    return {"state": state, "url": tab.get("url", ""), "can_drive": bool(drivable),
+            "options": [{"name": e["name"], "role": e["role"], "why": e["why"],
+                         # Carried so the cockpit can show it as "press this yourself" rather than
+                         # a button that calls an endpoint which would refuse it.
+                         "operator_only": bool(e.get("operator_only"))} for e in entries],
             "detail": detail, "seen": len(candidates)}
 
 
@@ -1694,6 +1718,16 @@ async def login_action(session_id: int, body: LoginActionBody,
             status_code=422,
             detail=f"{body.control_name!r} is not one of the ways in I can see "
                    f"({', '.join(o['name'] for o in before['options']) or 'none'}). Re-check first.")
+    # REFUSE RATHER THAN NO-OP. An iframe'd SSO button is a real way in that we cannot press: a
+    # click on the frame node lands on nothing and would come back `ok` — the exact shape of a
+    # silent failure. Say who has to press it instead.
+    if next((o for o in before["options"]
+             if o["name"] == body.control_name and o.get("operator_only")), None):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{body.control_name!r} is rendered inside a cross-origin iframe, so a click "
+                   f"from here would land on the frame and do nothing. Press it yourself in the "
+                   f"window, then press Re-check.")
 
     # Click it as the SURVEY saw it. Falling back to the surveyed role keeps the role gate — which
     # is what stops a name owned by two controls resolving in document order — without requiring
