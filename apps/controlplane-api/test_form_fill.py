@@ -140,3 +140,40 @@ def test_the_bar_whose_name_carries_a_count_still_matches():
     s = ff.section_status("successfactors", [_bar("Jobs Applied (7)", True)])
     row = next(r for r in s["sections"] if r["field"] == "profile_section_jobs_applied")
     assert row["state"] == "open" and row["label"] == "Jobs Applied (7)"
+
+
+def test_a_bare_address_field_maps_and_email_address_still_does_not():
+    # SAP's profile calls the street field exactly "Address"; before this it matched nothing, so
+    # the most important address field on the form was silently unrecognised. The ordering guard:
+    # "Email Address" contains "address", so a bare entry placed too high turns every email into
+    # a street.
+    assert ff.field_answer_key("Address") == "street_address"
+    assert ff.field_answer_key("\xa0Address") == "street_address"      # the nbsp SAP really emits
+    assert ff.field_answer_key("Email Address") == "email"
+    assert ff.field_answer_key("Address Line 2") is None               # specific still wins
+
+
+def test_a_repeated_name_is_planned_but_refused():
+    # Fields are addressed BY NAME. Three "Country" controls means a fill types one value into
+    # whichever resolves first and reports success three times, leaving two empty. Measured live:
+    # SAP's profile with every section open renders exactly this.
+    fields = [{"role": "combobox", "name": "Country"},
+              {"role": "combobox", "name": "Country"},
+              {"role": "textbox", "name": "City"}]
+    rows = ff.plan(fields, answers={"country": "United States", "city": "Nashua"}, identity={})
+    countries = [r for r in rows if r["field"] == "Country"]
+    assert len(countries) == 2 and all(r["ambiguous"] for r in countries)
+    assert not any(r["fillable"] for r in countries)
+    city = next(r for r in rows if r["field"] == "City")
+    assert city["fillable"] and city["ambiguous"] is False
+
+
+def test_ambiguous_is_not_reported_as_missing_data():
+    # "We hold no address for you" asks for data. "There are three Country controls" asks for a
+    # different addressing mode. Sending the operator to fill a value they already gave is the
+    # failure this separation exists to prevent.
+    fields = [{"role": "combobox", "name": "Country"}, {"role": "combobox", "name": "Country"}]
+    s = ff.summarise(ff.plan(fields, answers={"country": "United States"}, identity={}))
+    assert s["ambiguous"] == ["Country"]
+    assert s["missing"] == []          # we HAVE a country; it is not missing
+    assert s["fillable"] == 0
