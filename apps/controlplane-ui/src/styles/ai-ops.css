@@ -1775,6 +1775,7 @@ textarea:focus-visible {
 .sc-minis { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .sc-mini { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: rgba(127,127,127,0.12); color: var(--text-muted); }
 .sc-mini em { font-style: normal; font-weight: 600; margin-left: 3px; }
+.sc-mini__x { margin-left: 4px; font-weight: 600; opacity: 0.75; }  /* how many times this rung repeated — the trail collapsed for the eye, not the record */
 .sc-mini--ok em { color: var(--success); }
 .sc-mini--unknown, .sc-mini--blocked, .sc-mini--human_required { background: var(--warning-soft); color: var(--warning); }
 .sc-mini--unknown em, .sc-mini--blocked em, .sc-mini--human_required em { color: var(--warning); }

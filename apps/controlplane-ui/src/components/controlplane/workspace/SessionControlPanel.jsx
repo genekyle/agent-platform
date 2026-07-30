@@ -137,6 +137,35 @@ function StalenessChip({ stale }) {
   );
 }
 
+// --- the mini-step trail, when a rung has been walked many times -------------------------
+// The account rung records a mini on EVERY crank, and it gets cranked a lot: an operator presses
+// again, a drive resumes, a leg is retried, a wrong mark_created is retracted. Session 21 built up
+// twenty-odd `account` chips — human_required, ok, failed, ok, ok — which is an honest record and an
+// unreadable one, and the wall of chips hid the very transitions worth seeing.
+//
+// So: COLLAPSE FOR THE EYE, NEVER FOR THE RECORD. Consecutive minis sharing (rung, outcome) become
+// one chip with a count. Nothing is dropped and nothing is reordered — a `failed` between two `ok`s
+// stays its own chip, because that is exactly the shape a retry story has and averaging it away
+// would turn the trail into a summary. The hover keeps every detail line, newest last.
+function collapseMinis(minis) {
+  const out = [];
+  for (const m of minis) {
+    const last = out[out.length - 1];
+    if (last && last.rung === m.rung && last.outcome === m.outcome) {
+      last.count += 1;
+      if (m.detail) last.details.push(m.detail);
+      continue;
+    }
+    out.push({ rung: m.rung, outcome: m.outcome, count: 1, details: m.detail ? [m.detail] : [] });
+  }
+  return out.map((g) => ({
+    ...g,
+    title: g.count > 1
+      ? `${g.count}× ${g.rung} ${g.outcome}\n\n${g.details.join("\n\n")}`
+      : g.details[0] || "",
+  }));
+}
+
 function Rung({ rung }) {
   // "spent" means the cost was actually PAID — i.e. the rung is reached. A consuming rung that
   // is merely next has not been spent, and labelling it so would misreport what this session
@@ -738,9 +767,10 @@ export function SessionControlPanel({ domain }) {
                           must be visible rather than inferred from a gap. */}
                       {s.minis?.length > 0 && (
                         <div className="sc-minis">
-                          {s.minis.map((m, i) => (
-                            <span key={i} className={`sc-mini sc-mini--${m.outcome}`} title={m.detail}>
+                          {collapseMinis(s.minis).map((m, i) => (
+                            <span key={i} className={`sc-mini sc-mini--${m.outcome}`} title={m.title}>
                               {m.rung} <em>{m.outcome}</em>
+                              {m.count > 1 && <b className="sc-mini__x">×{m.count}</b>}
                             </span>
                           ))}
                         </div>

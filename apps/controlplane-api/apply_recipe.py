@@ -618,6 +618,16 @@ SUCCESSFACTORS_LESSONS = {
         "table stores it without the trailing ' Required'. It resolves because _resolve_ax_node "
         "falls back from exact match to substring; that fallback is load-bearing here, not "
         "decorative.",
+    "the_apply_form_is_collapsed_sections": "The application itself is not one flat form — it is a "
+        "stack of collapsible SECTION BARS, and a section's fields are not interactable until its "
+        "bar has been clicked open (operator, 2026-07-30). So every field on this form has a "
+        "PRECONDITION that no field-level recipe can express: open the bar that owns it. Expect the "
+        "failure to look like a moved field — /execute resolves nothing, or resolves a node that is "
+        "in the DOM and cannot be typed into — which is the same signature as a stale selector and "
+        "is a completely different problem. This is the widget-protocol shape again "
+        "(precondition -> open -> interact -> confirm), one level up: the container is the widget, "
+        "not the input. Scan a section's contents only AFTER opening it; a scan of a closed form "
+        "will under-report required fields and make the page look simpler than it is.",
     "the_policy_gate_comes_back_after_sign_in": "A successful sign-in does NOT land on the career "
         "site — SAP raises the Data Privacy Consent dialog again, unprompted, over the sign-in "
         "page (state successfactors_policy_gate, 2026-07-29). Same dialog as the signup's, same "
@@ -681,7 +691,12 @@ SUCCESSFACTORS_APPLY_RECIPE = [
      "controls": {"accept": {"role": "button", "name": "Accept"}},
      "expect": ["successfactors_apply_form", "successfactors_account_gate"]},
     {"step": 5, "state": "successfactors_apply_form",
-     "action": "UNDRIVEN. The application itself.", "expect": ["successfactors_submitted"]},
+     "action": "UNDRIVEN as a drive, but its SHAPE is known: a stack of collapsible section bars "
+               "(see the_apply_form_is_collapsed_sections). Open a bar, scan what it contains, "
+               "fill it, then move to the next — a field is not addressable while its section is "
+               "shut, and a scan of the closed form under-reports what the application asks for. "
+               "Map the bars first; do not transcribe fields off a closed page.",
+     "expect": ["successfactors_submitted"]},
 ]
 
 SUCCESSFACTORS_ACCOUNT_LOOP = {
