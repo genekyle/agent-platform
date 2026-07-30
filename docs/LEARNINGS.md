@@ -4276,3 +4276,73 @@ was only in a throwaway probe, but it is exactly how a bogus ATS id would get re
 **Where it stands:** the apply tab is left OPEN at the AppVault front, one "APPLY NOW" from the
 account-gated application. Not closed, because the tab hygiene rule fires on a FINISHED application
 (submitted, or abandoned at a human wall) and this is neither — it is a halt awaiting a decision.
+
+---
+
+## 2026-07-30 (5) — SAP's section bars were the easy part; the traps were in the names
+
+**The question this answered.** The previous session left one: are the Candidate Profile section
+bars addressable by accessible name, or do they need the same selector escape hatch the consent
+link needed (`#dataPrivacyId`)? **Answered NO, measured live** on
+`career41.sapsf.com/portalcareer` — every bar is a real `<button class="rcmFormSectionTopBar">`
+whose accessible name IS its visible label, and each carries `aria-expanded`, so open/closed is
+**read, not inferred** from chevron pixels or row geometry. Nine bars: My Documents, Profile
+Information, Search Options and Privacy, Jobs Applied (N), Saved Applications, Employment History,
+Formal Education, Language Skills, Geographic Mobility.
+
+Clicking `Profile Information` was verified by **both** signals, per the scroll lesson: its
+`aria-expanded` flipped `false`→`true`, and the bars below it moved ~514px down. `/execute`
+returning `ok` was not treated as evidence — it means a click was dispatched, nothing more.
+
+**The prediction that was wrong, and it matters.** The operator-reported lesson already in
+`SUCCESSFACTORS_LESSONS` predicted the failure mode as "resolves a node that is in the DOM and
+cannot be typed into". It is not that. **A collapsed section's fields are absent from the AX tree
+entirely** — the collapsed scan returned 25 candidates and *zero* textboxes; opening one bar took
+it to 41 with all thirteen. So the real signature is `/execute` → `NOT_FOUND`, which is
+indistinguishable from a stale recipe. Before believing the field table rotted, check whether the
+section is open. Corrected in place rather than appended to, because a wrong predicted signature
+sends the next session debugging the wrong layer.
+
+**Trap 1 — an aria-hidden marker changes the accessible name without changing the screen.** Every
+required label wraps its asterisk in `<span class="requiredField" aria-hidden="true">`.
+`aria-hidden` strips the `*` from the accessible name **but not the whitespace around it**, so AX
+reports `" First Name"` with a leading space while optional `"Middle Name"` has none. It happens to
+be survivable — `_resolve_ax_node` strips both sides before comparing (`main_server.py:190`),
+*verified in the source, not assumed*. Two things generalise: a name copied off the screen will not
+match what AX reports, and **the leading space is not a required-detector** — Country and
+State / Province are required and have no leading space, because they take their name from
+`aria-label` rather than the `<label>`. `aria-required` is the honest signal.
+
+**Trap 2 — one name, two controls.** Country and State / Province **each appear twice under one
+accessible name**: the `input[role=combobox]` holding the value (live: "United States" /
+"New Hampshire") and a sibling `<button id="81:_selectButton">` that opens the picker. Since
+`_resolve_ax_node` takes `exact[0]` in **document order** when no role is given, addressing these
+by name alone is a coin flip between typing the value and opening a dropdown. This is the "five
+links named Show all" trap (2026-07-29) with two candidates instead of five — **the role is
+load-bearing here, not decorative.** The shape is neither a native select nor a react-select, so
+`apply_fields` leaves it `UNKNOWN` and lets it route to `/describe_widget`, per that enum's own
+docstring; guessing `REACT_SELECT` would dispatch the wrong protocol at it.
+
+**Trap 3 — a bar whose name carries its value.** `"Jobs Applied (2)"` holds a live count, so it
+must be matched by **prefix**; baking today's count in makes the bar unreachable on the very run
+that changes it. Same shape as LinkedIn's `button "Location Greater Boston"`.
+
+**What is still not solved.** The bars expose **no `aria-controls`**, so a bar cannot name its own
+content region — scoping a scan to one section remains unsolved, and the field entries are
+addressed page-wide as a result. Element ids (`142:topBar`, `30:_expandAllSections`) are framework
+counters that shift with the component tree; they are not identity, the name is.
+
+**Where it landed, and its enforcement point.** `apply_fields.SUCCESSFACTORS_FIELDS` gained 19
+`profile_*` entries — note these are a **different form** from the create-account leg above them,
+with a different naming convention (`" First Name"` vs `"First Name: *"`), which is exactly why a
+matcher tuned on one misses the other. All 19 were replayed against the live AX scan using the
+driver's own matching rules: **19/19 resolve, 0 ambiguous, 0 misses**, with `profile_country`
+landing on the combobox and not the button. Four tests in `test_apply_fields.py` pin the traps
+against a verbatim live-AX fixture (leading spaces included — they must not be tidied out).
+
+**The 8-minute session timer.** Reported by the operator as a popup. At scan time there was **no
+countdown element and no dialog anywhere in the DOM**, and the tab title was the healthy
+"Career Opportunities: My Profile" rather than the "Your session has expired." recorded on
+2026-07-29. So it is a real but *transient* warning we have not yet captured as a state — worth
+grabbing the next time it fires, since the expiry it precedes is the one both cheap signals
+(`/auth_state`, the URL) already lied about.

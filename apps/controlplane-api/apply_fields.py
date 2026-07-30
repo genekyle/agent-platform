@@ -420,6 +420,112 @@ SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
                           widget_type=WidgetType.TEXT),
     "sign_in_submit": _f(ats="successfactors", role="button", name="Sign In",
                          widget_type=WidgetType.UNKNOWN),
+
+    # ----------------------------------------------------------------------------------------
+    # CANDIDATE PROFILE — a DIFFERENT form from the create-account leg above, on the signed-in
+    # /portalcareer page (state successfactors_candidate_profile). Measured live 2026-07-30.
+    #
+    # THE ACCORDION IS A PRECONDITION, NOT DECORATION. The page is nine collapsed section bars.
+    # A collapsed section's fields are ABSENT FROM THE AX TREE — the collapsed scan returned 25
+    # candidates and not one textbox; expanding "Profile Information" took it to 41 with all
+    # thirteen. So addressing any field below without expanding its section first does not
+    # mis-click, it returns NOT_FOUND, and the recipe reads as stale when it is merely early.
+    # Expand the section, THEN address the field.
+    #
+    # The bars themselves need no selector treatment — this was the open question and the answer
+    # is clean. Each is a real <button> whose accessible name is its visible label, and each
+    # carries aria-expanded, so the open/closed state is READ, never inferred from geometry.
+    # (They expose no aria-controls, so a bar does not name its content region; scoping a scan to
+    # one section is still unsolved and is why the fields below are addressed page-wide.)
+    # ----------------------------------------------------------------------------------------
+    #
+    # THE WHITESPACE ARTIFACT, and why it is survivable. Every REQUIRED label holds a
+    # `<span class="requiredField" aria-hidden="true">*</span>`. aria-hidden strips the asterisk
+    # from the accessible name but NOT the space around it, so AX reports " First Name" with a
+    # leading space while optional "Middle Name" has none. Names are written clean below because
+    # `_resolve_ax_node` strips both sides before comparing (main_server.py:190) — verified, not
+    # assumed. Do NOT use that space as a required-detector: it is absent on Country and
+    # State / Province, which are required but take their name from aria-label instead of the
+    # label element. `aria-required` is the honest signal.
+    "profile_expand_all": _f(ats="successfactors", role="button", name="Expand all sections",
+                             widget_type=WidgetType.UNKNOWN,
+                             note="Opens all nine sections at once — the cheapest way to make "
+                                  "every field addressable before a scan. Its twin is 'Collapse "
+                                  "all sections'; both are <a role=button>, not <button>."),
+    "profile_section_profile_information": _f(
+        ats="successfactors", role="button", name="Profile Information",
+        widget_type=WidgetType.UNKNOWN,
+        note="Section bar. Click toggles aria-expanded; verified false->true live, with the bars "
+             "below shifting ~514px down. Holds the thirteen identity fields below."),
+    "profile_section_employment_history": _f(
+        ats="successfactors", role="button", name="Employment History",
+        widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
+    "profile_section_formal_education": _f(
+        ats="successfactors", role="button", name="Formal Education",
+        widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
+    # MATCH THIS ONE BY PREFIX. Its accessible name carries a live COUNT — "Jobs Applied (2)" —
+    # so an exact match breaks the moment an application lands. Same shape as LinkedIn's
+    # `button "Location Greater Boston"`: a control whose name carries its value.
+    "profile_section_jobs_applied": _f(
+        ats="successfactors", role="button", name="Jobs Applied",
+        widget_type=WidgetType.UNKNOWN,
+        note="Section bar, NAME CARRIES A COUNT ('Jobs Applied (2)'). Resolves on the resolver's "
+             "substring fallback, never on exact match — do not 'fix' this by pasting today's "
+             "count in. The count is also the cheapest read of how many applications this "
+             "tenant thinks we have sent."),
+    "profile_first_name": _f(ats="successfactors", role="textbox", name="First Name",
+                             widget_type=WidgetType.TEXT, answer_key="first_name"),
+    "profile_middle_name": _f(ats="successfactors", role="textbox", name="Middle Name",
+                              widget_type=WidgetType.TEXT, optional=True),
+    "profile_last_name": _f(ats="successfactors", role="textbox", name="Last Name",
+                            widget_type=WidgetType.TEXT, answer_key="last_name"),
+    "profile_address": _f(ats="successfactors", role="textbox", name="Address",
+                          widget_type=WidgetType.TEXT, answer_key="street_address"),
+    "profile_city": _f(ats="successfactors", role="textbox", name="City",
+                       widget_type=WidgetType.TEXT, answer_key="city"),
+    # ROLE-GATED ON PURPOSE, and this is load-bearing. Country and State each appear TWICE under
+    # ONE accessible name: the `input[role=combobox]` that holds the value, and a
+    # `<button id="81:_selectButton">` that opens the picker. `_resolve_ax_node` takes exact[0]
+    # in document order when the role is not given — a coin flip between typing the value and
+    # opening a dropdown. This is the "five links named Show all" trap with two candidates
+    # instead of five, and the role is what disambiguates it. Never drop the role here.
+    #
+    # WIDGET SHAPE IS DELIBERATELY UNKNOWN, not a guess. It is an `input[role=combobox]`
+    # (aria-expanded, editable, value read straight off `.value` — held "United States" /
+    # "New Hampshire" live) paired with a sibling icon button. That is neither a native select
+    # nor a react-select, and calling it either would dispatch the wrong protocol at it.
+    # UNKNOWN routes to /describe_widget, which is what this enum's own docstring prescribes for
+    # a shape not yet in it; the probe's answer is what earns a new member.
+    "profile_country": _f(ats="successfactors", role="combobox", name="Country",
+                          widget_type=WidgetType.UNKNOWN, answer_key="country",
+                          note="input[role=combobox] + sibling opener button SHARING its name — "
+                               "role gating is mandatory. Typing likely fetches per keystroke; "
+                               "treat as a data cost in low-data mode."),
+    "profile_state": _f(ats="successfactors", role="combobox", name="State / Province",
+                        widget_type=WidgetType.UNKNOWN, answer_key="state",
+                        note="Same doubled-name shape as profile_country. Role gating mandatory."),
+    "profile_zip": _f(ats="successfactors", role="textbox", name="Postal Code",
+                      widget_type=WidgetType.TEXT, answer_key="postal_code"),
+    "profile_primary_phone": _f(ats="successfactors", role="textbox", name="Primary Phone",
+                                widget_type=WidgetType.TEXT, answer_key="phone",
+                                note="DOM name is `cellPhone`; the label is not."),
+    "profile_alternate_phone": _f(ats="successfactors", role="textbox", name="Alternate Phone",
+                                  widget_type=WidgetType.TEXT, optional=True,
+                                  note="DOM name is `homePhone`."),
+    "profile_email": _f(ats="successfactors", role="textbox", name="Email",
+                        widget_type=WidgetType.TEXT, answer_key="email"),
+    "profile_current_company": _f(ats="successfactors", role="textbox", name="Current Company",
+                                  widget_type=WidgetType.TEXT,
+                                  note="REQUIRED (aria-required), and no answer_key covers it — "
+                                       "the operator's profile has nowhere to put it yet."),
+    "profile_current_title": _f(ats="successfactors", role="textbox", name="Current Title",
+                                widget_type=WidgetType.TEXT, optional=True),
+    # ONE Save for the whole accordion, sitting below the last bar — not one per section.
+    "profile_save": _f(ats="successfactors", role="button", name="Save",
+                       widget_type=WidgetType.UNKNOWN,
+                       note="Commits the WHOLE profile, every section. Never clicked live yet; "
+                            "the profile already held the operator's real values on first sight, "
+                            "so nothing has needed saving."),
 }
 
 _BY_ATS: dict[str, dict[str, dict[str, Any]]] = {

@@ -160,3 +160,79 @@ def test_an_unread_policy_is_not_a_clean_bill_of_health():
 
 def test_every_policy_names_an_ats_we_actually_have_fields_for():
     assert set(apply_fields.PASSWORD_POLICIES) <= set(known_ats())
+
+
+# ---------------------------------------------------------------------------------------------
+# SAP CANDIDATE PROFILE — the three traps measured live on 2026-07-30. Every one of them is
+# invisible to a human reading the page, and every one resolves to SOMETHING rather than failing.
+# ---------------------------------------------------------------------------------------------
+
+def _resolve_like_the_driver(candidates, role, name):
+    """`_resolve_ax_node`'s matching, verbatim (main_server.py:183-194): strip+lower both sides,
+    role-gate, exact wins, substring falls back. Duplicated on purpose — the point is to catch a
+    field table that stops resolving, and importing the MCP app here would couple the suites."""
+    want_role, want = (role or "").strip().lower(), (name or "").strip().lower()
+    def role_ok(c):
+        return not want_role or (c.get("role") or "").strip().lower() == want_role
+    def nm(c):
+        return (c.get("name") or "").strip().lower()
+    exact = [c for c in candidates if role_ok(c) and nm(c) == want]
+    if exact:
+        return exact
+    return [c for c in candidates if role_ok(c) and want and want in nm(c)]
+
+
+#: Verbatim from the live AX scan of career41.sapsf.com/portalcareer with Profile Information
+#: expanded (2026-07-30). The leading spaces are REAL — an aria-hidden required-marker span
+#: leaves its whitespace in the accessible name — and must not be "tidied" out of this fixture.
+_LIVE_PROFILE_AX = [
+    {"role": "button", "name": "Expand all sections", "backend_node_id": 19898},
+    {"role": "button", "name": "Profile Information", "backend_node_id": 20006},
+    {"role": "button", "name": "Jobs Applied (2)", "backend_node_id": 20186},
+    {"role": "textbox", "name": " First Name", "backend_node_id": 19222},
+    {"role": "textbox", "name": "Middle Name", "backend_node_id": 19223},
+    {"role": "textbox", "name": " Postal Code", "backend_node_id": 19227},
+    {"role": "combobox", "name": "Country", "backend_node_id": 19217},
+    {"role": "button", "name": "Country", "backend_node_id": 20071},
+    {"role": "combobox", "name": "State / Province", "backend_node_id": 19219},
+    {"role": "button", "name": "State / Province", "backend_node_id": 20086},
+]
+
+
+def test_required_marker_whitespace_does_not_break_resolution():
+    # AX reports " First Name" because <span class=requiredField aria-hidden> keeps its spaces
+    # while losing its asterisk. The table stores the clean name; the driver strips. If either
+    # side stops stripping, every REQUIRED field on this form goes unreachable at once — and
+    # only the required ones, which is the worst possible half-failure.
+    hits = _resolve_like_the_driver(_LIVE_PROFILE_AX, "textbox", resolve("successfactors", "profile_first_name")["name"])
+    assert [h["backend_node_id"] for h in hits] == [19222]
+    hits = _resolve_like_the_driver(_LIVE_PROFILE_AX, "textbox", resolve("successfactors", "profile_zip")["name"])
+    assert [h["backend_node_id"] for h in hits] == [19227]
+
+
+@pytest.mark.parametrize("field,node", [("profile_country", 19217), ("profile_state", 19219)])
+def test_country_and_state_need_their_role_to_be_unambiguous(field, node):
+    # Each name belongs to TWO controls: the combobox holding the value and the button opening
+    # the picker. With the role, exactly one survives. Without it, `exact[0]` is document order —
+    # a coin flip between typing the value and opening a dropdown.
+    entry = resolve("successfactors", field)
+    assert entry["role"] == "combobox", "dropping the role here re-opens the ambiguity below"
+    assert [h["backend_node_id"] for h in _resolve_like_the_driver(_LIVE_PROFILE_AX, entry["role"], entry["name"])] == [node]
+    assert len(_resolve_like_the_driver(_LIVE_PROFILE_AX, None, entry["name"])) == 2
+
+
+def test_jobs_applied_is_matched_by_prefix_because_its_name_carries_a_count():
+    # "Jobs Applied (2)" becomes "(3)" the next time we apply. Storing today's count would make
+    # the bar unreachable on the very run that changes it.
+    entry = resolve("successfactors", "profile_section_jobs_applied")
+    assert "(" not in entry["name"], "the count must not be baked into the name"
+    assert [h["backend_node_id"] for h in _resolve_like_the_driver(_LIVE_PROFILE_AX, "button", entry["name"])] == [20186]
+
+
+def test_a_collapsed_section_hides_its_fields_so_the_bar_is_a_precondition():
+    # The collapsed page offered 25 AX candidates and NOT ONE textbox; opening one bar took it
+    # to 41. So a field lookup that succeeds in the table can still be NOT_FOUND on the page,
+    # and that is openness, not staleness. Every profile field therefore has a section bar.
+    collapsed = [c for c in _LIVE_PROFILE_AX if c["role"] == "button"]
+    assert _resolve_like_the_driver(collapsed, "textbox", "First Name") == []
+    assert {"profile_expand_all", "profile_section_profile_information"} <= set(known_fields("successfactors"))
