@@ -3150,6 +3150,20 @@ async def open_job_card(body: OpenJobCardRequest):
                     "returnByValue": True})
                 return (r.get("result") or {}).get("value") or {}
 
+            # ALREADY OPEN IS NOT A FAILURE TO OPEN. Both engines auto-open the first result, so
+            # for that card there is no switch to observe — the pane is already showing it. The
+            # switch check exists to catch a click that landed on the WRONG job, and it was
+            # answering "no" to a different question: "did the pane change?" Measured 2026-07-30:
+            # a 25-card sweep saved 23 descriptions and silently skipped the first card, which is
+            # the one most likely to be acted on. Ask the pane WHICH job it is showing first.
+            if platform == "linkedin":
+                pre = (await cdp.send("Runtime.evaluate", {
+                    "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
+                if str(pre.get("open_job_id") or "") == str(body.external_id) and pre.get("description"):
+                    pre.update({"ok": True, "switched": True, "already_open": True,
+                                "external_id": body.external_id, "platform": platform})
+                    return pre
+
             box = await _measure()
             scrolled: list[dict] = []
             if platform == "linkedin" and not (box.get("found") and box.get("in_view", True)):
