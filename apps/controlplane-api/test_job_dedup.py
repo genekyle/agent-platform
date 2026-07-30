@@ -244,6 +244,31 @@ def test_a_rotated_indeed_id_for_the_same_posting_folds_in(db):
     assert db.query(Job).one().sighting_count == 2
 
 
+def test_a_scrape_that_missed_the_employer_is_matched_to_the_named_row(db):
+    """9 of 355 live rows had no company and duplicated a job we already had with one."""
+    _job(db, "named", "Software Engineer - Back-End", "DEKA Research & Development",
+         seen=T0 + timedelta(days=3))
+    _job(db, "blank", "Software Engineer - Back-End", "", seen=T0)
+    assert jd.scan_and_record(db) == {"merged": 0, "queued": 1}
+    match = db.query(JobMatch).one()
+    assert match.tier == "blank_company"
+    # The NAMED row survives even though it is the newer one — the two are not equal records.
+    assert match.kept_key == "named" and match.folded_key == "blank"
+
+
+def test_merging_into_a_blank_row_never_loses_the_employer(db):
+    """The operator can flip the direction; doing so must not drop the only company name we have."""
+    _job(db, "named", "Software Engineer - Back-End", "DEKA Research & Development")
+    _job(db, "blank", "Software Engineer - Back-End", "", seen=T0 + timedelta(days=1))
+
+    jd.apply_merge(db, "blank", "named")     # deliberately the wrong way round
+    db.commit()
+
+    kept = db.get(Job, "blank")
+    assert kept.company == "DEKA Research & Development"
+    assert kept.company_norm == jd.normalize_company("DEKA Research & Development")
+
+
 def test_two_levels_of_the_same_role_stay_two_jobs(db):
     _sighting(db, "indeed:1", "Financial Analyst II", "Elbit America")
     _sighting(db, "indeed:2", "Financial Analyst III", "Elbit America")

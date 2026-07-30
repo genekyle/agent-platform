@@ -15,6 +15,7 @@ import { AccountsPanel } from "./AccountsPanel";
 import { ErrandsPanel } from "./ErrandsPanel";
 import { FacebookMarketplaceSection } from "../FacebookMarketplaceSection";
 import { JobsWorkspaceSection } from "../JobsWorkspaceSection";
+import { JobDatabaseSection } from "../JobDatabaseSection";
 import { AccountsSection } from "../AccountsSection";
 import { EventsConsole } from "../EventsConsole";
 import { DOMAINS_BY_ID } from "./domains";
@@ -38,6 +39,9 @@ function DataTab({ domain, tab, onOpenTraining, sessionId }) {
   if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
   if (tab === "errands") return <ErrandsPanel domain={domain} />;
+  // The cross-platform job database. Available on the Career Search parent (all boards) and
+  // on each engine, where `domain.platform` pins the filter to that board.
+  if (tab === "database") return <JobDatabaseSection domain={domain} />;
   if (tab === "terminal") {
     return (
       <div className="section-body">
@@ -139,7 +143,12 @@ function GroupWorkspace({ domain, activeTab, onChangeTab, onOpenDomain }) {
           ))}
         </div>
       )}
-      {tab === "accounts" ? <AccountsSection /> : tab === "activity" ? <EventsConsole /> : (
+      {/* One branch per tab. A ternary chain here silently rendered the sub-domain tiles for any
+          tab it didn't know, so a newly-declared tab looked wired up and wasn't. */}
+      {tab === "accounts" ? <AccountsSection />
+        : tab === "activity" ? <EventsConsole />
+        : tab === "database" ? <JobDatabaseSection domain={domain} />
+        : (
         <div className="domain-tiles">
           {children.map((c) => {
             const soon = c.kind === "coming_soon";

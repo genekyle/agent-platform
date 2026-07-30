@@ -4474,3 +4474,80 @@ authenticated with Google and is still logged out of the site it was signing int
 that fronts a target. `/ax_scan` is fine; `/screenshot` and `/page_content` are not. Wait for the
 popup to close, then verify against the HOST tab — which is the only place the answer was ever
 going to be.
+
+---
+
+## 2026-07-30 — the fuzzy title matcher was wrong on the real corpus, and the canonical job table it feeds
+
+**A scorer that has never been run over the real data is a hypothesis.** `applied_index`'s fuzzy
+tier had a careful docstring explaining that its containment score survived ATS title decoration
+without collapsing seniority levels. Run over the live 355 rows it produced **31 above-threshold
+pairs of which roughly 3 were real**, and it failed in exactly the way the docstring promised it
+would not:
+
+    'Software Engineer'      == 'Senior Data Integration Software Engineer'   1.00  (Liberty Mutual)
+    'Business Analyst'       == 'Client Solutions Business Analyst'           1.00  (State Street)
+    'Financial Analyst III'  == 'Financial Analyst II'                        1.00  (Elbit America)
+
+Three distinct mechanisms, each with its own fix (all in `job_dedup.py`):
+
+* **A generic short title is a subset of every richer title at that employer.** The `min()`
+  denominator gives a two-word title a free 1.00 against anything containing it. → containment is
+  only trusted when the shorter title carries ≥3 distinctive words; below that, Jaccard.
+* **An interleaved word changes the role; an appended one is a department.** `Senior Associate -
+  Data Governance Analyst` vs `- Data Analyst` scored 1.00 under set containment. Set logic cannot
+  tell that apart from `Healthcare Data Analyst` vs `Healthcare Data Analyst - BIDMC, OBGYN
+  Quality`, which is the case containment exists to protect. → the shorter title must appear as a
+  **contiguous run** in the longer. Decoration is appended; a qualifier is interleaved.
+* **The token filter deleted the seniority numeral.** `len(w) > 2` dropped `II`/`III` — erasing
+  precisely the distinction the filter was documented as preserving. → levels are extracted
+  *before* filtering and compared separately; two different levels **veto** the match.
+
+The threshold moved 0.75 → 0.85 alongside the fixes. `applied_index` now imports these primitives
+rather than keeping a second copy: "have I applied to this?" and "are these one job?" are the same
+comparison asked for two purposes, and they were drifting.
+
+**A sighting is not a job.** `observed_jobs` is keyed `platform:external_id`, which identifies *a
+card seen on a board* — and Indeed's `jk` rotates per search session while LinkedIn uses its own
+ids. Measured: Wellington Management's "Financial Reporting Analyst, US Funds" and Keurig's
+"Senior Analyst, Performance Measurement" each sat in the table **twice, once per board**, with
+nothing able to say so. So `Job` (canonical) now sits above the sightings, with `Application` and
+an append-only `ApplicationEvent` timeline above that. `job_key` is minted deterministically and
+a merge **tombstones** the loser rather than deleting it, so a reference another domain saved last
+month still resolves — that promise is the whole reason Gmail can join on it later.
+
+**Only evidence merges unattended.** A shared requisition id auto-merges; identical/fuzzy titles
+enqueue a `JobMatch` for review. Same rule `applied_index` already lived by, for the same reason:
+a near-miss that silently *hides* a job the operator picked is worse than one that asks.
+Rejections are remembered so a pair is never re-proposed.
+
+**Two counters that looked like one.** The first cut added one sighting's `seen_count` to
+another's, producing a job "sighted 38 times" that had two sighting rows. Split into
+`sighting_count` (distinct rows) and `seen_count` (total observations), and — the load-bearing
+part — **re-derived from the sightings by `recount_job`, never incremented**. Incremented counters
+drift the moment anything merges.
+
+**Descriptions were being captured and then dropped on the floor.** The sweep already clicks into
+cards on *both* boards (LinkedIn opens every card), and it wrote the JD onto the **sighting**.
+Nothing carried it up to the canonical row, because sightings resolve to a `Job` once — at scrape
+time, when they have no description yet. So `observed_jobs` filled up while the table the
+dashboard reads stayed empty: 32 sightings with a JD, 0 canonical jobs with one. `sync_description`
+is the missing half, and it is called wherever a description is written. Same defect shape for
+applications: the apply flow stamped `application_status='applied'` on the sighting and the
+canonical `Application` never existed (`_mirror_application`, inside a SAVEPOINT so a mirroring
+failure cannot discard the fact being recorded).
+
+**Where a helper runs is part of its contract.** Resolution was first called from inside
+`upsert_observed_jobs` — which is documented as *not* owning its transaction. Every caller's test
+immediately broke on a fake session with no `flush()`. That was the code being right: the
+resolution pass moved to the endpoints that own the commit, and `resolve_after_commit` swallows
+its own errors because the sightings are already durable by then and a live drive against a real
+account is far too expensive to throw away over a derived index.
+
+**Two smaller ones, both found by looking at the rendered page rather than the tests.** 9 of 355
+rows scraped with **no employer**, each duplicating a job we already had *with* one — a scraper
+miss, not a different company, so identical-title-plus-one-blank-company is its own tier (it
+proposes, never merges). And the review queue happily offered to keep the blank row and fold the
+named one in, while `apply_merge` had no `company` backfill — that merge would have discarded
+"DEKA Research & Development" entirely. The named row now wins the direction, *and* company
+backfills as a pair with `company_norm`, because the operator can flip the direction by hand.

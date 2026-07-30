@@ -339,9 +339,12 @@ def compare(a: Job, b: Job) -> Optional[MatchProposal]:
     # is just reading the scrape correctly. Identical titles only, and it still asks.
     if bool(a.company_norm) != bool(b.company_norm):
         if title_tokens(a.title) and title_tokens(a.title) == title_tokens(b.title):
-            named = a if a.company_norm else b
-            return MatchProposal(keep.job_key, fold.job_key, "blank_company", 1.0,
-                                 [f"identical title ({keep.title})",
+            # The NAMED row survives, overriding the usual oldest-wins rule. Oldest-wins exists to
+            # make the direction stable, and it still is — but here the two rows are not equally
+            # good records, and keeping the one that knows the employer is obviously right.
+            named, blank = (a, b) if a.company_norm else (b, a)
+            return MatchProposal(named.job_key, blank.job_key, "blank_company", 1.0,
+                                 [f"identical title ({named.title})",
                                   f"one side scraped without an employer; the other says {named.company}"])
         return None
 
@@ -521,9 +524,15 @@ def apply_merge(db: Session, kept_key: str, folded_key: str) -> Job:
 
     # Prefer the value we have over the value we lack; never overwrite a filled field. The one
     # ranked choice is the description — an ATS-sourced JD is fuller than a results-pane scrape.
-    for attr in ("salary", "location", "requisition_id", "ats", "canonical_url", "notes"):
+    for attr in ("salary", "location", "requisition_id", "ats", "canonical_url", "notes", "title"):
         if not getattr(kept, attr, None) and getattr(folded, attr, None):
             setattr(kept, attr, getattr(folded, attr))
+    # Company moves as a PAIR — the display name and the normalised key must never disagree, or the
+    # job stops being findable by the employer it now claims. Its own branch for that reason, and
+    # because the `blank_company` tier exists precisely to merge a row that has no employer: the
+    # operator can flip the merge direction, and doing so must not drop the only name we have.
+    if not kept.company_norm and folded.company_norm:
+        kept.company, kept.company_norm = folded.company, folded.company_norm
     if _description_rank(folded) > _description_rank(kept):
         kept.description, kept.description_source = folded.description, folded.description_source
 

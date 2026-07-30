@@ -32,6 +32,9 @@ export const DOMAIN_CATALOG = [
     blurb: "Job engines + ATS — search, apply, accounts.",
     tabs: [
       { id: "overview", label: "Sub-domains" },
+      // The canonical job database lives on the PARENT, not on an engine: it is one table across
+      // every board, and hanging it off Indeed would imply Indeed owns it.
+      { id: "database", label: "Job Database" },
       { id: "accounts", label: "Accounts" },
       { id: "activity", label: "Activity" },
     ],
@@ -75,6 +78,7 @@ export const DOMAIN_CATALOG = [
       { id: "live", label: "Live drive" },
       { id: "terminal", label: "Activity" },
       { id: "jobs", label: "Jobs" },
+      { id: "database", label: "Job Database" },
       { id: "profile", label: "Application Profile" },
       { id: "apply-state", label: "Apply State" },
       { id: "accounts", label: "Accounts" },
@@ -167,6 +171,7 @@ export const DOMAIN_CATALOG = [
       { id: "live", label: "Live drive" },
       { id: "terminal", label: "Activity" },
       { id: "jobs", label: "Jobs" },
+      { id: "database", label: "Job Database" },
       { id: "profile", label: "Application Profile" },
       { id: "apply-state", label: "Apply State" },
       { id: "accounts", label: "Accounts" },
