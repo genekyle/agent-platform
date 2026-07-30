@@ -1992,7 +1992,16 @@ _JOB_DESC_JS = r"""
   let apply_type = classify(buttonsIn(root));
   if (apply_type === 'unknown' && root !== document) apply_type = classify(buttonsIn(document));
 
-  return { description, salary, title, company, apply_type };
+  // WHICH JOB IS THIS PANE SHOWING? The SERP puts it in the URL: opening a card sets `?vjk=<jk>`,
+  // and the standalone page carries `?jk=<jk>`. That is an IDENTITY, which is a different and far
+  // better question than "did the pane change" — a click that lands on the wrong card is caught by
+  // comparing this to the id we asked for, and a card that was ALREADY open (Indeed auto-opens the
+  // first result) stops looking like a failure. Read live 2026-07-30: vjk matched the requested
+  // external_id exactly while the switch check was answering false.
+  const params = new URLSearchParams(location.search);
+  const open_job_id = params.get('vjk') || params.get('jk') || '';
+
+  return { description, salary, title, company, apply_type, open_job_id };
 })()
 """
 
@@ -3114,6 +3123,21 @@ async def _bring_card_into_view(cdp, driver, measure, box: Optional[dict] = None
     return cur, steps
 
 
+def pane_shows(pane: dict, external_id) -> bool:
+    """Is this pane showing the job we ASKED for — as opposed to merely a different one than before?
+
+    The identity question, given a name because it is the one that matters and the one the code
+    kept getting wrong in both directions. A pane that never changed is not a failure (both engines
+    auto-open the first result); a pane that changed to the WRONG job is. Only an id answers both,
+    and it answers them the same way for every engine that reports one.
+
+    Returns False when the pane reports no id at all — absent is not a match, and the caller falls
+    back to its weaker text diff rather than treating silence as agreement.
+    """
+    open_id = str((pane or {}).get("open_job_id") or "")
+    return bool(open_id) and open_id == str(external_id)
+
+
 @app.post("/open_job_card")
 async def open_job_card(body: OpenJobCardRequest):
     """Click a result card by its id to open the IN-PAGE right-hand detail pane, then scrape its
@@ -3156,13 +3180,23 @@ async def open_job_card(body: OpenJobCardRequest):
             # answering "no" to a different question: "did the pane change?" Measured 2026-07-30:
             # a 25-card sweep saved 23 descriptions and silently skipped the first card, which is
             # the one most likely to be acted on. Ask the pane WHICH job it is showing first.
-            if platform == "linkedin":
-                pre = (await cdp.send("Runtime.evaluate", {
-                    "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
-                if str(pre.get("open_job_id") or "") == str(body.external_id) and pre.get("description"):
-                    pre.update({"ok": True, "switched": True, "already_open": True,
-                                "external_id": body.external_id, "platform": platform})
-                    return pre
+            # BOTH ENGINES, which is what this comment always said and the code did not do. The
+            # guard read `platform == "linkedin"`, so Indeed — whose SERP auto-opens the first
+            # result just as hard — kept failing the switch check on a pane that was open, correct
+            # and fully read. Measured live 2026-07-30 on session 24: /open_job_card returned
+            # ok:false, switched:false, retried:2 alongside 3961 chars of the RIGHT description,
+            # title "Human Resources Data Analyst", company "BRISTOL COUNTY SAVINGS BANK" and
+            # apply_type quick_apply. The operator saw "open_pane failed x3" over a working pane.
+            #
+            # Identity is what makes this safe: this returns early only when the pane names the job
+            # we ASKED for, so a click that landed on the wrong card is still caught — by a
+            # stronger test than "did anything change".
+            pre = (await cdp.send("Runtime.evaluate", {
+                "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
+            if pane_shows(pre, body.external_id) and pre.get("description"):
+                pre.update({"ok": True, "switched": True, "already_open": True,
+                            "external_id": body.external_id, "platform": platform})
+                return pre
 
             box = await _measure()
             scrolled: list[dict] = []
@@ -3198,9 +3232,8 @@ async def open_job_card(body: OpenJobCardRequest):
                 # is genuinely weaker: it cannot tell a switch from a re-render, and it called a
                 # working click a failure on 2026-07-30 because two of the fields it read were
                 # empty for an unrelated reason.
-                open_id = str(d.get("open_job_id") or "")
-                if open_id:
-                    return open_id == str(body.external_id)
+                if str((d or {}).get("open_job_id") or ""):
+                    return pane_shows(d, body.external_id)
                 return bool(d.get("description")) and (
                     d.get("description") != before.get("description")
                     or (d.get("title") and d.get("title") != before.get("title")))

@@ -4676,3 +4676,52 @@ also locates the button**. One measurement, two uses.
 
 Live on the parked application: headline *Job landing page · appvault*, medium confidence, the
 mismatch banner, and two working buttons.
+
+---
+
+## 2026-07-30 (6) — The pane was open, correct, and read; the check asked the wrong question
+
+**The symptom.** The cockpit showed `open_pane failed ×3` on "Human Resources Data Analyst" and
+`Could not open …: no pane.` The operator's read was that Indeed might not be wired to the observer.
+It was wired fine.
+
+**What was actually true.** `/open_job_card` returned `ok:false, switched:false, retried:2` —
+alongside **3961 characters of the correct description**, `title: "Human Resources Data Analyst"`,
+`company: "BRISTOL COUNTY SAVINGS BANK"`, `apply_type: quick_apply`. Everything the call exists to
+produce, in the reply that called itself a failure. `ok` is computed as
+`bool(description) and switched`, so one false flag buried a complete, correct read.
+
+**Why `switched` was false.** Indeed's SERP **auto-opens the first result**. The card was already
+showing before we clicked it, so there was no change to observe, and a check that asks *"did the
+pane change?"* answers "no" for the one card most likely to be acted on. It then retried twice,
+waiting for a transition that could never happen.
+
+**The part that stings.** The fix already existed — for the other engine. A comment added the same
+day reads *"ALREADY OPEN IS NOT A FAILURE TO OPEN. **Both engines** auto-open the first result"* —
+and the guard beneath it read `if platform == "linkedin":`. The prose knew; the code did not. A
+comment that describes a general rule sitting on top of a special-cased branch is a bug with a
+docstring, and it is nearly invisible in review because the sentence above it is correct.
+
+**The right question is IDENTITY, not change.** "Did the pane change" cannot tell a no-op from an
+already-correct pane, and cannot tell a switch from a re-render. "Is the pane showing the job I
+asked for" answers both, and it is *stronger* than the check it replaces — it still catches the
+2026-07-26 near-miss where a click landed on the wrong card. Indeed's SERP names the open job in
+its own URL (`?vjk=<jk>`, `?jk=` on the standalone page); measured live, `vjk` equalled the
+requested `external_id` exactly while `switched` was reporting false. LinkedIn already had
+`currentJobId`. So both engines can answer it and neither needs the weaker diff.
+
+**Where it landed.** `_JOB_DESC_JS` now returns `open_job_id`; the already-open shortcut lost its
+`linkedin` gate; and the comparison is a named module-level helper, `pane_shows(pane, external_id)`,
+used by both the pre-click check and the post-click poll. **Absent is not a match** — a pane that
+reports no id returns False and the caller falls back to its text diff, because letting silence read
+as agreement would hand every engine without an id a free pass.
+
+**Verified live, both directions.** Asking for the already-open card returns
+`ok:true, already_open:true`; asking for a *different* card while that pane is open still performs a
+real click and lands `switched:true` on 7438 chars of the right job. Through the cockpit the rung
+now records `open_pane/ok` and advances to `verify_identity`.
+
+**Generalisable, and it is the third time this week:** a verification that watches OUR OWN action
+("did it change", "did the call return ok") instead of the WORLD ("is the world in the state I
+asked for") fails in whichever direction is least convenient. The scroll lesson wanted `moved` AND
+`new_ids`; the search commit wanted the path, not `origin=`; this one wants the id, not the diff.
