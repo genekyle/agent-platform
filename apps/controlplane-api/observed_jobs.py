@@ -21,7 +21,13 @@ def upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
     """UPSERT scraped job cards into observed_jobs, deduped by job_id = '{platform}:{external_id}'.
     A re-seen job bumps seen_count + last_seen_at (and records the search) instead of duplicating;
     blank fields are backfilled. Returns (new, duplicate) counts. Does NOT commit — the caller does,
-    so a multi-page sweep commits once per page."""
+    so a multi-page sweep commits once per page.
+
+    That `job_id` key dedupes SIGHTINGS, which is a weaker claim than it sounds: Indeed's jk
+    rotates per search session and LinkedIn uses its own ids, so the same posting still arrives as
+    several rows. Folding those into one canonical `Job` is a separate step — `job_dedup.resolve_*`
+    — deliberately NOT called from here: this helper does not own the transaction, and a caller
+    that only wants rows written should not silently pay for a resolution pass as well."""
     now = utcnow()
     new_count = dup_count = 0
     for j in jobs:
@@ -51,4 +57,5 @@ def upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
             row.company = row.company or (j.get("company") or "")[:300]
             row.location = row.location or (j.get("location") or "")[:300]
             dup_count += 1
+
     return new_count, dup_count

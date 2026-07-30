@@ -3338,15 +3338,22 @@ def test_open_pane_halts_when_the_database_says_we_already_applied(monkeypatch):
 
 
 def test_a_fuzzy_applied_match_warns_but_lets_the_step_continue(monkeypatch):
-    """`likely_applied` must never silently skip a job the operator picked."""
+    """`likely_applied` must never silently skip a job the operator picked.
+
+    Titles carry a department suffix on a 3-token base (`job_dedup.MIN_CONTAINMENT_TOKENS`) so the
+    pair still scores above `FUZZY_TITLE_THRESHOLD` (raised to 0.85 alongside the corpus-measured
+    scoring fixes) — a bare two-word title like the original 'Data Analyst' fixture no longer
+    qualifies on its own, correctly: see `test_a_generic_title_is_not_every_richer_title_at_that_employer`.
+    """
     harness, saved = _install(
         monkeypatch,
         {"/list_tabs": _tabs(SEARCH_URL),
          "/auth_state": {"ok": True, "logged_in": True},
-         "/open_job_card": {"ok": True, "title": "Data Analyst - Reporting", "apply_type": "company_site"},
+         "/open_job_card": {"ok": True, "title": "Healthcare Data Analyst - Reporting",
+                            "apply_type": "company_site"},
          "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
-        blackboard=_with_queue(("indeed:b2", "Data Analyst - Reporting", "Acme")),
-        applied=[_applied_row(None, "workday:JR9", "Data Analyst", "Acme")])
+        blackboard=_with_queue(("indeed:b2", "Healthcare Data Analyst - Reporting", "Acme")),
+        applied=[_applied_row(None, "workday:JR9", "Healthcare Data Analyst", "Acme")])
     try:
         r = client.post("/api/session_control/1/apply_step", json={"job_id": "indeed:b2"}).json()
     finally:

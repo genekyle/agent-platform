@@ -36,19 +36,30 @@ applied to "Data Analyst I", so it never reports `applied` — it reports `likel
 ladder surfaces to the operator instead of acting on. **A near-miss that silently skips a job the
 operator picked is worse than one that asks.**
 
-Pure except for the query itself: the matching lives in module functions with no DB in sight, so
-the interesting half is testable without a database.
+Pure except for the query itself: the comparison primitives now live in `job_dedup` (imported
+below, no DB in sight), so the interesting half is testable without a database — and so the same
+scoring answers both this question and "are these two rows one job?".
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+# The matching primitives live in `job_dedup` and are re-exported here, because "have I applied
+# to this?" and "are these one job?" are the same comparison asked for two purposes. They used to
+# be two implementations; running the older one over the real 355-row corpus on 2026-07-30 showed
+# it equating 'Financial Analyst II' with 'Financial Analyst III'. One implementation means a fix
+# lands in both questions at once — see the `job_dedup` module docstring for the failures it fixes.
+from job_dedup import (  # noqa: F401  (re-exported for callers and tests)
+    FUZZY_TITLE_THRESHOLD,
+    normalize_company,
+    requisition_ids,
+    title_similarity,
+)
 from models import ObservedJob
 
 #: `application_status` values that mean an application exists. `applied` is the only one the
@@ -60,72 +71,6 @@ APPLIED_STATUSES = frozenset({"applied", "submitted"})
 STATUS_APPLIED = "applied"                # certain: same job, or same requisition
 STATUS_LIKELY = "likely_applied"          # company + role words line up; ASK, do not act
 STATUS_NONE = "not_applied"               # nothing on file
-
-#: Words that carry no signal about WHICH role a posting is, so they must not prop up a fuzzy
-#: match. Without this, "Senior Analyst - Boston" and "Analyst - Boston" share half their words.
-_NOISE = frozenset({
-    "the", "and", "for", "with", "our", "you", "your", "job", "jobs", "role", "position",
-    "opening", "opportunity", "full", "time", "part", "remote", "hybrid", "onsite", "new",
-    "inc", "llc", "ltd", "corp", "corporation", "company", "group", "holdings", "health",
-})
-
-#: A requisition id as ATS platforms write them: Workday's JR#####, iCIMS's numeric job id in the
-#: path, Greenhouse's gh_jid. Matched case-insensitively against both records' urls and tenant ids.
-_REQ_PATTERNS = (
-    re.compile(r"\b(jr[-_]?\d{4,})\b", re.I),            # Workday: JR88822
-    re.compile(r"\bgh_jid=(\d{4,})\b", re.I),            # Greenhouse
-    re.compile(r"/jobs?/(\d{3,})(?:/|\b)", re.I),        # iCIMS: /jobs/3915/
-    re.compile(r"\breq[-_]?(\d{4,})\b", re.I),           # generic REQ-12345
-)
-
-
-def normalize_company(name: str) -> str:
-    """A company name reduced to its identifying words. 'Beth Israel Lahey Health' and
-    'Beth Israel Lahey Health, Inc.' are one employer; the suffixes are noise."""
-    words = _words(name)
-    return " ".join(sorted(words)) if words else ""
-
-
-def _words(text: str) -> set[str]:
-    """Alphanumeric words of the text, lowercased, minus noise and one/two-letter fragments.
-
-    Punctuation is stripped rather than normalised because the SAME title arrives spelled with an
-    en-dash on Indeed and a hyphen on Workday ('Healthcare Data Analyst – BIDMC' vs '- BIDMC'),
-    and a comparison that survives that is the only kind worth having.
-    """
-    raw = "".join(c if c.isalnum() else " " for c in (text or "").lower()).split()
-    return {w for w in raw if len(w) > 2 and w not in _NOISE}
-
-
-def title_similarity(a: str, b: str) -> float:
-    """How much of the SHORTER title's meaning the longer one covers, 0..1.
-
-    Asymmetric on purpose: 'Healthcare Data Analyst' inside 'Healthcare Data Analyst - BIDMC,
-    OBGYN Quality' should score high — the ATS routinely appends a department the results card
-    omits. Jaccard would punish that, and punishing it is how the same job reads as two.
-    """
-    wa, wb = _words(a), _words(b)
-    if not wa or not wb:
-        return 0.0
-    return len(wa & wb) / min(len(wa), len(wb))
-
-
-def requisition_ids(*texts: Optional[str]) -> set[str]:
-    """Every requisition id we can read out of these urls / ids, lowercased and punctuation-free
-    (so 'JR-88822' and 'jr88822' are one id)."""
-    out: set[str] = set()
-    for text in texts:
-        for pat in _REQ_PATTERNS:
-            for m in pat.finditer(str(text or "")):
-                out.add(re.sub(r"[-_]", "", m.group(1)).lower())
-    return out
-
-
-#: How similar two titles must be, at the same company, to be worth flagging. Tuned to catch a
-#: title the ATS decorated ('- BIDMC, OBGYN Quality') without collapsing seniority levels: 'Data
-#: Analyst I' vs 'Data Analyst II' shares its words but differs by one token the noise list keeps.
-FUZZY_TITLE_THRESHOLD = 0.75
-
 
 @dataclass
 class AppliedVerdict:
