@@ -383,3 +383,33 @@ def test_an_apply_link_to_nowhere_known_changes_nothing():
     d = aps.classify_landing(_FRONT_URL, _FRONT_TEXT,
                              apply_hrefs=["https://careers.example.com/apply/123"])
     assert d.platform == "company_site"
+
+
+# --- a correction has to be able to reopen a rung ------------------------------------------------
+def test_the_latest_verdict_settles_a_rung_not_the_best_one_ever_recorded():
+    """Live 2026-07-30: `account` was recorded ok while the browser was still on a careers-front job
+    posting. The guard that re-reads the page then recorded `account unknown` — and the ladder went
+    on reporting the prefix as walked, so the panel sat on the wrong step offering a sign-in for a
+    wall that was not on screen. `any OK ever` meant a rung could never be corrected."""
+    step = aps.ApplyStep(job_id="linkedin:1", title="Sr. Reporting Analyst",
+                         company="Ahold Delhaize USA")
+    for rung in ("open_pane", "verify_identity", "enter_apply", "classify", "account"):
+        step.record(rung, aps.OK, "walked")
+    assert step.next_rung() is None                      # prefix walked, as recorded
+
+    step.record("account", aps.UNKNOWN, "not at an account wall — the page is a job posting")
+    nxt = step.next_rung()
+    assert nxt is not None and nxt.id == "account", "a correction could not reopen the rung"
+
+    # …and re-settling it closes the prefix again, so a corrected step is not stuck open forever.
+    step.record("account", aps.OK, "signed in")
+    assert step.next_rung() is None
+
+
+def test_both_sides_of_the_correction_stay_on_the_record():
+    """Reopening must not be implemented by deleting history — the wrong answer is evidence too."""
+    step = aps.ApplyStep(job_id="linkedin:1", title="T", company="C")
+    step.record("account", aps.OK, "claimed")
+    step.record("account", aps.UNKNOWN, "corrected")
+    outcomes = [m.outcome for m in step.minis if m.rung == "account"]
+    assert outcomes == [aps.OK, aps.UNKNOWN]

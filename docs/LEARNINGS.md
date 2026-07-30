@@ -4551,3 +4551,44 @@ proposes, never merges). And the review queue happily offered to keep the blank 
 named one in, while `apply_merge` had no `company` backfill — that merge would have discarded
 "DEKA Research & Development" entirely. The named row now wins the direction, *and* company
 backfills as a pair with `company_norm`, because the operator can flip the direction by hand.
+
+---
+
+## 2026-07-30 (8) — "Our UI is on the wrong step"
+
+**The picture.** The panel showed `classify ok · account human_required ×2 · account ok` and a card
+reading *"Sign in — Ahold Delhaize USA (appvault) · The account exists and its login is stored"*.
+The browser's second tab was the careers-front JOB POSTING with **APPLY NOW never clicked**. No wall,
+nothing to sign into, and the panel said the account existed. Operator: *"it felt brainless — as in
+it would think we're just stepping through the recipe and nothing's happening."*
+
+**Two distinct faults, and only one of them is the display.**
+
+**1. The account rung offered a credential without looking at the page.** It went straight to
+`ensure_account` + "Sign in", asserting the wall rather than observing it. Fixed: it re-reads the
+live tab and, on a `job_posting` / `job_list`, records UNKNOWN, drops the handoff, and says what the
+way in actually is — the posting's own apply control. **A rung that assumes the screen it needs will
+always be confident and will sometimes be nowhere near it.**
+
+**2. THE ONE THAT PUT THE UI ON THE WRONG STEP, and it is three words of code:**
+
+    settled = {m.rung for m in self.minis if m.outcome in (OK, SKIPPED)}
+
+**Any OK ever recorded settled a rung permanently.** So the guard above fired, appended
+`account unknown` — and the ladder went on reporting the prefix as walked, because an older
+`account ok` was still in the list. `next_rung()` returned None, the step rendered as past its
+prefix, and the stale sign-in card stayed on screen. The correction had nowhere to land.
+
+Now the LATEST verdict per rung settles it. Every mini is still kept — both sides of every
+correction, PRINCIPLES §10 — what changed is which one the ladder READS. **A record that cannot be
+corrected is not a record of the world; it is a record of the first thing we believed about it.**
+And a self-correcting system needs its corrections to be able to *move* something, or they are only
+commentary.
+
+**What is still missing, named because the operator named it.** Both faults are the same absence
+wearing different clothes: **nothing observes continuously.** Each rung looks only when it happens
+to, and `awaiting` / `last_step` describe what the RECIPE did, never what the PAGE is. The general
+answer is a state observer that runs on every render and supplies one truth to the planner and the
+panel together — current URL, classified platform + kind + state, and an explicit MISMATCH when a
+rung's assumption and the observed state disagree — so drift is impossible to miss rather than
+merely unlikely. Two per-rung patches are not that, and should not be mistaken for it.

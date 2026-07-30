@@ -176,8 +176,23 @@ class ApplyStep:
         A rung is also considered walked when it was explicitly SKIPPED — `account` on a platform
         that needs no account is not an omission, and a ladder that kept asking for it would stall
         every Greenhouse application forever.
+
+        THE LATEST VERDICT WINS, NOT THE BEST ONE EVER RECORDED. This read `any OK ever`, so a rung
+        settled the first time anything said ok and could never be reopened by a later correction.
+        Live 2026-07-30: `account` was recorded ok while the browser was still on a careers-front
+        job posting; the guard that now re-reads the page recorded `account unknown` afterwards —
+        and the ladder went on reporting the prefix as walked, so the panel sat on the wrong step
+        showing a sign-in card for a wall that was not on screen. The operator's words: "our ui is
+        on the wrong step".
+
+        Every mini is still kept, both sides of every correction (PRINCIPLES §10) — what changes is
+        which one the LADDER reads. A record that cannot be corrected is not a record of the world,
+        it is a record of the first thing we believed about it.
         """
-        settled = {m.rung for m in self.minis if m.outcome in (OK, SKIPPED)}
+        latest: dict[str, str] = {}
+        for m in self.minis:
+            latest[m.rung] = m.outcome
+        settled = {rung for rung, outcome in latest.items() if outcome in (OK, SKIPPED)}
         for rung in PREFIX:
             if rung.id not in settled:
                 return rung
