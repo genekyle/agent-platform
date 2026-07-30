@@ -68,6 +68,7 @@ from schemas import (
 from settings import settings
 import browser_provisioning
 from deps import _artifacts_dir, _session_browser_url, _slugify, utcnow
+import job_dedup
 from observed_jobs import upsert_observed_jobs
 from migrations import migrate_schema
 from seed import (
@@ -1285,8 +1286,10 @@ async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
     new_count, dup_count = upsert_observed_jobs(db, raw.get("jobs", []),
                                                 body.platform, body.search_query)
     db.commit()
+    resolved = job_dedup.resolve_after_commit(db)
     return {"ok": True, "scraped": raw.get("count", 0), "new": new_count,
-            "duplicates": dup_count, "search_query": body.search_query}
+            "duplicates": dup_count, "search_query": body.search_query,
+            "canonical_resolved": resolved}
 
 
 _SENIORITY = {"senior", "sr", "junior", "jr", "lead", "principal", "staff", "associate",
@@ -2047,6 +2050,9 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
                                "moved": scroll_meta.get("moved"), "cards": len(cards)})
         new_c, _dup = upsert_observed_jobs(db, cards, platform, query)
         db.commit()
+        # Per page, so a long sweep's canonical view is current as it goes rather than only at the
+        # end — the operator watches this table while the sweep is still walking.
+        job_dedup.resolve_after_commit(db)
         pages_swept += 1
         total_found += len(cards)
         total_new += new_c

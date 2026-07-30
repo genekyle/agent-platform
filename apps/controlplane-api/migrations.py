@@ -74,6 +74,11 @@ def migrate_schema() -> None:
         ("training_sessions", "protected", "BOOLEAN NOT NULL DEFAULT false"),
         # training_captures AX faucet yield (v16)
         ("training_captures", "ax_candidate_count", "INTEGER NOT NULL DEFAULT 0"),
+        # observed_jobs → canonical Job link (v17). The sighting keeps its own identity and gains
+        # a pointer; nullable because scraping must never block on resolving what it just saw.
+        ("observed_jobs", "canonical_job_key", "VARCHAR(64)"),
+        # jobs: observations split from distinct sightings (v18) — see the Job model docstring.
+        ("jobs", "seen_count", "INTEGER NOT NULL DEFAULT 0"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:

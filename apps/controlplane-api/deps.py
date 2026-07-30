@@ -15,11 +15,25 @@ from db import get_db  # re-exported so routers can do `from deps import get_db`
 from models import TrainingSession
 from settings import settings
 
-__all__ = ["get_db", "utcnow", "_artifacts_dir", "_session_browser_url", "_slugify"]
+__all__ = ["get_db", "utcnow", "as_aware", "_artifacts_dir", "_session_browser_url", "_slugify"]
 
 
 def utcnow():
     return datetime.now(timezone.utc)
+
+
+def as_aware(value):
+    """A datetime that is safe to compare, whatever backend handed it over.
+
+    Postgres round-trips `DateTime(timezone=True)` as tz-aware; SQLite — which the unit tests run
+    on — hands back a naive value for the same column. Sorting a list that contains both raises
+    `TypeError`, and it raises it at whichever call site happens to mix a freshly-created row with
+    a reloaded one, which is a maddening way to find out. Anything comparing stored timestamps
+    goes through here first; naive values are read as UTC, which is what they are.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
 
 
 def _slugify(value: str) -> str:

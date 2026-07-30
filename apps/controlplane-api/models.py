@@ -458,3 +458,195 @@ class ObservedJob(Base):
     # Finer cross-site routing: indeed_quick_apply | workday | greenhouse | lever | icims |
     # ... | company_site. Drives which per-platform apply recipe runs (apply is NOT siloed).
     application_platform: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+    # The canonical `Job` this sighting resolves to. Nullable because a sighting exists the moment
+    # a card is scraped, and resolution is a separate (cheap, later) step — never a scrape-time
+    # blocker. See `job_dedup.py` and the `Job` docstring below.
+    canonical_job_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+
+class Job(Base):
+    """One real job in the world — the canonical entity, independent of where we met it.
+
+    `ObservedJob` is a SIGHTING: "a card with this id appeared on Indeed for query X at time T".
+    That is not the same thing as a job, and conflating the two is what breaks every question the
+    operator actually wants answered:
+
+      * Indeed's `jk` rotates per search session, so one posting yields several sightings.
+      * The same requisition seen on LinkedIn is a different row entirely — measured 2026-07-30:
+        Wellington Management's "Financial Reporting Analyst, US Funds" was on file twice, once
+        per platform, with no way to tell.
+      * "Which companies respond most?" is a question about jobs and applications, and cannot be
+        asked of a table whose grain is "times I scrolled past something".
+
+    So: many `ObservedJob` → one `Job` → at most one `Application` (with its own event timeline).
+
+    --------------------------------------------------------------------------------------
+    `job_key` is a PROMISE to other domains
+    --------------------------------------------------------------------------------------
+    This key is what Gmail, trackers and anything else will join on, so it must never change and
+    never 404. It is minted deterministically from the first sighting's id (so a re-run of the
+    backfill is idempotent) and, when two jobs turn out to be one, the loser is NOT deleted — it
+    keeps its row and points at the winner via `merged_into_key`. A reference saved by another
+    system last month still resolves after a merge. Resolve through the tombstone, never around it.
+    """
+    __tablename__ = "jobs"
+
+    job_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Set when this job was folded into another; the row survives so old references still resolve.
+    merged_into_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    company: Mapped[str] = mapped_column(String(300), default="", index=True)
+    # Company reduced to its identifying words (see job_dedup.normalize_company) — the grouping key
+    # for dedup, stored so the DB can narrow candidates instead of loading the table.
+    company_norm: Mapped[str] = mapped_column(String(300), default="", index=True)
+    title: Mapped[str] = mapped_column(String(400), default="")
+    location: Mapped[str] = mapped_column(String(300), default="")
+    canonical_url: Mapped[str] = mapped_column(String(1200), default="")
+
+    # Where an application would actually be filed (workday | greenhouse | icims | lever |
+    # indeed_quick_apply | company_site). Distinct from the platforms we SAW it on.
+    ats: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+    # The ATS requisition id, once we have landed on the ATS and can read one. Measured
+    # 2026-07-30: only 2 of 355 sightings carried a parseable req id, because we store the Indeed
+    # url, not the url we end up on. This column is where the apply epilogue writes it back.
+    requisition_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+
+    salary: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # indeed_pane | ats | manual — a JD read off the ATS beats one scraped from a results pane.
+    description_source: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
+    # Every platform this job has been sighted on, e.g. ["indeed", "linkedin"].
+    source_platforms: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Two different numbers, kept apart because conflating them makes both meaningless:
+    #   sighting_count — how many DISTINCT sighting rows resolve here (2 = seen on two boards)
+    #   seen_count     — how many times it has been observed in total across every search
+    # The second is the interesting one for triage: a posting still surfacing after six sweeps is
+    # still open, which is not something the first number can tell you. Both are recomputed from
+    # the sightings rather than incremented, so they are self-healing after any merge.
+    sighting_count: Mapped[int] = mapped_column(Integer, default=0)
+    seen_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # new | shortlisted | applied | skipped | closed — the operator's triage state for the JOB.
+    # Distinct from Application.status, which tracks what the EMPLOYER has done since.
+    status: Mapped[str] = mapped_column(String(30), default="new", index=True)
+    notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class JobMatch(Base):
+    """A proposed or decided "these two jobs are one" — the dedup review queue AND its audit log.
+
+    Certain matches (same id, same requisition) are merged on sight and land here already decided,
+    so there is always a record of WHY two rows became one. Uncertain matches land here `pending`
+    and wait for the operator, because a wrong merge silently hides a job they wanted.
+
+    That caution is measured, not hypothetical. Running the existing fuzzy matcher over the real
+    355-row corpus on 2026-07-30 produced 31 above-threshold pairs of which only ~3 were true
+    duplicates — it happily equated "Software Engineer" with "Senior Data Integration Software
+    Engineer" and "Financial Analyst III" with "Financial Analyst II". `job_dedup.py` fixes those
+    specific failures, but the shape of the error (a generic title is a subset of every richer one
+    at the same employer) is permanent, so the weak tier stays advisory forever.
+
+    Rejections are kept, not deleted: a pair the operator has already said "different" about must
+    never be proposed again.
+    """
+    __tablename__ = "job_matches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # `kept_key` survives the merge; `folded_key` is the one that gets a tombstone. Ordered at
+    # proposal time (oldest-first) so the same pair never enqueues twice under two orderings.
+    kept_key: Mapped[str] = mapped_column(String(64), index=True)
+    folded_key: Mapped[str] = mapped_column(String(64), index=True)
+
+    # exact | requisition | identical_title | fuzzy_title — descending trustworthiness.
+    tier: Mapped[str] = mapped_column(String(30), index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    # pending | merged | rejected
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    decided_by: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # auto | human
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Application(Base):
+    """My application to one job, and what has happened to it since.
+
+    Split from the job on purpose. `Job.status` is what *I* decided (shortlisted, skipped);
+    `Application.status` is what the *employer* has done (acknowledged, rejected, interviewing),
+    and only the second one can answer "which companies actually respond".
+
+    `status` is DERIVED — it is the furthest-along state implied by the events, recomputed on every
+    write (see `application_events.reduce_status`). The events are the truth; this column exists so
+    the job table can be filtered and sorted without replaying a timeline per row.
+    """
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    job_key: Mapped[str] = mapped_column(String(64), index=True, unique=True)
+
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    # Where the application was launched FROM (indeed | linkedin | direct) — the referral path,
+    # which is itself a thing worth measuring: do Indeed applies get answered less than direct ones?
+    via_platform: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+    ats: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+
+    # applied | acknowledged | responded | screening | interview | offer | rejected | withdrawn.
+    # Derived from events; see the class docstring.
+    status: Mapped[str] = mapped_column(String(30), default="applied", index=True)
+    last_event_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    events: Mapped[list["ApplicationEvent"]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="ApplicationEvent.occurred_at",
+    )
+
+
+class ApplicationEvent(Base):
+    """One thing that happened to an application, and how we know.
+
+    The operator's answer on 2026-07-30, choosing manual marking to start: *"start with the manual
+    but know that this will eventually be polled from gmail, the ATS status page itself, etc."*
+    That future is designed in here rather than deferred — `source` names WHO observed the event
+    and `evidence` carries whatever that observer can prove it with:
+
+        human       {}                                     — the operator ticked it in the UI
+        gmail       {message_id, from_address, subject}    — a matched inbox message
+        ats_portal  {url, status_text, captured_at}        — a candidate-portal status read
+        agent       {run_id, capture_filename}             — the apply epilogue, at submit time
+
+    Adding those observers later adds rows, not columns. Nothing about this table changes when
+    Gmail starts writing to it — which is the entire point of putting the timeline here now.
+
+    Events are append-only and never overwritten, so a rejection arriving after an interview
+    invite leaves both on the record. `Application.status` is a projection of this list.
+    """
+    __tablename__ = "application_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), index=True)
+
+    # When it happened in the WORLD (an email's date), which is not when we recorded it.
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    # applied | confirmation | viewed | recruiter_contact | screening_invite | interview_invite |
+    # assessment | rejection | offer | withdrawn | note
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    # human | gmail | ats_portal | agent — parallels label provenance elsewhere in the system.
+    source: Mapped[str] = mapped_column(String(20), default="human", index=True)
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    application: Mapped["Application"] = relationship(back_populates="events")
