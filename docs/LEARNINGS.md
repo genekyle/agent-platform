@@ -4439,3 +4439,38 @@ dance, so the identity has to be present in the SAME profile that is signing in.
 `linkedin_jobs` has `profile: None` (its own jar) while `gmail` has `profile: "google"`, and it is
 the open question for the provider model: a domain whose auth IS a provider may need to run in the
 PROVIDER's profile rather than its own.
+
+---
+
+## 2026-07-30 (7) — The passkey is not the end of the sign-in
+
+**What "acted weird" actually was.** After the operator completed the passkey, the Google popup
+closed and LinkedIn stayed logged out — nothing errored, and the fingerprint had plainly worked. Two
+things were going on, and only one of them was ours:
+
+* **The passkey leg does not finish the sign-in.** Completing the biometric gives GOOGLE a session;
+  it does not hand a credential to LinkedIn. Google Identity then returns to an ACCOUNT CHOOSER
+  (`accounts.google.com/gsi/select`) which still needs a click before the credential is posted back
+  to the host page. A person reads "Verifying it's you… ✓" as done; the flow is not done.
+* **I disturbed it.** Mid-handshake I called `/screenshot` and `/page_content` against the popup
+  target — both bring a target to front — while the flow was waiting on that window. Probing an
+  identity provider's popup while it is mid-flight is not a free read.
+
+**Second run, hands off the popup, and it completed on the first try:**
+
+    trusted press on the GIS iframe (re-measured: 33,397 420x44) -> css_point (243,419) -> ok
+    a Google window opens — straight to gsi/select this time, because the passkey left a session
+    sso_step: google_account_chooser -> closed
+    LinkedIn tab title: "LinkedIn Job Search: …" -> "Jobs | LinkedIn"
+    auth_state.logged_in: true ; ladder: authenticated HELD
+
+**The rule that falls out:** an SSO sign-in has legs after the human's gesture, and the agent owns
+those legs — the chooser click is exactly the kind of "click, never a credential" step
+`login_action`/`sso_step` exist for. The handoff to the operator is the GESTURE (passkey, 2FA,
+captcha), not the whole provider flow. Handing over the rest and walking away leaves a session that
+authenticated with Google and is still logged out of the site it was signing into.
+
+**And a probe-hygiene rule:** while an identity provider's window is mid-handshake, read NOTHING
+that fronts a target. `/ax_scan` is fine; `/screenshot` and `/page_content` are not. Wait for the
+popup to close, then verify against the HOST tab — which is the only place the answer was ever
+going to be.
