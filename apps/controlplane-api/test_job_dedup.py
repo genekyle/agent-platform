@@ -29,9 +29,10 @@ def db():
     session.close()
 
 
-def _job(db, key, title, company, *, platform="indeed", url="", req=None, seen=T0, location=""):
+def _job(db, key, title, company, *, platform="indeed", url="", req=None, seen=T0, location="",
+         salary=None):
     row = Job(job_key=key, title=title, company=company,
-              company_norm=jd.normalize_company(company), location=location,
+              company_norm=jd.normalize_company(company), location=location, salary=salary,
               canonical_url=url, requisition_id=req, source_platforms=[platform],
               sighting_count=1, first_seen_at=seen, last_seen_at=seen)
     db.add(row)
@@ -39,9 +40,11 @@ def _job(db, key, title, company, *, platform="indeed", url="", req=None, seen=T
     return row
 
 
-def _sighting(db, job_id, title, company, *, platform="indeed", url="", seen=T0, status="seen"):
+def _sighting(db, job_id, title, company, *, platform="indeed", url="", seen=T0, status="seen",
+              location="", salary=None):
     row = ObservedJob(job_id=job_id, platform=platform, external_id=job_id.split(":", 1)[-1],
-                      title=title, company=company, url=url, location="", application_status=status,
+                      title=title, company=company, url=url, location=location, salary=salary,
+                      application_status=status,
                       seen_count=1, search_queries=[], capture_filenames=[],
                       first_seen_at=seen, last_seen_at=seen)
     db.add(row)
@@ -275,3 +278,212 @@ def test_two_levels_of_the_same_role_stay_two_jobs(db):
     jd.resolve_all(db)
     assert db.query(Job).count() == 2
     assert jd.propose_matches(db) == []
+
+
+# ==============================================================================================
+# One board serving one requisition several times — session 24, page 1, measured
+# ==============================================================================================
+#
+# Both groups below are verbatim from the live table on 2026-07-30, and they are the pair that
+# decides where the auto-merge line goes. Every field agrees in the first and exactly one field
+# disagrees in the second, so a matcher that gets one right by being loose gets the other wrong.
+
+#: Indeed served ONE Bristol County Savings Bank requisition four times inside a single result
+#: page, under four ids. A fifth sighting of it was already on file from five days earlier.
+BRISTOL = dict(title="Human Resources Data Analyst", company="BRISTOL COUNTY SAVINGS BANK",
+               location="Taunton, MA 02780", salary="From $60,000 a year")
+BRISTOL_IDS = ("67a36d0962578890", "3eadcd066f720f0d", "987168995fca71d9", "1c7c998bd1c31dad")
+
+#: Two REAL postings, same title, same employer, same pay band, different office. Nothing about
+#: these may ever be folded together.
+LIBERTY = dict(title="Principal SAP PaPM Configuration Engineer", company="Liberty Mutual",
+               salary="$120,000 - $225,000 a year")
+
+
+def test_the_bristol_four_merge_to_one_job(db):
+    """Four Job rows, every field identical, one engine → one job and three tombstones."""
+    for i, ext in enumerate(BRISTOL_IDS):
+        _job(db, f"job_{ext}", BRISTOL["title"], BRISTOL["company"],
+             location=BRISTOL["location"], salary=BRISTOL["salary"], seen=T0 + timedelta(minutes=i))
+    db.commit()
+
+    assert jd.scan_and_record(db) == {"merged": 3, "queued": 0}
+
+    live = [j for j in db.query(Job).all() if j.merged_into_key is None]
+    assert len(live) == 1
+    # Tombstoned, never deleted: every id the operator may have saved still resolves to the winner.
+    for ext in BRISTOL_IDS:
+        assert jd.resolve_key(db, f"job_{ext}") == live[0].job_key
+    assert db.query(JobMatch).filter_by(tier="same_posting").count() == 3
+
+
+def test_the_bristol_four_carry_their_sightings_onto_the_one_job(db):
+    """The same four arriving as SIGHTINGS: one job, four sightings recorded against it."""
+    for i, ext in enumerate(BRISTOL_IDS):
+        _sighting(db, f"indeed:{ext}", BRISTOL["title"], BRISTOL["company"],
+                  location=BRISTOL["location"], salary=BRISTOL["salary"],
+                  seen=T0 + timedelta(minutes=i))
+    db.commit()
+    jd.resolve_all(db)
+
+    keys = {s.canonical_job_key for s in db.query(ObservedJob).all()}
+    assert len(keys) == 1, "four cards for one requisition became four jobs"
+    job = db.get(Job, keys.pop())
+    assert job.sighting_count == 4
+    assert [j for j in db.query(Job).all() if j.merged_into_key is None] == [job]
+
+
+def test_the_same_title_in_two_cities_is_two_jobs(db):
+    """Liberty Mutual posts this role in Boston AND Portsmouth. Merging them loses a real job.
+
+    Not queued either: a stated address that positively disagrees is not a near-miss awaiting a
+    human, it is the answer.
+    """
+    _job(db, "boston", LIBERTY["title"], LIBERTY["company"],
+         location="Hybrid work in Boston, MA", salary=LIBERTY["salary"])
+    _job(db, "portsmouth", LIBERTY["title"], LIBERTY["company"],
+         location="Hybrid work in Portsmouth, NH", salary=LIBERTY["salary"],
+         seen=T0 + timedelta(days=1))
+    db.commit()
+
+    assert jd.scan_and_record(db) == {"merged": 0, "queued": 0}
+    assert db.get(Job, "portsmouth").merged_into_key is None
+    assert db.get(Job, "boston").merged_into_key is None
+
+
+def test_the_liberty_pair_stays_two_jobs_when_it_arrives_as_sightings(db):
+    """The path that actually collapsed them in the live table: attach-on-scrape, location-blind."""
+    _sighting(db, "indeed:b6fe51544f2909ef", LIBERTY["title"], LIBERTY["company"],
+              location="Hybrid work in Boston, MA", salary=LIBERTY["salary"])
+    _sighting(db, "indeed:de43b5246ab451d8", LIBERTY["title"], LIBERTY["company"],
+              location="Hybrid work in Portsmouth, NH", salary=LIBERTY["salary"],
+              seen=T0 + timedelta(days=1))
+    db.commit()
+    jd.resolve_all(db)
+
+    keys = {s.canonical_job_key for s in db.query(ObservedJob).all()}
+    assert len(keys) == 2, "two cities collapsed into one job on the way in"
+
+
+# --- what 'same place' means ------------------------------------------------------------------
+
+@pytest.mark.parametrize("a,b", [
+    ("Boston, MA", "Hybrid work in Boston, MA"),          # Joslin Diabetes Center, measured
+    ("Burlington, MA", "Burlington, MA (Hybrid)"),        # Keurig Dr Pepper, measured
+    ("Taunton, MA 02780", "Taunton, MA"),                 # a zip one scrape carried
+])
+def test_a_working_arrangement_is_not_a_different_address(a, b):
+    assert jd.normalize_location(a) == jd.normalize_location(b)
+    assert not jd.locations_conflict(a, b)
+    assert jd.locations_agree(a, b)
+
+
+@pytest.mark.parametrize("a,b", [
+    ("Hybrid work in Boston, MA", "Hybrid work in Portsmouth, NH"),   # Liberty Mutual
+    ("Boston, MA", "Needham, MA"),                                    # Wellington Management
+    ("Boston, MA (Remote)", "Providence, RI (Remote)"),               # Husch Blackwell
+    ("Hybrid work in Manchester, NH", "Newington, NH"),               # Northwestern Mutual
+])
+def test_the_cross_city_pairs_the_corpus_had_already_collapsed(a, b):
+    """All four were one row apiece in the live table on 2026-07-30. All four are two jobs."""
+    assert jd.locations_conflict(a, b)
+    assert not jd.locations_agree(a, b)
+
+
+def test_an_unscraped_location_is_unknown_and_not_elsewhere(db):
+    """DEKA Research's back-end engineer is on file twice, once with no location at all."""
+    assert not jd.locations_conflict("", "Manchester, NH 03101")
+    assert not jd.locations_agree("", "Manchester, NH 03101")   # ...but it corroborates nothing
+
+
+# --- what the auto tier still refuses ----------------------------------------------------------
+
+def test_two_boards_agreeing_is_proposed_rather_than_merged(db):
+    """`same_posting` is about ONE board re-rendering its own card. Two boards is a wider claim."""
+    _job(db, "a", **BRISTOL)
+    _job(db, "b", platform="linkedin", seen=T0 + timedelta(days=1), **BRISTOL)
+    db.commit()
+    assert jd.scan_and_record(db) == {"merged": 0, "queued": 1}
+    assert db.query(JobMatch).one().tier == "identical_title"
+
+
+def test_pay_that_disagrees_blocks_the_merge(db):
+    _job(db, "a", BRISTOL["title"], BRISTOL["company"],
+         location=BRISTOL["location"], salary="From $60,000 a year")
+    _job(db, "b", BRISTOL["title"], BRISTOL["company"],
+         location=BRISTOL["location"], salary="From $85,000 a year", seen=T0 + timedelta(days=1))
+    db.commit()
+    assert jd.scan_and_record(db) == {"merged": 0, "queued": 0}
+
+
+def test_both_cards_quoting_no_pay_is_not_a_disagreement(db):
+    """Sonsoft's 'Informatica B2B' appeared four times in Springfield with pay on none of them."""
+    for i in range(3):
+        _job(db, f"s{i}", "Informatica B2B", "Sonsoft Inc", location="Springfield, MA",
+             seen=T0 + timedelta(minutes=i))
+    db.commit()
+    assert jd.scan_and_record(db) == {"merged": 2, "queued": 0}
+
+
+def test_two_grades_at_one_address_are_two_jobs(db):
+    """Elbit America, Merrimack NH — 'Financial Analyst II' and 'III', correctly on file as two."""
+    _job(db, "ii", "Financial Analyst II", "Elbit America", location="Merrimack, NH")
+    _job(db, "iii", "Financial Analyst III", "Elbit America", location="Merrimack, NH",
+         seen=T0 + timedelta(days=1))
+    db.commit()
+    assert jd.scan_and_record(db) == {"merged": 0, "queued": 0}
+
+
+# --- repairing what the location-blind rule already did ----------------------------------------
+
+def test_the_repair_splits_a_job_holding_two_cities(db):
+    job = _job(db, "lm", LIBERTY["title"], LIBERTY["company"],
+               location="Hybrid work in Boston, MA", salary=LIBERTY["salary"])
+    for ext, loc in (("b6fe51544f2909ef", "Hybrid work in Boston, MA"),
+                     ("de43b5246ab451d8", "Hybrid work in Portsmouth, NH")):
+        s = _sighting(db, f"indeed:{ext}", LIBERTY["title"], LIBERTY["company"],
+                      location=loc, salary=LIBERTY["salary"])
+        s.canonical_job_key = job.job_key
+    db.commit()
+
+    assert len(jd.split_conflicting_sightings(db)) == 1
+    keys = {s.canonical_job_key for s in db.query(ObservedJob).all()}
+    assert len(keys) == 2
+    assert db.get(Job, "lm").sighting_count == 1        # recounted, not left claiming two
+
+
+def test_the_repair_never_undoes_a_merge_a_human_approved(db):
+    """DEKA Research, measured: the operator merged a blank-employer row by hand. The first cut of
+    this repair offered to take that back, because a merged job legitimately holds sightings whose
+    fields differ from the row that survived."""
+    kept = _job(db, "kept", "Software Engineer - Back-End", "DEKA Research & Development",
+                location="Manchester, NH 03101")
+    for ext, loc in (("aa", "Manchester, NH 03101"), ("bb", "Nashua, NH")):
+        s = _sighting(db, f"indeed:{ext}", "Software Engineer - Back-End", "DEKA Research",
+                      location=loc)
+        s.canonical_job_key = kept.job_key
+    # The tombstone is the whole signal: `indeed:bb` once had a job of its own, and a recorded
+    # merge folded it into `kept`. Without this row the repair would rightly split the pair.
+    db.add(Job(job_key=jd.mint_job_key("indeed:bb"), title="Software Engineer - Back-End",
+               company="", company_norm="", merged_into_key=kept.job_key,
+               first_seen_at=T0, last_seen_at=T0))
+    db.add(JobMatch(kept_key=kept.job_key, folded_key=jd.mint_job_key("indeed:bb"),
+                    tier="blank_company", score=1.0, evidence=["identical title"],
+                    status="merged", decided_by="human"))
+    db.commit()
+
+    assert jd.split_conflicting_sightings(db, dry_run=True) == []
+    stray = db.query(ObservedJob).filter_by(job_id="indeed:bb").one()
+    assert stray.canonical_job_key == kept.job_key
+
+
+def test_the_repair_is_idempotent(db):
+    job = _job(db, "lm", LIBERTY["title"], LIBERTY["company"],
+               location="Hybrid work in Boston, MA")
+    for ext, loc in (("aa", "Hybrid work in Boston, MA"), ("bb", "Hybrid work in Portsmouth, NH")):
+        s = _sighting(db, f"indeed:{ext}", LIBERTY["title"], LIBERTY["company"], location=loc)
+        s.canonical_job_key = job.job_key
+    db.commit()
+
+    assert len(jd.split_conflicting_sightings(db)) == 1
+    assert jd.split_conflicting_sightings(db) == []
