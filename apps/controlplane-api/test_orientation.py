@@ -92,10 +92,12 @@ def test_an_unreadable_page_never_fires_the_catch():
 
 # --- the way out ---------------------------------------------------------------------------------
 def test_the_plan_off_a_posting_is_press_apply_then_reorient():
+    """And both are DRIVEABLE — the cockpit renders them as buttons, so "we have seen this before"
+    has to mean an action the operator can press, not a sentence describing one."""
     plan = _front().plan
-    assert len(plan) == 2
-    assert "apply control" in plan[0]["action"]
-    assert "re-orient" in plan[1]["action"]
+    assert [st["id"] for st in plan] == [om.PRESS_APPLY, om.REORIENT]
+    assert all(st["driveable"] for st in plan)
+    assert plan[0]["label"] == "Click Apply on this page"
 
 
 def test_the_plan_off_an_account_gate_is_the_account_rung():
@@ -103,7 +105,7 @@ def test_the_plan_off_an_account_gate_is_the_account_rung():
     o = om.orient("https://aholddelhaizeapply.appvault.com/external/home", gate, rung="account")
     assert o.kind == al.ACCOUNT_GATE
     assert o.mismatch is None
-    assert "account rung" in o.plan[0]["action"]
+    assert o.plan[0]["id"] == om.WORK_RUNG
 
 
 def test_an_undriven_form_plans_an_attended_drive_not_an_autofill():
@@ -111,9 +113,34 @@ def test_an_undriven_form_plans_an_attended_drive_not_an_autofill():
                  "upload Submit application required field")
     o = om.orient("https://apply.example.com/form", form_text, rung="submit", known_recipe=False)
     assert o.kind == al.APPLICATION_FORM
-    assert "attended" in o.plan[0]["action"]
+    assert "attended" in o.plan[0]["label"].lower()
 
 
 def test_nothing_recognised_plans_a_screenshot_and_a_human():
+    """…and offers NO button. An unrecognised page is exactly where a driveable action would be a
+    guess wearing a control, so this one is named and left to the operator."""
     o = om.orient("https://x.example.com/", "", rung="account")
-    assert "escalate" in o.plan[0]["action"]
+    assert o.plan[0]["id"] == om.ESCALATE
+    assert o.plan[0]["driveable"] is False
+
+
+# --- the prediction, in the words a person would use ---------------------------------------------
+def test_the_headline_reads_like_an_answer_not_an_identifier():
+    """Operator, 2026-07-30: the card should say "job landing page". `appvault_job_posting` is the
+    corpus's name for it, not an answer to "where are we" — so both are carried, and the human one
+    is what the card leads with."""
+    o = _front()
+    assert o.headline == "Job landing page · appvault"
+    assert o.state == "appvault_job_posting"          # the machine's name, still there
+
+
+def test_an_unrecognised_owner_says_so_plainly():
+    o = om.orient("https://careers.example.com/jobs/123",
+                  "Responsibilities Qualifications Apply now Job description", rung="classify")
+    assert o.headline == "Job landing page · employer's own site"
+
+
+def test_a_page_nobody_recognises_gets_no_confident_headline():
+    o = om.orient("https://x.example.com/", "", rung="classify")
+    assert o.headline in ("Unrecognised page", "Unreadable page")
+    assert o.confidence == "low"

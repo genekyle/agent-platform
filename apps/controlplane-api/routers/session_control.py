@@ -40,6 +40,8 @@ from starlette.concurrency import run_in_threadpool
 import account_forms
 import applied_index
 import apply_fields
+from urllib.parse import urlparse
+
 import apply_landing as al
 import apply_steps as aps
 import google_recipe
@@ -603,6 +605,93 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str) -> Optiona
 #: Platforms with an end-to-end recipe, for the observer's plan wording. Mirrors
 #: apply_steps.DRIVEN_PLATFORMS without importing the executor's policy into a read path.
 DRIVEN_PLATFORMS_VIEW = frozenset({"indeed", "workday", "greenhouse"})
+
+
+class OrientActionBody(BaseModel):
+    action_id: str
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/orient_action")
+async def orient_action(session_id: int, body: OrientActionBody,
+                        db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Take one of the observer's OFFERED actions — the card's buttons.
+
+    Operator, 2026-07-30: *"the observer should give us options as to hit the apply now button on
+    the job landing page"*. Orientation already works out where we are and what one or two moves
+    lead out; this is the half that lets the operator take the move without leaving the panel.
+
+    It re-orients FIRST and refuses an action the current page does not offer. That is the whole
+    safety property: the buttons were rendered from an observation that is now some seconds old,
+    and a third-party landing can move underneath it (a redirect, a session timeout, an interstitial
+    the employer serves once). Acting on a stale plan is precisely the drift this module exists to
+    end, so the plan is recomputed and the request is checked against it rather than trusted.
+    """
+    _check_initiator(body.initiator)
+    import orientation as om
+
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    before = await _orient_now(bb, obs, browser_url)
+    if not before:
+        raise HTTPException(status_code=409,
+                            detail="No application tab is open, so there is nothing to orient in.")
+    offered = {st["id"] for st in (before.get("plan") or []) if st.get("driveable")}
+    if body.action_id not in offered:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{body.action_id!r} is not on offer here. The page reads as a "
+                    f"{(before.get('kind') or 'unknown').replace('_', ' ')} and what it offers is: "
+                    f"{', '.join(sorted(offered)) or 'nothing driveable — this one is yours'}."))
+
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    style = xs.pick_style()
+    detail = ""
+
+    if body.action_id == om.REORIENT:
+        detail = (f"Re-read the page: {(before.get('state') or 'unknown').replace('_', ' ')}"
+                  f" ({before.get('confidence')} confidence).")
+
+    elif body.action_id == om.PRESS_APPLY:
+        # ADDRESS THE CONTROL BY WHERE IT GOES, not by what it is called. A careers front's apply
+        # control is the link whose href is the ATS destination — that href is already the
+        # `signpost` witness, so the thing that identified the platform also locates the button.
+        # Names vary per employer ("APPLY NOW", "Apply", "Start your application"); the destination
+        # does not.
+        hrefs = [w.get("detail", "") for w in (before.get("witnesses") or [])
+                 if w.get("source") == "signpost"]
+        content = await _capture_post("/page_content",
+                                      {"browser_url": browser_url,
+                                       "tab_url": before.get("url") or ""}, timeout=12.0)
+        target = (content.get("apply_hrefs") or [""])[0]
+        if not target:
+            raise HTTPException(status_code=409,
+                                detail="The page reads as a posting but exposes no apply link to "
+                                       "press. Look at it — this one is yours.")
+        host = (urlparse(target).hostname or "")
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_url": before.get("url") or "",
+            "action_id": "click", "target_bbox": {},
+            "selector": f'a[href*="{host}"]', "driver": "humanized"})
+        await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+        if res.get("outcome") not in _ACTED_OK:
+            detail = (f"Could not press the apply link ({res.get('outcome') or 'no outcome'}). "
+                      f"Nothing moved — the page is still a posting.")
+            if step is not None:
+                step.record("orient", aps.FAILED, detail, initiator=body.initiator)
+        else:
+            detail = f"Pressed the apply link → {host}."
+            if step is not None:
+                step.record("orient", aps.OK, detail, initiator=body.initiator)
+
+    # RE-OBSERVE AFTER ACTING, ALWAYS. The action's own `ok` means CDP dispatched it; where we
+    # ended up is a separate question, and it is the only one worth reporting.
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=True, pace=style,
+                                      detail=detail)
 
 
 # --- the read model ------------------------------------------------------------------------------

@@ -72,19 +72,51 @@ class Witness:
                 "weight": self.weight}
 
 
+#: WHAT TO CALL IT ON SCREEN. The operator asked to see "job landing page", not
+#: `appvault_job_posting`: the card answers "where are we" to a person, and a state id is an
+#: identifier for the corpus, not an answer to that question. Both are kept — `state` stays the
+#: machine's, `headline` is the human's.
+KIND_LABELS: dict[str, str] = {
+    al.JOB_POSTING: "Job landing page",
+    al.JOB_LIST: "Job listing page",
+    al.ACCOUNT_GATE: "Account / sign-in wall",
+    al.APPLICATION_FORM: "Application form",
+    al.CONFIRMATION: "Submitted — confirmation page",
+    al.GONE: "Posting is gone",
+    al.UNREADABLE: "Unreadable page",
+    al.UNKNOWN: "Unrecognised page",
+}
+
+
+def headline_for(kind: str, platform: str) -> str:
+    """"Job landing page · AppVault" — the prediction, in the words a person would use."""
+    label = KIND_LABELS.get(kind, "Unrecognised page")
+    # NO OWNER ON A PAGE WE COULD NOT READ. `company_site` is the URL witness shrugging, and
+    # appending "· employer's own site" to "Unreadable page" dresses two non-answers as one
+    # finding. When the kind is unknown the headline says only that.
+    if kind in (al.UNKNOWN, al.UNREADABLE):
+        return label
+    if platform and platform not in ("company_site", "unknown", ""):
+        return f"{label} · {platform}"
+    if platform == "company_site":
+        return f"{label} · employer's own site"
+    return label
+
+
 @dataclass
 class Orientation:
     platform: str                        # best fused answer for WHOSE page ("" = nobody knows)
     kind: str                            # best fused answer for WHAT KIND of page
     state: str                           # platform + kind composed (apply_landing.landing_state)
     confidence: str                      # high | medium | low
+    headline: str = ""                   # the prediction in plain English, for the card
     witnesses: list[Witness] = field(default_factory=list)
     mismatch: Optional[dict[str, Any]] = None   # {rung, expected, observed, detail} when they disagree
     plan: list[dict[str, str]] = field(default_factory=list)   # 1-2 steps, each {action, why}
 
     def as_dict(self) -> dict[str, Any]:
         return {"platform": self.platform, "kind": self.kind, "state": self.state,
-                "confidence": self.confidence,
+                "confidence": self.confidence, "headline": self.headline,
                 "witnesses": [w.as_dict() for w in self.witnesses],
                 "mismatch": self.mismatch, "plan": self.plan}
 
@@ -140,34 +172,59 @@ def _fuse(witnesses: list[Witness], *, prefer_specific: bool = True) -> tuple[st
     return winner, "low"
 
 
-def _short_plan(kind: str, platform: str, rung: Optional[str], known_recipe: bool) -> list[dict[str, str]]:
-    """The 1–2 step way out. Small on purpose — the operator's words: 'it's not that deep to back
-    track or just get your bearings.' Anything longer than two steps is the planner's job proper,
-    not orientation's."""
+#: The actions orientation can actually DRIVE, as opposed to advise. An action is offered as a
+#: BUTTON only when we know how to perform it here — "if we've ever seen it before then we would
+#: have actions" (operator, 2026-07-30). Everything else is still named, but as guidance, because a
+#: button that does nothing is worse than a sentence that admits it.
+PRESS_APPLY = "press_apply"
+REORIENT = "reorient"
+WORK_RUNG = "work_rung"
+OPEN_JOB = "open_job"
+ESCALATE = "escalate"
+
+#: Which of those the executor implements. Kept explicit and SHORT for the same reason
+#: `apply_steps.DRIVEN_PLATFORMS` is: recognising a situation is not the same as being able to act
+#: in it, and offering a control we cannot honour is how a panel starts lying again.
+DRIVEABLE = frozenset({PRESS_APPLY, REORIENT})
+
+
+def _step(action_id: str, label: str, why: str) -> dict[str, Any]:
+    return {"id": action_id, "label": label, "why": why,
+            "driveable": action_id in DRIVEABLE}
+
+
+def _short_plan(kind: str, platform: str, rung: Optional[str], known_recipe: bool) -> list[dict[str, Any]]:
+    """The 1–2 step way out, each step a NAMED action the cockpit can render as a button.
+
+    Small on purpose — the operator's words: "it's not that deep to back track or just get your
+    bearings." Anything longer than two steps is the planner's job proper, not orientation's.
+    """
     if kind == al.JOB_POSTING:
-        return [{"action": "press the posting's own apply control",
-                 "why": "a posting is one click from the real application — nothing to sign into yet"},
-                {"action": "re-orient after the click",
-                 "why": "third-party applies land somewhere uncertain by definition"}]
+        return [_step(PRESS_APPLY, "Click Apply on this page",
+                      "a posting is one click from the real application — nothing to sign into yet"),
+                _step(REORIENT, "Re-check where we are",
+                      "third-party applies land somewhere uncertain by definition")]
     if kind == al.ACCOUNT_GATE:
-        return [{"action": "work the account rung",
-                 "why": f"{platform or 'this ATS'} wants an identity before it takes an application"}]
+        return [_step(WORK_RUNG, "Work the account step",
+                      f"{platform or 'this ATS'} wants an identity before it takes an application")]
     if kind == al.APPLICATION_FORM:
-        return ([{"action": "plan the fill", "why": "the form is the application — scan, fill, stop at Submit"}]
+        return ([_step(WORK_RUNG, "Plan the fill",
+                       "the form is the application — scan, fill, stop at Submit")]
                 if known_recipe else
-                [{"action": "drive attended and capture every state",
-                  "why": f"no recipe has driven {platform or 'this platform'} end to end yet"}])
+                [_step(WORK_RUNG, "Drive it attended",
+                       f"no recipe has driven {platform or 'this platform'} end to end yet — "
+                       f"capture every state on the way")])
     if kind == al.JOB_LIST:
-        return [{"action": "open the intended job's posting",
-                 "why": "we are on a listing, not the job — clicking through is how a human gets there"}]
+        return [_step(OPEN_JOB, "Open the intended job",
+                      "we are on a listing, not the job — clicking through is how a human gets there")]
     if kind == al.CONFIRMATION:
-        return [{"action": "record the submission and close out",
-                 "why": "the page says the application went through — write it down while it is on screen"}]
+        return [_step(WORK_RUNG, "Record the submission",
+                      "the page says it went through — write it down while it is on screen")]
     if kind == al.GONE:
-        return [{"action": "flag the job gone and move to the next pick",
-                 "why": "the requisition outlived the posting; nothing here to apply to"}]
-    return [{"action": "screenshot and escalate",
-             "why": "nothing recognises this page — a human look beats a guess"}]
+        return [_step(WORK_RUNG, "Flag the job gone",
+                      "the requisition outlived the posting; nothing here to apply to")]
+    return [_step(ESCALATE, "Screenshot and hand to me",
+                  "nothing recognises this page — a human look beats a guess")]
 
 
 def orient(url: str, page_text: str = "", frames: Optional[list[dict]] = None,
@@ -231,5 +288,6 @@ def orient(url: str, page_text: str = "", frames: Optional[list[dict]] = None,
         }
 
     return Orientation(platform=platform, kind=kind, state=state, confidence=confidence,
+                       headline=headline_for(kind, platform),
                        witnesses=witnesses, mismatch=mismatch,
                        plan=_short_plan(kind, platform, rung, known_recipe))

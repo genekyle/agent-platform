@@ -4639,3 +4639,40 @@ the corpus for it is exactly the per-render verdicts this observer now produces 
 the ladder honouring the latest verdict) were symptoms of rungs acting on assumed screens. The
 observer makes the disagreement itself first-class: the next drifted rung does not need its own
 guard — it needs only to be contradicted by a render that was already happening.
+
+---
+
+## 2026-07-30 (10) — The orientation card: a prediction a person can read, and buttons that act
+
+**Operator:** *"the card would be an 'orientation' card meaning it tells us where we are, and maybe
+options for actions if we've ever seen it before … so that's what we should see 'job landing page'
+as its prediction and an action to continue by 'click the apply button'."*
+
+Three things that turns into, and each one is a rule worth keeping:
+
+**1. The prediction is for a person.** `appvault_job_posting` is the corpus's name for the state, not
+an answer to "where are we". `headline_for()` composes the human phrasing — **"Job landing page ·
+appvault"** — and `state` stays underneath as the machine's id. Both are carried; the card leads
+with the human one. And the headline claims no owner on a page it could not read: appending
+"· employer's own site" to "Unreadable page" would dress two non-answers as one finding.
+
+**2. Every plan step is a NAMED action, and only some are buttons.** Steps carry `{id, label, why,
+driveable}`, with `DRIVEABLE` kept explicit and short for the same reason `DRIVEN_PLATFORMS` is:
+recognising a situation is not being able to act in it, and **a button that cannot act is how a
+panel starts lying again**. `press_apply` and `reorient` are buttons; "screenshot and hand to me" is
+deliberately not one.
+
+**3. The button re-orients BEFORE it acts.** `/orient_action` recomputes the plan and refuses an
+action the current page no longer offers. The buttons were rendered from an observation some seconds
+old, and a third-party landing moves underneath it — a redirect, a timeout, a one-time interstitial.
+Acting on a stale plan is exactly the drift this module exists to end, so the plan is recomputed and
+the request checked against it rather than trusted. After acting it re-observes, because the
+action's own `ok` means CDP dispatched it and where we ended up is a different question.
+
+**And how the apply control is located, which generalises.** Not by name — "APPLY NOW", "Apply",
+"Start your application" vary per employer — but by WHERE IT GOES: the link whose href is the ATS
+destination. That href is already the `signpost` witness, so **the thing that identified the platform
+also locates the button**. One measurement, two uses.
+
+Live on the parked application: headline *Job landing page · appvault*, medium confidence, the
+mismatch banner, and two working buttons.

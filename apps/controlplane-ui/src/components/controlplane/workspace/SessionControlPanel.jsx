@@ -767,28 +767,59 @@ export function SessionControlPanel({ domain }) {
                          borderRadius: 8, padding: "10px 12px", margin: "10px 0"}}>
               <div style={{display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap"}}>
                 <AppIcon name="eye" size={14} />
-                <strong>Observer</strong>
-                <span className="badge">{(observer.state || "unknown").replaceAll("_", " ")}</span>
-                <span className="badge badge--muted">{observer.confidence} confidence</span>
-                <span style={{opacity: 0.6, fontSize: 12, overflow: "hidden",
-                              textOverflow: "ellipsis", maxWidth: 340, whiteSpace: "nowrap"}}>
-                  {observer.url}
-                </span>
+                <strong>Orientation</strong>
+                <span style={{opacity: 0.55, fontSize: 12}}>where we are</span>
               </div>
+
+              {/* THE PREDICTION, in the words a person would use. The state id stays underneath as
+                  the machine's name for it — the operator asked to read "job landing page", not
+                  `appvault_job_posting`. */}
+              <div style={{display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap",
+                           margin: "8px 0 2px"}}>
+                <span style={{fontSize: 16, fontWeight: 600}}>
+                  {observer.headline || (observer.state || "unknown").replaceAll("_", " ")}
+                </span>
+                <span className="badge badge--muted">{observer.confidence} confidence</span>
+              </div>
+              <div style={{opacity: 0.5, fontSize: 11, marginBottom: 6}}>
+                <code>{observer.state}</code> · {observer.url}
+              </div>
+
               {observer.mismatch && (
-                <p style={{color: "#b58900", margin: "8px 0 4px", fontSize: 13}}>
+                <p style={{color: "#b58900", margin: "6px 0", fontSize: 13}}>
                   ⚠ {observer.mismatch.detail}
                 </p>
               )}
+
+              {/* WHAT TO DO ABOUT IT. A step we know how to perform renders as a button; one we do
+                  not renders as a line of guidance, because a button that cannot act is how a panel
+                  starts lying again. The endpoint re-orients before honouring any of them. */}
               {(observer.plan || []).length > 0 && (
-                <ol style={{margin: "6px 0 2px", paddingLeft: 18, fontSize: 13}}>
-                  {observer.plan.map((st, i) => (
-                    <li key={i}><strong>{st.action}</strong>
-                      <span style={{opacity: 0.7}}> — {st.why}</span></li>
+                <div style={{display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
+                             marginTop: 4}}>
+                  {observer.plan.map((st, i) => st.driveable ? (
+                    <button key={i}
+                            className={"btn btn-sm" + (i === 0 ? " btn-primary" : "")}
+                            disabled={busy}
+                            title={st.why}
+                            onClick={() => call("/orient_action",
+                                                {action_id: st.id, initiator: "operator"})}>
+                      {busy ? "…" : st.label}
+                    </button>
+                  ) : (
+                    <span key={i} style={{fontSize: 13, opacity: 0.75}}>
+                      {st.label} — <span style={{opacity: 0.7}}>{st.why}</span>
+                    </span>
                   ))}
-                </ol>
+                </div>
               )}
-              <details style={{marginTop: 4}}>
+              {(observer.plan || []).some((st) => st.driveable) && (
+                <p style={{margin: "6px 0 0", fontSize: 11, opacity: 0.5}}>
+                  {observer.plan.find((st) => st.driveable)?.why}
+                </p>
+              )}
+
+              <details style={{marginTop: 6}}>
                 <summary style={{cursor: "pointer", fontSize: 12, opacity: 0.7}}>
                   {(observer.witnesses || []).length} witnesses
                 </summary>
