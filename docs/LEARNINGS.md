@@ -4388,3 +4388,54 @@ the earlier one.
 **Owed, and named:** the classify RUNG does not yet pass `apply_hrefs`, so it recorded
 `company_site` where the signpost fix would say `appvault`. The capability landed this session; the
 wiring into the rung did not.
+
+---
+
+## 2026-07-30 (6) — The Google button is not LinkedIn's button
+
+**Fresh session, and the profile had lost its cookies** (`/tmp/agent-platform-training-chrome/persistent/linkedin` — /tmp does not survive a reboot), so for the first time we met LinkedIn's real logged-out wall instead of a warm session. Worth knowing: a "persistent" profile under /tmp is persistent until the machine restarts.
+
+**Fault 1 — a password form on screen is not a reason to fill it.** `_deterministic_policy` answered
+`signin_form -> fill_credentials` unconditionally: it never consulted `has_creds`, and never looked
+at the SSO button beside the form. On this account there IS no LinkedIn password — it signs in with
+Google — so the recommendation was to fill a credential that does not exist, which downstream is
+either a no-op or an empty submit against a real account. Every part needed for the right answer was
+already there and unused: `find_signin_entries(alternates_only=True)` returns routes AROUND a
+credential, and its own note says *"LinkedIn's logged-out /jobs page carries BOTH, which is what
+forced the distinction."* The policy now prefers the alternate when we hold no credential, and
+escalates when there is neither. The same rail went onto the reasoner path, so a model cannot
+propose a fill we have nothing to fill with either.
+
+**Fault 2, and the real find — the SSO control is a CROSS-ORIGIN IFRAME, so a node click cannot work.**
+`login_action` clicked "Continue with google" by role + accessible name, reported `ok`, and nothing
+happened: same page, same options, no popup. The AX scan finds the button because AX walks into
+frames — but the button is not LinkedIn's:
+
+    <iframe id="gsi_22120_344589" title="Sign in with Google Button"
+            src="https://accounts.google.com/gsi/button?...text=continue_with">   rect [33,397,420,44]
+
+with only an empty `<div>` placeholder beneath it in the top document. Driving it as a NODE ends in a
+native `.click()` inside an out-of-process frame, which is not a trusted user gesture, and Google
+Identity requires one. A trusted press at the IFRAME'S COORDINATES in the top-level page is a real
+gesture, and it worked first try:
+
+    /execute click target_bbox={33,397,420,44} dpr=1 -> css_point (243,419) -> ok
+    a new target appears: accounts.google.com/v3/signin/identifier
+
+**Generalisable:** an SSO button rendered BY the identity provider (Google Identity Services, Apple,
+Facebook Login) is a cross-origin iframe the host page only reserves space for. Address it by
+coordinates over the frame, never by the node AX found inside it. This is the same family as the
+widget-protocol lesson — AX finds elements, not widgets — with a new twist: here AX finds an element
+that is real, addressable, and in a frame where our click cannot count.
+
+**Then the errand behaved exactly as designed.** `sso_step` classified `google_signin_email`, typed
+the address, pressed Next, and reported landing on `google_signin_2fa` — one step, then re-observe,
+never a loop through somebody's identity provider. Google asked to *"Complete sign-in using your
+passkey"*, which is a hardware gesture and categorically the operator's. Handed off there.
+
+**Note for the errand model:** an emailed-code errand can be served by a DIFFERENT browser (read the
+code in Gmail's profile, carry the string back). An SSO errand cannot — SSO is a cookie and redirect
+dance, so the identity has to be present in the SAME profile that is signing in. That is why
+`linkedin_jobs` has `profile: None` (its own jar) while `gmail` has `profile: "google"`, and it is
+the open question for the provider model: a domain whose auth IS a provider may need to run in the
+PROVIDER's profile rather than its own.

@@ -209,3 +209,44 @@ def test_no_re_resolve_still_escalates_honestly():
     """Without the backup plan wired, a stale tab must still be named rather than swallowed."""
     result = _run(FakeClient(scans=[STALE_SCAN]), re_resolve=None)
     assert result.status == "stale_tab"
+
+
+# --- no credential, but a way around one -------------------------------------------------------
+# MEASURED live 2026-07-30 on LinkedIn's logged-out /jobs page: 118 AX candidates, a password form,
+# and "Continue with google" beside it. This account has no LinkedIn password at all — it signs in
+# with Google — and the policy still answered "fill the stored credentials and submit".
+_LI_LOGGED_OUT = [
+    {"role": "textbox", "name": "Email or phone", "backend_node_id": 11},
+    {"role": "textbox", "name": "Password", "backend_node_id": 12},
+    {"role": "button", "name": "Continue with google", "backend_node_id": 13},
+    {"role": "link", "name": "Sign in", "backend_node_id": 14},
+]
+
+
+def test_a_password_form_on_screen_is_not_a_reason_to_fill_it():
+    """The form being visible says nothing about whether we hold anything to put in it."""
+    step = lr.reason_step("signin_form", _LI_LOGGED_OUT, "", has_creds=False, attempted_creds=False)
+    assert step.action == "click"
+    assert step.control["name"] == "Continue with google"
+    assert "no stored credential" in step.rationale
+
+
+def test_with_a_stored_credential_the_form_is_still_the_route():
+    """SSO is the fallback for having no password, not a preference over having one."""
+    step = lr.reason_step("signin_form", _LI_LOGGED_OUT, "", has_creds=True, attempted_creds=False)
+    assert step.action == "fill_credentials"
+
+
+def test_no_credential_and_no_way_around_it_escalates_rather_than_guessing():
+    only_form = [c for c in _LI_LOGGED_OUT if c["name"] in ("Email or phone", "Password")]
+    step = lr.reason_step("signin_form", only_form, "", has_creds=False, attempted_creds=False)
+    assert step.action == "escalate" and step.escalate_status == "no_credentials"
+    assert "never type passwords" in step.reason.lower()
+
+
+def test_a_reasoner_cannot_invent_a_fill_from_no_credential():
+    """The rail sits on both paths — the deterministic policy AND anything a model proposes."""
+    step = lr.reason_step("signin_form", _LI_LOGGED_OUT, "", has_creds=False, attempted_creds=False,
+                          reasoner=lambda _obs: {"action": "fill_credentials", "rationale": "just do it"})
+    assert step.action != "fill_credentials"
+    assert step.control["name"] == "Continue with google"

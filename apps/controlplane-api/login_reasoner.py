@@ -256,12 +256,39 @@ class LoginStep:
     rung: str = "model"               # model (reasoned) | recipe (deterministic) — valid journal rungs
 
 
-def _deterministic_policy(state: LoginState, candidates: list[dict]) -> LoginStep:
+def _deterministic_policy(state: LoginState, candidates: list[dict],
+                          *, has_creds: bool = True) -> LoginStep:
     """The safe fallback policy (also the baseline the Haiku reasoner is compared against). Encodes the
     gray-area handling as rules; the reasoner earns its keep on the genuinely ambiguous screens."""
     if state == "signin_form":
-        return LoginStep(state, "fill_credentials", rung="recipe",
-                         rationale="a sign-in form (email + password) is visible — fill the stored credentials and submit")
+        # A PASSWORD FORM ON SCREEN IS NOT A REASON TO FILL IT. This branch used to return
+        # `fill_credentials` unconditionally — it never looked at whether we HAVE a credential, and
+        # never at the SSO button sitting beside the form. Measured live on LinkedIn's logged-out
+        # /jobs page 2026-07-30: no stored password (this account signs in with Google), and the
+        # policy still answered "fill the stored credentials and submit". Downstream that is either
+        # a no-op or an empty submit against a real account, and neither is a login.
+        #
+        # `find_signin_entries(alternates_only=True)` exists for exactly this and was already
+        # measured on this exact page — its own note says LinkedIn's logged-out /jobs carries BOTH a
+        # credential form and "Continue with google". An ALTERNATE is a route AROUND the credential,
+        # which is the only route available when we hold none.
+        if has_creds and _has_password_field(candidates):
+            return LoginStep(state, "fill_credentials", rung="recipe",
+                             rationale="a sign-in form (email + password) is visible and we hold a "
+                                       "stored credential — fill it and submit")
+        alternates = find_signin_entries(candidates, alternates_only=True)
+        if alternates:
+            entry = alternates[0]
+            return LoginStep(state, "click", control=entry, rung="recipe",
+                             rationale=("no stored credential for this site, and the page offers a "
+                                        f"route around one: {entry['name']!r} — {entry['why']}"))
+        return LoginStep(state, "escalate", escalate=True, escalate_status="no_credentials",
+                         rung="recipe",
+                         rationale="a sign-in form is visible, we hold no credential for it, and "
+                                   "the page offers no SSO / emailed-code alternative",
+                         reason="This site wants a password I do not have, and there is no "
+                                "'Continue with…' route beside it. Sign in on your side, or add "
+                                "the credential in the Account Manager. I never type passwords.")
     if state in ("account_exists", "create_form"):
         ctrl = find_control(candidates, ("sign in", "log in", "already have", "sign-in"))
         if ctrl and ctrl.get("backend_node_id") is not None:
@@ -276,10 +303,11 @@ def _deterministic_policy(state: LoginState, candidates: list[dict]) -> LoginSte
                      reason=f"I can't confidently classify this login screen ({state}) — handing it to you rather than guessing.")
 
 
-def _step_from_reasoner(state: LoginState, r: dict, candidates: list[dict]) -> Optional[LoginStep]:
+def _step_from_reasoner(state: LoginState, r: dict, candidates: list[dict],
+                        *, has_creds: bool = True) -> Optional[LoginStep]:
     """Turn a reasoner's JSON into a validated LoginStep — with safety: a reasoner cannot invent a
-    fill on a form with no password field, and an unresolved control name falls back rather than
-    clicking nothing."""
+    fill on a form with no password field OR with no credential to put in it, and an unresolved
+    control name falls back rather than clicking nothing."""
     action = str(r.get("action") or "").strip()
     rationale = str(r.get("rationale") or "")[:200] or f"reasoned action for {state}"
     if action == "done":
@@ -290,6 +318,8 @@ def _step_from_reasoner(state: LoginState, r: dict, candidates: list[dict]) -> O
     if action == "fill_credentials":
         if not _has_password_field(candidates):
             return None  # can't fill what isn't there — fall back
+        if not has_creds:
+            return None  # …nor fill it from nothing. Same rail as the deterministic policy.
         return LoginStep(state, "fill_credentials", rationale=rationale)
     if action == "click":
         want = str(r.get("control") or "").lower()
@@ -325,13 +355,14 @@ def reason_step(state: LoginState, candidates: list[dict], page_text: str, *, ha
                                 "Account Manager, then retry. (Not retrying automatically against your real account.)")
     if reasoner is not None:
         try:
-            step = _step_from_reasoner(state, reasoner(_observation(state, candidates, page_text, has_creds)), candidates)
+            step = _step_from_reasoner(state, reasoner(_observation(state, candidates, page_text, has_creds)),
+                                       candidates, has_creds=has_creds)
         except Exception as exc:  # noqa: BLE001 — a reasoner failure falls back, never crashes login
             logger.warning("login reasoner error: %s", exc)
             step = None
         if step is not None:
             return step
-    return _deterministic_policy(state, candidates)
+    return _deterministic_policy(state, candidates, has_creds=has_creds)
 
 
 def _observation(state, candidates, page_text, has_creds) -> dict:
