@@ -365,6 +365,7 @@ export function SessionControlPanel({ domain }) {
   // moments: the handoff is cleared the instant the account is made, and the sign-in leg that
   // follows still needs somewhere to be pressed.
   const accountState = p.account_state || null;
+  const observer = p.observer || null;
   const signInDue = accountState && accountState.leg === "sign_in" && accountState.has_creds;
 
   const flagStep = (jobId, flag, detail = "") =>
@@ -753,6 +754,55 @@ export function SessionControlPanel({ domain }) {
               </>
             )}
           </div>
+
+          {/* --- the observer: where the browser ACTUALLY is, on every render --------
+              Operator, 2026-07-30: "the UI should reflect that something is going on wrong …
+              constantly monitoring so that way we understand what's always going on and not just
+              happily strumming along." This card renders the WORLD; the queue below renders the
+              RECIPE. When they disagree, the mismatch banner says so and the plan is the way out —
+              the panel must never look calmer than the situation. */}
+          {observer && (
+            <div className={"sc-observer" + (observer.mismatch ? " sc-observer--mismatch" : "")}
+                 style={{border: observer.mismatch ? "1px solid #b58900" : "1px solid var(--line, #333)",
+                         borderRadius: 8, padding: "10px 12px", margin: "10px 0"}}>
+              <div style={{display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap"}}>
+                <AppIcon name="eye" size={14} />
+                <strong>Observer</strong>
+                <span className="badge">{(observer.state || "unknown").replaceAll("_", " ")}</span>
+                <span className="badge badge--muted">{observer.confidence} confidence</span>
+                <span style={{opacity: 0.6, fontSize: 12, overflow: "hidden",
+                              textOverflow: "ellipsis", maxWidth: 340, whiteSpace: "nowrap"}}>
+                  {observer.url}
+                </span>
+              </div>
+              {observer.mismatch && (
+                <p style={{color: "#b58900", margin: "8px 0 4px", fontSize: 13}}>
+                  ⚠ {observer.mismatch.detail}
+                </p>
+              )}
+              {(observer.plan || []).length > 0 && (
+                <ol style={{margin: "6px 0 2px", paddingLeft: 18, fontSize: 13}}>
+                  {observer.plan.map((st, i) => (
+                    <li key={i}><strong>{st.action}</strong>
+                      <span style={{opacity: 0.7}}> — {st.why}</span></li>
+                  ))}
+                </ol>
+              )}
+              <details style={{marginTop: 4}}>
+                <summary style={{cursor: "pointer", fontSize: 12, opacity: 0.7}}>
+                  {(observer.witnesses || []).length} witnesses
+                </summary>
+                <ul style={{margin: "4px 0 0", paddingLeft: 16, fontSize: 12}}>
+                  {(observer.witnesses || []).map((w, i) => (
+                    <li key={i} style={{opacity: w.claim ? 1 : 0.55}}>
+                      <code>{w.source}</code> → {w.claim || "abstains"}
+                      <span style={{opacity: 0.65}}> · {w.detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          )}
 
           {/* --- the apply queue: N picks, N steps, the page waits ------------------ */}
           {queue.length > 0 && (

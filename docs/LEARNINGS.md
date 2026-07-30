@@ -4592,3 +4592,50 @@ answer is a state observer that runs on every render and supplies one truth to t
 panel together — current URL, classified platform + kind + state, and an explicit MISMATCH when a
 rung's assumption and the observed state disagree — so drift is impossible to miss rather than
 merely unlikely. Two per-rung patches are not that, and should not be mistaken for it.
+
+---
+
+## 2026-07-30 (9) — The observer, built: witnesses testify, the rung declares, the mismatch renders
+
+**The operator's spec, verbatim where it matters:** *"i need the observer to fire and collect data,
+and it should be collecting data constantly especially since we know third party applications will
+always land us somewhere uncertain … figure out by context of steps, past recipes, like 'oh we just
+hit apply … we might be in a job landing page, or an account creation page' … what ats is in the
+url, what is in the context of the html … do we have data in screenshots that are similar … use any
+and all context around it and any tools to make the answer more accurate."* That is a WITNESS FUSION,
+and it is what `orientation.py` is.
+
+**The shape.** Every cheap source testifies independently — url (ats_registry), content
+(apply_landing, frames included), signpost (where the page's own apply controls point), memory
+(company_ats, learned per drive), context (the current rung, a prior that never vetoes) — and the
+verdict is what they agree on. Confidence IS agreement; a dissenting witness stays on the record
+because the dissent is often the finding (`company_site`-URL against `appvault`-signpost IS the
+branded-wrapper diagnosis). A shrug (`company_site`) can win but never above `low` confidence —
+reporting ignorance as a finding is how the account rung lied yesterday.
+
+**The safety catch.** Each rung DECLARES what kind of page it can act on (`RUNG_NEEDS`: account
+needs a gate, submit needs a form; classify deliberately needs nothing). Observed kind vs declared
+need = the MISMATCH flag, computed on every render — and `unknown` never fires it, because "could
+not look" and "looked and saw otherwise" lead to different next moves. The plan is 1–2 steps by
+design (the operator: "it's not that deep to back track or just get your bearings"); anything longer
+is the planner proper.
+
+**The wiring is the point.** `_orient_now` runs on EVERY panel poll and after EVERY apply_step —
+the poll is the heartbeat, so "constantly" is literal while the operator is looking. One
+/page_content call per render on a local CDP socket: free. The panel renders the observer card
+ABOVE the queue — the world above the recipe — with the amber mismatch banner and the plan.
+Verified live on the parked application: state `appvault_job_posting`, mismatch "`submit` needs an
+application form, the page is a job posting — follow the plan, not the rung", plan = press the
+posting's apply control, then re-orient.
+
+**The training seam, so the models join without a rewrite.** `extra_witnesses` takes any further
+testimony — a perception witness ("this screenshot sits nearest the workday_account_gate cluster")
+arrives with its own calibrated weight and votes like every other witness. The fusion works today
+on deterministic witnesses and sharpens as trained ones graduate; nothing waits on training, and
+training changes no shapes. That is the operator's "it needs time to train it" answered additively:
+the corpus for it is exactly the per-render verdicts this observer now produces on every drive.
+
+**What this retires.** The two per-rung patches earlier today (the account rung reading the page,
+the ladder honouring the latest verdict) were symptoms of rungs acting on assumed screens. The
+observer makes the disagreement itself first-class: the next drifted rung does not need its own
+guard — it needs only to be contradicted by a render that was already happening.

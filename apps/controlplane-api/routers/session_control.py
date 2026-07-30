@@ -343,7 +343,8 @@ def _account_state(bb: Any) -> Optional[dict[str, Any]]:
 
 def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, Any], *,
           page: int, results: Optional[list[dict]] = None,
-          awaiting: Optional[str] = None, last: Optional[dict] = None) -> dict[str, Any]:
+          awaiting: Optional[str] = None, last: Optional[dict] = None,
+          observer: Optional[dict] = None) -> dict[str, Any]:
     """Everything the control panel renders: the declared query, where we are on the ladder,
     which page we are on, and this page's results."""
     ss = bb.search_state
@@ -366,6 +367,10 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "next": cps.next_step(ledger, observed, page=page, engine=engine_label).as_dict(),
         "progress": cps.progress(ledger, observed, page=page),
         "observed": observed,
+        # THE OBSERVER'S VERDICT, computed fresh for this render (None when no apply tab is open).
+        # The panel renders this INSTEAD of trusting the recipe position — where they disagree,
+        # `observer.mismatch` says so and `observer.plan` says the way out.
+        "observer": observer,
         "block": obs.get("block"),
         "tab_count": len(obs.get("tabs") or []),
         "results": results if results is not None else (bb.world or {}).get("page_results", []),
@@ -557,15 +562,60 @@ async def initialize(session_id: int, body: InitializeBody,
     return _view(session, bb, ledger, obs, page=bb.search_state.page or 1)
 
 
+async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str) -> Optional[dict]:
+    """One observation of the live APPLY tab, fused into a verdict — or None when no apply is open.
+
+    This runs on EVERY panel render (the poll is the heartbeat, so the observer fires constantly
+    while the operator is looking) and after every apply_step. One /page_content call on a local
+    CDP socket — free in low-data mode, and the same read the classify rung already makes.
+    """
+    import orientation
+    from ats_registry import ats_for_company
+
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = queue.current()
+    if step is None:
+        return None
+    url = _apply_tab_url(bb, obs)
+    if not url:
+        return None
+    try:
+        content = await _capture_post("/page_content", {"browser_url": browser_url,
+                                                        "tab_url": url}, timeout=12.0)
+    except Exception:  # noqa: BLE001 — an unreadable tab is an abstaining witness, not a crash
+        content = {}
+    nr = step.next_rung()
+    o = orientation.orient(
+        url,
+        page_text=content.get("text") or "",
+        frames=content.get("frames") or [],
+        apply_hrefs=content.get("apply_hrefs") or [],
+        rung=(nr.id if nr else "submit"),
+        company=step.company or "",
+        ats_lookup=ats_for_company,
+        known_recipe=(step.platform or "") in DRIVEN_PLATFORMS_VIEW,
+    )
+    out = o.as_dict()
+    out["url"] = url[:200]
+    return out
+
+
+#: Platforms with an end-to-end recipe, for the observer's plan wording. Mirrors
+#: apply_steps.DRIVEN_PLATFORMS without importing the executor's policy into a read path.
+DRIVEN_PLATFORMS_VIEW = frozenset({"indeed", "workday", "greenhouse"})
+
+
 # --- the read model ------------------------------------------------------------------------------
 @router.get("/api/session_control/{session_id}")
 async def get_panel(session_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
     """The panel's view. READ-ONLY — probes the tabs and auth state (a local CDP socket, free
     even in low-data mode) and drives nothing."""
     session, bb, ledger = _load(session_id, db)
-    obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     page = _current_page(obs, bb)
-    return _view(session, bb, ledger, obs, page=page)
+    return _view(session, bb, ledger, obs, page=page,
+                 observer=await _orient_now(bb, obs, browser_url))
 
 
 def _current_page(obs: dict[str, Any], bb: Any) -> int:
@@ -2774,7 +2824,7 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     block = obs.get("block")
     if block and block.get("strength") == "active":
-        return _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
+        return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
                                     detail="A challenge is up — clear it yourself before filling.")
     tab_id = _apply_tab(bb, obs).get("tab_id", "")
     candidates = await _scan_ax(browser_url, tab_id)
@@ -3382,13 +3432,13 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     if block and block.get("strength") == "active":
         step.record("challenge", aps.BLOCKED, f"active {block.get('provider')}",
                     initiator=body.initiator)
-        return _save_queue_and_view(session, bb, ledger, queue, obs,
+        return await _save_queue_and_view(session, bb, ledger, queue, obs,
                                     ok=False, detail="A challenge is up — clear it yourself. "
                                                      "We never auto-solve.")
 
     rung = step.next_rung()
     if rung is None:
-        return _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
+        return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
                                     detail="Past the known prefix. The rungs from here depend on "
                                            f"the platform ({step.platform or 'unclassified'}), and "
                                            "those are not built yet — drive it and flag the result.")
@@ -3437,7 +3487,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                             f"applied ({verdict.matched_on}: {'; '.join(verdict.evidence)})",
                             initiator=body.initiator)
                 _save_queue(bb, queue); _persist(bb, ledger)
-                return _save_queue_and_view(
+                return await _save_queue_and_view(
                     session, bb, ledger, queue, obs, ok=False, pace=style,
                     detail=(f"We have already applied to this job — matched on "
                             f"{verdict.matched_on} ({'; '.join(verdict.evidence)}"
@@ -3625,7 +3675,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                             f"control, not a sign-in.", initiator=body.initiator)
                 bb.world = dict(bb.world or {})
                 bb.world.pop("account_handoff", None)
-                return _save_queue_and_view(
+                return await _save_queue_and_view(
                     session, bb, ledger, queue, obs, ok=False, pace=style,
                     detail=(f"We are not at {company}'s account wall — the tab is still a "
                             f"{seen.kind.replace('_', ' ')} on {seen.platform}. Nothing to sign "
@@ -3665,7 +3715,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                           f"confirm to create it.")
 
 
-    return _save_queue_and_view(session, bb, ledger, queue, obs,
+    return await _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style)
 
 
@@ -3874,7 +3924,7 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
 
     step.record(rung, outcome, detail[:300], initiator=body.initiator)
     obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
-    view = _save_queue_and_view(session, bb, ledger, queue, obs,
+    view = await _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=outcome == aps.OK,
                                 detail=f"Taught {body.intent!r}: {detail}")
     view["last_step"]["taught"] = {"journaled": res.get("journaled"), "held": res.get("held"),
@@ -3935,8 +3985,11 @@ def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
     return _apply_tab(bb, obs).get("url", "")
 
 
-def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool, detail: str,
-                         pace=None) -> dict[str, Any]:
+async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool,
+                               detail: str, pace=None) -> dict[str, Any]:
+    """Persist, then render — WITH a fresh observation. Async so the observer fires on every
+    apply-step render, not only on the poll: the moment after an action is exactly when the world
+    is most likely to have moved (operator-directed 2026-07-30)."""
     bb.world = dict(bb.world or {})
     bb.world["apply_queue"] = queue.as_dict()
     _persist(bb, ledger)
@@ -3944,8 +3997,9 @@ def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool
                             "queue": queue.summary()}
     if pace is not None:
         last["pace"] = xs.describe(pace)
+    observer = await _orient_now(bb, obs, _session_browser_url(session))
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
-                 awaiting="apply", last=last)
+                 awaiting="apply", last=last, observer=observer)
 
 
 

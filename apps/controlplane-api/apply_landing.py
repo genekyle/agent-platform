@@ -47,6 +47,9 @@ GONE = "gone"                      # requisition closed, expired, 404
 UNREADABLE = "unreadable"          # nothing to read — not the same as nothing there
 UNKNOWN = "unknown"
 
+#: Every REAL kind (the two non-answers excluded) — the vocabulary a learned witness may vote in.
+KINDS = (JOB_POSTING, JOB_LIST, ACCOUNT_GATE, APPLICATION_FORM, CONFIRMATION, GONE)
+
 #: Phrases that identify a kind, lowercased. Deliberately vendor-NEUTRAL: the point is that these
 #: work on an employer's own careers page as well as on a named ATS, because that is the case the
 #: platform axis cannot help with. Each list is evidence, and the matcher reports which phrases
