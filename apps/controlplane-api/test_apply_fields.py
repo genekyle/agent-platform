@@ -183,15 +183,17 @@ def _resolve_like_the_driver(candidates, role, name):
 
 
 #: Verbatim from the live AX scan of career41.sapsf.com/portalcareer with Profile Information
-#: expanded (2026-07-30). The leading spaces are REAL — an aria-hidden required-marker span
-#: leaves its whitespace in the accessible name — and must not be "tidied" out of this fixture.
+#: expanded (2026-07-30). The leading \xa0 are REAL and are NON-BREAKING SPACES, not ASCII
+#: ones — an aria-hidden required-marker span leaves its whitespace in the accessible name.
+#: Written as escapes so they survive an editor, and they must not be "tidied" out: a fixture
+#: with a plain space would pass while testing a condition the live page never produces.
 _LIVE_PROFILE_AX = [
     {"role": "button", "name": "Expand all sections", "backend_node_id": 19898},
     {"role": "button", "name": "Profile Information", "backend_node_id": 20006},
     {"role": "button", "name": "Jobs Applied (2)", "backend_node_id": 20186},
-    {"role": "textbox", "name": " First Name", "backend_node_id": 19222},
+    {"role": "textbox", "name": "\xa0First Name", "backend_node_id": 19222},
     {"role": "textbox", "name": "Middle Name", "backend_node_id": 19223},
-    {"role": "textbox", "name": " Postal Code", "backend_node_id": 19227},
+    {"role": "textbox", "name": "\xa0Postal Code", "backend_node_id": 19227},
     {"role": "combobox", "name": "Country", "backend_node_id": 19217},
     {"role": "button", "name": "Country", "backend_node_id": 20071},
     {"role": "combobox", "name": "State / Province", "backend_node_id": 19219},

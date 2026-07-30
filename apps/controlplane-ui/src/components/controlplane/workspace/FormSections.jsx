@@ -32,8 +32,22 @@ function labelFor(row) {
   return (row.field || "").replace(/^profile_section_/, "").replace(/_/g, " ");
 }
 
-export default function FormSections({ sections, busy, onExpand }) {
-  if (!sections) return null;
+export default function FormSections({ sections, ats, accordionAts, busy, onExpand }) {
+  // THE WAY IN. Without this the card was unreachable: it rendered only once it had section data,
+  // and the only control that fetches section data lived inside it. Offered only for an ATS that
+  // actually declares section bars — the list comes from the API, so adding a second accordion
+  // site does not mean editing this file.
+  if (!sections) {
+    if (!ats || !(accordionAts || []).includes(ats)) return null;
+    return (
+      <div className="cv-actions">
+        <button className="btn btn-sm" disabled={busy} onClick={() => onExpand(null)}
+                title="This form is an accordion — read which sections are open. Touches nothing.">
+          Read the form's sections
+        </button>
+      </div>
+    );
+  }
   const rows = sections.sections || [];
   if (!rows.length) return null;
 

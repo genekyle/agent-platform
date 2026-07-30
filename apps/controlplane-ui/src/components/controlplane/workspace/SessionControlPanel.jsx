@@ -585,8 +585,10 @@ export function SessionControlPanel({ domain }) {
               a rung, because "is the form open" is a fact about the page in front of us, not a
               stage of the ladder — the same profile is shut again after every re-login. */}
           <FormSections sections={last?.sections} busy={busy}
+                        ats={accountState?.ats} accordionAts={p.accordion_ats}
                         onExpand={(what) => call("/apply_sections",
-                                                 { initiator: "operator", ats: "successfactors",
+                                                 { initiator: "operator",
+                                                   ats: accountState?.ats || "successfactors",
                                                    ...(what ? { expand: what } : {}) })} />
           <FillPlan plan={last?.fill_plan} summary={last?.fill_summary} busy={busy}
                     onPlan={() => call("/apply_fill", { initiator: "operator", execute: false })}

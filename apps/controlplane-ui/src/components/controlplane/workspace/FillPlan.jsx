@@ -73,11 +73,19 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
                         dropdown
                       </span>
                     )}
+                    {r.ambiguous && (
+                      <span className="badge badge--warn"
+                            title="More than one control on this page has this exact name, and fields are addressed BY name — so a fill would type into whichever resolves first and leave the rest empty">
+                        name repeats
+                      </span>
+                    )}
                   </div>
                   <div className="rung__meta">
-                    {r.fillable
-                      ? <code>{r.value}</code>
-                      : <em>left blank — we hold no {r.answer_key?.replace(/_/g, " ")}</em>}
+                    {r.ambiguous
+                      ? <em>skipped — this name appears more than once on the page</em>
+                      : r.fillable
+                        ? <code>{r.value}</code>
+                        : <em>left blank — we hold no {r.answer_key?.replace(/_/g, " ")}</em>}
                   </div>
                 </div>
               </li>
@@ -89,6 +97,17 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
       {missing.length > 0 && (
         <p className="cv-blocked">
           Needs you for {missing.length}: {missing.join(", ")}. These stay empty rather than guessed.
+        </p>
+      )}
+      {/* A DIFFERENT problem from `missing`, and it must not read like one. These have a value —
+          what they lack is a way to say WHICH control on the page we mean. Sending the operator to
+          "fill in Country" when Country is already answered is the wrong instruction entirely. */}
+      {(summary?.ambiguous || []).length > 0 && (
+        <p className="cv-blocked">
+          {summary.ambiguous.length} name{summary.ambiguous.length === 1 ? "" : "s"} appear more
+          than once on this page ({summary.ambiguous.join(", ")}) — we have values for them, but
+          fields are addressed by name, so a fill would land them all on the first match. These
+          need their own step, not your data.
         </p>
       )}
       {selects.length > 0 && (

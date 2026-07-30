@@ -387,6 +387,11 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "applied_check": (bb.world or {}).get("applied_check"),
         "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
         "awaiting": awaiting,
+        # WHICH ATSes hide their form behind section bars. The panel needs this to know whether to
+        # offer the section reader at all, and the declaration lives in apply_fields — so it is
+        # sent rather than duplicated as a hardcoded name in the UI, which is how the two would
+        # drift the first time a second accordion ATS is added.
+        "accordion_ats": sorted(apply_fields.SECTION_BARS),
         "last_step": last,
         "events": [{"ts": e.ts, "kind": e.kind, "detail": e.detail} for e in bb.events[-12:]],
         # How old is what we are looking at (perception/staleness.py — PROTOTYPE). Advisory: the

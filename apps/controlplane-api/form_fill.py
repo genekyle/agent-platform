@@ -48,6 +48,13 @@ _FIELD_TO_KEY: tuple[tuple[str, str], ...] = (
     ("state", "state"),
     ("country", "country"),
     ("email", "email"),
+    # BARE "address", for forms that do not say "line 1" — SAP's candidate profile calls the
+    # street field exactly "Address", so the most important address field on that form matched
+    # nothing at all (measured live 2026-07-30: 11 of 34 controls recognised, this among the
+    # misses). It MUST sit below the specific ones so "Address Line 2" still resolves to None,
+    # and below "email" because "Email Address" contains it — put this line above ("email",
+    # "email") and every SAP profile email becomes a street address.
+    ("address", "street_address"),
     # "How did you hear" is a PROMPT, not a text field — it renders as a textbox but a free-typed
     # value is invalid (the bunch-fill left it red on 2026-07-24). It must be SELECTED via
     # apply_prompt_select (source-aware), so it is deliberately not mapped for text fill here.
@@ -82,8 +89,17 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
     `identity` carries the account-derived defaults (first_name, last_name, email) and the apply
     source (how_did_you_hear). Fields we do not recognise are left out entirely — this plans what
     we can speak to, and stays silent on the rest.
+
+    AMBIGUOUS NAMES ARE NOT FILLABLE. The executor addresses fields by accessible NAME, so when a
+    page shows the same name more than once every one of those rows would type into whichever node
+    resolves first — the same value, into one field, as many times as the name repeats, leaving the
+    others empty and reporting success each time. SAP's profile with all sections open renders
+    three "Country" controls and two "Company Name"s (measured live 2026-07-30). Such rows are kept
+    and marked rather than dropped, because "we found it and cannot safely address it" is a
+    different fact from "it is not there", and only the first one tells the operator what to do.
     """
     rows: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
     for f in fields:
         name = (f.get("name") or "").strip()
         role = (f.get("role") or "").lower()
@@ -92,6 +108,7 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
         key = field_answer_key(name)
         if key is None:
             continue
+        seen[name] = seen.get(name, 0) + 1
         value, source = _resolve(key, answers=answers, identity=identity, today=today)
         rows.append({
             "field": name, "role": role, "answer_key": key,
@@ -99,6 +116,10 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
             "fillable": source in (SRC_WORKING, SRC_STORED, SRC_IDENTITY),
             "widget": "select" if role == "combobox" else "text",
         })
+    for r in rows:
+        r["ambiguous"] = seen[r["field"]] > 1
+        if r["ambiguous"]:
+            r["fillable"] = False
     return rows
 
 
@@ -117,10 +138,18 @@ def _resolve(key: str, *, answers: dict[str, Any], identity: dict[str, str],
 
 
 def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """The header for the bunch: how many we can fill, and which fields need the operator."""
+    """The header for the bunch: how many we can fill, and which fields need the operator.
+
+    `missing` is keyed on the SOURCE, not on `fillable`, and the distinction is load-bearing now
+    that a row can be unfillable for a second reason. "We hold no address for you" is a request
+    for data; "there are three controls called Country" is a request for a different addressing
+    mode. Folding the two would send the operator to fill in a value they have already given.
+    """
     fillable = [r for r in rows if r["fillable"]]
-    missing = [r["field"] for r in rows if not r["fillable"]]
+    missing = [r["field"] for r in rows if r["source"] == SRC_MISSING]
+    ambiguous = sorted({r["field"] for r in rows if r.get("ambiguous")})
     return {"total": len(rows), "fillable": len(fillable), "missing": missing,
+            "ambiguous": ambiguous,
             "by_source": {s: sum(1 for r in rows if r["source"] == s)
                           for s in (SRC_WORKING, SRC_STORED, SRC_IDENTITY, SRC_MISSING)}}
 

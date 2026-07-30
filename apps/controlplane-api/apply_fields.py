@@ -441,10 +441,14 @@ SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
     #
     # THE WHITESPACE ARTIFACT, and why it is survivable. Every REQUIRED label holds a
     # `<span class="requiredField" aria-hidden="true">*</span>`. aria-hidden strips the asterisk
-    # from the accessible name but NOT the space around it, so AX reports " First Name" with a
-    # leading space while optional "Middle Name" has none. Names are written clean below because
-    # `_resolve_ax_node` strips both sides before comparing (main_server.py:190) — verified, not
-    # assumed. Do NOT use that space as a required-detector: it is absent on Country and
+    # from the accessible name but NOT the whitespace around it, so AX reports "\xa0First Name"
+    # while optional "Middle Name" is clean. That leading character is a NON-BREAKING SPACE
+    # (U+00A0), not an ASCII one — measured on the live page. It survives here only because both
+    # sides normalise with Python's `str.strip()`, which treats \xa0 as whitespace
+    # (`_resolve_ax_node`, main_server.py:190) — verified in the source, not assumed. Any matcher
+    # that trims an explicit ASCII set (" \t\n"), or a regex flavour whose \s is ASCII-only, will
+    # NOT strip it and will miss every required field on this form while finding the optional
+    # ones. Do NOT use the space as a required-detector either: it is absent on Country and
     # State / Province, which are required but take their name from aria-label instead of the
     # label element. `aria-required` is the honest signal.
     "profile_expand_all": _f(ats="successfactors", role="button", name="Expand all sections",
