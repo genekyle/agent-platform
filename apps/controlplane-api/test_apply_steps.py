@@ -344,3 +344,42 @@ def test_a_reopened_step_survives_a_round_trip():
     assert back.current().job_id == "indeed:a1"
     assert len(back.steps[0].archived_minis) == 1
     assert back.steps[0].archived_minis[0]["parked_as"] == aps.PARKED_ACCOUNT_WALL
+
+
+# --- the careers FRONT: where the page points, not where it is -----------------------------------
+# MEASURED live 2026-07-30 driving a LinkedIn apply for Ahold Delhaize's Sr. Reporting Analyst.
+_FRONT_URL = "https://aholddelhaizeusa.careerswithus.com/job/Procurement-%26-Logistics/Sr.-Reporting-Analyst/Quincy-MA/ADUSA"
+_FRONT_APPLY = "https://aholddelhaizeapply.appvault.com/external/home?jobId=533857&company=ADUSA"
+_FRONT_TEXT = ("Join Our Talent Community Search for more jobs Sr. Reporting Analyst Posting Date: "
+               "07/22/2026 Quincy, MA APPLY NOW Category/Area of Expertise: Procurement & Logistics "
+               "Job Requisition: 533857 Responsibilities Qualifications")
+
+
+def test_a_careers_front_halts_when_only_its_own_host_is_read():
+    """The honest halt, and it is the RIGHT answer given only the URL: the employer's own careers
+    domain names no ATS, so we stop rather than guess through a real application."""
+    d = aps.classify_landing(_FRONT_URL, _FRONT_TEXT)
+    assert d.platform == "company_site"
+    assert d.known is False and d.outcome == aps.UNKNOWN
+    # …but it still says WHAT it was looking at, which is the point of the content axis
+    assert d.kind == "job_posting" and d.state == "company_site_job_posting"
+
+
+def test_the_apply_link_names_the_ats_the_landing_host_cannot():
+    """The signpost. Same page, same text — the only new input is where APPLY NOW points, and that
+    turns an UNKNOWN halt into a recognised platform. The registry had described this exact hop in
+    AppVault's notes from an Indeed drive; prose does not classify, so it halted anyway."""
+    d = aps.classify_landing(_FRONT_URL, _FRONT_TEXT, apply_hrefs=[_FRONT_APPLY])
+    assert d.platform == "appvault"
+    # recognised is NOT the same as driven: AppVault's recipe is still an empty stub, so the step
+    # must still halt for a human rather than claim it can finish.
+    assert d.known is False and d.outcome == aps.UNKNOWN
+    assert "never been driven" in d.detail
+
+
+def test_an_apply_link_to_nowhere_known_changes_nothing():
+    """The hint may only ever promote a landing to a platform the registry already knows. A random
+    href must not invent one."""
+    d = aps.classify_landing(_FRONT_URL, _FRONT_TEXT,
+                             apply_hrefs=["https://careers.example.com/apply/123"])
+    assert d.platform == "company_site"

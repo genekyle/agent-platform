@@ -214,13 +214,24 @@ def classify_ats(url: str, page_hints: Optional[dict[str, Any]] = None) -> str:
         if param in params and ats_id in _BY_ID:
             return ats_id
 
-    # Branded wrapper with no param tell: an embedded ATS iframe on the page.
-    for embed in ((page_hints or {}).get("embed_hosts") or []):
-        embed_host = (urlparse(embed).hostname or embed or "").lower()
+    # Branded wrapper with no param tell — ask where the page POINTS rather than where it IS.
+    # Two sources, same idea: an embedded ATS iframe (`embed_hosts`), and the destination of the
+    # page's own apply control (`apply_hrefs`).
+    #
+    # THE APPLY HREF IS OFTEN THE ONLY TELL, and this one cost a halt to find. Ahold Delhaize's
+    # careers front is `aholddelhaizeusa.careerswithus.com` — no known host, no param, no iframe —
+    # and its "APPLY NOW" points at `aholddelhaizeapply.appvault.com` (measured live 2026-07-30, via
+    # a LinkedIn apply). The registry already DESCRIBED that hop in AppVault's notes, in prose,
+    # from an Indeed drive; prose does not classify. A careers front is a signpost, and reading the
+    # signpost is the whole trick.
+    hosts_to_try = list((page_hints or {}).get("embed_hosts") or [])
+    hosts_to_try += list((page_hints or {}).get("apply_hrefs") or [])
+    for candidate in hosts_to_try:
+        cand_host = (urlparse(candidate).hostname or candidate or "").lower()
         for ats in ATS_PLATFORMS:
             if ats["ats_id"] in _ON_ENGINE_APPLY:
                 continue
-            if any(needle in embed_host for needle in ats["hosts"]):
+            if any(needle in cand_host for needle in ats["hosts"]):
                 return ats["ats_id"]
 
     # Branded SuccessFactors: no host tell, no param tell — read the path shape.

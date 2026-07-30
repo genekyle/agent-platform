@@ -4225,3 +4225,54 @@ end state as the 2026-07-26 near-miss, one engine over.
 **Still untested:** the `linkedin_easy_apply` branch. The pane on screen was a company_site posting,
 so there was no Easy Apply control to match; the ordering for it is written but has never chosen
 anything. Named here rather than left to look covered.
+
+---
+
+## 2026-07-30 (4) — The first LinkedIn apply, and the knowledge that was already there
+
+**Driven live**, operator-approved, on job #1 of the LinkedIn results: Ahold Delhaize USA,
+"Sr. Reporting Analyst", Quincy MA. Identity confirmed from the pane's own `currentJobId` immediately
+before pressing; control resolved by a fresh AX scan; humanized click through `/execute`:
+
+    link 'Apply on company website'  -> ok, re-resolved -> node 27891
+    new tab: aholddelhaizeusa.careerswithus.com/job/.../Sr.-Reporting-Analyst/Quincy-MA/ADUSA
+
+**The classify rung halted, and that was right.** `company_site` / `job_posting` /
+`company_site_job_posting`, `known=False`, outcome UNKNOWN — stop rather than guess a stranger's
+form. What made it interesting is what the system already knew:
+
+    ats_for_company("Ahold Delhaize USA") -> appvault
+
+learned from an **Indeed** drive, answering a **LinkedIn** apply. The operator's worry — that ATS
+knowledge is siloed under Indeed — turns out to be already solved in the model: the apply ladder,
+`apply_landing`'s content-based page-kind, and the company→ATS map are all engine-agnostic, and this
+drive reached a page the registry describes in detail (down to AppVault's Material-UI login and its
+password-field ids) without ever having been there from LinkedIn.
+
+**The one real gap: prose does not classify.** AppVault's registry entry already said, in its notes,
+"reached via a company careers FRONT (e.g. careerswithus.com → 'APPLY NOW') that hands off to
+<employer>apply.appvault.com" — written after an Indeed drive. `classify_ats` still returned
+`company_site`, because that knowledge lived in a sentence and the classifier reads hosts, params
+and iframes. Measured on the page:
+
+    APPLY NOW -> https://aholddelhaizeapply.appvault.com/external/home?jobId=533857&...
+    script    -> api.workspace.appvault.com/embed/appvault-preload.js
+
+So `classify_ats` now takes `apply_hrefs` alongside `embed_hosts`: **a careers front is a signpost,
+and the destination of its apply control names the ATS the landing host cannot.** Same landing now
+classifies `appvault` / `appvault_job_posting` — and still halts, because AppVault's recipe is an
+empty stub and *recognised is not driven*. The promotion only ever reaches platforms the registry
+already knows; an unrecognised href changes nothing.
+
+**Generalisable:** when a lesson is written as a note rather than as a rule, it will be re-learned
+the expensive way. The note was correct, specific, and had already cost a live drive to obtain — and
+it still let the next drive halt on the same page.
+
+**A trap noticed in passing.** A substring vendor fingerprint over page HTML reported `lever` on this
+page. The word was "**Lever**age database systems" in the job description. Vendor names that are
+ordinary English fragments (lever, dice, monster) cannot be detected by substring over prose — this
+was only in a throwaway probe, but it is exactly how a bogus ATS id would get recorded.
+
+**Where it stands:** the apply tab is left OPEN at the AppVault front, one "APPLY NOW" from the
+account-gated application. Not closed, because the tab hygiene rule fires on a FINISHED application
+(submitted, or abandoned at a human wall) and this is neither — it is a halt awaiting a decision.

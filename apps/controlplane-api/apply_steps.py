@@ -403,7 +403,8 @@ DRIVEN_PLATFORMS = frozenset({"indeed", "workday", "greenhouse"})
 
 
 def classify_landing(url: str, page_text: str = "",
-                     frames: Optional[list[dict]] = None) -> Discovery:
+                     frames: Optional[list[dict]] = None,
+                     apply_hrefs: Optional[list[str]] = None) -> Discovery:
     """Answer the discovery rung: what kind of apply did we land in?
 
     Delegates identification to `ats_registry` (one source of truth for "which ATS is this") and
@@ -411,11 +412,17 @@ def classify_landing(url: str, page_text: str = "",
     driven it?** An unknown platform is reported as UNKNOWN so the step halts and the operator
     teaches it live, rather than a generic form-filler guessing its way through somebody's real
     job application.
+
+    `apply_hrefs` are where the page's own apply controls POINT. On a company careers FRONT the
+    landing host is the employer's and says nothing, while the apply link names the ATS outright —
+    measured 2026-07-30: `aholddelhaizeusa.careerswithus.com` halted as UNKNOWN while its APPLY NOW
+    pointed at `aholddelhaizeapply.appvault.com`, an ATS the registry already knew. Reading the
+    signpost turns a halt into a recognised platform, without loosening what "recognised" means.
     """
     import apply_landing as al
     from ats_registry import classify_ats
 
-    platform = classify_ats(url) or "unknown"
+    platform = classify_ats(url, {"apply_hrefs": list(apply_hrefs or [])}) or "unknown"
 
     # WHERE ARE WE, not just whose software is it. Read from the content — and from the FRAME that
     # holds it, because a branded ATS wrapper puts the job somewhere the top document never
