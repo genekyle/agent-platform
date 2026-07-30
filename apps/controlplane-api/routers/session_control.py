@@ -75,12 +75,17 @@ ENGINES: list[dict[str, Any]] = [
      # require a submit CONTROL on every engine, so on LinkedIn it reported "found submit" — it had
      # matched `Skip to search`, the skip-link `linkedin_recipe` warns about — and refused to run.
      "commit": "button",
+     # Indeed exposes a Distance pill; LinkedIn's results page exposes no distance control at all
+     # (measured 2026-07-30: its filter row is topical — Date posted / Remote / Easy Apply /
+     # Experience level — plus a LOCATION button whose name carries its value, "Greater Boston").
+     "distance_filter": True,
      "label": "Indeed", "spa": False},
     {"id": "linkedin_jobs", "platform": "linkedin", "host": "linkedin.com", "results_path": "/jobs",
      "query_param": "keywords", "page_size": 25, "home": "https://www.linkedin.com/jobs/",
      "search_tab": "linkedin.com/jobs", "label": "LinkedIn",
      # No submit button exists on the jobs home; Enter on the query box is the commit.
      "commit": "enter",
+     "distance_filter": False,
      # A SINGLE-PAGE APP: query, filters and pagination all pushState and re-render in place, so
      # nothing here may treat a navigation (or its absence) as proof an action landed.
      "spa": True},
@@ -780,6 +785,27 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
 
     if action == "set_distance":
         miles = max(int((bb.world or {}).get("radius_miles") or 50), 50)
+        # AN ENGINE WITHOUT A DISTANCE CONTROL CANNOT HOLD A DISTANCE RUNG. Operator-directed
+        # 2026-07-30 after this blocked the whole preamble on LinkedIn — and the preamble gates
+        # `choose`, so a rung about a control that does not exist was standing between us and
+        # selecting jobs to apply to.
+        #
+        # It is marked SKIPPED-with-a-reason, never "set to 50mi": the floor exists so we never
+        # gather a 5-mile Indeed radius by accident, and quietly recording a filter we did not
+        # apply would retire that guarantee instead of scoping it. What geography LinkedIn is
+        # actually searching is a real open question — its location button reads "Greater Boston" —
+        # and it stays open, in writing, rather than being answered by a rung that lied.
+        if not engine.get("distance_filter", True):
+            ledger.mark("radius_set",
+                        evidence=(f"not applicable on {engine['label']}: the results page exposes "
+                                  f"no distance control. Geography comes from the location filter, "
+                                  f"which is a metro area — NOT a {miles}mi radius we set."),
+                        initiator=initiator)
+            bb.log("checkpoint", f"radius_set — skipped: {engine['label']} has no distance filter")
+            return {"ok": True, "action": action, "skipped": True,
+                    "detail": (f"{engine['label']} has no distance filter, so there is nothing to "
+                               f"set. Recorded as not-applicable rather than as a radius we "
+                               f"applied. Its location filter carries the geography.")}
         # Setting the pill RE-QUERIES the backend, so it is a navigation as far as pacing goes.
         # This step used to fire with no pause at all and was over in about half a second.
         style = xs.pick_style()
