@@ -4346,3 +4346,45 @@ countdown element and no dialog anywhere in the DOM**, and the tab title was the
 2026-07-29. So it is a real but *transient* warning we have not yet captured as a state — worth
 grabbing the next time it fires, since the expiry it precedes is the one both cheap signals
 (`/auth_state`, the URL) already lied about.
+
+---
+
+## 2026-07-30 (5) — A session could be driven into a state it could not be driven out of
+
+**The hole.** The LinkedIn apply was driven endpoint-by-endpoint, so the ladder knew none of it: the
+cockpit showed an empty queue and `query_entered: next` while an application sat open on AppVault.
+And there was **no way back in**. The queue is filled only by `choose`; `choose` requires the
+preamble walked; the preamble's first rung is CONSUMING. So the only route the system offered was to
+spend a second query re-running a search already on screen — exactly what the once-only rule exists
+to prevent. `reconcile_step` could not help: it aligns a step that already exists.
+
+**`adopt_from_window`** closes it, under the same rule `reconcile_step` follows — the browser is
+truth, the record is memory, memory yields — and the same limit: it records only what the window
+PROVES. A results page for a query is proof that query ran (mark it, never re-run it); the pane's
+`currentJobId` names the job; an `observed_jobs` row makes it enqueueable. What it cannot confirm it
+returns as `refused`, because a fabricated rung is worse than a missing one. Live, it adopted the
+query, marked `query_entered` held, and enqueued `linkedin:4439543515`.
+
+**Two small bugs it flushed out, both the same shape — reading one place when the answer is
+anywhere.**
+
+* `_last_path_words` read the LAST path segment to check an ATS destination against the pick.
+  Ahold Delhaize's careers front puts the title in the MIDDLE:
+  `/job/Procurement-%26-Logistics/Sr.-Reporting-Analyst/Quincy-MA/ADUSA` → it returned "ADUSA" and
+  `verify_identity` recorded UNKNOWN for a URL that names the job plainly. Reading from the end is
+  right for Workday and wrong here, and nothing forced the choice: the caller only asks whether the
+  pick's words appear. Now all segments. Workday still matches.
+* `engine_of_url` returns the engine DICT; the first draft of the adopt endpoint treated it as a
+  string. It also meant guessing at query params — the ENGINES table already declares
+  `query_param` (`q` / `keywords`) and `platform`, so ask it rather than try both (trying both would
+  quietly pick up somebody else's `q`).
+
+**Where the ladder now stands**, with the record matching the world: open_pane ok, verify_identity
+unknown→ok, enter_apply ok, classify unknown→ok (`company_site_job_posting`), next rung `account`,
+and the cockpit's account card reading *Ahold Delhaize USA · create_account · pending · has_creds
+false*. Both sides of each correction stay on the ledger rather than the later answer overwriting
+the earlier one.
+
+**Owed, and named:** the classify RUNG does not yet pass `apply_hrefs`, so it recorded
+`company_site` where the signpost fix would say `appvault`. The capability landed this session; the
+wiring into the rung did not.

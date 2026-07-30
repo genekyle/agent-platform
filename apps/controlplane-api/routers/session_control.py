@@ -2771,6 +2771,111 @@ async def orient_step(session_id: int, body: OrientStepBody,
     return view
 
 
+class AdoptWindowBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/adopt_from_window")
+async def adopt_from_window(session_id: int, body: AdoptWindowBody,
+                            db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Adopt an application the WINDOW is already in the middle of, so the record can catch up.
+
+    `reconcile_step` aligns a step that exists. This is the case one level up: the world moved
+    ahead of the record entirely — a query was run, a card was opened, Apply was pressed, an ATS
+    tab is open — and the ladder still says "run the query" because none of it went through the
+    queue. There was no way back in: the queue is only filled by `choose`, `choose` requires the
+    preamble to have been walked, and the preamble's first rung is CONSUMING. So the only route the
+    system offered was to spend a second query re-doing something already done, which is precisely
+    what the once-only rule exists to prevent. A session could be driven into a state it could not
+    be driven out of. (Live 2026-07-30: a LinkedIn apply reached AppVault while the cockpit showed
+    an empty queue and `query_entered: next`.)
+
+    THE RULE IS THE SAME ONE reconcile_step FOLLOWS — the browser is truth, the record is memory,
+    and memory yields — with the same limit: **it records only what the window PROVES.** A results
+    page for a query is proof that query ran; an open pane names the job; an ObservedJob row makes
+    it a pick we can enqueue. Anything it cannot confirm is reported as refused rather than
+    assumed, because a fabricated rung is worse than a missing one.
+    """
+    _check_initiator(body.initiator)
+    from urllib.parse import parse_qs, urlparse
+
+    from models import ObservedJob
+
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    tabs = obs.get("tabs") or []
+    adopted: list[str] = []
+    refused: list[str] = []
+
+    # 1. THE QUERY. Read it off the results tab's own URL rather than asking for it: the engine
+    #    names the param (`q` on Indeed, `keywords` on LinkedIn) and the page IS the effect of the
+    #    consuming rung. Marking it held is a RECOVERY, never a re-run.
+    engine_tab, tab_engine = None, None
+    for t in tabs:
+        eng = engine_of_url(t.get("url", ""))
+        if eng is not None:
+            engine_tab, tab_engine = t, eng
+            break
+    if engine_tab and not (bb.search_state.query or "").strip():
+        params = parse_qs(urlparse(engine_tab.get("url", "")).query)
+        # ASK THE ENGINE WHAT ITS PARAM IS CALLED. `q` on Indeed, `keywords` on LinkedIn — the
+        # table already knows, and guessing both would quietly pick up somebody else's `q`.
+        found = (params.get(tab_engine["query_param"]) or [""])[0].strip()
+        if found:
+            bb.search_state.query = found
+            adopted.append(f"query={found!r}")
+        else:
+            refused.append("the results tab carries no query parameter to read")
+    if (bb.search_state.query or "").strip() and engine_tab and not ledger.holds("query_entered"):
+        ledger.mark("query_entered", evidence=f"adopted from the live window: results for "
+                                              f"{bb.search_state.query!r} are on screen "
+                                              f"({(engine_tab.get('url') or '')[:90]})",
+                    initiator=body.initiator)
+        adopted.append("query_entered")
+
+    # 2. THE JOB IN FLIGHT. The pane names it — on LinkedIn in the URL itself (`currentJobId`),
+    #    which is the same id the pane's own slots carry. A pick we cannot resolve to an
+    #    ObservedJob row is NOT enqueued: the queue's steps carry a job_id that the rest of the
+    #    system dereferences, and inventing one would put a phantom application on the ladder.
+    job_id = ""
+    if engine_tab:
+        cur = parse_qs(urlparse(engine_tab.get("url", "")).query).get("currentJobId") or []
+        if cur:
+            candidate = f"{tab_engine['platform']}:{cur[0]}"
+            if db.get(ObservedJob, candidate) is not None:
+                job_id = candidate
+            else:
+                refused.append(f"the open pane is {candidate}, which has no observed_jobs row — "
+                               f"extract the results page before adopting it")
+    if not job_id:
+        refused.append("no open job pane to adopt as the current application")
+
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    if job_id and not any(s.job_id == job_id for s in queue.steps):
+        row = db.get(ObservedJob, job_id)
+        approved = list(bb.search_state.approved or [])
+        if job_id not in approved:
+            approved.append(job_id)
+        bb.search_state.approved = approved
+        queue.page = queue.page or (bb.search_state.page or 1)
+        queue.enqueue([{"job_id": job_id, "title": row.title if row else "",
+                        "company": row.company if row else ""}])
+        _save_queue(bb, queue)
+        adopted.append(f"enqueued {job_id} ({row.title if row else '?'})")
+
+    bb.log("adopt", f"adopted from the live window: {', '.join(adopted) or 'nothing'}")
+    _persist(bb, ledger)
+    detail = ("Adopted from the window: " + "; ".join(adopted)) if adopted else \
+             "Nothing in the window could be adopted."
+    if refused:
+        detail += " | Not asserted: " + "; ".join(refused)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                 awaiting="apply" if job_id else None,
+                 last={"ok": bool(adopted), "action": "adopt_from_window", "detail": detail,
+                       "adopted": adopted, "refused": refused})
+
+
 class ReconcileStepBody(BaseModel):
     initiator: str = "operator"
 
@@ -2882,12 +2987,24 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
 def _last_path_words(url: str) -> str:
     """The human-readable job slug from an ATS URL, spaced out — e.g. a Workday
     '/job/Boston/Compliance-Reporting-Associate_M...' becomes 'Compliance Reporting Associate'.
-    Used to check an ATS destination against the Indeed pick title."""
+    Used to check an ATS destination against the pick title.
+
+    ALL the segments, not just the last one. MEASURED 2026-07-30: Ahold Delhaize's careers front
+    puts the title in the MIDDLE —
+    `/job/Procurement-%26-Logistics/Sr.-Reporting-Analyst/Quincy-MA/ADUSA` — so reading from the end
+    returned "ADUSA", the title check found nothing to match, and `verify_identity` recorded UNKNOWN
+    for a destination that names the job plainly. Reading from the end is right for Workday and
+    wrong here, and there is no reason to pick: the caller only asks whether the pick's words appear.
+    """
     from urllib.parse import unquote, urlparse
-    path = urlparse(url or "").path
-    seg = next((s for s in reversed(path.split("/")) if s and "job" not in s.lower()), "")
-    seg = unquote(seg).split("_")[0]
-    return " ".join(w for w in seg.replace("-", " ").split() if not w.isdigit())
+    path = unquote(urlparse(url or "").path)
+    words: list[str] = []
+    for seg in path.split("/"):
+        if not seg or "job" in seg.lower():
+            continue
+        words += [w for w in seg.split("_")[0].replace("-", " ").replace("+", " ").split()
+                  if not w.isdigit()]
+    return " ".join(words)
 
 
 class RebuildQueueBody(BaseModel):

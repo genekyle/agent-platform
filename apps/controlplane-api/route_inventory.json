@@ -175,6 +175,7 @@
   "POST /api/search/targets",
   "POST /api/search/targets/outcome",
   "POST /api/select/trajectory",
+  "POST /api/session_control/{session_id}/adopt_from_window",
   "POST /api/session_control/{session_id}/apply_account",
   "POST /api/session_control/{session_id}/apply_decide",
   "POST /api/session_control/{session_id}/apply_fill",
