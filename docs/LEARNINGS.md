@@ -3995,3 +3995,22 @@ ACTS: re-applying a filter that already holds the wanted value re-queries for no
 expects `data-occludable-job-id` / `data-job-id` / `.job-card-container` and the page has none of
 them. That scaffold was labelled UNVERIFIED and is now measured wrong — the next recording should
 be a hand-scroll of the results list so the mutation stream shows what a card actually is.
+
+**Addendum — the expired session that both cheap signals called healthy.** Coming back to the drive
+after it went cold, SAP's tab title *was* the state: **"Your session has expired."** Two things make
+that dangerous rather than merely inconvenient, and both are signals we lean on:
+
+* **`/auth_state` reported `logged_in: true`** on it. That detector is shaped for the job ENGINE
+  (Indeed) and does not read an ATS session at all, so it answered confidently about a domain it
+  knows nothing about — the same failure shape as `build_summary` answering for Gmail as whoever was
+  there first (2026-07-27), and as every `ok` this week that meant "a call was dispatched".
+* **The URL kept the authenticated `/portalcareer` path**, so URL-implies-state agreed with it.
+
+The reliable tell was the AX tree collapsing to two controls: `Close` and `Log in`. Recorded as
+`successfactors_session_expired` (capture 344) with that spelled out, because the next session will
+meet the same two lying signals. **Generalisable: when a detector was written for one domain, its
+confident answer about another is not evidence — and an expired session is exactly where you are
+least likely to check.**
+
+Recovery is the sign_in leg, which then meets `successfactors_policy_gate` again — so the
+interstitial handling committed earlier is on the recovery path, not just the happy path.
