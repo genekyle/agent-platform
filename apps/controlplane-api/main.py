@@ -103,6 +103,7 @@ from routers import accounts as accounts_router  # noqa: E402
 from routers import activity as activity_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
 from routers import career_search as career_search_router  # noqa: E402
+from routers import job_database as job_database_router  # noqa: E402
 from routers import controller as controller_router  # noqa: E402
 from routers import drive_lock as drive_lock_router  # noqa: E402
 from routers import errands as errands_router  # noqa: E402
@@ -1894,6 +1895,7 @@ async def fetch_job_descriptions(body: FetchDescriptionsRequest, db: Session = D
                 j.description = (d.get("description") or "")[:20000]
                 j.salary = j.salary or (d.get("salary") or "")[:200] or None
                 j.apply_type = d.get("apply_type") or j.apply_type
+                job_dedup.sync_description(db, j)
                 fetched += 1
                 results.append({"job_id": j.job_id, "title": j.title, "apply_type": j.apply_type,
                                 "salary": j.salary, "desc_chars": len(j.description or "")})
@@ -2087,6 +2089,8 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
                 row.description = (d.get("description") or "")[:20000]
                 row.salary = row.salary or (d.get("salary") or "")[:200] or None
                 row.apply_type = d.get("apply_type") or row.apply_type
+                # Carry it up to the canonical job — the sighting is not what the dashboard reads.
+                job_dedup.sync_description(db, row)
                 total_desc += 1
                 if jid not in shortlist_refs:
                     shortlist_refs.append(jid)
@@ -2151,10 +2155,40 @@ def update_job(job_id: str, body: JobStatusUpdate, db: Session = Depends(get_db)
         row.application_status = body.application_status
         if body.application_status == "applied" and row.applied_at is None:
             row.applied_at = utcnow()
+            # Mirror it onto the canonical job as a real Application with a timeline. Without this
+            # the apply flow keeps stamping sightings and the career-search dashboard — which reads
+            # canonical jobs — shows nothing applied, which is precisely the question it exists to
+            # answer. Everything the employer does next hangs off the application this creates.
+            _mirror_application(db, row)
     if body.notes is not None:
         row.notes = body.notes
     db.commit()
     return _job_dict(row)
+
+
+def _mirror_application(db: Session, sighting: ObservedJob) -> None:
+    """Give a just-applied sighting a canonical Application. Best-effort by design: the apply
+    already happened out in the world, so failing to mirror it must not fail the request that
+    records it. `/api/career_search/reindex` rebuilds anything missed.
+
+    Inside a SAVEPOINT, not a bare try/except: a plain `db.rollback()` here would also discard the
+    caller's own `application_status = applied` write, turning a cosmetic mirroring failure into
+    losing the very fact being recorded. The nested transaction scopes the undo to this function.
+    """
+    from application_events import ensure_application
+
+    try:
+        with db.begin_nested():
+            job = job_dedup.resolve_sighting(db, sighting)
+            if job is None:
+                return
+            db.flush()
+            ensure_application(db, job.job_key, applied_at=sighting.applied_at,
+                              via_platform=sighting.platform, ats=sighting.application_platform)
+            if job.status in ("new", ""):
+                job.status = "applied"
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.post("/api/training/page-states")
@@ -5277,6 +5311,7 @@ def create_app() -> FastAPI:
     app.include_router(activity_router.router)
     app.include_router(application_answers_router.router)
     app.include_router(career_search_router.router)
+    app.include_router(job_database_router.router)
     app.include_router(controller_router.router)
     app.include_router(drive_lock_router.router)
     app.include_router(errands_router.router)

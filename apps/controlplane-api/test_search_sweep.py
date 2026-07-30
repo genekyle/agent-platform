@@ -171,6 +171,10 @@ class _DescRow:
         self.description = ""
         self.salary = None
         self.apply_type = None
+        # Unresolved: the sweep syncs a fresh description up to the canonical Job, and a sighting
+        # with no canonical key is the case that must no-op rather than raise.
+        self.canonical_job_key = None
+        self.application_platform = None
 
 
 def _loop_capture(has_next):

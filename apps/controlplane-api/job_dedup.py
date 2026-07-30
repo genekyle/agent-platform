@@ -58,7 +58,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from deps import as_aware, utcnow
@@ -332,6 +332,19 @@ def compare(a: Job, b: Job) -> Optional[MatchProposal]:
         return MatchProposal(keep.job_key, fold.job_key, "requisition", 1.0,
                              [f"requisition {sorted(shared_reqs)[0]}"])
 
+    # A sighting whose company cell failed to parse. Measured 2026-07-30: 9 of 355 rows, and every
+    # one of them duplicated a job we already had WITH its employer — 'EPIC Caboodle/Clarity Report
+    # Writer' sat in the table twice, once as SolutionHealth and once as nobody. Comparing titles
+    # across all employers would be reckless; comparing them when one side names no employer at all
+    # is just reading the scrape correctly. Identical titles only, and it still asks.
+    if bool(a.company_norm) != bool(b.company_norm):
+        if title_tokens(a.title) and title_tokens(a.title) == title_tokens(b.title):
+            named = a if a.company_norm else b
+            return MatchProposal(keep.job_key, fold.job_key, "blank_company", 1.0,
+                                 [f"identical title ({keep.title})",
+                                  f"one side scraped without an employer; the other says {named.company}"])
+        return None
+
     if not a.company_norm or a.company_norm != b.company_norm:
         return None
 
@@ -373,14 +386,53 @@ def _candidate_groups(rows: list[Job]) -> list[list[Job]]:
     merge unattended — because a shared requisition is precisely the evidence that survives the
     company being spelled 'BILH' on one board and 'Beth Israel Lahey Health' on the other. That
     is the exact pair the tier was written for, so it gets its own bucket keyed on the id itself.
+
+    A third bucket keys on the title itself, and is emitted ONLY when it contains a job with no
+    employer — the scrape-miss case in `compare`. Without it those rows sit in a bucket of one
+    (they match no company) and their duplicate is never even considered.
     """
     by_company: dict[str, list[Job]] = {}
     by_req: dict[str, list[Job]] = {}
+    by_title: dict[tuple[str, ...], list[Job]] = {}
     for r in rows:
         by_company.setdefault(r.company_norm or f"\x00{r.job_key}", []).append(r)
         for req in requisition_ids(r.requisition_id, r.canonical_url):
             by_req.setdefault(req, []).append(r)
-    return [g for g in (*by_company.values(), *by_req.values()) if len(g) > 1]
+        tokens = tuple(title_tokens(r.title))
+        if tokens:
+            by_title.setdefault(tokens, []).append(r)
+
+    title_groups = [g for g in by_title.values()
+                    if len(g) > 1 and any(not r.company_norm for r in g)]
+    return [g for g in (*by_company.values(), *by_req.values(), *title_groups) if len(g) > 1]
+
+
+def recount_job(db: Session, job: Job) -> Job:
+    """Recompute a job's tallies and provenance from the sightings that point at it.
+
+    Derived from the rows rather than incremented alongside them, because incremented counters
+    drift the moment anything merges — and the first version of this did exactly that, adding one
+    sighting's `seen_count` to another's and producing a job "sighted 38 times" that had two
+    sighting rows. A number nobody can explain is worse than no number.
+    """
+    sightings = list(db.scalars(select(ObservedJob)
+                                .where(ObservedJob.canonical_job_key == job.job_key)).all())
+    job.sighting_count = len(sightings)
+    job.seen_count = sum((s.seen_count or 1) for s in sightings)
+    job.source_platforms = sorted({s.platform for s in sightings if s.platform})
+    if sightings:
+        job.first_seen_at = min(as_aware(s.first_seen_at) for s in sightings)
+        job.last_seen_at = max(as_aware(s.last_seen_at) for s in sightings)
+    return job
+
+
+def recount_all(db: Session) -> int:
+    """Recount every live job. Cheap, idempotent, and the repair for any drift."""
+    jobs = list(db.scalars(select(Job).where(Job.merged_into_key.is_(None))).all())
+    for j in jobs:
+        recount_job(db, j)
+    db.commit()
+    return len(jobs)
 
 
 def propose_matches(db: Session, *, limit: int = 500) -> list[MatchProposal]:
@@ -465,6 +517,7 @@ def apply_merge(db: Session, kept_key: str, folded_key: str) -> Job:
     for s in db.scalars(select(ObservedJob)
                         .where(ObservedJob.canonical_job_key == folded.job_key)).all():
         s.canonical_job_key = kept.job_key
+    db.flush()
 
     # Prefer the value we have over the value we lack; never overwrite a filled field. The one
     # ranked choice is the description — an ATS-sourced JD is fuller than a results-pane scrape.
@@ -474,10 +527,10 @@ def apply_merge(db: Session, kept_key: str, folded_key: str) -> Job:
     if _description_rank(folded) > _description_rank(kept):
         kept.description, kept.description_source = folded.description, folded.description_source
 
-    kept.source_platforms = sorted(set(kept.source_platforms or []) | set(folded.source_platforms or []))
-    kept.sighting_count = (kept.sighting_count or 0) + (folded.sighting_count or 0)
-    kept.first_seen_at = min(as_aware(kept.first_seen_at), as_aware(folded.first_seen_at))
-    kept.last_seen_at = max(as_aware(kept.last_seen_at), as_aware(folded.last_seen_at))
+    # Counts and dates come from the repointed sightings, not from arithmetic on the two rows —
+    # the merge has just changed what the truth is, so re-read it. Also self-heals a job whose
+    # tallies were already wrong before the merge.
+    recount_job(db, kept)
     if kept.status in ("new", "") and folded.status not in ("new", ""):
         kept.status = folded.status
 
@@ -489,7 +542,20 @@ def apply_merge(db: Session, kept_key: str, folded_key: str) -> Job:
     return kept
 
 
-_DESCRIPTION_RANK = {"ats": 3, "manual": 2, "indeed_pane": 1}
+#: How much to trust a description by where it came from. Anything not listed is a board's own
+#: detail pane ('indeed_pane', 'linkedin_pane', …) and ranks 1 — boards truncate and reformat, so
+#: the same posting read off the ATS itself always wins.
+_DESCRIPTION_RANK = {"ats": 3, "manual": 2}
+
+
+def pane_source(platform: Optional[str]) -> str:
+    """Provenance label for a description read off a board's detail pane.
+
+    Platform-derived rather than the hardcoded 'indeed_pane' it started as: LinkedIn descriptions
+    land in the same column, and a corpus that cannot say WHICH board a JD was read from cannot
+    later tell you that one of them truncates.
+    """
+    return f"{platform or 'search'}_pane"
 
 
 def _description_rank(job: Job) -> int:
@@ -578,15 +644,15 @@ def resolve_sighting(db: Session, sighting: ObservedJob) -> Job:
         canonical_url=sighting.url or "",
         ats=sighting.application_platform, salary=sighting.salary,
         description=sighting.description,
-        description_source="indeed_pane" if (sighting.description or "").strip() else None,
+        description_source=pane_source(sighting.platform) if (sighting.description or "").strip() else None,
         source_platforms=[sighting.platform] if sighting.platform else [],
-        sighting_count=sighting.seen_count or 1,
         first_seen_at=sighting.first_seen_at, last_seen_at=sighting.last_seen_at,
         status="applied" if sighting.application_status == "applied" else "new",
     )
     db.add(job)
     sighting.canonical_job_key = key
-    return job
+    db.flush()
+    return recount_job(db, job)
 
 
 def _company_candidates(db: Session, company_norm: str, reqs: set[str]) -> list[Job]:
@@ -608,19 +674,52 @@ def _company_candidates(db: Session, company_norm: str, reqs: set[str]) -> list[
 def _attach(db: Session, sighting: ObservedJob, job: Job) -> Job:
     """Point a sighting at an existing job and let the job learn from it."""
     sighting.canonical_job_key = job.job_key
-    job.sighting_count = (job.sighting_count or 0) + 1
-    if sighting.platform and sighting.platform not in (job.source_platforms or []):
-        job.source_platforms = sorted((job.source_platforms or []) + [sighting.platform])
-    if sighting.last_seen_at and as_aware(sighting.last_seen_at) > as_aware(job.last_seen_at):
-        job.last_seen_at = sighting.last_seen_at
-    if sighting.first_seen_at and as_aware(sighting.first_seen_at) < as_aware(job.first_seen_at):
-        job.first_seen_at = sighting.first_seen_at
     for src, attr in ((sighting.salary, "salary"), (sighting.location, "location"),
                       (sighting.url, "canonical_url"), (sighting.application_platform, "ats")):
         if src and not getattr(job, attr, None):
             setattr(job, attr, src)
     if (sighting.description or "").strip() and not (job.description or "").strip():
-        job.description, job.description_source = sighting.description, "indeed_pane"
+        job.description, job.description_source = sighting.description, pane_source(sighting.platform)
+    # Counts, platforms and dates are all re-derived from the sightings — see `recount_job`.
+    db.flush()
+    return recount_job(db, job)
+
+
+def sync_description(db: Session, sighting: ObservedJob) -> Optional[Job]:
+    """Push a sighting's freshly-read description (and salary / apply route) up to its job.
+
+    The missing half of description capture, and the reason coverage looked stuck. Sightings are
+    resolved to a canonical `Job` once, when they are first scraped — at which point most of them
+    have no description, because the JD is read later by clicking INTO the card. Nothing then
+    carried that text upward, so the board's own table filled up while the canonical table the
+    dashboard reads stayed empty.
+
+    Platform-agnostic on purpose: Indeed and LinkedIn both write their JD onto a sighting and both
+    arrive here. The only thing the platform decides is the provenance label (`pane_source`), which
+    is what later lets us ask which board truncates.
+
+    Does not commit — the caller owns the transaction, same contract as the upsert.
+    """
+    if not sighting.canonical_job_key:
+        return None
+    alive = resolve_key(db, sighting.canonical_job_key)
+    job = db.get(Job, alive) if alive else None
+    if job is None:
+        return None
+
+    text = (sighting.description or "").strip()
+    if text:
+        incoming = _DESCRIPTION_RANK.get(pane_source(sighting.platform), 1)
+        # A longer read of the same posting is a better read: the pane sometimes truncates on the
+        # first click and fills in on a later one.
+        if incoming > _description_rank(job) or (
+                incoming == _description_rank(job) and len(text) > len((job.description or "").strip())):
+            job.description = sighting.description
+            job.description_source = pane_source(sighting.platform)
+    if sighting.salary and not job.salary:
+        job.salary = sighting.salary
+    if sighting.application_platform and not job.ats:
+        job.ats = sighting.application_platform
     return job
 
 
@@ -671,9 +770,29 @@ def backfill(db: Session) -> dict[str, int]:
     the corpus. Fully idempotent, so it is safe to re-run after any sweep.
     """
     resolved = resolve_all(db)
+    recount_all(db)
+    descriptions = sync_all_descriptions(db)
     applications = _backfill_applications(db)
     dedup = scan_and_record(db)
-    return {"sightings_resolved": resolved, "applications_created": applications, **dedup}
+    return {"sightings_resolved": resolved, "descriptions_synced": descriptions,
+            "applications_created": applications, **dedup}
+
+
+def sync_all_descriptions(db: Session) -> int:
+    """Carry every sighting's description up to its canonical job. Idempotent.
+
+    The catch-up for descriptions read before the canonical table existed, and the repair for any
+    that slipped past the live sync.
+    """
+    synced = 0
+    rows = db.scalars(select(ObservedJob).where(
+        ObservedJob.canonical_job_key.isnot(None),
+        func.coalesce(ObservedJob.description, "") != "")).all()
+    for s in rows:
+        if sync_description(db, s) is not None:
+            synced += 1
+    db.commit()
+    return synced
 
 
 def _backfill_applications(db: Session) -> int:

@@ -165,6 +165,9 @@ def test_a_rejected_pair_is_never_proposed_again(db):
 def test_a_merge_repoints_sightings_and_leaves_a_tombstone(db):
     _job(db, "a", "Data Analyst", "Acme")
     _job(db, "b", "Data Analyst", "Acme", platform="linkedin", seen=T0 + timedelta(days=2))
+    # Both jobs get a real sighting: counts and platforms are DERIVED from these rows, so a job
+    # asserting a platform no sighting backs is a fixture that cannot occur in the live table.
+    _sighting(db, "indeed:11", "Data Analyst", "Acme").canonical_job_key = "a"
     s = _sighting(db, "linkedin:99", "Data Analyst", "Acme", platform="linkedin")
     s.canonical_job_key = "b"
     db.commit()
