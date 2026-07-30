@@ -1955,10 +1955,16 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     the data already gathered. Returns the run summary; the dashboard tables read the results.
 
     Runs against ANY registered aggregator (`domain_id`). The cadence — floor the radius, one page
-    at a time, click into shortlisted cards, human pauses, never under a captcha — is the same
-    everywhere because it is about how we behave, not about whose markup we are reading. Only the
-    tab we aim at and the platform we tag rows with come from the domain; the capture server picks
-    its readers off the live tab's host.
+    at a time, human pauses, never under a captcha — is the same everywhere because it is about how
+    we behave, not about whose markup we are reading.
+
+    WHAT IS NOT THE SAME is the LIST. `search_cadence.traversal_for(platform)` says how this
+    engine's results are walked, and the two answers differ in kind: Indeed's cards are all in the
+    DOM and we click into a shortlist, while LinkedIn's list is virtualised inside its own scrolling
+    column — its results do not exist until the list has been wheeled through, and the traversal
+    opens EVERY card because on that engine walking the list IS the search. The tab we aim at and
+    the platform we tag rows with come from the domain; the capture server picks its readers (and
+    its scroller) off the live tab's host.
     """
     import random
     import apply_state_store as store
@@ -1974,6 +1980,9 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     platform = command_center.platform_for(body.domain_id)
     search_tab = command_center.search_tab_url(body.domain_id)
     is_spa = command_center.is_spa(body.domain_id)
+    # How THIS engine's list is walked — virtualised or not, every card or the shortlist. The
+    # cadence stays the same everywhere; only the list differs (search_cadence.traversal_for).
+    traversal = search_cadence.traversal_for(platform)
 
     target = jst.active_target() or {}
     query = (body.query or target.get("query") or "").strip()
@@ -2019,13 +2028,23 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     def _jitter(extra: float) -> float:
         return random.uniform(pace_base, pace_base + extra)
 
-    pages_swept = total_found = total_new = total_short = total_desc = 0
+    pages_swept = total_found = total_new = total_short = total_desc = total_uncapped = 0
+    scroll_log: list[dict] = []
     shortlist_refs: list[str] = list(bb.search_state.shortlist or [])
     stopped_reason = "max_pages"
     for _ in range(max_pages):
+        # `/extract_jobs` walks a virtualised list itself (wheel over the list column, re-read until
+        # it stops growing) and reports what the scrolling did in `meta.scroll`. That is carried out
+        # of here rather than averaged away: a page that came back short needs to say whether it was
+        # a short page or a wheel that went nowhere.
         ex = await _capture_post("/extract_jobs",
                                  {"browser_url": browser_url, "tab_url": search_tab})
         cards = ex.get("jobs", []) if ex.get("ok") else []
+        scroll_meta = ((ex.get("meta") or {}).get("scroll") or {}
+                       ) if isinstance(ex.get("meta"), dict) else {}
+        if scroll_meta:
+            scroll_log.append({"page": pages_swept + 1, "batches": scroll_meta.get("batches"),
+                               "moved": scroll_meta.get("moved"), "cards": len(cards)})
         new_c, _dup = upsert_observed_jobs(db, cards, platform, query)
         db.commit()
         pages_swept += 1
@@ -2038,8 +2057,19 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
         shortlisted = _shortlist_jobs(cards, query, applied_keys)
         total_short += len(shortlisted)
 
-        # CLICK INTO each shortlisted card (in-page pane) to grab the full description.
-        for card in shortlisted[:body.max_details_per_page]:
+        # WHICH CARDS GET OPENED IS THE ENGINE'S CALL, NOT THIS LOOP'S. On LinkedIn the traversal
+        # IS the search — scroll, open every card, record it (operator-directed 2026-07-30) — and
+        # a keyword shortlist there throws away exactly the rows that teach the boundary. Indeed
+        # keeps the shortlist: its cards are all in the DOM, so a detail read is a click we chose
+        # to spend rather than the only way to see the result at all.
+        to_open = cards if traversal.get("click_into") == "every_card" else shortlisted
+        # NO SILENT CAP. `max_details_per_page` (default 8) will truncate a 25-card LinkedIn page
+        # that asked for every card, and a summary reading "25 found, 8 descriptions" looks like
+        # success. Count what the cap dropped and return it.
+        total_uncapped += max(0, len(to_open) - body.max_details_per_page)
+
+        # CLICK INTO each card (in-page pane) to grab the full description.
+        for card in to_open[:body.max_details_per_page]:
             jid = f"{platform}:{card.get('external_id')}"
             row = db.get(ObservedJob, jid)
             if row is None or (row.description or "").strip():
@@ -2090,13 +2120,19 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     bb.search_state.observed_count = total_found
     bb.search_state.shortlist = shortlist_refs
     bb.log("sweep", f"{platform}: {query!r} @ {min_miles}mi: {pages_swept}p, {total_found} found, "
-                    f"{total_desc} descriptions ({stopped_reason})")
+                    f"{total_desc} descriptions ({stopped_reason})"
+                    + (f"; {total_uncapped} cards left unopened by max_details_per_page="
+                       f"{body.max_details_per_page}" if total_uncapped else ""))
     store.save(bb)
     return {"ok": True, "stopped_reason": stopped_reason, "pages_swept": pages_swept,
             "jobs_found": total_found, "new": total_new, "shortlisted": total_short,
             "descriptions_captured": total_desc, "min_miles": min_miles,
             "distance_selected": dist.get("selected_miles"), "query": query, "location": location,
-            "domain_id": body.domain_id, "platform": platform}
+            "domain_id": body.domain_id, "platform": platform,
+            # What the engine's traversal asked for, and what the caps actually allowed.
+            "click_into": traversal.get("click_into"),
+            "details_skipped_by_cap": total_uncapped,
+            "scroll": scroll_log}
 
 
 @router.patch("/api/jobs/{job_id:path}")

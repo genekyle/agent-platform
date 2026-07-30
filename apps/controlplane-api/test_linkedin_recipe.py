@@ -42,14 +42,24 @@ def test_linkedins_own_finder_takes_the_box_and_refuses_the_skip_link():
     assert controls["location"] is None     # measured: no location box either
 
 
-def test_it_will_not_claim_it_can_run_a_query_while_the_box_cannot_be_filled():
-    """THE HONEST BIT. Finding a query box is not the same as being able to use one: the humanized
-    `type` reports ok, blurs the field and inserts nothing. `ready` stays False so no caller reads
-    "found" as "can run"."""
+def test_ready_is_true_now_that_the_box_fills_and_enter_commits():
+    """`ready` was False for a reason that turned out to be false. The claim behind it — "the
+    humanized type reports ok, blurs the field and inserts nothing" — was retracted by the
+    operator's own recording (17 trusted keystrokes landed), and Enter then committed and landed on
+    the results page. So `ready` is True, and the retracted claim must not be back in `why`."""
     controls = lr.search_controls(LIVE_HOME)
+    assert controls["ready"] is True
+    assert "does not fill" not in controls["why"]
+    assert lr.SEARCH_SUBMIT_READY is True
+
+
+def test_a_page_with_no_query_box_is_still_not_ready():
+    """`ready` has to keep meaning something. On the results page there is no query box to fill, and
+    saying "ready" there would send a caller typing into nothing."""
+    controls = lr.search_controls([_c("button", "Location Greater Boston", 9)])
+    assert controls.get("query") is None
     assert controls["ready"] is False
-    assert "does not fill" in controls["why"]
-    assert lr.SEARCH_SUBMIT_READY is False
+    assert "No query box" in controls["why"]
 
 
 def test_the_placeholder_is_not_an_identifier():
@@ -84,8 +94,8 @@ def test_the_home_state_id_matches_what_facets_already_maps():
 # Operator-described 2026-07-28 and the real structural difference from Indeed:
 #   INDEED    [what] + [where] together -> submit -> results -> radius
 #   LINKEDIN  [title] alone             -> submit -> results -> location -> radius
-def test_the_search_is_staged_title_then_location_then_radius():
-    assert [s["stage"] for s in lr.SEARCH_CADENCE] == ["title", "location", "radius"]
+def test_the_search_is_staged_title_then_location_then_radius_then_traverse():
+    assert [s["stage"] for s in lr.SEARCH_CADENCE] == ["title", "location", "radius", "traverse"]
     assert lr.stage_for_state(lr.HOME)["stage"] == "title"
     assert lr.stage_for_state(lr.HOME)["value_from"] == "query"
 
@@ -121,7 +131,8 @@ def test_a_state_with_no_outstanding_stage_answers_none():
     """The honest answer on a page the cadence does not drive — it keeps a caller from forcing a
     stage onto the wrong screen."""
     assert lr.stage_for_state(lr.JOB_DETAIL) is None
-    assert lr.stage_for_state(lr.SEARCH_RESULTS, done=("title", "location", "radius")) is None
+    assert lr.stage_for_state(
+        lr.SEARCH_RESULTS, done=("title", "location", "radius", "traverse")) is None
 
 
 def test_the_title_stage_must_open_the_widget_before_typing():
@@ -133,10 +144,10 @@ def test_the_title_stage_must_open_the_widget_before_typing():
 
 
 def test_filling_and_submitting_are_tracked_separately():
-    """'We can type' is not 'we can search'. The fill is measured; nothing has yet committed the
-    query and read back a results page."""
+    """'We can type' is not 'we can search' — two flags, and they were true at different times,
+    which is the only reason the gap between them was ever visible. Both measured now."""
     assert lr.SEARCH_FILL_READY is True
-    assert lr.SEARCH_SUBMIT_READY is False
+    assert lr.SEARCH_SUBMIT_READY is True
 
 
 def test_the_commit_is_enter_and_is_confirmable_without_a_navigation():
@@ -156,6 +167,76 @@ def test_the_disproven_mechanisms_are_gone_from_the_record():
     for dead in ("blurs the element", "the accessible name changes on focus",
                  "THE OPEN BLOCKER"):
         assert dead not in doc, dead
+
+
+# --- walking the results list ------------------------------------------------------------------
+# Operator-directed 2026-07-30, after the list would not scroll: on LinkedIn the traversal IS the
+# search — scroll it, open every card, record each — and the scroll has to be a wheel with the
+# cursor over the list, like the clicks. These assertions are what keeps that from being optional
+# again, because every part of it was previously left to whichever caller got there first.
+def test_walking_the_list_is_a_stage_of_the_cadence_not_an_afterthought():
+    traverse = next(s for s in lr.SEARCH_CADENCE if s["stage"] == lr.STAGE_TRAVERSE)
+    assert traverse["on_state"] == lr.SEARCH_RESULTS
+    assert traverse["commits"] is False           # scrolling and reading spend no search
+    # it comes AFTER the filters — traversing a list you are about to re-query is wasted motion
+    assert lr.stage_for_state(lr.SEARCH_RESULTS,
+                              done=("title", "location", "radius"))["stage"] == "traverse"
+
+
+def test_the_scroll_is_a_wheel_over_the_list_and_never_scrolltop():
+    """The measured failure: `pane.scrollTop` on a class-named element that was null on the live
+    page, so every scroll fell through to the window and the list never moved. Both halves are
+    named here — the wheel, and the pointer being over the list — because either one alone is the
+    same no-op wearing a different hat."""
+    t = lr.results_traversal()
+    assert t["scroll_by"] == "wheel"
+    assert "over the results list" in t["scroll_pointer"]
+    assert t["scroll_container"] == "inner"
+    assert "scrollTop" not in str(t.values()).replace("never scrollTop", "")
+
+
+def test_the_list_is_located_from_a_card_not_by_class():
+    """The classes are build-hashed, which is why the class-named scroller and the class-named card
+    reader both came back empty on the same page."""
+    t = lr.results_traversal()
+    assert "anchor" in t["located_by"]
+    assert t["virtualised"] is True
+
+
+def test_a_scroll_needs_evidence_that_it_moved_or_rendered():
+    """`ok` from a wheel means CDP dispatched it. Movement OR new cards is what means it landed —
+    and both are needed, because at the end of a rendered list the position moves with nothing new,
+    while a list that renders in place grows on almost no movement."""
+    t = lr.results_traversal()
+    assert "MOVED" in t["scroll_evidence"] and "RENDERED" in t["scroll_evidence"]
+    assert "exhausted" in t["stop_scrolling_when"]
+
+
+def test_every_card_is_opened_and_the_pane_switch_is_the_proof():
+    t = lr.results_traversal()
+    assert t["click_into"] == "every_card"
+    assert "humanized" in t["click_by"] and ".click()" in t["click_by"]
+    assert "switched" in t["click_evidence"]
+
+
+def test_the_traversal_admits_it_has_not_been_driven_live():
+    """It is built from measurements of what FAILED, which is not a measurement of it working.
+    PRINCIPLES §13: say which it is."""
+    assert "Not yet driven" in lr.results_traversal()["unverified"]
+    assert "not been driven live" in lr.spec()["blocked_on"]
+
+
+def test_the_shared_cadence_reads_linkedins_traversal_and_indeeds_default():
+    """The cadence is the same everywhere; the LIST is not. Indeed's cards are all in the DOM and
+    earn a shortlist; LinkedIn's are virtualised and every one gets opened."""
+    assert sc.traversal_for("linkedin")["click_into"] == "every_card"
+    assert sc.traversal_for("linkedin")["virtualised"] is True
+    assert sc.traversal_for("indeed")["click_into"] == "shortlist"
+    assert sc.traversal_for("indeed")["virtualised"] is False
+    # an engine we have not mapped gets the conservative default, not an error
+    assert sc.traversal_for("dice")["click_into"] == "shortlist"
+    # and the shared bounds now say how a scroll is performed at all
+    assert "wheel" in sc.BOUNDS["scroll_by"] and "scrollTop" in sc.BOUNDS["scroll_by"]
 
 
 def test_the_title_stage_asserts_which_search_it_committed():

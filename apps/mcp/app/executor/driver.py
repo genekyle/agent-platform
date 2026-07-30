@@ -111,6 +111,47 @@ class TrajectoryDriver(ABC):
         if path:
             await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": x, "y": y})
 
+    # --- the two PUBLIC seams for a caller that already holds a CDP session --------------------
+    # A tier-2 recipe (LinkedIn's virtualised results list, say) needs to click and scroll several
+    # times inside ONE session, interleaved with its own reads. Going back out through
+    # `move_and_act` per act would open a fresh websocket and re-discover the target each time, and
+    # reaching for `_click_sequence` / `_scroll_plan` from outside is how a second, drifting copy of
+    # the humanized signature gets written. These two are the same code `move_and_act` runs — the
+    # driver stays the ONE place that knows what a human hand looks like.
+
+    async def click_at(self, cdp, x: float, y: float,
+                       start: Optional[tuple[float, float]] = None) -> None:
+        """This driver's trusted click at a VIEWPORT point (CSS px), on an open session.
+
+        Humanized: approach along a wiggly path, jitter the press point, dwell. Direct: teleport
+        and press. Identical to the coordinate branch of `move_and_act`."""
+        path = await self._path_to(x, y, start)
+        await self._click_sequence(cdp, x, y, path)
+
+    async def scroll_at(self, cdp, x: float, y: float, total_px: float,
+                        start: Optional[tuple[float, float]] = None) -> None:
+        """This driver's wheel scroll of `total_px` (DOWN positive) WITH THE CURSOR AT (x, y).
+
+        THE CURSOR POSITION IS THE ARGUMENT, not a detail. A wheel event scrolls whichever
+        scroll container sits under the pointer, so on a two-column app (LinkedIn's results list
+        beside its detail pane) the same wheel scrolls a different thing depending on where the
+        pointer is — and a wheel over a column that cannot scroll simply does nothing while every
+        `ok` in the chain still says success. Callers must pass a point they measured INSIDE the
+        thing they mean to scroll.
+
+        The cursor is MOVED there first (along this driver's path), so the page sees a hover before
+        the wheel — which is both what a hand does and what a list binding on mouseenter needs.
+        """
+        import asyncio
+        await self._approach(cdp, x, y, start)
+        for delta, pause in self._scroll_plan(total_px):
+            # tolerate a dropped wheel ack per notch (the wheel lands regardless) — see _dispatch_mouse
+            await self._dispatch_mouse(
+                cdp, {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta},
+                timeout=0.6)
+            if pause:
+                await asyncio.sleep(pause)
+
     async def _apply_value(self, cdp, request: ActionRequest,
                            object_id: Optional[str] = None) -> None:
         """For type/select/clear actions, apply the value after focusing via click.
@@ -233,17 +274,16 @@ class TrajectoryDriver(ABC):
 
     async def _do_scroll(self, cdp, request: ActionRequest) -> str:
         """Vertical wheel scroll over a viewport point. `request.value` = 'down'/'up' (default ~600px),
-        a number of px, or 'down 1000'. Positive deltaY scrolls down. Dispatches this driver's plan."""
-        import asyncio
+        a number of px, or 'down 1000'. Positive deltaY scrolls down.
+
+        `target_bbox` is WHERE THE CURSOR GOES — pass the bbox of the pane you mean to scroll (see
+        `scroll_at`). With no bbox we fall back to mid-viewport, which is a guess: on a two-column
+        app it may well land on the column that does not move."""
         total = parse_scroll_value(request.value)
         x, y = target_css_point(request.target_bbox, request.device_scale_factor)
         if not x and not y:  # no anchor bbox → scroll over mid-viewport
             x, y = 400.0, 400.0
-        for delta, pause in self._scroll_plan(total):
-            # tolerate a dropped wheel ack per notch (the wheel lands regardless) — see _dispatch_mouse
-            await self._dispatch_mouse(cdp, {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta}, timeout=0.6)
-            if pause:
-                await asyncio.sleep(pause)
+        await self.scroll_at(cdp, x, y, total)
         return "scroll"
 
     #: Where a custom combobox's options are searched. `this.ownerDocument` — NOT the top

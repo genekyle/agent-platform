@@ -1072,6 +1072,15 @@ _INDEED_JOBS_JS = r"""
 #   * TITLES CARRY A SCREEN-READER DUPLICATE. The anchor renders the title twice — once visible,
 #     once in a `.visually-hidden` span "Job title, Company" — so innerText yields it doubled.
 #     Prefer the aria-label, then strip the hidden node from a clone.
+#   * THE CARD IS FOUND FROM ITS ANCHOR, NOT BY A CLASS. Measured 2026-07-28: this reader returned
+#     ZERO on the real signed-in results page, because it enumerated cards by class
+#     (`li[data-occludable-job-id]`, `.job-card-container`, …) and the live page has none of them —
+#     the classes on it are build-hashed (`_5b06c34f cfc88646`). The module note above already said
+#     never to use a class selector and this did it anyway. So the card is now DERIVED: find the
+#     `/jobs/view/<id>` anchors (the one thing every rendering agrees on, and already our identity),
+#     then walk up to the largest ancestor that still contains exactly ONE of them. That ancestor is
+#     the card whatever it is called. The class selectors survive only as text-picking HINTS below,
+#     where a miss costs a field rather than the whole page.
 _LINKEDIN_JOBS_JS = r"""
 (() => {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
@@ -1081,6 +1090,17 @@ _LINKEDIN_JOBS_JS = r"""
     const c = n.cloneNode(true);
     c.querySelectorAll('.visually-hidden, .a11y-text, [aria-hidden=true]').forEach((e) => e.remove());
     return clean(c.innerText || '');
+  };
+  const lines = (n) => {
+    if (!n) return [];
+    const c = n.cloneNode(true);
+    c.querySelectorAll('.visually-hidden, .a11y-text, [aria-hidden=true]').forEach((e) => e.remove());
+    const seenL = new Set();
+    return (c.innerText || '').split('\n').map((s) => clean(s)).filter((s) => {
+      if (!s || seenL.has(s.toLowerCase())) return false;   // the card repeats its own title
+      seenL.add(s.toLowerCase());
+      return true;
+    });
   };
   const pick = (root, sels) => {
     for (const s of sels) { const n = root.querySelector(s); const t = txt(n); if (t) return t; }
@@ -1094,14 +1114,34 @@ _LINKEDIN_JOBS_JS = r"""
     return '';
   };
 
-  // Every rendering LinkedIn currently serves: the authed virtualised list, the authed card, and
-  // the public (logged-out) results list.
-  const cards = Array.from(document.querySelectorAll(
-    'li[data-occludable-job-id], div.job-card-container, li.jobs-search-results__list-item,'
-    + ' div.base-card.job-search-card, li.jobs-search__results-list > li, div[data-job-id]'
-  ));
+  // THE CARD, DERIVED FROM ITS ANCHOR. Grow upward while the ancestor still holds exactly one job
+  // anchor; the moment it holds two we have left the card and are in the list, so stop one short.
+  // `li`/`[data-occludable-job-id]` short-circuit it when LinkedIn happens to serve them.
+  const cardOf = (anchor) => {
+    const fast = anchor.closest('li[data-occludable-job-id], li, [data-job-id], [data-entity-urn]');
+    if (fast && fast.querySelectorAll('a[href*="/jobs/view/"]').length === 1) return fast;
+    let el = anchor;
+    for (let hops = 0; hops < 6; hops++) {
+      const up = el.parentElement;
+      if (!up || up === document.body) break;
+      if (up.querySelectorAll('a[href*="/jobs/view/"]').length > 1) break;
+      el = up;
+    }
+    return el;
+  };
+
+  const anchors = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
+  const cards = [];
+  const cardSeen = new Set();
+  for (const a of anchors) {
+    const c = cardOf(a);
+    if (cardSeen.has(c)) continue;
+    cardSeen.add(c);
+    cards.push(c);
+  }
   const seen = new Set();
   const out = [];
+  let sample_lines = null;
   for (const card of cards) {
     const anchor = card.querySelector('a[href*="/jobs/view/"]')
                 || (card.matches('a[href*="/jobs/view/"]') ? card : null);
@@ -1113,23 +1153,41 @@ _LINKEDIN_JOBS_JS = r"""
             || '';
     if (!id || seen.has(id)) continue;
     seen.add(id);
+    if (sample_lines === null) sample_lines = lines(card).slice(0, 8);
 
     // aria-label is the cleanest title LinkedIn gives us; the anchor's own text is the fallback.
     let title = clean(anchor && (anchor.getAttribute('aria-label') || '')) || txt(anchor);
     if (!title) title = pick(card, ['.job-card-list__title', '.base-search-card__title',
                                     '.artdeco-entity-lockup__title', 'h3']);
-    const company = pick(card, ['.artdeco-entity-lockup__subtitle',
-                                '.job-card-container__primary-description',
-                                '.base-search-card__subtitle', '.job-card-container__company-name']);
-    const location = pick(card, ['.artdeco-entity-lockup__caption',
-                                 '.job-card-container__metadata-item',
-                                 '.job-search-card__location', '.job-card-container__metadata-wrapper li']);
+    let company = pick(card, ['.artdeco-entity-lockup__subtitle',
+                              '.job-card-container__primary-description',
+                              '.base-search-card__subtitle', '.job-card-container__company-name']);
+    let location = pick(card, ['.artdeco-entity-lockup__caption',
+                               '.job-card-container__metadata-item',
+                               '.job-search-card__location', '.job-card-container__metadata-wrapper li']);
     // Salary is not a labelled field — it is whichever metadata chip mentions money.
+    const money = /\$|\bper (hour|year)\b|\ban? (hour|year)\b|\/yr\b|\/hr\b/i;
     let salary = '';
     for (const li of card.querySelectorAll('.job-card-container__metadata-item, .artdeco-entity-lockup__metadata li, .job-search-card__salary-info')) {
       const t = txt(li);
-      if (/\$|\bper (hour|year)\b|\ban? (hour|year)\b/i.test(t)) { salary = t; break; }
+      if (money.test(t)) { salary = t; break; }
     }
+
+    // POSITIONAL FALLBACK — UNVERIFIED (no live read of these lines yet, 2026-07-30).
+    // Everything above addresses fields by CLASS, and on the live page the card-level classes were
+    // measured absent, so the fields most likely come back empty even now that the card itself is
+    // found structurally. LinkedIn stacks a card as title / company / location / metadata, so the
+    // remaining lines are read in that order. A wrong guess here mislabels a FIELD; leaving it out
+    // would drop the row's company and location entirely, which is worse and silent. `meta.
+    // sample_lines` carries the first card's real lines out with the response so ONE live call
+    // replaces this guess with a measurement.
+    const rest = lines(card).filter((s) => s.toLowerCase() !== (title || '').toLowerCase());
+    const chip = /^(promoted|viewed|easy apply|actively (hiring|reviewing)|reposted|be an early applicant|\d+ (school|connection|alum))/i;
+    const body = rest.filter((s) => !chip.test(s));
+    if (!company && body.length) company = body[0];
+    if (!location && body.length > 1) location = body[1];
+    if (!salary) salary = body.find((s) => money.test(s)) || '';
+
     // "Easy Apply" is the on-engine apply tell — the same question `apply_type` answers on Indeed,
     // and the fork between finishing here and handing off to an ATS.
     const apply_type = /easy apply/i.test(card.innerText || '') ? 'linkedin_easy_apply' : '';
@@ -1142,7 +1200,13 @@ _LINKEDIN_JOBS_JS = r"""
     .filter((n) => !isNaN(n)))].sort((a, b) => a - b);
   const start = parseInt(new URLSearchParams(location.search).get('start') || '0', 10);
   const totalEl = document.querySelector('.jobs-search-results-list__subtitle, .results-context-header__job-count, small.jobs-search-results-list__text');
-  const totalText = totalEl ? clean(totalEl.innerText) : '';
+  let totalText = totalEl ? clean(totalEl.innerText) : '';
+  // Class-free fallback, same reason as the card: read the count off the words. LinkedIn prints
+  // "1,234 results" near the top of the list; the first such phrase in the document is it.
+  if (!totalText) {
+    const m = clean((document.body && document.body.innerText) || '').match(/([\d,]{1,12})\+?\s+results?/i);
+    totalText = m ? m[0] : '';
+  }
   const totalMatch = totalText.match(/([\d,]+)/);
   const nextBtn = document.querySelector('.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"]');
   return {
@@ -1154,26 +1218,225 @@ _LINKEDIN_JOBS_JS = r"""
       visible_pages,
       has_next: !!(nextBtn && !nextBtn.disabled),
       rendered: out.length,
+      // The first card's ACTUAL text lines. Carried out with every response because the field
+      // mapping above is still a guess and this is what replaces it — see the fallback note.
+      sample_lines: sample_lines || [],
     },
   };
 })()
 """
 
-# Force the virtualised list to render the next batch. Scrolls the results COLUMN (LinkedIn scrolls
-# an inner pane, not the window) and, failing that, the window.
-_LINKEDIN_SCROLL_JS = r"""
+# --- scrolling the virtualised list, with the cursor actually over it -------------------------
+# WHAT THIS REPLACED, AND WHY. The previous version set `pane.scrollTop` on a class-named element
+# (`.jobs-search-results-list`, `.scaffold-layout__list`) and fell back to `window.scrollBy`. Three
+# things were wrong with it, and together they are why the list never scrolled:
+#
+#   1. THE CLASSES ARE BUILD-HASHED (measured 2026-07-28), so `pane` was null and every scroll went
+#      to the window — which on this layout moves the page frame, not the list. Nothing errored.
+#   2. `scrollTop = …` IS NOT A SCROLL A HAND COULD MAKE. It is the same class of shortcut as a
+#      synthetic `.click()`: an assignment, no wheel, no pointer, no hover. Operator-directed
+#      2026-07-30: the scroll must be a WHEEL WITH THE CURSOR OVER THE LIST, like the clicks.
+#   3. A wheel only scrolls what is UNDER THE POINTER. On a two-column app the results list and the
+#      detail pane are separate scrollers, so where the cursor sits decides which one moves — and a
+#      wheel over the wrong column is a no-op that reports fine.
+#
+# So the JS here is READ-ONLY: it finds the list, works out WHERE TO PUT THE CURSOR, and measures
+# the scroll position. The motion itself is dispatched by the humanized driver (`scroll_at`) —
+# eased, jittered notches at that point — and `_scroll_job_list` compares the measurement before
+# and after, so "it scrolled" is evidence rather than an assumption.
+#
+# The list is found FROM A CARD, never by class (same lesson, same page): the scroll container is
+# the nearest ancestor of a job anchor that actually overflows. If nothing overflows, the window is
+# the scroller — and the cursor still goes over the card column, because that is the column whose
+# content we want rendered.
+_LINKEDIN_LIST_PROBE_JS = r"""
 (() => {
-  const pane = document.querySelector(
-    '.jobs-search-results-list, .scaffold-layout__list > div, .scaffold-layout__list,'
-    + ' div.jobs-search__results-list');
-  if (pane && pane.scrollHeight > pane.clientHeight) {
-    pane.scrollTop = Math.min(pane.scrollTop + pane.clientHeight * 0.9, pane.scrollHeight);
-    return { scrolled: 'pane', at: pane.scrollTop, height: pane.scrollHeight };
+  const idFromHref = (href) => {
+    const m = (href || '').match(/\/jobs\/view\/(?:[^/]*-)?(\d{6,})/);
+    return m ? m[1] : '';
+  };
+  const anchors = [...document.querySelectorAll('a[href*="/jobs/view/"]')];
+  const boxed = anchors.map((a) => ({ a, r: a.getBoundingClientRect() }))
+                       .filter((o) => o.r.width > 0 && o.r.height > 0);
+  const ids = [...new Set(anchors.map((a) => idFromHref(a.href)).filter(Boolean))];
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (!boxed.length) {
+    return { ok: false, cards: 0, ids, reason: 'no visible /jobs/view/ anchors on this page',
+             hover: { x: Math.round(vw / 2), y: Math.round(vh / 2) } };
   }
-  window.scrollBy(0, window.innerHeight * 0.9);
-  return { scrolled: 'window', at: window.scrollY, height: document.body.scrollHeight };
+
+  // The card COLUMN: the union of the card anchors' rects, clipped to the viewport. Its centre is
+  // where the cursor belongs — inside the list, never over the detail pane on the right.
+  const left = Math.min(...boxed.map((o) => o.r.left));
+  const right = Math.max(...boxed.map((o) => o.r.right));
+  const top = Math.max(0, Math.min(...boxed.map((o) => o.r.top)));
+  const bottom = Math.min(vh, Math.max(...boxed.map((o) => o.r.bottom)));
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const hover = {
+    x: Math.round(clamp((left + right) / 2, 4, vw - 4)),
+    y: Math.round(clamp((top + bottom) / 2, 8, vh - 8)),
+  };
+
+  // The SCROLLER: the nearest ancestor of a card that overflows and is allowed to scroll. Walk up
+  // from a card that is actually on screen — an occluded one may not have a laid-out ancestor.
+  const scrollable = (el) => {
+    if (!el || el === document.body || el === document.documentElement) return null;
+    const cs = getComputedStyle(el);
+    const oy = cs.overflowY;
+    if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay')
+        && el.scrollHeight > el.clientHeight + 4) return el;
+    return null;
+  };
+  let pane = null;
+  for (let el = boxed[0].a; el && !pane; el = el.parentElement) pane = scrollable(el);
+  const doc = document.scrollingElement || document.documentElement;
+  const cont = pane || doc;
+  const at = Math.round(pane ? pane.scrollTop : (window.scrollY || doc.scrollTop || 0));
+  const height = Math.round(cont.scrollHeight);
+  const client = Math.round(pane ? pane.clientHeight : vh);
+  return {
+    ok: true,
+    kind: pane ? 'pane' : 'window',
+    cards: ids.length,
+    ids,
+    hover,
+    column: { left: Math.round(left), right: Math.round(right),
+              top: Math.round(top), bottom: Math.round(bottom) },
+    at, height, client,
+    at_end: at + client >= height - 8,
+    dpr: window.devicePixelRatio || 1,
+  };
 })()
 """
+
+
+async def _list_probe(cdp) -> dict:
+    """Read-only: where the results list is, where to put the cursor, and where it is scrolled to."""
+    res = await cdp.send("Runtime.evaluate",
+                         {"expression": _LINKEDIN_LIST_PROBE_JS, "returnByValue": True})
+    return (res.get("result") or {}).get("value") or {"ok": False, "cards": 0,
+                                                     "reason": "probe returned nothing"}
+
+
+async def _scroll_job_list(cdp, *, driver, notch_px: float = 700.0,
+                           settle_seconds: float = 0.9,
+                           before: Optional[dict] = None) -> dict:
+    """ONE humanized wheel batch over the results column, and the evidence that it landed.
+
+    The cursor is moved into the card column and the wheel is dispatched THERE (see
+    `_LINKEDIN_LIST_PROBE_JS` for why the pointer position is the whole game), in the driver's
+    eased-and-jittered notches — the same motion the clicks use, because a page that fingerprints
+    input sees scrolling too, and an instant 900px jump next to a human-shaped click is a louder
+    tell than either alone.
+
+    `landed` is the honest bit: a wheel that neither MOVED the scroller nor GREW the rendered list
+    did nothing, and this says so instead of returning the `ok` that means "CDP did not throw".
+    Both signals are needed — at the end of a fully-rendered list the position moves and nothing
+    grows; on a list that lazy-renders in place the count grows on barely any movement.
+    """
+    b = before or await _list_probe(cdp)
+    if not b.get("ok"):
+        return {"ok": False, "landed": False, "detail": b.get("reason") or "no results list found",
+                "cards_before": b.get("cards", 0), "probe": b}
+    hover = b.get("hover") or {}
+    # The probe's coordinates are already CSS px (getBoundingClientRect), which is what CDP input
+    # wants — so they go to the driver unscaled. Do NOT run them through `target_css_point`, which
+    # divides by the device scale factor and exists for AX bboxes in screenshot px.
+    await driver.scroll_at(cdp, float(hover.get("x", 0)), float(hover.get("y", 0)), float(notch_px))
+    await asyncio.sleep(max(0.0, settle_seconds))
+    a = await _list_probe(cdp)
+    moved = int(a.get("at", 0)) - int(b.get("at", 0))
+    known = set(b.get("ids") or [])
+    new_ids = [i for i in (a.get("ids") or []) if i not in known]
+    return {
+        "ok": True,
+        "kind": a.get("kind") or b.get("kind"),
+        "hover": hover,
+        "at_before": b.get("at"), "at_after": a.get("at"),
+        "moved": moved,
+        "cards_before": b.get("cards", 0), "cards_after": a.get("cards", 0),
+        "new_ids": new_ids,
+        "at_end": bool(a.get("at_end")),
+        "landed": bool(moved) or bool(new_ids),
+        "probe": a,
+        "detail": ("" if (moved or new_ids) else
+                   f"the wheel at ({hover.get('x')},{hover.get('y')}) moved nothing and rendered "
+                   f"nothing new — the pointer is over a {a.get('kind')} that does not scroll, or "
+                   f"the list is already at its end (at_end={bool(a.get('at_end'))})"),
+    }
+
+
+class ScrollJobListRequest(BaseModel):
+    """Walk the virtualised results list by WHEEL, with the cursor over the list."""
+    browser_url: str = "http://127.0.0.1:9222"
+    tab_id: Optional[str] = None
+    tab_url: Optional[str] = None
+    #: How many humanized wheel batches. Each is several eased notches, not one jump.
+    scrolls: int = 1
+    #: Signed CSS px per batch — DOWN positive, so a negative value walks back up the list.
+    notch_px: float = 700.0
+    settle_seconds: float = 0.9
+    #: Stop early once the scroller is at its end (or a batch lands nothing). On by default: past
+    #: the end every further batch is a no-op that would still read as a completed action.
+    stop_at_end: bool = True
+    driver: Optional[str] = None          # humanized by default — see get_driver
+
+
+@app.post("/scroll_job_list")
+@journaled(Intent.SCROLL)
+async def scroll_job_list(body: ScrollJobListRequest):
+    """Scroll the job-results list like a hand: cursor into the card column, then wheel.
+
+    TIER 2. Unlike `/execute action_id=scroll` — which wheels at a bbox the caller worked out, or
+    at mid-viewport if it had none — this one FINDS the list first (structurally, from the job
+    anchors) and reports what changed. Returns
+    {ok, batches, moved, cards_before, cards_after, new_ids, at_end, exhausted, steps[]}.
+
+    `exhausted` means a batch neither moved the scroller nor rendered a new card: the list is
+    finished, or the pointer is over something that does not scroll. Either way it is the signal to
+    stop scrolling and page instead — and it is positive evidence, not a timeout.
+    """
+    import websockets
+    from app.executor.driver import get_driver
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+
+    target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    driver = get_driver(body.driver)
+    steps: list[dict] = []
+    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
+        cdp = _CDPSession(ws)
+        # The wheel goes to the FOCUSED page. Without this a background tab reports every notch
+        # dispatched and scrolls nothing (same family as the popup that will not render in a hidden
+        # tab — see the widget-protocol notes).
+        await cdp.send("Page.bringToFront", {})
+        probe = await _list_probe(cdp)
+        if not probe.get("ok"):
+            return {"outcome": Outcome.NOT_FOUND, "ok": False, "batches": 0,
+                    "detail": probe.get("reason") or "no job-card anchors on this page",
+                    "probe": probe}
+        first_cards, all_new, exhausted = probe.get("cards", 0), [], False
+        for _ in range(max(1, min(int(body.scrolls), 40))):
+            step = await _scroll_job_list(cdp, driver=driver, notch_px=body.notch_px,
+                                          settle_seconds=body.settle_seconds, before=probe)
+            steps.append({k: step.get(k) for k in
+                          ("moved", "cards_before", "cards_after", "new_ids", "at_end", "landed")})
+            all_new += step.get("new_ids") or []
+            probe = step.get("probe") or probe
+            if not step.get("landed"):
+                exhausted = True
+                break
+            if body.stop_at_end and step.get("at_end"):
+                break
+    last = steps[-1] if steps else {}
+    return {"outcome": Outcome.OK, "ok": True, "batches": len(steps),
+            "kind": probe.get("kind"), "hover": probe.get("hover"),
+            "moved": sum(int(s.get("moved") or 0) for s in steps),
+            "cards_before": first_cards, "cards_after": probe.get("cards", first_cards),
+            "new_ids": all_new, "at_end": bool(last.get("at_end")), "exhausted": exhausted,
+            "steps": steps,
+            "detail": ("the list did not move and rendered nothing new — pointer over a "
+                       "non-scrolling column, or the end of the list"
+                       if exhausted and not all_new else "")}
 
 
 # --- "did that actually take?" on a single-page app -------------------------------------------
@@ -1329,13 +1592,20 @@ async def extract_jobs(body: ExtractJobsRequest):
     anchors. LinkedIn's list is VIRTUALISED, so there we scroll-and-re-read until the count stops
     growing — one read would return only the handful of cards currently in the viewport, and the
     corpus would silently record a 25-result page as 7.
+
+    THE SCROLL IS A HUMANIZED WHEEL WITH THE CURSOR OVER THE LIST (`_scroll_job_list`), not a
+    `scrollTop` assignment — operator-directed 2026-07-30, and see the probe's note for the three
+    separate reasons the assignment version scrolled nothing. `meta.scroll` carries what the
+    scrolling actually did, so a page that came back short says whether it was a short page or a
+    wheel that went nowhere.
     """
-    import asyncio
     import websockets
+    from app.executor.driver import get_driver
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
         platform = _platform_of(target.get("url", ""))
+        scroll_log: list[dict] = []
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
 
@@ -1346,14 +1616,21 @@ async def extract_jobs(body: ExtractJobsRequest):
 
             val = await _read()
             if platform == "linkedin":
-                # Bounded: 12 scrolls covers a 25-card page with room to spare, and stops early on
-                # two consecutive no-growth reads (the list is fully rendered, or it is short).
-                stale = 0
+                await cdp.send("Page.bringToFront", {})   # a wheel to a background tab moves nothing
+                driver = get_driver()                     # humanized: the system-wide default
+                # Bounded: 12 batches covers a 25-card page with room to spare. Stops early on a
+                # batch that LANDED NOTHING (end of list, or a pointer over a non-scroller — the
+                # difference is in `detail`), and on two consecutive no-growth reads.
+                stale, probe = 0, None
                 for _ in range(12):
                     before = len(val.get("jobs", []))
-                    await cdp.send("Runtime.evaluate",
-                                   {"expression": _LINKEDIN_SCROLL_JS, "returnByValue": True})
-                    await asyncio.sleep(0.6)
+                    step = await _scroll_job_list(cdp, driver=driver, settle_seconds=0.7,
+                                                  before=probe)
+                    scroll_log.append({k: step.get(k) for k in
+                                       ("moved", "landed", "at_end", "new_ids", "detail")})
+                    if not step.get("landed"):
+                        break
+                    probe = step.get("probe")
                     val = await _read()
                     if len(val.get("jobs", [])) <= before:
                         stale += 1
@@ -1363,6 +1640,10 @@ async def extract_jobs(body: ExtractJobsRequest):
                         stale = 0
         jobs = val.get("jobs", val if isinstance(val, list) else [])
         meta = val.get("meta") if isinstance(val, dict) else None
+        if scroll_log and isinstance(meta, dict):
+            meta["scroll"] = {"batches": len(scroll_log),
+                              "moved": sum(int(s.get("moved") or 0) for s in scroll_log),
+                              "steps": scroll_log}
         return {"ok": True, "jobs": jobs, "count": len(jobs), "meta": meta,
                 "platform": platform, "url": target.get("url", "")}
     except Exception as exc:  # noqa: BLE001
@@ -2535,9 +2816,14 @@ _CARD_BBOX_JS = r"""
 """
 
 # Same job for LinkedIn, whose card is addressed by the id in its /jobs/view/ href (see the note on
-# _LINKEDIN_JOBS_JS for why the href and not an attribute). The card may be scrolled out of the
-# virtualised list, so scrollIntoView is load-bearing here, not cosmetic — and after it we must let
-# the row settle before reading a rect, which the caller does by re-reading if the rect is offscreen.
+# _LINKEDIN_JOBS_JS for why the href and not an attribute).
+#
+# NO scrollIntoView HERE — and that is the point. This reader only MEASURES: where the row is, and
+# whether it is somewhere a pointer could actually press. Bringing it into view is the caller's job
+# and it does it with the wheel, over the list, like a hand (`_bring_card_into_view`). A
+# `scrollIntoView` would move the list by assignment, which is the shortcut this whole path exists
+# to stop taking — and it also lies about the wheel's reach: it can place a row that the virtualised
+# list has not rendered, in a container the wheel never touched.
 _LINKEDIN_CARD_BBOX_JS = r"""
 (id) => {
   const esc = String(id).replace(/"/g, '');
@@ -2545,12 +2831,19 @@ _LINKEDIN_CARD_BBOX_JS = r"""
             || document.querySelector(`li[data-occludable-job-id="${esc}"]`)
             || document.querySelector(`div[data-job-id="${esc}"]`)
             || document.querySelector(`[data-entity-urn$=":${esc}"]`);
-  if (!card) return {found:false};
+  if (!card) return {found:false, reason:'no node for this id (not rendered yet?)'};
   const el = card.matches('a') ? card : (card.querySelector('a[href*="/jobs/view/"]') || card);
-  el.scrollIntoView({block:'center', inline:'center'});
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return {found:false, reason:'card has no box (occluded)'};
-  return {found:true, x:r.x + r.width/2, y:r.y + r.height/2};
+  const x = r.x + r.width / 2, y = r.y + r.height / 2;
+  // A press outside the viewport hits nothing and reports success — the same trap the framed-form
+  // click guard is written against. Say whether the point is pressable and by how much it misses.
+  const vh = window.innerHeight, vw = window.innerWidth;
+  const margin = 60;                                  // keep clear of sticky headers/footers
+  const in_view = y > margin && y < vh - margin && x > 0 && x < vw;
+  return {found:true, x, y, in_view,
+          // signed CSS px the list must scroll DOWN for this row to sit mid-viewport
+          delta_y: Math.round(y - vh / 2)};
 }
 """
 
@@ -2609,6 +2902,40 @@ _JOB_DESC_JS_BY_PLATFORM = {"indeed": _JOB_DESC_JS, "linkedin": _LINKEDIN_JOB_DE
 _CARD_BBOX_JS_BY_PLATFORM = {"indeed": _CARD_BBOX_JS, "linkedin": _LINKEDIN_CARD_BBOX_JS}
 
 
+async def _bring_card_into_view(cdp, driver, measure, box: Optional[dict] = None,
+                                max_batches: int = 8) -> tuple[dict, list[dict]]:
+    """Wheel the results list until this card is pressable. Returns (final measurement, batches).
+
+    Two cases, one mechanism. If the row is RENDERED but off-screen we know exactly how far to go
+    (`delta_y` from the measurement). If it is not rendered at all — the virtualised list has not
+    reached it — we do not know where it is, so we walk DOWN a batch at a time and re-measure, which
+    is what a person scanning the list does. Both are the same humanized wheel over the same column;
+    neither touches `scrollTop`.
+
+    Stops as soon as the row is in view, when the list stops moving/growing (`landed=False` — the
+    end, honestly reached), or at `max_batches`. The caller decides what a still-missing card means;
+    this returns the evidence rather than a bare failure.
+    """
+    steps: list[dict] = []
+    cur = box if box is not None else await measure()
+    probe = None
+    for _ in range(max(1, max_batches)):
+        if cur.get("found") and cur.get("in_view"):
+            return cur, steps
+        # A rendered-but-offscreen row tells us the distance; an unrendered one gets a page-ish
+        # batch downward. Clamped so one measurement error cannot fling the list to the bottom.
+        delta = float(cur.get("delta_y") or 0) if cur.get("found") else 700.0
+        delta = max(-1200.0, min(1200.0, delta or 700.0))
+        step = await _scroll_job_list(cdp, driver=driver, notch_px=delta, settle_seconds=0.7,
+                                      before=probe)
+        steps.append({k: step.get(k) for k in ("moved", "landed", "at_end", "detail")})
+        probe = step.get("probe")
+        cur = await measure()
+        if not step.get("landed"):
+            break
+    return cur, steps
+
+
 @app.post("/open_job_card")
 async def open_job_card(body: OpenJobCardRequest):
     """Click a result card by its id to open the IN-PAGE right-hand detail pane, then scrape its
@@ -2619,46 +2946,57 @@ async def open_job_card(body: OpenJobCardRequest):
 
     Card locator and pane reader are both chosen by the tab's host: Indeed's `data-jk`, or
     LinkedIn's `/jobs/view/<id>` href. On LinkedIn the row may not be rendered at all — the list is
-    virtualised — so a miss earns one scroll-and-retry before it is reported as missing."""
-    import asyncio
+    virtualised — so a miss earns a WHEEL over the list (bounded, `_bring_card_into_view`) before it
+    is reported as missing, and the click waits until the row is somewhere a pointer could land.
+
+    THE CLICK IS THE DRIVER'S. It was three bare CDP mouse events at the card's centre: trusted, but
+    a teleport — no approach, no jitter, no dwell, while every other click in the system has all
+    three. `driver.click_at` is the same hand that clicks everything else, so the traversal that
+    clicks 25 cards in a row does not stand out from the one that fills a form."""
     import websockets
+    from app.executor.driver import get_driver
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
         platform = _platform_of(target.get("url", ""))
         bbox_js = _CARD_BBOX_JS_BY_PLATFORM[platform]
         desc_js = _JOB_DESC_JS_BY_PLATFORM[platform]
+        driver = get_driver()
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             await cdp.send("Page.bringToFront", {})
-            box = (await cdp.send("Runtime.evaluate", {
-                "expression": f"({bbox_js})({json.dumps(body.external_id)})",
-                "returnByValue": True})).get("result", {}).get("value") or {}
-            if not box.get("found") and platform == "linkedin":
-                # The virtualised list may not have rendered this row yet. scrollIntoView above
-                # only works on a node that EXISTS, so give the pane one scroll+settle and retry
-                # before calling it missing.
-                await cdp.send("Runtime.evaluate",
-                               {"expression": _LINKEDIN_SCROLL_JS, "returnByValue": True})
-                await asyncio.sleep(0.8)
-                box = (await cdp.send("Runtime.evaluate", {
+
+            async def _measure() -> dict:
+                r = await cdp.send("Runtime.evaluate", {
                     "expression": f"({bbox_js})({json.dumps(body.external_id)})",
-                    "returnByValue": True})).get("result", {}).get("value") or {}
+                    "returnByValue": True})
+                return (r.get("result") or {}).get("value") or {}
+
+            box = await _measure()
+            scrolled: list[dict] = []
+            if platform == "linkedin" and not (box.get("found") and box.get("in_view", True)):
+                box, scrolled = await _bring_card_into_view(cdp, driver, _measure, box)
             if not box.get("found"):
-                return {"ok": False, "platform": platform,
+                return {"ok": False, "platform": platform, "scrolled": scrolled,
                         "detail": f"card {body.external_id} not found"
-                                  + (f" ({box['reason']})" if box.get("reason") else "")}
+                                  + (f" ({box['reason']})" if box.get("reason") else "")
+                                  + (f" after {len(scrolled)} wheel batches over the list"
+                                     if scrolled else "")}
+            if platform == "linkedin" and not box.get("in_view", True):
+                # Refusing to press is the honest outcome: a press outside the viewport hits nothing
+                # and the pane-switch poll would then blame the click for a scroll that never got
+                # there. Say which half failed.
+                return {"ok": False, "platform": platform, "scrolled": scrolled,
+                        "detail": f"card {body.external_id} is rendered but still off-screen "
+                                  f"(y={box.get('y')}, needs {box.get('delta_y')}px) after "
+                                  f"{len(scrolled)} wheel batches — the list would not scroll to it"}
             # Snapshot the WHOLE pane (from the same scoped reader), not just the description.
             # The old check watched description alone — so when the pane switched but a field was
             # read from a stale node, that field silently kept the previous job's value and the
             # check never noticed. We now require the pane itself to have changed.
             before = (await cdp.send("Runtime.evaluate", {
                 "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
-            for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
-                ev = {"type": typ, "x": box["x"], "y": box["y"]}
-                if typ != "mouseMoved":
-                    ev.update({"button": "left", "clickCount": 1})
-                await cdp.send("Input.dispatchMouseEvent", ev)
+            await driver.click_at(cdp, float(box["x"]), float(box["y"]))
             # Poll until the pane has switched to the clicked job, bounded by settle_seconds. The
             # switch signal is description OR title changing from the before-snapshot — description
             # is the most reliable per-job field, title catches the rare identical-description case.
@@ -2679,6 +3017,8 @@ async def open_job_card(body: OpenJobCardRequest):
         data["switched"] = _switched(data)
         data["external_id"] = body.external_id
         data["platform"] = platform
+        if scrolled:
+            data["scrolled"] = scrolled
         return data
     except Exception as exc:  # noqa: BLE001
         logger.warning("open_job_card failed: %s", exc)
@@ -2714,27 +3054,38 @@ _NEXT_PAGE_JS = r"""
 """
 
 
-# LinkedIn's pagination is an artdeco bar at the bottom of the RESULTS COLUMN, not the window — so
-# scroll the pane to the end first (which also finishes the virtualised list), then click the next
-# NUMBER, falling back to the Next button. Numbers are preferred for the same reason as Indeed's:
-# the Next control is sometimes present-but-disabled on the last page, and clicking it is a no-op
-# that would read as "paged forward" and re-extract the same page.
+# LinkedIn's pagination is a bar at the BOTTOM OF THE RESULTS COLUMN, so it only exists on screen
+# once the list is scrolled to its end — which is why the caller wheels there first and this only
+# MEASURES the control. Numbers are preferred over the Next button for the same reason as Indeed's:
+# Next is sometimes present-but-disabled on the last page, and clicking it is a no-op that reads as
+# "paged forward" and re-extracts the same page.
+#
+# The bar is addressed by aria-label first (`Page 3`, `Next`) and by class only as a fallback — the
+# artdeco names are the ones LinkedIn's own tests use, but the note at the top of this file applies
+# here too, so a class miss must not be the difference between paging and stopping. Returns the
+# control's centre; the press is the driver's, not `el.click()`.
 _LINKEDIN_NEXT_PAGE_JS = r"""
 (() => {
-  const pane = document.querySelector(
-    '.jobs-search-results-list, .scaffold-layout__list > div, .scaffold-layout__list');
-  if (pane) pane.scrollTop = pane.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
   const start = parseInt(new URLSearchParams(location.search).get('start') || '0', 10);
   const cur = isNaN(start) ? 1 : Math.floor(start / 25) + 1;
-  const btnFor = (n) => [...document.querySelectorAll('.artdeco-pagination__indicator button, button[aria-label^="Page "]')]
-      .find((b) => (b.getAttribute('aria-label') === `Page ${n}`)
-                || ((b.innerText || '').trim() === String(n)));
-  const next = document.querySelector(
-    '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"]');
-  const el = btnFor(cur + 1) || (next && !next.disabled ? next : null);
-  if (!el) return {clicked:false, current:cur, has_next:false};
-  el.scrollIntoView({block:'center'}); el.click();
-  return {clicked:true, current:cur, next_page:cur + 1, has_next:true};
+  const all = [...document.querySelectorAll('button, a')];
+  const byNum = all.find((b) => (b.getAttribute('aria-label') === `Page ${cur + 1}`)
+                             || ((b.innerText || '').trim() === String(cur + 1)
+                                 && b.closest('[class*=pagination], nav, [role=navigation]')));
+  const next = all.find((b) => /^(next|view next page)$/i.test((b.getAttribute('aria-label') || '').trim())
+                            || (b.className || '').toString().includes('pagination__button--next'));
+  const el = byNum || (next && !next.disabled ? next : null);
+  if (!el) return {clicked:false, current:cur, has_next:false,
+                   reason:'no page-number or Next control found at the end of the list'};
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) {
+    return {clicked:false, current:cur, has_next:true,
+            reason:'the pagination control has no box — the list is not scrolled to its end'};
+  }
+  return {found:true, current:cur, next_page:cur + 1, has_next:true,
+          via:(byNum ? `Page ${cur + 1}` : 'Next'),
+          x:r.x + r.width/2, y:r.y + r.height/2,
+          in_view:(r.top > 0 && r.bottom < window.innerHeight)};
 })()
 """
 
@@ -2746,17 +3097,47 @@ async def next_page(body: NextPageRequest):
     """Page the results forward by CLICKING the pagination control (never a ?start= URL-jump):
     scroll to the bottom, then click the next page number (or the Next link). Returns whether a
     next page existed and was clicked, and the new page number. Best-effort.
-    Control chosen by the tab's host — Indeed's numbered links, LinkedIn's artdeco bar."""
+    Control chosen by the tab's host — Indeed's numbered links, LinkedIn's pagination bar.
+
+    The two engines reach the control differently, and that is not cosmetic. Indeed's pagination is
+    in the WINDOW's flow, so its JS scrolls the window and clicks. LinkedIn's is at the bottom of the
+    results COLUMN, and it does not exist on screen until that column is wheeled to its end — so
+    there we wheel the list (cursor over it, same as everywhere else), then measure the control and
+    press it with the driver."""
     import websockets
+    from app.executor.driver import get_driver
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
-        js = _NEXT_PAGE_JS_BY_PLATFORM[_platform_of(target.get("url", ""))]
+        platform = _platform_of(target.get("url", ""))
+        js = _NEXT_PAGE_JS_BY_PLATFORM[platform]
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
+            if platform != "linkedin":
+                res = await cdp.send("Runtime.evaluate", {"expression": js, "returnByValue": True})
+                data = (res.get("result") or {}).get("value") or {"clicked": False, "has_next": False}
+                data["ok"] = True
+                return data
+
+            await cdp.send("Page.bringToFront", {})
+            driver = get_driver()
+            scrolled: list[dict] = []
+            probe = None
+            # Wheel to the end of the list — that is what brings the pagination bar into existence.
+            for _ in range(12):
+                step = await _scroll_job_list(cdp, driver=driver, settle_seconds=0.7, before=probe)
+                scrolled.append({k: step.get(k) for k in ("moved", "landed", "at_end")})
+                probe = step.get("probe")
+                if not step.get("landed") or step.get("at_end"):
+                    break
             res = await cdp.send("Runtime.evaluate", {"expression": js, "returnByValue": True})
-        data = (res.get("result") or {}).get("value") or {"clicked": False, "has_next": False}
-        data["ok"] = True
+            data = (res.get("result") or {}).get("value") or {}
+            if not data.get("found"):
+                return {"ok": True, "clicked": False, "has_next": bool(data.get("has_next")),
+                        "current": data.get("current"), "scrolled": scrolled,
+                        "detail": data.get("reason") or "no pagination control"}
+            await driver.click_at(cdp, float(data["x"]), float(data["y"]))
+        data.update({"ok": True, "clicked": True, "scrolled": scrolled})
         return data
     except Exception as exc:  # noqa: BLE001
         logger.warning("next_page failed: %s", exc)

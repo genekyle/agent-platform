@@ -70,11 +70,44 @@ The success condition is landing on `/jobs/search-results/`. An earlier version 
 the exact mistake that clicked the wrong company on 2026-07-26. Choose by HREF: the jobs one is the
 only one pointing at `/jobs/`.
 
-THE ONE REMAINING GAP, now precisely defined: **the executor cannot send Enter.** The interaction
-vocabulary (`interaction/contract.py`) has no `press`/key intent — an earlier attempt dispatched
-`action_id="press"` and it went nowhere, silently. Filling the box is solved; COMMITTING it needs a
-key-press capability in the driver. That is a driver change, justified now by a measurement rather
-than by the guess that preceded it.
+**Committing the query now works** (2026-07-28): `submit` dispatches Enter to the focused element,
+driven end to end by the system, and the landed URL confirmed `/jobs/search-results/`. The earlier
+"the executor cannot send Enter" gap is closed, and the retracted claim that the humanized `type`
+could not fill the box is gone with it — 17 trusted keystrokes landed and the value read back.
+
+--------------------------------------------------------------------------------------
+WALKING THE RESULTS LIST — the traversal, and why LinkedIn needs its own
+--------------------------------------------------------------------------------------
+Operator-directed 2026-07-30: **scrolling and clicking into every card is not an optional extra on
+top of the search — it is how the search is performed here**, and the scroll has to be a real wheel
+with the cursor over the list, like the clicks. So the traversal is a STAGE of this engine's
+cadence (`STAGE_TRAVERSE`), not something a caller may or may not get around to.
+
+Three facts make LinkedIn's traversal different from Indeed's, and all three are MEASURED:
+
+* **The list is VIRTUALISED.** Cards outside the viewport are not in the DOM (`occludable` is
+  LinkedIn's own word). One read of a 25-result page returns ~7 cards, so a sweep that reads once
+  records a 25-result page as 7 and nothing raises.
+* **The list is an INNER SCROLLER beside a detail pane.** A wheel scrolls whatever is under the
+  POINTER, so the same wheel moves a different column depending on where the cursor is — and a
+  wheel over the wrong one does nothing while every `ok` still says success.
+* **The classes are build-hashed**, so the list cannot be addressed by name. It is found from a
+  card: the nearest ancestor of a `/jobs/view/` anchor that actually overflows.
+
+What was wrong before, exactly (2026-07-28 → 2026-07-30): the capture server scrolled by assigning
+`pane.scrollTop` on a class-named element. The element was null on the live page, so every scroll
+fell through to the window, which moved the frame and not the list — the reported symptom, "we
+couldn't scroll down". The extractor's cards were class-named too and returned 0 on the same page.
+Both are now derived from the anchors, and the scroll is `POST /scroll_job_list` — humanized wheel
+notches at a point measured inside the card column, reporting whether the scroller MOVED and whether
+new cards RENDERED. Neither signal alone is enough: at the end of a rendered list the position moves
+and nothing grows; on a list that renders in place the count grows on almost no movement.
+
+UNVERIFIED, and it is the next live drive's whole job: none of the above has been driven on the live
+results page yet — the traversal is built from measurements of what FAILED, which is not the same as
+a measurement of what works. The per-card field mapping (company/location off the card's text lines)
+is a guess and says so; `/extract_jobs` carries `meta.sample_lines` out with every response so one
+live call replaces it with a measurement.
 """
 
 from __future__ import annotations
@@ -145,11 +178,12 @@ LOCATION_IS_BUTTON = True
 SUBMIT_NAME_HINTS: tuple[str, ...] = ()
 FORBIDDEN_SUBMIT_NAMES: tuple[str, ...] = ("skip to", "keyboard shortcut", "close jump menu")
 
-#: FILLING the box is now MEASURED to work (click to open, then type — see the module note and the
-#: `/observe` trace that produced it). SUBMITTING it is not: nothing has yet committed the query and
-#: read back a results page. Two flags, because "we can type" is not "we can search".
+#: Both MEASURED 2026-07-28. FILLING: click to open, then type (the `/observe` trace in the module
+#: note). SUBMITTING: `submit` dispatches Enter to the focused element, and the landed URL confirmed
+#: `/jobs/search-results/`. Two flags kept separate because "we can type" is not "we can search" —
+#: they were true at different times, and the pair is what made that visible.
 SEARCH_FILL_READY = True
-SEARCH_SUBMIT_READY = False
+SEARCH_SUBMIT_READY = True
 
 
 def find_query_box(candidates: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -183,12 +217,12 @@ def search_controls(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         # here would send a caller hunting for a control that cannot exist yet.
         "location": None,
         "location_stage": SEARCH_RESULTS,
-        "submit": None,            # MEASURED absent; the typeahead/Enter is the commit
+        "submit": None,            # MEASURED absent as a CONTROL; Enter is the commit
         "ready": bool(query) and SEARCH_SUBMIT_READY,
-        "why": ("" if SEARCH_SUBMIT_READY else
-                "The query box is found but the humanized `type` does not fill it — it reports ok, "
-                "blurs the field and inserts nothing (measured session #22). Needs a "
-                "focus-preserving fill in the driver before a LinkedIn query can be claimed."),
+        "why": ("" if bool(query) and SEARCH_SUBMIT_READY else
+                "No query box on this page — LinkedIn's is a staged widget on the jobs home "
+                f"(names matched as substrings: {', '.join(QUERY_NAME_HINTS)}). On the results "
+                "page the search is already spent; refine with the location/radius filters."),
     }
 
 
@@ -210,6 +244,7 @@ def search_controls(candidates: list[dict[str, Any]]) -> dict[str, Any]:
 STAGE_TITLE = "title"
 STAGE_LOCATION = "location"
 STAGE_RADIUS = "radius"
+STAGE_TRAVERSE = "traverse"
 
 SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
     {
@@ -259,7 +294,69 @@ SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
         "why": "Radius is a slider on the results page and is meaningless before there is a "
                "location to be radial about — which is why it follows location, not precedes it.",
     },
+    {
+        # THE STAGE THAT ACTUALLY GATHERS. The three above only aim the search; this one walks
+        # what came back, and on a virtualised list it is the difference between recording a
+        # 25-result page and recording the 7 rows that happened to be in the viewport.
+        "stage": STAGE_TRAVERSE,
+        "on_state": SEARCH_RESULTS,
+        "control": "results_list",
+        "commits": False,                   # scrolling and reading spend no search
+        "lands_on": SEARCH_RESULTS,
+        "traversal": "RESULTS_TRAVERSAL",   # the how — see below
+        "why": "The list is virtualised and scrolls INSIDE its own column, so the results only "
+               "exist once the list has been wheeled through them. Extracting without traversing "
+               "records a partial page as a whole one, and nothing raises.",
+    },
 )
+
+# --- HOW the list is walked. The shared cadence reads this; it does not hardcode any of it. -----
+# Every step here is an existing capability, named so the cadence (and later the planner) can
+# sequence it rather than each caller improvising. The bounds are the shared ones — this says what
+# LinkedIn's list needs, never how fast we are allowed to be.
+RESULTS_TRAVERSAL: dict[str, Any] = {
+    "virtualised": True,
+    "scroll_container": "inner",            # the results column, not the window
+    #: THE SCROLL IS A WHEEL WITH THE CURSOR OVER THE LIST. Not `scrollTop`, not the window, not
+    #: mid-viewport — a wheel lands on whatever is under the pointer, and the pointer has to be in
+    #: the card column for the list to be the thing that moves. Operator-directed 2026-07-30.
+    "scroll_by": "wheel",
+    "scroll_pointer": "over the results list — the point is measured inside the card column",
+    "scroll_endpoint": "/scroll_job_list",
+    #: The list is FOUND from a card (an `a[href*='/jobs/view/']` anchor's nearest overflowing
+    #: ancestor), because the classes are build-hashed. Same rule as the card reader.
+    "located_by": "job-card anchor -> nearest overflowing ancestor",
+    #: What proves a scroll landed. BOTH, because either alone is satisfied by a no-op:
+    #: `moved` without `rendered` is a fully-rendered list moving; `rendered` without `moved` is a
+    #: list that renders in place. Neither means the wheel reached the right column.
+    "scroll_evidence": ("the scroller's position MOVED and/or new card ids RENDERED "
+                        "(/scroll_job_list returns `moved`, `new_ids`, `at_end`, `exhausted`)"),
+    "stop_scrolling_when": "a batch neither moves the scroller nor renders a new card (`exhausted`)",
+    #: EVERY card, not a shortlist — operator-directed 2026-07-30. The point of the traversal is the
+    #: record: each card is clicked open, its pane read, and the state captured. A shortlist filter
+    #: belongs to what we APPLY to, which is a later and separately-approved decision.
+    "click_into": "every_card",
+    "click_endpoint": "/open_job_card",
+    "click_by": "humanized trusted click at the card's measured centre (never a synthetic .click())",
+    #: Reading the pane is not enough on its own — the pane auto-opens the first result, so an
+    #: unconfirmed click returns the previous job looking perfectly fine. /open_job_card polls the
+    #: pane and reports `switched`.
+    "click_evidence": "the detail pane's title/description CHANGED (`switched`)",
+    "records_per_card": ("observed_jobs row (deduped by platform:external_id), the pane's "
+                         "description/salary/apply_type, and a page-state capture of the open pane"),
+    "paginate_by": "wheel to the end of the list, then click the page number (never a ?start= jump)",
+    "why_every_card": ("Operator-directed: on LinkedIn the traversal IS the search — scroll, open "
+                       "each card, record it. Recording only a keyword-matched shortlist throws "
+                       "away exactly the rows a model would learn the boundary from."),
+    "unverified": ("Not yet driven on the live results page. The mechanisms replace measured "
+                   "FAILURES (a class-named scroller that was null, a class-named card reader that "
+                   "returned 0) — which is not the same as a measurement of them working."),
+}
+
+
+def results_traversal() -> dict[str, Any]:
+    """How LinkedIn's results list must be walked. Read by the shared search cadence."""
+    return dict(RESULTS_TRAVERSAL)
 
 
 def stage_for_state(state: str, done: tuple[str, ...] = ()) -> Optional[dict[str, Any]]:
@@ -290,11 +387,15 @@ def spec() -> dict[str, Any]:
                    "cadence": [st["stage"] for st in SEARCH_CADENCE],
                    "location_box_on": SEARCH_RESULTS,   # staged, not absent
                    "has_submit_button": False, "ready": SEARCH_SUBMIT_READY},
+        "traversal": results_traversal(),
         "measured": ["classes are build-hashed — never a class selector",
                      "the search is STAGED: title alone, then location, then radius",
                      "one search box and no submit button on the jobs home",
                      "the placeholder changes on focus; the AX name does not",
-                     "'Skip to search' matches a generic submit hint and must be excluded"],
-        "blocked_on": ("humanized `type` does not fill the search combobox (ok + blur + empty); "
-                       "driver-level fix, tracked in the module docstring"),
+                     "'Skip to search' matches a generic submit hint and must be excluded",
+                     "Enter is the commit, and it lands on /jobs/search-results/",
+                     "the results list is virtualised and scrolls inside its own column",
+                     "a class-named scroller/card reader was null/0 on the live results page"],
+        "blocked_on": ("the traversal (scroll + click into every card) has not been driven live "
+                       "yet — built against measured failures, not a measured success"),
     }

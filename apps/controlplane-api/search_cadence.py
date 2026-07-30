@@ -23,8 +23,16 @@ BOUNDS = {
     # the Indeed distance filter (not a radius= URL param) up to this value before extracting.
     "min_radius_miles": 50,
     "navigate_by": "search results only — NEVER job-detail URLs or bot-like tab churn",
+    # SCROLLING IS AN INPUT, NOT A LAYOUT OPERATION. Operator-directed 2026-07-30, after LinkedIn's
+    # list would not move: a wheel with the cursor over the thing being scrolled, in the driver's
+    # eased notches — never `scrollTop = …`, never `scrollIntoView` as a way of getting somewhere,
+    # never a wheel at mid-viewport on a two-column app (it lands on whichever column is there).
+    # Same reasoning as trusted clicks: an assignment is not a motion a hand could make, and on an
+    # inner scroller it is not even the right element.
     "interact_by": "CLICK like a human — click cards to open the in-page detail pane, click "
-                   "pagination numbers to page forward; scroll the page; never URL-jump",
+                   "pagination numbers to page forward; SCROLL BY WHEEL with the cursor over the "
+                   "list being scrolled; never URL-jump",
+    "scroll_by": "wheel, cursor over the target scroller, humanized notches (never scrollTop)",
     "apply_requires": "explicit user approval per job before the final Submit",
     # Tab hygiene: Indeed opens the apply flow (smartapply) OR a cross-site ATS (Workday/…) in a
     # NEW tab. The "no tab churn" rule forbids scraper-like opening/closing of many tabs — it does
@@ -110,6 +118,43 @@ def find_search_controls(candidates: list[dict]) -> dict:
     return out
 
 
+# --- HOW a results list is walked, per engine ---------------------------------------------------
+# The cadence is the same everywhere because it is about how we BEHAVE. The traversal is not: a
+# virtualised inner-scrolling list has to be wheeled through before its results exist at all, and a
+# paginated page of static cards does not. That difference lived nowhere, so every caller improvised
+# it — which is how LinkedIn ended up being read seven cards at a time (see linkedin_recipe's
+# RESULTS_TRAVERSAL for the full account).
+#
+# Indeed's is the DEFAULT because it is the simple case, not because it is the norm: cards are all in
+# the DOM, the window scrolls, and we click into the ones worth reading. LinkedIn declares its own.
+_DEFAULT_TRAVERSAL = {
+    "virtualised": False,
+    "scroll_container": "window",
+    "scroll_by": "wheel",
+    "scroll_pointer": "over the results column",
+    "located_by": "cards are all in the DOM — one read is the whole page",
+    "click_into": "shortlist",          # only the query-matching cards earn a detail read
+    "click_by": "humanized trusted click at the card's measured centre",
+    "click_evidence": "the detail pane's title/description CHANGED (`switched`)",
+    "paginate_by": "scroll to the bottom, then click the page number (never a ?start= jump)",
+}
+
+
+def traversal_for(platform: str) -> dict:
+    """How to walk THIS engine's results list — the per-domain half of the sweep.
+
+    Returns at minimum {virtualised, scroll_by, scroll_pointer, click_into, paginate_by}. Callers
+    read `click_into` to decide whether every card gets opened or only the shortlist, and
+    `virtualised` to decide whether the list must be scrolled before it can be trusted as complete.
+    An unknown platform gets the default, which is the safe direction: it under-scrolls a list that
+    needed wheeling rather than over-clicking a page that did not.
+    """
+    if (platform or "").strip().lower() == "linkedin":
+        import linkedin_recipe
+        return linkedin_recipe.results_traversal()
+    return dict(_DEFAULT_TRAVERSAL)
+
+
 CADENCE_MODES = {
     # ---- TASK 1: pure data gathering ----------------------------------------
     "extraction_sweep": {
@@ -121,9 +166,15 @@ CADENCE_MODES = {
             "Set the DISTANCE filter to >= min_radius_miles by CLICKING the filter pill and picking "
             "the option (never a radius= URL param). Refuse to gather sub-floor results.",
             "Capture + classify the results page (trains L3 along the way).",
+            "WALK THE LIST per traversal_for(platform): on a VIRTUALISED list (LinkedIn) wheel "
+            "through it with the cursor over the list column until a batch lands nothing — the "
+            "results do not exist in the DOM until then, so extracting first records a partial "
+            "page as a whole one.",
             "Extract all job cards → observed_jobs (deduped by platform:external_id).",
-            "Shortlist the cards that match the query, and CLICK INTO each (opens the in-page detail "
-            "pane) to read the full description — like a human, no viewjob URL-jump.",
+            "CLICK INTO the cards the traversal says to — every card where click_into is "
+            "'every_card' (LinkedIn), otherwise the query-matching shortlist — to read the full "
+            "description from the in-page pane, like a human, no viewjob URL-jump. Confirm the pane "
+            "SWITCHED before recording it: both engines auto-open the first result.",
             "Scroll to the bottom and CLICK the pagination number to page forward within bounds; "
             "else next query.",
         ],
@@ -291,6 +342,8 @@ def cadence_spec() -> dict:
         "bounds": BOUNDS,
         "modes": CADENCE_MODES,
         "search_recipe": SEARCH_RECIPE,
+        # The per-engine half: same behaviour everywhere, different list to walk.
+        "traversals": {"indeed": traversal_for("indeed"), "linkedin": traversal_for("linkedin")},
         "known_platforms": sorted({a["ats_id"] for a in ATS_PLATFORMS} | {"company_site"}),
         "apply_outcomes": [{"outcome": o, "human_required": h} for o, h, _ in _APPLY_OUTCOMES],
         "note": "Two search tasks: extraction_sweep (record everything) vs apply_triage "

@@ -4014,3 +4014,86 @@ least likely to check.**
 
 Recovery is the sign_in leg, which then meets `successfactors_policy_gate` again — so the
 interstitial handling committed earlier is on the recovery path, not just the happy path.
+
+---
+
+## 2026-07-30 — The list wouldn't scroll, and three separate shortcuts were why
+
+**The symptom.** LinkedIn's results list would not scroll, so the extractor kept returning the
+handful of cards that happened to be rendered (and, on the live signed-in page, zero). The operator's
+instruction is the frame for all of it: **scrolling, clicking into every card and recording each is
+not an extra on top of the search — it is how the search is performed on this engine — and the scroll
+has to be a real wheel with the cursor actually hovering the list, like the clicks already are.**
+
+**Three shortcuts, one silent failure.** The scroll was `pane.scrollTop = …` on a class-named element:
+
+1. **The classes are build-hashed**, so `pane` was `null` and every scroll fell through to
+   `window.scrollBy` — which moved the page frame, not the list. This was already written down at the
+   top of the same file ("never a class selector") and the code did it anyway.
+2. **`scrollTop = …` is not a motion a hand could make.** It is the same class of shortcut as a
+   synthetic `.click()`: an assignment, no wheel, no pointer, no hover.
+3. **A wheel only scrolls what is under the POINTER.** On a two-column app the results list and the
+   detail pane are separate scrollers, so where the cursor sits decides which one moves — and a wheel
+   over the wrong column is a no-op that reports fine. `_do_scroll` defaulted to mid-viewport when it
+   had no bbox, which on this layout is a coin flip.
+
+The card reader had the same disease and the same cause: it enumerated cards by class
+(`.job-card-container`, `li[data-occludable-job-id]`) and returned **0** on the real page.
+
+**The fix, and the shape worth keeping: DERIVE THE STRUCTURE, NAME THE IDENTITY.** The one thing every
+LinkedIn rendering agrees on is that a card contains an anchor to `/jobs/view/<id>` — which is already
+our identity. So:
+
+* the **card** is the largest ancestor of such an anchor that still contains exactly ONE of them;
+* the **scroller** is the nearest ancestor of a card that actually overflows (`overflow-y` + a
+  `scrollHeight` bigger than its `clientHeight`), or the window if nothing does;
+* the **hover point** is the centre of the union of the card rects, clipped to the viewport — so the
+  cursor is inside the card column even when the window is what scrolls.
+
+Nothing here is a name. A deploy that rewrites every class leaves all three standing.
+
+**Two new public driver seams, so the humanized hand stays in one place.** `driver.scroll_at(cdp, x,
+y, total)` and `driver.click_at(cdp, x, y)` — the same code `move_and_act` runs, callable on a CDP
+session the caller already holds. A tier-2 recipe that clicks and scrolls 25 times inside one session
+was otherwise going to reach for `_click_sequence` / `_scroll_plan`, and a second copy of "what a
+human hand looks like" is how the two drift apart. `scroll_at` moves the cursor to the point *first*
+and then wheels, which is both what a hand does and what a list binding on `mouseenter` needs.
+
+**What counts as proof that a scroll landed — and it takes BOTH signals.** `POST /scroll_job_list`
+returns `moved` (did the scroller's position change) and `new_ids` (did new cards render), and
+`landed` is their OR. Either alone is satisfied by a no-op:
+
+* at the end of a fully-rendered list the position moves and nothing new appears;
+* a list that renders in place grows on almost no movement.
+
+`exhausted` (a batch that did neither) is the honest stop condition, and its `detail` names both
+suspects — a pointer over a column that doesn't scroll, or the genuine end of the list. This is the
+same lesson as `origin=` on the search commit and as `switched` on the pane: **the check has to be
+about the world, not about whether our own call returned.**
+
+**`scrollIntoView` is not a way of getting somewhere either.** `/open_job_card` used it to bring a
+card into range. It is removed: the card reader now only MEASURES (rect, `in_view`, and the signed
+`delta_y` to centre it), and `_bring_card_into_view` wheels by that measured distance — or, for a row
+the virtualised list hasn't rendered at all, a batch at a time downward like a person scanning. If the
+row is rendered but still off-screen we **refuse to press** rather than dispatch a click outside the
+viewport, because that press hits nothing while the pane-switch poll blames the click for a scroll
+that never arrived.
+
+**Where the knowledge lives.** `linkedin_recipe.RESULTS_TRAVERSAL` + a fourth cadence stage
+(`STAGE_TRAVERSE`, after title/location/radius) — so "walk the list, open every card" is part of
+LinkedIn's cadence rather than something each caller improvises. `search_cadence.traversal_for()` is
+the seam the shared sweep reads: Indeed's cards are all in the DOM and earn a keyword **shortlist**;
+LinkedIn's are virtualised and every card gets opened, because there a card not opened is a result we
+never really saw. `BOUNDS["scroll_by"]` now says how a scroll is performed at all, for every engine.
+
+**Retracted while here:** `SEARCH_SUBMIT_READY` was still `False` and `search_controls().why` still
+carried the disproven "the humanized `type` does not fill it", three days after the recording that
+retracted it and two days after Enter committed a query and landed on `/jobs/search-results/`. A
+retracted claim left in a `why` string is not a stale comment — `ready` is computed from it, so the
+recipe was reporting that it could not run a search it had already run.
+
+**Still UNVERIFIED, and it is the next drive's only job.** None of this has been driven on the live
+results page. It is built from measurements of what FAILED — a null scroller, a card reader returning
+0 — which is not a measurement of anything working. `/extract_jobs` therefore carries
+`meta.sample_lines` (the first card's real text lines) out with every response, because the per-card
+company/location mapping is an explicit guess and one live call replaces it with a measurement.

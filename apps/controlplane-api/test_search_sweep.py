@@ -392,3 +392,80 @@ def test_indeed_does_not_pay_for_the_spa_check(monkeypatch):
         _teardown()
     assert "/results_signature" not in cap.calls
     assert "/await_results" not in cap.calls
+
+
+# --- WHICH cards get opened is the engine's call ------------------------------------------
+# Operator-directed 2026-07-30: on LinkedIn the traversal IS the search — scroll the list, open
+# every card, record each — because the list is virtualised, so a card not opened is a result we
+# never really saw. Indeed keeps the keyword shortlist: its cards are all in the DOM already, so a
+# detail read there is a click we CHOOSE to spend. One sweep, two lists.
+def _openers_capture():
+    """Records the external_id of every card the sweep clicks into."""
+    opened: list[str] = []
+
+    def capture(path, b):
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True}
+        if path == "/set_distance":
+            return {"ok": True, "applied": True, "selected_miles": 50}
+        if path == "/extract_jobs":
+            return {"ok": True, "jobs": _CARDS,
+                    "meta": {"scroll": {"batches": 3, "moved": 2100}}}
+        if path == "/open_job_card":
+            opened.append((b or {}).get("external_id"))
+            return {"ok": True, "description": "desc", "salary": "", "apply_type": ""}
+        if path == "/next_page":
+            return {"ok": True, "has_next": False}
+        return {"ok": True}
+    capture.opened = opened
+    return capture
+
+
+def _both_rows(prefix):
+    return _FakeDB(rows={f"{prefix}:a1": _DescRow(), f"{prefix}:w9": _DescRow()})
+
+
+def test_linkedin_opens_every_card_not_just_the_query_matches(monkeypatch):
+    cap = _openers_capture()
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=cap, db=_both_rows("linkedin"))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    # the welder does not match the query and is opened anyway — that is the point
+    assert cap.opened == ["a1", "w9"]
+    assert r["click_into"] == "every_card"
+    # and what the scrolling did comes back with the summary, per page
+    assert r["scroll"] and r["scroll"][0]["batches"] == 3
+
+
+def test_indeed_still_opens_only_the_shortlist(monkeypatch):
+    cap = _openers_capture()
+    _install(monkeypatch, tabs=[{"url": "https://www.indeed.com/jobs"}], block=None,
+             capture=cap, db=_both_rows("indeed"))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    assert cap.opened == ["a1"]
+    assert r["click_into"] == "shortlist"
+
+
+def test_the_detail_cap_reports_what_it_dropped(monkeypatch):
+    """A 25-card page asked to open every card, with max_details_per_page=1, reads as "25 found, 1
+    description" — which looks like success. The cap has to say what it left."""
+    cap = _openers_capture()
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=cap, db=_both_rows("linkedin"))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst", "max_details_per_page": 1}).json()
+    finally:
+        _teardown()
+    assert cap.opened == ["a1"]
+    assert r["details_skipped_by_cap"] == 1
