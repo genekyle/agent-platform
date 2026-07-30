@@ -46,8 +46,8 @@ _ERROR = ("incorrect", "invalid", "wrong password", "does not match", "doesn't m
 #         | identifier_form (email now, secret on the next screen) | unknown
 LoginState = str
 
-# Actions: done | fill_credentials | click | escalate
-ACTIONS = ("done", "fill_credentials", "click", "escalate")
+# Actions: done | fill_credentials | fill_identifier | click | escalate
+ACTIONS = ("done", "fill_credentials", "fill_identifier", "click", "escalate")
 
 
 # --- tab-level staleness ---------------------------------------------------------------------
@@ -249,21 +249,22 @@ def find_signin_entries(candidates: list[dict], *, alternates_only: bool = False
             if c.get("backend_node_id") is None:
                 continue
             seen.add(name.lower())
-            # AN SSO BUTTON INSIDE AN IFRAME IS STILL A WAY IN — it just is not one WE can press.
-            # Google Identity Services renders its button in a cross-origin frame, so the AX tree
-            # offers the frame (`Iframe "Sign in with Google Button"`) and never the button inside
-            # it. This finder only accepted link/button/menuitem, so on Indeed's auth screen the
-            # cockpit listed Apple alone and silently omitted the big blue Google button the
-            # operator was looking straight at (measured 2026-07-30). Clicking the frame NODE does
-            # nothing — a click has to land on a POINT inside it — so it is offered with
-            # `operator_only`, named rather than hidden. Silently dropping a visible route is the
-            # failure; being honest that it needs a human hand is not.
+            # AN SSO BUTTON INSIDE AN IFRAME IS DRIVEN BY POINT, NOT BY NODE. Google Identity
+            # Services renders its button in a cross-origin frame, so the AX tree offers the FRAME
+            # (`Iframe "Sign in with Google Button"`) and never the button inside it. Dispatching
+            # `.click()` at the frame node lands on nothing — but a real mouse press at a POINT
+            # inside the frame's rect hits the button exactly as a hand does, which is what the
+            # humanized driver already does whenever no backend_node_id is given.
+            #
+            # So the frame is addressed by NAME (stable identity, re-resolved at act time) and
+            # delivered by POINT. `bbox` rides along because a point click needs one; it is
+            # re-read fresh at act time rather than trusted from this survey.
             entry = {"name": name, "role": role, "alternate": alternate,
                      "backend_node_id": c.get("backend_node_id"), "why": why}
             if role == "iframe":
-                entry["operator_only"] = True
-                entry["why"] = (f"{why}. Rendered inside a cross-origin iframe, so I cannot click "
-                                f"it for you — press it yourself in the window.")
+                entry["by_point"] = True
+                entry["bbox"] = c.get("bbox")
+                entry["why"] = f"{why}. Inside a cross-origin iframe, so it is clicked by point."
             out.append(entry)
     return out
 
@@ -327,35 +328,28 @@ def _deterministic_policy(state: LoginState, candidates: list[dict],
                                 "'Continue with…' route beside it. Sign in on your side, or add "
                                 "the credential in the Account Manager. I never type passwords.")
     if state == "identifier_form":
-        # The password is on the NEXT screen, so there is nothing here to fill from the vault even
-        # when we hold one — `fill_credentials` is structurally tied to a password field and would
-        # be refused downstream anyway. Two honest moves: take a route AROUND the credential if the
-        # page offers one, or hand over saying exactly what this screen is.
-        # operator_only routes are excluded from anything we CLICK — an iframe'd SSO button
-        # cannot be pressed by node, so choosing it would be a no-op reported as an action taken.
-        # It stays in the survey's option list; it just is not something we do on our own.
-        alternates = [a for a in find_signin_entries(candidates, alternates_only=True)
-                      if not a.get("operator_only")]
-        # AND WE ONLY TAKE ONE WHEN WE HOLD NOTHING — the same rail as `signin_form`. Holding a
-        # credential means the identifier box IS our route, so wandering off into a third-party
-        # provider would pick an identity nobody chose. It is a live hazard, not a hypothetical:
-        # on Indeed's auth screen the Google button is iframe'd and therefore un-clickable, so
-        # "first drivable alternate" resolves to APPLE — a provider this account may have no
-        # relationship with, clicked against a real account because the preferred one happened to
-        # be unreachable. Escalating is the honest answer there.
-        if alternates and not has_creds:
+        # THE EMAIL STEP IS OURS TO DRIVE. An identifier box wants a username, not a secret, and
+        # the loop already resolves the account server-side — so filling it and pressing Continue
+        # is the same class of act as filling a sign-in form, not a credential the operator must
+        # type. It stops one screen later by construction: what comes back is a password or a code
+        # screen, and those are `signin_form` / `mfa`, handled by their own branches.
+        if has_creds and _has_identifier_field(candidates):
+            return LoginStep(state, "fill_identifier", rung="recipe",
+                             rationale="an identifier-first screen and we hold the account — fill "
+                                       "the address and continue to the secret step")
+        alternates = find_signin_entries(candidates, alternates_only=True)
+        if alternates:
             entry = alternates[0]
             return LoginStep(state, "click", control=entry, rung="recipe",
-                             rationale=("an identifier-first screen (email now, secret later), no "
-                                        f"stored credential, and a route around one: "
-                                        f"{entry['name']!r} — {entry['why']}"))
+                             rationale=("an identifier-first screen (email now, secret later) and "
+                                        f"the page offers a route around it: {entry['name']!r} — "
+                                        f"{entry['why']}"))
         return LoginStep(state, "escalate", escalate=True, escalate_status="identifier_form",
                          rung="recipe",
-                         rationale="identifier-first screen; no SSO alternative we can address",
-                         reason="This is the email-first step — it wants your address now and the "
-                                "password or a code on the next screen. I can see the box but I "
-                                "don't drive a credential entry, so type it here and press "
-                                "\"I've signed in — re-check\" when you land.")
+                         rationale="identifier-first screen, no credential and no SSO route",
+                         reason="This is the email-first step and I hold no account for this site "
+                                "— type the address here, or add the account in the Account "
+                                "Manager so I can fill it next time.")
     if state in ("account_exists", "create_form"):
         ctrl = find_control(candidates, ("sign in", "log in", "already have", "sign-in"))
         if ctrl and ctrl.get("backend_node_id") is not None:
@@ -621,10 +615,42 @@ async def run_login(*, client, capture_url: str, browser_url: str, tab_id: str,
                     return stop
                 continue
             attempted_creds = True
+        elif decision.action == "fill_identifier":
+            # The email-first step: put the account's ADDRESS in and continue. Deliberately not
+            # `fill_credentials` — there is no password on this screen and none is sent. What comes
+            # back is the secret step, which the next pass classifies on its own terms.
+            fields = find_login_fields(candidates)
+            if "email" not in fields or "submit" not in fields:
+                return LoginResult(False, "no_login_form", step + 1,
+                                   f"an email-first screen I could not address "
+                                   f"(found {sorted(fields)}).", trail)
+            replies = [
+                await _post("/execute", {"action_id": "clear", "backend_node_id": fields["email"],
+                                         "target_bbox": {}, "driver": "humanized"}),
+                await _post("/execute", {"action_id": "type", "backend_node_id": fields["email"],
+                                         "target_bbox": {}, "value": username,
+                                         "driver": "humanized"}),
+                await _post("/execute", {"action_id": "click", "backend_node_id": fields["submit"],
+                                         "target_bbox": {}, "driver": "humanized"}),
+            ]
+            if any(_mentions_stale_tab(r) for r in replies):
+                stop = _recover_from_stale(step)
+                if stop is not None:
+                    return stop
+                continue
         elif decision.action == "click" and decision.control:
-            reply = await _post("/execute", {"action_id": "click", "target_bbox": {},
-                                             "backend_node_id": decision.control["backend_node_id"],
-                                             "driver": "humanized"})
+            ctrl = decision.control
+            # BY POINT WHEN THE TARGET IS A FRAME. `.click()` on an iframe node lands on the frame
+            # and does nothing; a mouse press at a point inside its rect hits the button within,
+            # which is what the humanized driver does whenever no backend_node_id is given. The
+            # rect is taken from the scan this decision was made on, so it is one observation old —
+            # the same freshness every coordinate action here carries.
+            by_point = bool(ctrl.get("by_point")) and ctrl.get("bbox")
+            payload = ({"action_id": "click", "target_bbox": ctrl["bbox"], "driver": "humanized"}
+                       if by_point else
+                       {"action_id": "click", "target_bbox": {},
+                        "backend_node_id": ctrl["backend_node_id"], "driver": "humanized"})
+            reply = await _post("/execute", payload)
             if _mentions_stale_tab(reply):
                 stop = _recover_from_stale(step)
                 if stop is not None:

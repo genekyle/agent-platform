@@ -1502,7 +1502,6 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
                 "detail": detail, "seen": len(candidates)}
 
     # A password form with a clickable alternative is a CHOICE, not a dead end.
-    drivable = [e for e in entries if not e.get("operator_only")]
     detail = (f"Not signed in. {len(entries)} way(s) in from here — pick one and I'll click it; "
               f"you take over at the password.")
     if state == "signin_form":
@@ -1513,15 +1512,15 @@ async def _login_survey(browser_url: str, obs: dict[str, Any],
         # Say what this screen IS. It used to arrive as "unknown", which told the operator nothing
         # and made an ordinary email-first page look like a fault in the page.
         detail = (f"This is the email-first step — your address now, the password or an emailed "
-                  f"code on the next screen. {len(entries)} way(s) in"
-                  + (f", {len(entries) - len(drivable)} of which I can only point at, not press"
-                     if len(drivable) != len(entries) else "")
-                  + ". Type the address here, or pick a route and I'll click it.")
-    return {"state": state, "url": tab.get("url", ""), "can_drive": bool(drivable),
+                  f"code on the next screen. {len(entries)} way(s) in, all of them pressable. "
+                  f"Step again and I'll fill the address and continue, or pick a route.")
+    return {"state": state, "url": tab.get("url", ""), "can_drive": True,
             "options": [{"name": e["name"], "role": e["role"], "why": e["why"],
-                         # Carried so the cockpit can show it as "press this yourself" rather than
-                         # a button that calls an endpoint which would refuse it.
-                         "operator_only": bool(e.get("operator_only"))} for e in entries],
+                         # How this one gets pressed. A frame is clicked by point (its rect rides
+                         # along); everything else by node. The cockpit shows them identically —
+                         # both are things we press — because to the operator they are.
+                         "by_point": bool(e.get("by_point")),
+                         "bbox": e.get("bbox")} for e in entries],
             "detail": detail, "seen": len(candidates)}
 
 
@@ -1719,32 +1718,37 @@ async def login_action(session_id: int, body: LoginActionBody,
             status_code=422,
             detail=f"{body.control_name!r} is not one of the ways in I can see "
                    f"({', '.join(o['name'] for o in before['options']) or 'none'}). Re-check first.")
-    # REFUSE RATHER THAN NO-OP. An iframe'd SSO button is a real way in that we cannot press: a
-    # click on the frame node lands on nothing and would come back `ok` — the exact shape of a
-    # silent failure. Say who has to press it instead.
-    if next((o for o in before["options"]
-             if o["name"] == body.control_name and o.get("operator_only")), None):
-        raise HTTPException(
-            status_code=409,
-            detail=f"{body.control_name!r} is rendered inside a cross-origin iframe, so a click "
-                   f"from here would land on the frame and do nothing. Press it yourself in the "
-                   f"window, then press Re-check.")
 
     # Click it as the SURVEY saw it. Falling back to the surveyed role keeps the role gate — which
     # is what stops a name owned by two controls resolving in document order — without requiring
     # every caller to know a detail the survey just reported.
-    role = body.role or next((o.get("role") for o in before["options"]
-                              if o["name"] == body.control_name), None)
+    chosen = next((o for o in before["options"] if o["name"] == body.control_name), {})
+    role = body.role or chosen.get("role")
     tab = (obs.get("tabs") or [{}])[0]
-    res = await _capture_post("/execute", {
-        "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
-        "target_bbox": {},   # required by ExecuteRequest even here, where it goes unused
-        "target_role": role, "target_name": body.control_name, "driver": "humanized",
-    })
+    # A FRAME IS PRESSED BY POINT. Google renders its SSO button inside a cross-origin iframe, so
+    # AX offers the frame and never the button: addressing by name resolves the frame node, and
+    # `.click()` on that lands on nothing. Sending the frame's RECT instead makes the humanized
+    # driver do what a hand does — move to the point and press — and the press lands on the button
+    # inside. Named for identity, point for delivery.
+    if chosen.get("by_point") and chosen.get("bbox"):
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
+            "target_bbox": chosen["bbox"], "driver": "humanized"})
+    else:
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
+            "target_bbox": {},   # required by ExecuteRequest even here, where it goes unused
+            "target_role": role, "target_name": body.control_name, "driver": "humanized",
+        })
     await asyncio.sleep(2.0)
 
     obs_after = await _observe(browser_url, bb.search_state.query, session_id=session.id)
-    after = await _login_survey(browser_url, obs_after)
+    # SAME ARGUMENTS AS THE `before` SURVEY. This one dropped `engine` and `bb`, and it is the one
+    # the operator actually reads — so the identity lookup got nothing and Google's address step
+    # reported "no Google login is stored to answer with" while the account sat in the vault. A
+    # survey that cannot name the identity cannot offer to fill it.
+    after = await _login_survey(browser_url, obs_after,
+                                engine_for(session, obs_after.get("search_tab")), bb)
     # Only a recognised outcome counts as a click. A reply with no `outcome` is an error body,
     # not a result — reading one as success is what let a whole drive report work it never did.
     ok = res.get("outcome") in _ACTED_OK
