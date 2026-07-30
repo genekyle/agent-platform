@@ -4478,22 +4478,54 @@ async def read_inbox(body: ScreenshotRequest):
 
 _FRAME_TEXT_JS = r"""
 (() => {
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+  // WHERE THE APPLY CONTROLS POINT. A company careers FRONT is a signpost: its host is the
+  // employer's and names no ATS, its text is the employer's own prose, and the only thing on the
+  // page that identifies the vendor is the destination of "APPLY NOW". Measured live 2026-07-30 —
+  // aholddelhaizeusa.careerswithus.com halted as an unrecognised company_site while its apply link
+  // pointed at aholddelhaizeapply.appvault.com, an ATS the registry has known for weeks.
+  //
+  // Collected from the frames too, for the same reason the text is: on a branded wrapper the apply
+  // control lives in the iframe, and the top document never mentions it.
+  const applyHrefs = (doc) => {
+    const out = [];
+    try {
+      for (const a of doc.querySelectorAll('a[href]')) {
+        const label = clean(a.innerText) || clean(a.getAttribute('aria-label') || '');
+        if (!/\bapply\b/i.test(label)) continue;
+        const href = a.href || a.getAttribute('href') || '';
+        // Same-page and javascript: links point nowhere and would only add noise.
+        if (!/^https?:/i.test(href)) continue;
+        if (!out.includes(href)) out.push(href);
+        if (out.length >= 8) break;
+      }
+    } catch (e) { /* unreadable document */ }
+    return out;
+  };
+
   // Same-origin frames only: a cross-origin contentDocument throws, and we swallow it rather
   // than fail — an unreadable frame is reported as unreadable, never as empty.
   const out = [];
+  let hrefs = applyHrefs(document);
   document.querySelectorAll('iframe').forEach((f) => {
     const r = f.getBoundingClientRect();
     let text = null, readable = false;
     try {
       const doc = f.contentDocument;
-      if (doc && doc.body) { text = (doc.body.innerText || '').slice(0, 12000); readable = true; }
+      if (doc && doc.body) {
+        text = (doc.body.innerText || '').slice(0, 12000);
+        readable = true;
+        for (const h of applyHrefs(doc)) if (!hrefs.includes(h)) hrefs.push(h);
+      }
     } catch (e) { /* cross-origin */ }
     out.push({ id: f.id || null, name: f.name || null, src: (f.src || '').slice(0, 200),
                width: Math.round(r.width), height: Math.round(r.height),
                readable, text });
   });
   return { url: location.href, title: document.title,
-           text: (document.body ? document.body.innerText : '').slice(0, 12000), frames: out };
+           text: (document.body ? document.body.innerText : '').slice(0, 12000), frames: out,
+           apply_hrefs: hrefs.slice(0, 8) };
 })()
 """
 

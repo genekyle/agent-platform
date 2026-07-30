@@ -3400,8 +3400,13 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # a hospital marketing page (live 2026-07-26); `/page_content` returns both.
         content = await _capture_post("/page_content",
                                       {"browser_url": browser_url, "tab_url": url}, timeout=15.0)
+        # AND WHERE THE PAGE POINTS. A careers front names no ATS in its host, its params or its
+        # prose — the only tell is the destination of its own APPLY control. This is a third axis
+        # beside host and content, and it is the one that gets us through the jungle of employer
+        # landing pages that are really a wrapper around an ATS we already know how to drive.
         disc = aps.classify_landing(url, page_text=content.get("text") or "",
-                                    frames=content.get("frames") or [])
+                                    frames=content.get("frames") or [],
+                                    apply_hrefs=content.get("apply_hrefs") or [])
         step.platform = disc.platform
         step.landing_state = disc.state
         # CLASSIFY'S JOB IS TO SAY WHERE WE ARE, and it has done that the moment the landing has a
