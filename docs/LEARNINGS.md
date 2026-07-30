@@ -4097,3 +4097,79 @@ results page. It is built from measurements of what FAILED — a null scroller, 
 0 — which is not a measurement of anything working. `/extract_jobs` therefore carries
 `meta.sample_lines` (the first card's real text lines) out with every response, because the per-card
 company/location mapping is an explicit guess and one live call replaces it with a measurement.
+
+---
+
+## 2026-07-30 (2) — The live page, and four guesses it retired in one sitting
+
+**Setup.** The operator offered to start a LinkedIn session and log in by Google SSO. The check
+first: session 22 (3 days old, persistent `linkedin` profile) was still authenticated — full nav,
+99+ results, a job pane open — so **no login was needed at all**, and the page sitting there was the
+exact one the traversal targets. Reading an already-open tab over CDP is a local socket and free, so
+this cost nothing to establish. *Ask what state the machine is in before asking the human to create
+one.*
+
+**The card is not what any of three readers thought it was.** MEASURED:
+
+    card      div[role=button][tabindex=0][componentkey="job-card-component-ref-<id>"]   432x105
+    identity  the componentkey's numeric suffix
+    list      div[data-testid=lazy-column][componentkey=SearchResultsMainContent]  scrollHeight 3610
+    pane      a SECOND lazy-column at x=487; every slot suffixed with the open id
+              ([componentkey="JobDetails_AboutTheJob_<id>"]), as is the URL's ?currentJobId=
+
+And what is absent: no `data-job-id`, no `data-occludable-job-id`, no `data-entity-urn` — a sweep of
+every attribute matching `/job/i` across the whole document returned `{}` — no class hooks, and **no
+`/jobs/view/` anchor on a card**. The page has exactly three and all three are the detail pane's
+title link.
+
+**That last absence is the whole bug, and its shape is the lesson.** The reader looked for
+`/jobs/view/` anchors. It found the pane's. The "find the list" walk therefore started *inside the
+detail pane*, returned the pane as "the list", and the humanized wheel moved **the pane** 561px while
+the results list sat at `scrollTop: 0`. Every layer reported success — `landed: true`, `moved: 561`,
+`kind: pane`. I had written the two-column trap into the comments of that very function the same day
+and still shipped a check that could not detect it, because **`moved` was a difference between two
+scroll positions that were never guaranteed to belong to the same element.** Subtracting one
+element's position from another's is not a small measurement, it is a meaningless one. The container
+now names itself (`data-testid`/`componentkey`) on every read, and a delta measured across two
+different containers is discarded rather than reported. *When a check can be satisfied by the wrong
+object, it is not a check.*
+
+**`innerText` on a detached clone silently degrades to `textContent`.** The card reader cloned each
+card to strip screen-reader duplicates, then split `innerText` on newlines — and got the entire card
+back as ONE string ("Sr. Reporting Analyst (Verified job)Sr. Reporting AnalystAhold Delhaize
+USAQuincy, MA (Hybrid)…"), because `innerText` is defined in terms of RENDERED text and a detached
+node has no layout. Every line-based field collapsed into the title. Read lines off the LIVE node.
+
+**A containment dedupe ate a real field.** With lines working, the card still repeats its title
+("… (Verified job)" then plain), so I collapsed lines where one contained another — and the
+"Flight Centre Travel Group - Business Intelligence Developer/Analyst II - Woburn, MA" card lists its
+company as **"Flight Centre"**, a substring of its own title. Company came back as
+"Woburn, MA (On-site)". 1 row in 25, and only visible because the whole set was eyeballed.
+*A generic containment rule cannot tell a badge from a company;* the badge is now matched exactly
+(`title + "(Verified job)"`) and nothing else is collapsed.
+
+**Identity beats a text diff, and identity arrives before content.** `/open_job_card` proved the
+click by diffing the pane's description against a before-snapshot. It reported `switched: false` for
+a click that had demonstrably worked (the pane's Apply button had already changed to the new job's
+"Easy Apply") — because two fields it read were empty for an unrelated reason. The pane states its
+own id, so we compare ids now. Immediately, that caught the opposite error too: a press that landed
+on a still-settling row and opened nothing, which the old check would have called a switch. But
+identity flips BEFORE the body renders (the SPA pushes `currentJobId`, then fills the slot), so a
+poll that stopped at identity returned an empty description. **Two conditions, waited on separately:
+is it the right job, and has it finished rendering.**
+
+**Verified live, in this order:** the wheel moves the list (`lazy-column` scrollTop 0 -> 700, read
+off the element itself, not from our own report); the walk reaches `at_end` in 3 batches / 2607px;
+the reader returns 25/25 cards with correct title, company, location, salary where present, and Easy
+Apply on exactly the two cards that show it; humanized clicks open cards and the pane's own
+`currentJobId` confirms which one.
+
+**Still not verified, and named rather than implied:** pressing through to page 2 (the bar is now
+read by label and reports `[1,2,3]`, but has not been pressed), and the traversal driven through
+`/api/search/sweep` end to end — that path opens with `/set_distance`, which is Indeed-shaped and
+would stop a LinkedIn sweep before it reached the list.
+
+**Method note worth keeping.** Every one of these was found by asking the page a question through
+`/probe` (journaled, with the question recorded) rather than by reasoning about what LinkedIn
+probably renders. Four probes replaced three days of inference, which is the same result the
+operator's `/observe` recording produced on 2026-07-28. The instrument keeps winning.

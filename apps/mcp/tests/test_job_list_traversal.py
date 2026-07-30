@@ -37,10 +37,11 @@ class FakeCDP:
         return [p for m, p in self.sent if m == "Input.dispatchMouseEvent" and p.get("type") == kind]
 
 
-def _probe(at, cards, ids=None, kind="pane", at_end=False, ok=True):
+def _probe(at, cards, ids=None, kind="pane", at_end=False, ok=True, key="SearchResultsMainContent"):
     return {"ok": ok, "kind": kind, "cards": cards, "ids": ids or [f"id{i}" for i in range(cards)],
             "hover": {"x": 320, "y": 400}, "at": at, "height": 5000, "client": 800,
-            "at_end": at_end}
+            "at_end": at_end,
+            "container": {"testid": "lazy-column", "component": "LazyColumn", "key": key}}
 
 
 # --- the driver seams -------------------------------------------------------------------
@@ -164,3 +165,27 @@ def test_an_unrendered_card_is_hunted_downward_and_gives_up_honestly():
     box, steps = asyncio.run(_bring_card_into_view(cdp, DirectDriver(), measure, max_batches=5))
     assert box["found"] is False
     assert len(steps) == 1 and steps[0]["landed"] is False   # stopped at the end, not after 5 tries
+
+
+def test_a_move_measured_on_two_different_containers_is_not_a_move():
+    """THE ONE THAT COST A LIVE DRIVE. When the card selector was wrong, the walk started from the
+    DETAIL PANE's title anchor, called the pane "the list", wheeled it 561px and reported
+    `landed: true` while the results list sat at scrollTop 0. `moved` is a difference of two scroll
+    positions, and subtracting one element's position from another's is a number with no meaning —
+    so if the container is not the same element before and after, nothing is claimed."""
+    from app.main_server import _scroll_job_list
+    cdp = FakeCDP(probes=[_probe(at=0, cards=7, ids=["a"], key="SearchResultsMainContent"),
+                          _probe(at=561, cards=7, ids=["a"], key="JobDetailsPane")])
+    out = asyncio.run(_scroll_job_list(cdp, driver=DirectDriver(), settle_seconds=0.0))
+    assert out["moved"] == 0, "561px of the WRONG column was counted as progress"
+    assert out["landed"] is False
+    assert "changed identity" in out["detail"]
+
+
+def test_the_same_container_moving_is_still_a_move():
+    """The guard must not swallow the real case it sits next to."""
+    from app.main_server import _scroll_job_list
+    cdp = FakeCDP(probes=[_probe(at=0, cards=25, ids=["a"]), _probe(at=700, cards=25, ids=["a"])])
+    out = asyncio.run(_scroll_job_list(cdp, driver=DirectDriver(), settle_seconds=0.0))
+    assert out["moved"] == 700 and out["landed"] is True
+    assert out["container"]["testid"] == "lazy-column"

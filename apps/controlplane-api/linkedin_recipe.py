@@ -83,31 +83,44 @@ top of the search — it is how the search is performed here**, and the scroll h
 with the cursor over the list, like the clicks. So the traversal is a STAGE of this engine's
 cadence (`STAGE_TRAVERSE`), not something a caller may or may not get around to.
 
-Three facts make LinkedIn's traversal different from Indeed's, and all three are MEASURED:
+**THE DOM, MEASURED LIVE 2026-07-30** (session 22, signed-in `/jobs/search-results/`, 1200x838 @2):
 
-* **The list is VIRTUALISED.** Cards outside the viewport are not in the DOM (`occludable` is
-  LinkedIn's own word). One read of a 25-result page returns ~7 cards, so a sweep that reads once
-  records a 25-result page as 7 and nothing raises.
-* **The list is an INNER SCROLLER beside a detail pane.** A wheel scrolls whatever is under the
-  POINTER, so the same wheel moves a different column depending on where the cursor is — and a
-  wheel over the wrong one does nothing while every `ok` still says success.
-* **The classes are build-hashed**, so the list cannot be addressed by name. It is found from a
-  card: the nearest ancestor of a `/jobs/view/` anchor that actually overflows.
+    card          div[role=button][tabindex=0][componentkey="job-card-component-ref-<id>"]  432x105
+    identity      the componentkey's numeric suffix
+    list          div[data-testid=lazy-column][componentkey=SearchResultsMainContent]
+                  rect 37,199 450x638 — scrollHeight 3610, i.e. ~5.6 screens
+    detail pane   a SECOND lazy-column at x=487, whose own componentkey is a per-render UUID
+    pane slots    [componentkey="JobDetails_AboutTheJob_<id>"] and siblings — every slot in the
+                  pane is suffixed with the OPEN job's id, as is the URL's ?currentJobId=
 
-What was wrong before, exactly (2026-07-28 → 2026-07-30): the capture server scrolled by assigning
-`pane.scrollTop` on a class-named element. The element was null on the live page, so every scroll
-fell through to the window, which moved the frame and not the list — the reported symptom, "we
-couldn't scroll down". The extractor's cards were class-named too and returned 0 on the same page.
-Both are now derived from the anchors, and the scroll is `POST /scroll_job_list` — humanized wheel
-notches at a point measured inside the card column, reporting whether the scroller MOVED and whether
-new cards RENDERED. Neither signal alone is enough: at the end of a rendered list the position moves
-and nothing grows; on a list that renders in place the count grows on almost no movement.
+What is NOT there, each of which a previous version of the reader depended on: no `data-job-id`,
+no `data-occludable-job-id`, no `data-entity-urn` (a sweep of every attribute matching /job/i over
+the whole document returned {}), no class hooks, and **no `/jobs/view/` anchor on a card** — the
+page has exactly three and all three belong to the detail pane's title.
 
-UNVERIFIED, and it is the next live drive's whole job: none of the above has been driven on the live
-results page yet — the traversal is built from measurements of what FAILED, which is not the same as
-a measurement of what works. The per-card field mapping (company/location off the card's text lines)
-is a guess and says so; `/extract_jobs` carries `meta.sample_lines` out with every response so one
-live call replaces it with a measurement.
+That last one is why "we couldn't scroll down", and the failure is worth keeping whole. The reader
+looked for `/jobs/view/` anchors; the only ones present were the DETAIL PANE's; the scroller-walk
+therefore started from the pane and returned *the pane* as "the list"; the humanized wheel then
+moved the pane 561px and every check said success while the results list sat at `scrollTop: 0`.
+**"Something scrolled" is not the claim we needed.** So the scroll now reports WHICH container it
+moved (`data-testid`/`componentkey`), and a position delta measured across two different containers
+is discarded rather than reported as progress.
+
+Three properties still make this traversal different from Indeed's:
+
+* **The list is an INNER SCROLLER beside a second one.** A wheel scrolls whatever is under the
+  POINTER, so the cursor must be measured INSIDE the card column — mid-viewport lands on the pane.
+* **The classes are build-hashed**, so nothing may be addressed by name. The list is found from a
+  card: the nearest ancestor of a card that actually overflows.
+* **The list is lazy** (`LazyColumn`). On the page measured, all 25 cards of a page were in the DOM
+  at once and scrolling rendered nothing new — so BOTH signals are needed: at the end of a rendered
+  list the position moves and nothing grows, and a list that renders in place grows without moving.
+
+**VERIFIED LIVE 2026-07-30**, in this order: the wheel moves the list (`lazy-column` scrollTop
+0 -> 700, confirmed by reading the element itself, not by our own report); walking the list reaches
+`at_end` in 3 batches / 2607px; the reader returns all 25 cards with correct title, company,
+location, salary where present, and Easy Apply on exactly the two cards that show it; a humanized
+click opens a card and the pane's own `currentJobId` confirms WHICH job opened.
 """
 
 from __future__ import annotations
@@ -323,9 +336,16 @@ RESULTS_TRAVERSAL: dict[str, Any] = {
     "scroll_by": "wheel",
     "scroll_pointer": "over the results list — the point is measured inside the card column",
     "scroll_endpoint": "/scroll_job_list",
-    #: The list is FOUND from a card (an `a[href*='/jobs/view/']` anchor's nearest overflowing
-    #: ancestor), because the classes are build-hashed. Same rule as the card reader.
-    "located_by": "job-card anchor -> nearest overflowing ancestor",
+    #: The list is FOUND from a card (its nearest overflowing ancestor), because the classes are
+    #: build-hashed. Same rule as the card reader. MEASURED: the container is
+    #: `[data-testid=lazy-column][componentkey=SearchResultsMainContent]`, and it REPORTS THAT
+    #: IDENTITY on every scroll — a delta measured across two different containers is void, which is
+    #: how a wheel that moved the detail pane got reported as the list moving.
+    "located_by": "job card -> nearest overflowing ancestor (lazy-column/SearchResultsMainContent)",
+    #: MEASURED: the card is `[componentkey="job-card-component-ref-<id>"]` with role=button — no
+    #: href, no data-job-id, no urn, no class. The id is the componentkey's numeric suffix.
+    "card_selector": '[role=button][componentkey^="job-card-component-ref-"]',
+    "card_identity": "the componentkey's numeric suffix",
     #: What proves a scroll landed. BOTH, because either alone is satisfied by a no-op:
     #: `moved` without `rendered` is a fully-rendered list moving; `rendered` without `moved` is a
     #: list that renders in place. Neither means the wheel reached the right column.
@@ -339,18 +359,31 @@ RESULTS_TRAVERSAL: dict[str, Any] = {
     "click_endpoint": "/open_job_card",
     "click_by": "humanized trusted click at the card's measured centre (never a synthetic .click())",
     #: Reading the pane is not enough on its own — the pane auto-opens the first result, so an
-    #: unconfirmed click returns the previous job looking perfectly fine. /open_job_card polls the
-    #: pane and reports `switched`.
-    "click_evidence": "the detail pane's title/description CHANGED (`switched`)",
+    #: unconfirmed click returns the previous job looking perfectly fine. MEASURED: the pane states
+    #: its own job id (`?currentJobId=` and `[componentkey="JobDetails_*_<id>"]`), so identity is
+    #: compared rather than inferred from a text diff — which caught a press that silently missed a
+    #: still-settling row, and stopped calling a working click a failure.
+    "click_evidence": "the pane's OWN currentJobId equals the id we clicked (`switched`)",
+    #: And they do not arrive together: the SPA pushes `currentJobId` first and fills the
+    #: description slot after, so a poll that stops at identity records an empty description.
+    "click_settled": "identity AND a non-empty description, polled separately",
     "records_per_card": ("observed_jobs row (deduped by platform:external_id), the pane's "
                          "description/salary/apply_type, and a page-state capture of the open pane"),
     "paginate_by": "wheel to the end of the list, then click the page number (never a ?start= jump)",
     "why_every_card": ("Operator-directed: on LinkedIn the traversal IS the search — scroll, open "
                        "each card, record it. Recording only a keyword-matched shortlist throws "
                        "away exactly the rows a model would learn the boundary from."),
-    "unverified": ("Not yet driven on the live results page. The mechanisms replace measured "
-                   "FAILURES (a class-named scroller that was null, a class-named card reader that "
-                   "returned 0) — which is not the same as a measurement of them working."),
+    "verified_live": ("2026-07-30, session 22: the wheel moved the lazy-column (scrollTop 0 -> 700, "
+                      "read off the element itself rather than from our own report); the walk "
+                      "reaches at_end in 3 batches / 2607px; the reader returns 25/25 cards with "
+                      "correct title, company, location, salary where present, and Easy Apply on "
+                      "exactly the two cards showing it; humanized clicks opened cards and the "
+                      "pane's own currentJobId confirmed which job had opened."),
+    "still_unverified": ("Paging to page 2 — the bar is now read by label instead of by the absent "
+                         "artdeco classes, and reports pages [1,2,3], but has not been PRESSED "
+                         "live. And the traversal has not been driven through /api/search/sweep "
+                         "end to end: that path first runs /set_distance, which is Indeed-shaped "
+                         "and would stop a LinkedIn sweep before it reached the list."),
 }
 
 
@@ -396,6 +429,8 @@ def spec() -> dict[str, Any]:
                      "Enter is the commit, and it lands on /jobs/search-results/",
                      "the results list is virtualised and scrolls inside its own column",
                      "a class-named scroller/card reader was null/0 on the live results page"],
-        "blocked_on": ("the traversal (scroll + click into every card) has not been driven live "
-                       "yet — built against measured failures, not a measured success"),
+        "blocked_on": ("paging to page 2 has not been pressed live, and the traversal has not been "
+                       "run through /api/search/sweep end to end — that path starts with "
+                       "/set_distance, which is Indeed-shaped and would stop a LinkedIn sweep "
+                       "before it reached the list"),
     }

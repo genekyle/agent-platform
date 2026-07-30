@@ -1072,15 +1072,76 @@ _INDEED_JOBS_JS = r"""
 #   * TITLES CARRY A SCREEN-READER DUPLICATE. The anchor renders the title twice — once visible,
 #     once in a `.visually-hidden` span "Job title, Company" — so innerText yields it doubled.
 #     Prefer the aria-label, then strip the hidden node from a clone.
-#   * THE CARD IS FOUND FROM ITS ANCHOR, NOT BY A CLASS. Measured 2026-07-28: this reader returned
-#     ZERO on the real signed-in results page, because it enumerated cards by class
-#     (`li[data-occludable-job-id]`, `.job-card-container`, …) and the live page has none of them —
-#     the classes on it are build-hashed (`_5b06c34f cfc88646`). The module note above already said
-#     never to use a class selector and this did it anyway. So the card is now DERIVED: find the
-#     `/jobs/view/<id>` anchors (the one thing every rendering agrees on, and already our identity),
-#     then walk up to the largest ancestor that still contains exactly ONE of them. That ancestor is
-#     the card whatever it is called. The class selectors survive only as text-picking HINTS below,
-#     where a miss costs a field rather than the whole page.
+#   * THE CARD IS NOT AN ANCHOR AND HAS NO JOB-ID ATTRIBUTE. See `_LINKEDIN_CARD_TELLS_JS` — this
+#     was measured on the live signed-in page and it retired both of the guesses above.
+
+
+# --- what a LinkedIn job card IS, measured once and shared -------------------------------------
+# MEASURED LIVE 2026-07-30 (session 22, signed-in `/jobs/search-results/`, viewport 1200x838 @ DPR 2)
+# after three separate readers had each guessed and each returned nothing:
+#
+#     card      div[role=button][tabindex=0][componentkey="job-card-component-ref-4439543515"]
+#               rect 39,207 432x105 — and the SAME componentkey repeats on an inner div
+#     list      div[data-testid=lazy-column][data-component-type=LazyColumn]
+#               [componentkey=SearchResultsMainContent], rect 37,199 450x638, scrollHeight 3610
+#     identity  THE COMPONENTKEY'S NUMERIC SUFFIX.
+#
+# What is NOT there, each of which a previous version depended on:
+#   * no `data-job-id`, no `data-occludable-job-id`, no `data-entity-urn` — a sweep of every
+#     attribute matching /job/i on the whole document returned {} (empty);
+#   * no class hooks — the classes are build-hashed;
+#   * NO `/jobs/view/` ANCHOR ON A CARD. The page has exactly three, and all three are the
+#     DETAIL PANE's title link at x=511. That is the expensive one: the previous reader looked for
+#     `/jobs/view/` anchors, found only the pane's, walked up from it to find "the list", and so the
+#     humanized wheel scrolled the DETAIL PANE (moved 561px) while the results list sat at
+#     scrollTop 0 — a scroll that moved something, reported `landed: true`, and moved the wrong
+#     column. "Something scrolled" is not the same claim as "the list scrolled".
+#
+# Two renderings are kept because LinkedIn genuinely serves more than one (no single golden path):
+# the componentkey card is what the signed-in results page serves TODAY; the `/jobs/view/` anchor is
+# the public/logged-out list and older renderings. They are tried in that order and never mixed —
+# mixing them lets the pane's own title anchor masquerade as a card for the open job.
+_LINKEDIN_CARD_TELLS_JS = r"""
+  const __idFromComponentKey = (el) => {
+    const ck = (el.getAttribute && el.getAttribute('componentkey')) || '';
+    const m = ck.match(/job-card-component-ref-(\d{6,})/);
+    return m ? m[1] : '';
+  };
+  const __idFromHref = (el) => {
+    const href = (el.getAttribute && el.getAttribute('href')) || el.href || '';
+    const hv = String(href).match(/\/jobs\/view\/(?:[^/]*-)?(\d{6,})/);
+    if (hv) return hv[1];
+    try {
+      const cj = new URL(String(href), location.origin).searchParams.get('currentJobId');
+      if (cj) return cj;
+    } catch (e) { /* relative/odd href */ }
+    return '';
+  };
+  // One entry per job: {id, el, rect}. The componentkey rendering wins outright when present, and
+  // within it the BIGGEST box wins — the key repeats on a wrapper and an inner div (both 432x105
+  // as measured, but the wrapper is the one carrying role=button, so size is the tie-break that
+  // survives them differing later).
+  const __cards = () => {
+    const pick = (nodes, idOf) => {
+      const best = new Map();
+      for (const el of nodes) {
+        const id = idOf(el);
+        if (!id) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;         // occluded / not rendered
+        const prev = best.get(id);
+        if (!prev || r.width * r.height > prev.rect.width * prev.rect.height) {
+          best.set(id, { id, el, rect: r });
+        }
+      }
+      return [...best.values()];
+    };
+    const byKey = pick(document.querySelectorAll('[componentkey^="job-card-component-ref-"]'),
+                       __idFromComponentKey);
+    if (byKey.length) return byKey;
+    return pick(document.querySelectorAll('a[href*="/jobs/view/"]'), __idFromHref);
+  };
+"""
 _LINKEDIN_JOBS_JS = r"""
 (() => {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
@@ -1091,102 +1152,113 @@ _LINKEDIN_JOBS_JS = r"""
     c.querySelectorAll('.visually-hidden, .a11y-text, [aria-hidden=true]').forEach((e) => e.remove());
     return clean(c.innerText || '');
   };
+  // The card's visible lines, with its own title's variants collapsed. MEASURED: a card reads
+  // "Sr. Reporting Analyst (Verified job)" then "Sr. Reporting Analyst" — two DIFFERENT strings, so
+  // an exact-match dedupe keeps both and the positional read below then calls the second one the
+  // company. Containment is the test, not equality.
+  // THE LINES COME OFF THE LIVE NODE, NOT A CLONE — and that is not a style preference.
+  // MEASURED 2026-07-30: `cloneNode(true).innerText` returned the entire card as ONE string with no
+  // separators ("Sr. Reporting Analyst (Verified job)Sr. Reporting AnalystAhold Delhaize USAQuincy,
+  // MA (Hybrid)…"), because `innerText` is defined in terms of RENDERED text and a detached node has
+  // no layout, so it silently degrades to `textContent` semantics. Every line-based read then
+  // collapsed into the title field. The live node has layout and yields the real lines.
+  //
+  // Nothing is stripped, for two reasons: `innerText` already excludes display:none /
+  // visibility:hidden content, and on this rendering the VISIBLE title is itself inside an
+  // `[aria-hidden]` span (218x19) while the a11y copy is a 1x1 clipped span — inverted from the
+  // usual pattern, so stripping aria-hidden would delete the title. The duplicate is handled by the
+  // containment dedupe below instead, which works for both renderings.
+  // RAW lines, in order, with nothing collapsed. An earlier version deduped by CONTAINMENT here and
+  // it ate a real field: the "Flight Centre Travel Group - Business Intelligence Developer/Analyst
+  // II - Woburn, MA" card lists its company as "Flight Centre", which is a SUBSTRING of its own
+  // title — so the company line was dropped as a title variant and the row came back with
+  // company="Woburn, MA (On-site)" (measured, 1 of 25 rows). Duplicates are the field read's problem,
+  // where the test can be exact; a generic containment rule cannot tell a badge from a company.
   const lines = (n) => {
     if (!n) return [];
-    const c = n.cloneNode(true);
-    c.querySelectorAll('.visually-hidden, .a11y-text, [aria-hidden=true]').forEach((e) => e.remove());
-    const seenL = new Set();
-    return (c.innerText || '').split('\n').map((s) => clean(s)).filter((s) => {
-      if (!s || seenL.has(s.toLowerCase())) return false;   // the card repeats its own title
-      seenL.add(s.toLowerCase());
-      return true;
-    });
+    const out = [];
+    for (const raw of ((n.innerText || n.textContent || '')).split('\n')) {
+      const s = clean(raw);
+      if (s) out.push(s);
+    }
+    return out;
   };
   const pick = (root, sels) => {
     for (const s of sels) { const n = root.querySelector(s); const t = txt(n); if (t) return t; }
     return '';
   };
-  const idFromHref = (href) => {
-    const m = (href || '').match(/\/jobs\/view\/(?:[^/]*-)?(\d{6,})/);
-    if (m) return m[1];
-    try { const cj = new URL(href, location.origin).searchParams.get('currentJobId'); if (cj) return cj; }
-    catch (e) { /* relative/odd href */ }
-    return '';
-  };
-
-  // THE CARD, DERIVED FROM ITS ANCHOR. Grow upward while the ancestor still holds exactly one job
-  // anchor; the moment it holds two we have left the card and are in the list, so stop one short.
-  // `li`/`[data-occludable-job-id]` short-circuit it when LinkedIn happens to serve them.
-  const cardOf = (anchor) => {
-    const fast = anchor.closest('li[data-occludable-job-id], li, [data-job-id], [data-entity-urn]');
-    if (fast && fast.querySelectorAll('a[href*="/jobs/view/"]').length === 1) return fast;
-    let el = anchor;
-    for (let hops = 0; hops < 6; hops++) {
-      const up = el.parentElement;
-      if (!up || up === document.body) break;
-      if (up.querySelectorAll('a[href*="/jobs/view/"]').length > 1) break;
-      el = up;
-    }
-    return el;
-  };
-
-  const anchors = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
-  const cards = [];
-  const cardSeen = new Set();
-  for (const a of anchors) {
-    const c = cardOf(a);
-    if (cardSeen.has(c)) continue;
-    cardSeen.add(c);
-    cards.push(c);
-  }
+""" + _LINKEDIN_CARD_TELLS_JS + r"""
   const seen = new Set();
   const out = [];
   let sample_lines = null;
-  for (const card of cards) {
-    const anchor = card.querySelector('a[href*="/jobs/view/"]')
-                || (card.matches('a[href*="/jobs/view/"]') ? card : null);
-    const href = anchor ? anchor.href : '';
-    const id = idFromHref(href)
-            || card.getAttribute('data-occludable-job-id')
-            || card.getAttribute('data-job-id')
-            || ((card.getAttribute('data-entity-urn') || '').match(/(\d{6,})/) || [])[1]
-            || '';
+  for (const found of __cards()) {
+    const card = found.el;
+    const id = found.id;
     if (!id || seen.has(id)) continue;
     seen.add(id);
     if (sample_lines === null) sample_lines = lines(card).slice(0, 8);
+    const anchor = card.querySelector('a[href*="/jobs/view/"]')
+                || (card.matches && card.matches('a[href*="/jobs/view/"]') ? card : null);
+    // The card is not a link on the current rendering, so there is no per-card href to record.
+    // Build the canonical posting URL from the id instead — it is the same address the pane's own
+    // title anchor uses, and it is what `observed_jobs` stores. It is NOT a URL we navigate to
+    // (that would be the scraper-shaped jump the cadence forbids); we click the card.
+    const href = anchor ? anchor.href : `https://www.linkedin.com/jobs/view/${id}/`;
 
-    // aria-label is the cleanest title LinkedIn gives us; the anchor's own text is the fallback.
+    // THE CARD READS POSITIONALLY, because it has nothing else to be read by. MEASURED live
+    // 2026-07-30 — one card's lines, after the containment dedupe collapses the title's
+    // "(Verified job)" variant and "Posted 2 weeks ago"/"2 weeks ago":
+    //
+    //     Sr. Reporting Analyst      <- title
+    //     Ahold Delhaize USA         <- company
+    //     Quincy, MA (Hybrid)        <- location
+    //     9 benefits                 <- chip
+    //     Posted 2 weeks ago         <- chip
+    //
+    // So: title, company, location, then chips. The class selectors below are kept as a FIRST try
+    // for the other renderings (public/logged-out cards do carry them) and simply miss here.
+    const lns = lines(card);
+    const badge = /\s*\((verified job|promoted|reposted)\)\s*$/i;
+    const money = /\$|\bper (hour|year)\b|\ban? (hour|year)\b|\/yr\b|\/hr\b|\bK\/yr\b/i;
+    const chip = new RegExp('^(promoted|viewed|easy apply|actively (hiring|reviewing)|reposted'
+      + '|be an early applicant|posted |\\d+ (school|connection|alum|benefit)'
+      + '|\\d+ (hour|day|week|month|year)s? ago|vision|medical|401\\(k\\)|\\+?\\d+ benefits?)', 'i');
+
+    // aria-label is the cleanest title when there IS an anchor; otherwise the first line is it.
     let title = clean(anchor && (anchor.getAttribute('aria-label') || '')) || txt(anchor);
     if (!title) title = pick(card, ['.job-card-list__title', '.base-search-card__title',
                                     '.artdeco-entity-lockup__title', 'h3']);
+    if (!title) title = lns[0] || '';
+    // MEASURED: the title line carries LinkedIn's own badge — "Sr. Reporting Analyst (Verified
+    // job)". It is a badge on the posting, not part of the role name, and leaving it in would both
+    // pollute the stored title and break the cross-platform (company, title) match that stops us
+    // applying to the same job twice off two engines.
+    title = clean(title.replace(badge, ''));
     let company = pick(card, ['.artdeco-entity-lockup__subtitle',
                               '.job-card-container__primary-description',
                               '.base-search-card__subtitle', '.job-card-container__company-name']);
     let location = pick(card, ['.artdeco-entity-lockup__caption',
                                '.job-card-container__metadata-item',
                                '.job-search-card__location', '.job-card-container__metadata-wrapper li']);
-    // Salary is not a labelled field — it is whichever metadata chip mentions money.
-    const money = /\$|\bper (hour|year)\b|\ban? (hour|year)\b|\/yr\b|\/hr\b/i;
     let salary = '';
     for (const li of card.querySelectorAll('.job-card-container__metadata-item, .artdeco-entity-lockup__metadata li, .job-search-card__salary-info')) {
       const t = txt(li);
       if (money.test(t)) { salary = t; break; }
     }
 
-    // POSITIONAL FALLBACK — UNVERIFIED (no live read of these lines yet, 2026-07-30).
-    // Everything above addresses fields by CLASS, and on the live page the card-level classes were
-    // measured absent, so the fields most likely come back empty even now that the card itself is
-    // found structurally. LinkedIn stacks a card as title / company / location / metadata, so the
-    // remaining lines are read in that order. A wrong guess here mislabels a FIELD; leaving it out
-    // would drop the row's company and location entirely, which is worse and silent. `meta.
-    // sample_lines` carries the first card's real lines out with the response so ONE live call
-    // replaces this guess with a measurement.
-    const rest = lines(card).filter((s) => s.toLowerCase() !== (title || '').toLowerCase());
-    const chip = /^(promoted|viewed|easy apply|actively (hiring|reviewing)|reposted|be an early applicant|\d+ (school|connection|alum))/i;
-    const body = rest.filter((s) => !chip.test(s));
+    // The card repeats its title — once with the badge, once plain — so a title line is either
+    // EXACTLY the title or the title plus a parenthesised badge. Tested that precisely, because the
+    // loose version dropped a company that happened to appear inside its own job title.
+    const tl = (title || '').toLowerCase();
+    const isTitleLine = (s) => {
+      const low = s.toLowerCase();
+      if (low === tl) return true;
+      return clean(s.replace(badge, '')).toLowerCase() === tl;
+    };
+    const body = lns.filter((s) => !isTitleLine(s) && !chip.test(s));
     if (!company && body.length) company = body[0];
     if (!location && body.length > 1) location = body[1];
-    if (!salary) salary = body.find((s) => money.test(s)) || '';
+    if (!salary) salary = lns.find((s) => money.test(s)) || '';
 
     // "Easy Apply" is the on-engine apply tell — the same question `apply_type` answers on Indeed,
     // and the fork between finishing here and handing off to an ATS.
@@ -1194,10 +1266,23 @@ _LINKEDIN_JOBS_JS = r"""
     out.push({ external_id: id, title, company, location, salary, url: href, apply_type });
   }
 
-  // Pagination state. LinkedIn numbers pages in an artdeco pagination bar; `start=` is 25/page.
-  const pageEls = [...document.querySelectorAll('.artdeco-pagination__indicator button, li.artdeco-pagination__indicator')];
-  const visible_pages = [...new Set(pageEls.map((e) => parseInt(clean(e.innerText), 10))
+  // Pagination state. LinkedIn numbers pages in a bar at the bottom of the list; `start=` is
+  // 25/page. MEASURED 2026-07-30: the artdeco class hooks are absent on the current rendering, so
+  // this reported `visible_pages: []` and `has_next: false` on a page whose footer reads "1 2 3
+  // Next". Read the controls by ROLE + LABEL and fall back to the classes.
+  const pageEls = [...document.querySelectorAll(
+    '.artdeco-pagination__indicator button, li.artdeco-pagination__indicator,'
+    + ' button[aria-label^="Page "], [role=button][aria-label^="Page "]')];
+  let visible_pages = [...new Set(pageEls.map((e) => parseInt(clean(e.innerText), 10)
+      || parseInt((e.getAttribute('aria-label') || '').replace(/\D+/g, ''), 10))
     .filter((n) => !isNaN(n)))].sort((a, b) => a - b);
+  if (!visible_pages.length) {
+    // Last resort: the small numeric controls near the end of the list, by their own text.
+    visible_pages = [...new Set([...document.querySelectorAll('button, [role=button], a')]
+      .filter((e) => /^\d{1,3}$/.test(clean(e.innerText)))
+      .map((e) => parseInt(clean(e.innerText), 10))
+      .filter((n) => n > 0 && n < 200))].sort((a, b) => a - b);
+  }
   const start = parseInt(new URLSearchParams(location.search).get('start') || '0', 10);
   const totalEl = document.querySelector('.jobs-search-results-list__subtitle, .results-context-header__job-count, small.jobs-search-results-list__text');
   let totalText = totalEl ? clean(totalEl.innerText) : '';
@@ -1208,7 +1293,10 @@ _LINKEDIN_JOBS_JS = r"""
     totalText = m ? m[0] : '';
   }
   const totalMatch = totalText.match(/([\d,]+)/);
-  const nextBtn = document.querySelector('.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"]');
+  const nextBtn = document.querySelector(
+      '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"]')
+    || [...document.querySelectorAll('button, [role=button], a')]
+         .find((e) => /^next$/i.test(clean(e.innerText)));
   return {
     jobs: out,
     meta: {
@@ -1246,31 +1334,35 @@ _LINKEDIN_JOBS_JS = r"""
 # and after, so "it scrolled" is evidence rather than an assumption.
 #
 # The list is found FROM A CARD, never by class (same lesson, same page): the scroll container is
-# the nearest ancestor of a job anchor that actually overflows. If nothing overflows, the window is
-# the scroller — and the cursor still goes over the card column, because that is the column whose
+# the nearest ancestor of a CARD that actually overflows. If nothing overflows, the window is the
+# scroller — and the cursor still goes over the card column, because that is the column whose
 # content we want rendered.
+#
+# AND THE CONTAINER NAMES ITSELF IN THE RESULT. Measured 2026-07-30: when the card selector was
+# wrong, this walk started from the DETAIL PANE's title anchor and confidently returned the pane as
+# "the list" — a wheel then moved it 561px and the whole chain reported success while the results
+# list sat at scrollTop 0. A container that reports WHICH element it is (`data-testid`,
+# `componentkey`) makes that visible in one read instead of costing a live drive. The list is
+# `lazy-column` / `SearchResultsMainContent`; anything else under the cursor is the wrong column.
 _LINKEDIN_LIST_PROBE_JS = r"""
 (() => {
-  const idFromHref = (href) => {
-    const m = (href || '').match(/\/jobs\/view\/(?:[^/]*-)?(\d{6,})/);
-    return m ? m[1] : '';
-  };
-  const anchors = [...document.querySelectorAll('a[href*="/jobs/view/"]')];
-  const boxed = anchors.map((a) => ({ a, r: a.getBoundingClientRect() }))
-                       .filter((o) => o.r.width > 0 && o.r.height > 0);
-  const ids = [...new Set(anchors.map((a) => idFromHref(a.href)).filter(Boolean))];
+""" + _LINKEDIN_CARD_TELLS_JS + r"""
   const vw = window.innerWidth, vh = window.innerHeight;
-  if (!boxed.length) {
-    return { ok: false, cards: 0, ids, reason: 'no visible /jobs/view/ anchors on this page',
+  const cards = __cards();
+  const ids = cards.map((c) => c.id);
+  if (!cards.length) {
+    return { ok: false, cards: 0, ids: [],
+             reason: 'no job cards on this page (no [componentkey^=job-card-component-ref-] and no '
+                   + 'visible /jobs/view/ anchor)',
              hover: { x: Math.round(vw / 2), y: Math.round(vh / 2) } };
   }
 
-  // The card COLUMN: the union of the card anchors' rects, clipped to the viewport. Its centre is
-  // where the cursor belongs — inside the list, never over the detail pane on the right.
-  const left = Math.min(...boxed.map((o) => o.r.left));
-  const right = Math.max(...boxed.map((o) => o.r.right));
-  const top = Math.max(0, Math.min(...boxed.map((o) => o.r.top)));
-  const bottom = Math.min(vh, Math.max(...boxed.map((o) => o.r.bottom)));
+  // The card COLUMN: the union of the cards' rects, clipped to the viewport. Its centre is where the
+  // cursor belongs — inside the list, never over the detail pane on the right.
+  const left = Math.min(...cards.map((c) => c.rect.left));
+  const right = Math.max(...cards.map((c) => c.rect.right));
+  const top = Math.max(0, Math.min(...cards.map((c) => c.rect.top)));
+  const bottom = Math.min(vh, Math.max(...cards.map((c) => c.rect.bottom)));
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const hover = {
     x: Math.round(clamp((left + right) / 2, 4, vw - 4)),
@@ -1288,7 +1380,7 @@ _LINKEDIN_LIST_PROBE_JS = r"""
     return null;
   };
   let pane = null;
-  for (let el = boxed[0].a; el && !pane; el = el.parentElement) pane = scrollable(el);
+  for (let el = cards[0].el; el && !pane; el = el.parentElement) pane = scrollable(el);
   const doc = document.scrollingElement || document.documentElement;
   const cont = pane || doc;
   const at = Math.round(pane ? pane.scrollTop : (window.scrollY || doc.scrollTop || 0));
@@ -1297,6 +1389,16 @@ _LINKEDIN_LIST_PROBE_JS = r"""
   return {
     ok: true,
     kind: pane ? 'pane' : 'window',
+    // WHICH element we are about to scroll, in its own words. Not decoration: this is the check
+    // that catches a walk that landed on the wrong column.
+    container: pane ? { testid: pane.getAttribute('data-testid') || '',
+                        component: pane.getAttribute('data-component-type') || '',
+                        key: (pane.getAttribute('componentkey') || '').slice(0, 40),
+                        rect: [Math.round(pane.getBoundingClientRect().x),
+                               Math.round(pane.getBoundingClientRect().y),
+                               Math.round(pane.getBoundingClientRect().width),
+                               Math.round(pane.getBoundingClientRect().height)] }
+                    : { testid: '', component: 'window', key: '', rect: [0, 0, vw, vh] },
     cards: ids.length,
     ids,
     hover,
@@ -1348,21 +1450,35 @@ async def _scroll_job_list(cdp, *, driver, notch_px: float = 700.0,
     moved = int(a.get("at", 0)) - int(b.get("at", 0))
     known = set(b.get("ids") or [])
     new_ids = [i for i in (a.get("ids") or []) if i not in known]
+    # THE SAME CONTAINER, BEFORE AND AFTER. `moved` is a difference of two scroll positions, and
+    # subtracting one element's position from another's is a number with no meaning — it was how a
+    # wheel that scrolled the detail pane produced `moved: 561` and read as the list moving. If the
+    # container changed identity between the two reads, the measurement is void, not merely small.
+    before_key = ((b.get("container") or {}).get("key"), (b.get("container") or {}).get("testid"))
+    after_key = ((a.get("container") or {}).get("key"), (a.get("container") or {}).get("testid"))
+    same_container = before_key == after_key
+    if not same_container:
+        moved = 0
+    landed = (bool(moved) and same_container) or bool(new_ids)
     return {
         "ok": True,
         "kind": a.get("kind") or b.get("kind"),
+        "container": a.get("container"),
         "hover": hover,
         "at_before": b.get("at"), "at_after": a.get("at"),
         "moved": moved,
         "cards_before": b.get("cards", 0), "cards_after": a.get("cards", 0),
         "new_ids": new_ids,
         "at_end": bool(a.get("at_end")),
-        "landed": bool(moved) or bool(new_ids),
+        "landed": landed,
         "probe": a,
-        "detail": ("" if (moved or new_ids) else
-                   f"the wheel at ({hover.get('x')},{hover.get('y')}) moved nothing and rendered "
-                   f"nothing new — the pointer is over a {a.get('kind')} that does not scroll, or "
-                   f"the list is already at its end (at_end={bool(a.get('at_end'))})"),
+        "detail": ("" if landed else
+                   (f"the scroll container changed identity between reads "
+                    f"({before_key} -> {after_key}) — the before/after positions are not "
+                    f"comparable, so nothing is claimed" if not same_container else
+                    f"the wheel at ({hover.get('x')},{hover.get('y')}) moved nothing and rendered "
+                    f"nothing new — the pointer is over a {a.get('kind')} that does not scroll, or "
+                    f"the list is already at its end (at_end={bool(a.get('at_end'))})")),
     }
 
 
@@ -2826,13 +2942,21 @@ _CARD_BBOX_JS = r"""
 # list has not rendered, in a container the wheel never touched.
 _LINKEDIN_CARD_BBOX_JS = r"""
 (id) => {
-  const esc = String(id).replace(/"/g, '');
-  const card = document.querySelector(`a[href*="/jobs/view/${esc}"]`)
+  const esc = String(id).replace(/["\\]/g, '');
+  // MEASURED 2026-07-30: the card is `[componentkey="job-card-component-ref-<id>"]` with
+  // role=button — so it is addressed by its own id, and the ROLE=BUTTON copy is the one to press
+  // (the key repeats on an inner div that is not the click target). The anchor/attribute forms
+  // below are the other renderings, kept in the order they are likely to exist.
+  const card = document.querySelector(`[role=button][componentkey="job-card-component-ref-${esc}"]`)
+            || document.querySelector(`[componentkey="job-card-component-ref-${esc}"]`)
+            || document.querySelector(`a[href*="/jobs/view/${esc}"]`)
             || document.querySelector(`li[data-occludable-job-id="${esc}"]`)
             || document.querySelector(`div[data-job-id="${esc}"]`)
             || document.querySelector(`[data-entity-urn$=":${esc}"]`);
   if (!card) return {found:false, reason:'no node for this id (not rendered yet?)'};
-  const el = card.matches('a') ? card : (card.querySelector('a[href*="/jobs/view/"]') || card);
+  const el = card.matches('a') ? card
+           : (card.getAttribute('componentkey') ? card
+              : (card.querySelector('a[href*="/jobs/view/"]') || card));
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return {found:false, reason:'card has no box (occluded)'};
   const x = r.x + r.width / 2, y = r.y + r.height / 2;
@@ -2851,14 +2975,45 @@ _LINKEDIN_CARD_BBOX_JS = r"""
 # description, apply_type}) and the same discipline: scope to the PANE, never the document — the
 # results column on the left holds a title/company node per card, so a document-wide read returns
 # the first card's fields for every job (exactly the bug _JOB_DESC_JS carries its scar from).
+#
+# THE PANE SAYS WHICH JOB IT IS SHOWING, TWICE, AND BOTH ARE STRUCTURAL. MEASURED live 2026-07-30:
+#
+#     ?currentJobId=4433333449                            <- the URL, updated by the SPA on switch
+#     [componentkey="JobDetails_AboutTheJob_4433333449"]   <- the description slot, 3825 chars
+#     [componentkey="JobDetailsPeopleWhoCanHelpSlot_<id>"], JobMatchRef_<id>, …
+#
+# Every slot in the pane is suffixed with the open job's id. That retires the old switch check,
+# which diffed the description text against a before-snapshot: text-diffing cannot tell "the pane
+# switched" from "the pane re-rendered the same job", it needs a round trip to establish a baseline,
+# and it reported `switched:false` for a click that had demonstrably worked (the pane's Apply button
+# had already changed to the new job's "Easy Apply"). An id we can compare to the id we clicked is
+# a fact about the page; a text difference is an inference about it.
+#
+# The class selectors are kept underneath for the renderings that have them, and miss here.
 _LINKEDIN_JOB_DESC_JS = r"""
 (() => {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-  const root = document.querySelector(
-    '.jobs-search__job-details, .jobs-details, .job-view-layout, .jobs-search__job-details--container,'
-    + ' .details-pane__content, .job-details-jobs-unified-top-card'
-  );
-  const pane = root ? (root.closest('.jobs-search__job-details') || root) : document;
+  const open_job_id = new URLSearchParams(location.search).get('currentJobId') || '';
+  const slot = (prefix) => (open_job_id
+    ? document.querySelector('[componentkey="' + prefix + '_' + open_job_id + '"]') : null);
+
+  // The pane: the description slot's nearest scrolling ancestor. Derived, like the list — the
+  // right column is a `lazy-column` too, but its componentkey is a UUID that changes per render.
+  const about = slot('JobDetails_AboutTheJob');
+  let pane = null;
+  for (let el = about; el; el = el.parentElement) {
+    if (el === document.body) break;
+    const cs = getComputedStyle(el);
+    if (['auto', 'scroll', 'overlay'].includes(cs.overflowY)
+        && el.scrollHeight > el.clientHeight + 4) { pane = el; break; }
+  }
+  if (!pane) {
+    const root = document.querySelector(
+      '.jobs-search__job-details, .jobs-details, .job-view-layout,'
+      + ' .jobs-search__job-details--container, .details-pane__content,'
+      + ' .job-details-jobs-unified-top-card');
+    pane = root ? (root.closest('.jobs-search__job-details') || root) : document;
+  }
   const pick = (sels) => {
     for (const s of sels) {
       const n = pane.querySelector(s);
@@ -2869,7 +3024,7 @@ _LINKEDIN_JOB_DESC_JS = r"""
   };
   // The description body carries LinkedIn's own "About the job" heading; keep it, it is part of
   // the posting as rendered, and stripping headings is how you accidentally strip content.
-  let description = '';
+  let description = about ? clean(about.innerText) : '';
   for (const s of ['#job-details', '.jobs-description__content', '.jobs-box__html-content',
                    '.jobs-description-content__text', '.show-more-less-html__markup']) {
     const n = pane.querySelector(s);
@@ -2880,21 +3035,40 @@ _LINKEDIN_JOB_DESC_JS = r"""
       if (t.length > (description || '').length) description = t;
     }
   }
-  const title = pick(['.job-details-jobs-unified-top-card__job-title', '.jobs-unified-top-card__job-title',
-                      '.top-card-layout__title', 'h1']);
-  const company = pick(['.job-details-jobs-unified-top-card__company-name',
-                        '.jobs-unified-top-card__company-name', '.topcard__org-name-link',
-                        '.top-card-layout__second-subline a']);
+  let title = pick(['.job-details-jobs-unified-top-card__job-title',
+                    '.jobs-unified-top-card__job-title', '.top-card-layout__title', 'h1']);
+  let company = pick(['.job-details-jobs-unified-top-card__company-name',
+                      '.jobs-unified-top-card__company-name', '.topcard__org-name-link',
+                      '.top-card-layout__second-subline a']);
+  // POSITIONAL, and measured: the pane's own header reads company, then title, then a
+  // "City, ST · N weeks ago · N people clicked apply" line. Read from the pane's TOP, above the
+  // description slot, so the list column on the left can never leak in (the scar _JOB_DESC_JS
+  // carries: a document-wide read returns the first card's fields for every job).
+  if (!title || !company) {
+    const head = [];
+    for (const raw of ((pane.innerText || '')).split('\n')) {
+      const s = clean(raw);
+      if (!s) continue;
+      if (/^about the job$/i.test(s)) break;
+      head.push(s);
+      if (head.length > 6) break;
+    }
+    if (!company) company = head[0] || '';
+    if (!title) title = head[1] || '';
+  }
   const meta = pick(['.job-details-jobs-unified-top-card__job-insight',
                      '.jobs-unified-top-card__job-insight', '.salary']);
   const salary = /\$|\bper (hour|year)\b/i.test(meta) ? meta : '';
   // The apply FORK, read off the button: Easy Apply finishes on LinkedIn; anything else hands off
   // to the employer's ATS and the existing cross-site machinery takes over.
-  const applyBtn = pane.querySelector('.jobs-apply-button, button[aria-label*="Apply" i], a[aria-label*="Apply" i]');
+  const applyBtn = pane.querySelector('.jobs-apply-button, button[aria-label*="Apply" i], a[aria-label*="Apply" i]')
+    || [...pane.querySelectorAll('button, a, [role=button]')]
+         .find((e) => /^(easy apply|apply)$/i.test(clean(e.innerText)));
   const applyTxt = applyBtn ? clean(applyBtn.innerText) : '';
   const apply_type = /easy apply/i.test(applyTxt) ? 'linkedin_easy_apply'
                    : (applyTxt ? 'company_site' : '');
-  return { title, company, salary, description, apply_type, apply_button: applyTxt.slice(0, 40) };
+  return { title, company, salary, description, apply_type, open_job_id,
+           apply_button: applyTxt.slice(0, 40) };
 })()
 """
 
@@ -2996,25 +3170,62 @@ async def open_job_card(body: OpenJobCardRequest):
             # check never noticed. We now require the pane itself to have changed.
             before = (await cdp.send("Runtime.evaluate", {
                 "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
-            await driver.click_at(cdp, float(box["x"]), float(box["y"]))
-            # Poll until the pane has switched to the clicked job, bounded by settle_seconds. The
-            # switch signal is description OR title changing from the before-snapshot — description
-            # is the most reliable per-job field, title catches the rare identical-description case.
             deadline = max(0.6, min(body.settle_seconds, 8.0))
             waited, data = 0.0, {}
+
             def _switched(d):
+                # PREFER THE ID THE PANE ITSELF REPORTS. On LinkedIn every pane slot (and the URL)
+                # is suffixed with the open job's id, so "is this the job I clicked" is answerable
+                # exactly. The text diff below is the fallback for engines with no such id — and it
+                # is genuinely weaker: it cannot tell a switch from a re-render, and it called a
+                # working click a failure on 2026-07-30 because two of the fields it read were
+                # empty for an unrelated reason.
+                open_id = str(d.get("open_job_id") or "")
+                if open_id:
+                    return open_id == str(body.external_id)
                 return bool(d.get("description")) and (
                     d.get("description") != before.get("description")
                     or (d.get("title") and d.get("title") != before.get("title")))
-            while waited < deadline:
-                await asyncio.sleep(0.4)
-                waited += 0.4
-                data = (await cdp.send("Runtime.evaluate", {
-                    "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
+
+            # TWO ATTEMPTS, because a coordinate press into a list that is still settling is a
+            # genuinely racy act. MEASURED 2026-07-30: after wheeling UP to reach a card, the press
+            # landed where the row had been a moment earlier and the pane never changed — caught
+            # only because the identity check compares ids rather than trusting the click. The
+            # answer is not a longer sleep (that is a race with a longer fuse): re-measure the row
+            # IMMEDIATELY before pressing, and if the pane still shows the wrong job, measure and
+            # press once more. A third try would be a loop papering over a broken locator.
+            for attempt in (1, 2):
+                fresh = await _measure()
+                if not (fresh.get("found") and fresh.get("in_view", True)):
+                    if attempt == 2:
+                        break
+                    fresh, more = await _bring_card_into_view(cdp, driver, _measure, fresh,
+                                                              max_batches=3)
+                    scrolled += more
+                    if not (fresh.get("found") and fresh.get("in_view", True)):
+                        break
+                box = fresh
+                await driver.click_at(cdp, float(box["x"]), float(box["y"]))
+                # Poll for BOTH conditions, separately: the pane must be showing the job we clicked
+                # (identity) AND have rendered its body (content). They do not arrive together —
+                # the SPA pushes `currentJobId` first and fills the description slot after, so a
+                # poll that stops at identity returns an empty description for a click that worked.
+                waited = 0.0
+                while waited < deadline:
+                    await asyncio.sleep(0.4)
+                    waited += 0.4
+                    data = (await cdp.send("Runtime.evaluate", {
+                        "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
+                    if _switched(data) and data.get("description"):
+                        break
                 if _switched(data):
                     break
-        data["ok"] = bool(data.get("description"))
+                data["retried"] = attempt
+        # `ok` means WE ARE LOOKING AT THE JOB WE CLICKED and it has a body. Description alone was
+        # the old test, which made a successful click on a job whose description slot we could not
+        # read look identical to a click that never landed.
         data["switched"] = _switched(data)
+        data["ok"] = bool(data.get("description")) and data["switched"]
         data["external_id"] = body.external_id
         data["platform"] = platform
         if scrolled:

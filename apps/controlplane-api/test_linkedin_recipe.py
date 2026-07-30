@@ -192,14 +192,22 @@ def test_the_scroll_is_a_wheel_over_the_list_and_never_scrolltop():
     assert t["scroll_by"] == "wheel"
     assert "over the results list" in t["scroll_pointer"]
     assert t["scroll_container"] == "inner"
-    assert "scrollTop" not in str(t.values()).replace("never scrollTop", "")
+    # The MECHANISM is the assertion, not the absence of a word: `scrollTop` legitimately appears in
+    # the evidence ("scrollTop 0 -> 700") because reading the element's own position is how we
+    # confirmed the wheel landed. Assigning to it is what is forbidden, and `scroll_by` says so.
+    assert t["scroll_by"] != "scrollTop"
+    assert t["scroll_endpoint"] == "/scroll_job_list"
 
 
 def test_the_list_is_located_from_a_card_not_by_class():
     """The classes are build-hashed, which is why the class-named scroller and the class-named card
-    reader both came back empty on the same page."""
+    reader both came back empty on the same page. Note what this does NOT say any more: 'from an
+    anchor'. A card is not a link here — assuming it was is what walked the scroller-finder up from
+    the detail pane's title and scrolled the wrong column."""
     t = lr.results_traversal()
-    assert "anchor" in t["located_by"]
+    assert t["located_by"].startswith("job card")
+    assert "lazy-column" in t["located_by"]
+    assert "anchor" not in t["located_by"]
     assert t["virtualised"] is True
 
 
@@ -219,11 +227,34 @@ def test_every_card_is_opened_and_the_pane_switch_is_the_proof():
     assert "switched" in t["click_evidence"]
 
 
-def test_the_traversal_admits_it_has_not_been_driven_live():
-    """It is built from measurements of what FAILED, which is not a measurement of it working.
-    PRINCIPLES §13: say which it is."""
-    assert "Not yet driven" in lr.results_traversal()["unverified"]
-    assert "not been driven live" in lr.spec()["blocked_on"]
+def test_the_traversal_separates_what_was_driven_live_from_what_was_not():
+    """PRINCIPLES §13: say which it is. The scroll, the reader and the click were driven on the live
+    page 2026-07-30 and say so with the numbers; paging and the end-to-end sweep were NOT, and say
+    that too. A recipe that claimed both would be the same failure as claiming neither."""
+    t = lr.results_traversal()
+    assert "scrollTop 0 -> 700" in t["verified_live"]
+    assert "25/25 cards" in t["verified_live"]
+    assert "not been PRESSED" in t["still_unverified"]
+    assert "set_distance" in lr.spec()["blocked_on"]
+
+
+def test_the_card_is_addressed_by_componentkey_not_by_an_href_or_an_attribute():
+    """MEASURED: the page carries no data-job-id / urn / class hook, and its only /jobs/view/
+    anchors belong to the DETAIL PANE — which is exactly how the scroller-walk ended up on the
+    wrong column. The card is `[componentkey=job-card-component-ref-<id>]` with role=button."""
+    t = lr.results_traversal()
+    assert "componentkey" in t["card_selector"] and "role=button" in t["card_selector"]
+    assert "componentkey" in t["card_identity"]
+    assert "lazy-column" in t["located_by"]
+
+
+def test_the_pane_is_asked_which_job_it_is_showing():
+    """The pane states its own id (?currentJobId= / JobDetails_*_<id>), so 'is this the job I
+    clicked' is compared, not inferred from a text diff — and identity arrives BEFORE the body, so
+    both are waited on separately."""
+    t = lr.results_traversal()
+    assert "currentJobId" in t["click_evidence"]
+    assert "description" in t["click_settled"]
 
 
 def test_the_shared_cadence_reads_linkedins_traversal_and_indeeds_default():
