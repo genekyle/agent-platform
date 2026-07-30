@@ -123,3 +123,78 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"total": len(rows), "fillable": len(fillable), "missing": missing,
             "by_source": {s: sum(1 for r in rows if r["source"] == s)
                           for s in (SRC_WORKING, SRC_STORED, SRC_IDENTITY, SRC_MISSING)}}
+
+
+# ---------------------------------------------------------------------------------------------
+# ACCORDION FORMS — reading whether the form is even open before believing what it says.
+# ---------------------------------------------------------------------------------------------
+
+def section_status(ats: str, candidates: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Which of this ATS's declared section bars are open, from one AX scan. None if flat.
+
+    Pure on purpose: the browser-facing half is one `/ax_scan` call, and everything that can be
+    got wrong here — matching a bar whose name carries a count, treating "not expandable" as
+    "closed", calling a form empty that is merely shut — is decidable from the candidate list
+    alone, so it is testable without a live page.
+
+    Matching mirrors `_resolve_ax_node` (strip/lower, role-gated, exact then substring) because a
+    bar this reports as open must be the same node /execute would click. `expanded=None` means
+    the node never claimed to be expandable, which is reported as `unknown` and never folded into
+    `closed` — a bar we cannot read is not a bar we know is shut.
+    """
+    import apply_fields
+    decl = apply_fields.section_bars(ats)
+    if decl is None:
+        return None
+
+    def nm(c: dict[str, Any]) -> str:
+        return (c.get("caption") or c.get("name") or "").strip().lower()
+
+    def find(role: Optional[str], name: str) -> Optional[dict[str, Any]]:
+        want_role, want = (role or "").strip().lower(), (name or "").strip().lower()
+        pool = [c for c in candidates
+                if not want_role or (c.get("role") or "").strip().lower() == want_role]
+        return next((c for c in pool if nm(c) == want),
+                    next((c for c in pool if want and want in nm(c)), None))
+
+    rows: list[dict[str, Any]] = []
+    for key in decl["sections"]:
+        entry = apply_fields.resolve(ats, key)
+        hit = find(entry.get("role"), entry.get("name") or "")
+        exp = hit.get("expanded") if hit else None
+        rows.append({
+            "field": key,
+            # The LIVE name, count and all — and it must read BOTH keys. The raw proposer calls it
+            # `caption`, the /ax_scan endpoint projects that to `name`, and this function is fed
+            # from the endpoint. Reading only `caption` silently fell back to our generic name, so
+            # the operator saw "Jobs Applied" where the page said "Jobs Applied (2)".
+            "label": (hit or {}).get("caption") or (hit or {}).get("name") or entry.get("name"),
+            "present": hit is not None,
+            "state": "unknown" if hit is None or exp is None else ("open" if exp else "closed"),
+        })
+    closed = [r for r in rows if r["state"] == "closed"]
+    return {
+        "ats": ats,
+        "sections": rows,
+        "closed": [r["field"] for r in closed],
+        "open": [r["field"] for r in rows if r["state"] == "open"],
+        "unknown": [r["field"] for r in rows if r["state"] == "unknown"],
+        "expand_all": decl.get("expand_all"),
+        "all_open": bool(rows) and not closed,
+        "page": decl.get("page"),
+    }
+
+
+def sections_caveat(status: Optional[dict[str, Any]], planned: int) -> str:
+    """The sentence a fill plan owes the operator when the form was read shut.
+
+    Empty string when there is nothing to warn about. This exists so that "0 fields" and "0
+    fields because nine sections are closed" cannot read the same on screen — the whole failure
+    was a confident, accurate summary of a page nobody had opened.
+    """
+    if not status or not status["closed"]:
+        return ""
+    n = len(status["closed"])
+    return (f"{n} section{'s' if n != 1 else ''} still closed — a closed section's fields are "
+            f"absent from the scan entirely, so this plan describes only what is open"
+            + (". Nothing is open yet." if planned == 0 else f" ({planned} field(s))."))

@@ -3457,9 +3457,14 @@ class AXScanRequest(BaseModel):
 @app.post("/ax_scan")
 async def ax_scan(body: AXScanRequest):
     """Enumerate the page's CDP-AX candidates (the SAME proposer the training capture uses) and
-    return them as {role, name, backend_node_id, bbox, dpr}. This is how driven flows — login
-    included — find controls by role + accessible-name instead of hardcoded selectors, so a
-    <div role=button> "Log in" is found exactly like a <button> would be. Best-effort."""
+    return them as {role, name, backend_node_id, bbox, dpr, expanded}. This is how driven flows —
+    login included — find controls by role + accessible-name instead of hardcoded selectors, so a
+    <div role=button> "Log in" is found exactly like a <button> would be. Best-effort.
+
+    `expanded` is tri-state and must stay that way through this projection: True/False for a node
+    that declares itself expandable, None for one that never claimed to be. It is how a caller
+    tells "this form is empty" from "this form is shut" — a distinction that has no other honest
+    signal here, because a collapsed container's children are absent from this very list."""
     try:
         stats = AXProposerStats()
         candidates = await propose_ax_candidates(
@@ -3473,6 +3478,7 @@ async def ax_scan(body: AXScanRequest):
             "backend_node_id": c.get("backend_node_id"),
             "bbox": c.get("bbox"),
             "dpr": (c.get("_debug") or {}).get("dpr", body.device_scale_factor),
+            "expanded": c.get("expanded"),
         } for c in candidates]
         # `errors` carries WHY a scan came back empty (e.g. target-tab discovery raised: no matching
         # tab, unreachable browser, ambiguous). Callers used to see count:0 with no reason — that

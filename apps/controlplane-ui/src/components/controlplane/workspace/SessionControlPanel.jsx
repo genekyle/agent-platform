@@ -3,6 +3,8 @@ import { getJSON, postJSON, fmtTime } from "./api";
 import { AppIcon } from "../../../ui/Icon";
 import { PickOrb } from "./OrderedPicks";
 import { useOrderedPicks } from "./useOrderedPicks";
+import FormSections from "./FormSections";
+import FillPlan from "./FillPlan";
 
 // The Session Control Panel — the one place the local side turns the loop.
 //
@@ -578,6 +580,17 @@ export function SessionControlPanel({ domain }) {
               </div>
             </div>
           )}
+
+          {/* THE ACCORDION, and the fill plan it gates. Both hang off the last action rather than
+              a rung, because "is the form open" is a fact about the page in front of us, not a
+              stage of the ladder — the same profile is shut again after every re-login. */}
+          <FormSections sections={last?.sections} busy={busy}
+                        onExpand={(what) => call("/apply_sections",
+                                                 { initiator: "operator", ats: "successfactors",
+                                                   ...(what ? { expand: what } : {}) })} />
+          <FillPlan plan={last?.fill_plan} summary={last?.fill_summary} busy={busy}
+                    onPlan={() => call("/apply_fill", { initiator: "operator", execute: false })}
+                    onFill={() => call("/apply_fill", { initiator: "operator", execute: true })} />
 
           {/* The inherited window. Shown in full and never cleared silently — a persistent
               profile's restored tabs can include somebody's half-finished application. */}

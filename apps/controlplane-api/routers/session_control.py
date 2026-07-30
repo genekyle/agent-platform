@@ -2475,11 +2475,21 @@ def _identity_defaults() -> dict[str, str]:
     }
 
 
-async def _scan_form_fields(browser_url: str, tab_id: str) -> list[dict[str, Any]]:
+async def _scan_ax(browser_url: str, tab_id: str) -> list[dict[str, Any]]:
+    """The raw AX candidates for the tab. Split out from `_scan_form_fields` because the section
+    reader needs `expanded`, which the {role, name} projection below throws away."""
     scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
                                timeout=25.0)
-    return [{"role": c.get("role"), "name": c.get("name")}
-            for c in (scan.get("candidates") or []) if c.get("name")]
+    return scan.get("candidates") or []
+
+
+def _form_fields_from(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{"role": c.get("role"), "name": c.get("caption") or c.get("name")}
+            for c in candidates if (c.get("caption") or c.get("name"))]
+
+
+async def _scan_form_fields(browser_url: str, tab_id: str) -> list[dict[str, Any]]:
+    return _form_fields_from(await _scan_ax(browser_url, tab_id))
 
 
 def _fill_plan_for(bb: Any, fields: list[dict[str, Any]], db: Session) -> list[dict[str, Any]]:
@@ -2491,9 +2501,91 @@ def _fill_plan_for(bb: Any, fields: list[dict[str, Any]], db: Session) -> list[d
     return form_fill.plan(fields, answers=answers, identity=_identity_defaults())
 
 
+class ApplySectionsBody(BaseModel):
+    initiator: str = "operator"
+    ats: str = "successfactors"
+    expand: Optional[str] = None   # None = just read; "all" = the Expand-all control; else a field key
+
+
+@router.post("/api/session_control/{session_id}/apply_sections")
+async def apply_sections(session_id: int, body: ApplySectionsBody,
+                         db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Read — and optionally open — an accordion form's section bars.
+
+    The rung that has to exist before `apply_fill` means anything on SAP: a closed section's
+    fields are not in the AX tree at all, so a fill plan over a shut form is an accurate summary
+    of nothing. Reading is free and always safe; `expand` clicks, and clicking a disclosure bar
+    on our own profile is not a submit, so it needs no per-prospect approval.
+
+    VERIFICATION IS A RE-READ, not the click's own `ok`. /execute returns ok when CDP dispatched,
+    which on a detached or 0-size node is exactly what a no-op looks like — so this scans again
+    afterwards and reports the bars' real state. If a bar did not open, the response says so.
+    """
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    import form_fill
+    af = apply_fields
+
+    if not af.has_section_bars(body.ats):
+        raise HTTPException(status_code=400,
+                            detail=f"No section bars declared for {body.ats!r}. Absent means the "
+                                   f"form is flat or nobody has checked — not that it is flat.")
+
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    tab_id = _apply_tab(bb, obs).get("tab_id", "")
+    before = form_fill.section_status(body.ats, await _scan_ax(browser_url, tab_id))
+
+    if not body.expand:
+        return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                     last={"ok": True, "action": "apply_sections", "sections": before,
+                           "detail": _sections_detail(before)})
+
+    keys = [before["expand_all"]] if body.expand == "all" else [body.expand]
+    style = xs.pick_style()
+    clicked, refused = [], []
+    for key in keys:
+        try:
+            addr = af.addressing_for(body.ats, key)
+        except af.FieldNotFound as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        res = await _capture_post("/execute", {
+            "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+            "target_bbox": {}, "target_role": addr.get("role"), "target_name": addr.get("name"),
+            "driver": "humanized"})
+        (clicked if res.get("outcome") in ("ok", "committed_unconfirmed") else refused).append(key)
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    after = form_fill.section_status(body.ats, await _scan_ax(browser_url, tab_id))
+    opened = sorted(set(before["closed"]) - set(after["closed"]))
+    # The honest failure: the click reported ok and the bar is still shut. Naming it here is the
+    # difference between "we opened it" and "we asked".
+    stuck = [k for k in clicked if k in after["closed"]]
+    ok = bool(opened) and not stuck
+    detail = (f"Opened {len(opened)} section(s). " if opened else "Nothing opened. ")
+    if stuck:
+        detail += (f"{len(stuck)} bar(s) took the click and stayed shut ({', '.join(stuck)}) — "
+                   f"a dispatched click is not an opened section. ")
+    if refused:
+        detail += f"{len(refused)} could not be resolved on the page ({', '.join(refused)}). "
+    detail += _sections_detail(after)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                 last={"ok": ok, "action": "apply_sections", "sections": after,
+                       "opened": opened, "pace": xs.describe(style), "detail": detail})
+
+
+def _sections_detail(status: dict[str, Any]) -> str:
+    n_open, n_closed = len(status["open"]), len(status["closed"])
+    bits = f"{n_open} open, {n_closed} closed"
+    if status["unknown"]:
+        # Never folded into "closed": a bar we could not read is not one we know is shut.
+        bits += f", {len(status['unknown'])} not readable on this page"
+    return bits + "."
+
+
 class ApplyFillBody(BaseModel):
     initiator: str = "operator"
     execute: bool = False          # False = plan only (see the bunch); True = fill the fillable ones
+    ats: str = "successfactors"    # whose accordion declaration to check the form against
 
 
 @router.post("/api/session_control/{session_id}/apply_fill")
@@ -2522,17 +2614,23 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
         return _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
                                     detail="A challenge is up — clear it yourself before filling.")
     tab_id = _apply_tab(bb, obs).get("tab_id", "")
-    fields = await _scan_form_fields(browser_url, tab_id)
+    candidates = await _scan_ax(browser_url, tab_id)
+    fields = _form_fields_from(candidates)
     rows = _fill_plan_for(bb, fields, db)
     summary = form_fill.summarise(rows)
+    # A plan over a shut accordion is an accurate summary of a page nobody opened. Carry the
+    # caveat with the plan so "0 fields" and "0 fields, nine sections closed" cannot read alike.
+    sections = form_fill.section_status(body.ats, candidates)
+    caveat = form_fill.sections_caveat(sections, summary["total"])
 
     if not body.execute:
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_fill", "queue": queue.summary(),
-                           "fill_plan": rows, "fill_summary": summary,
+                           "fill_plan": rows, "fill_summary": summary, "sections": sections,
                            "detail": f"Planned {summary['fillable']} of {summary['total']} fields. "
-                                     + (f"Need your data for: {', '.join(summary['missing'])}."
-                                        if summary["missing"] else "Every field has a value.")})
+                                     + (f"Need your data for: {', '.join(summary['missing'])}. "
+                                        if summary["missing"] else "Every field has a value. ")
+                                     + caveat})
 
     style = xs.pick_style()
     filled, failed = [], []
@@ -2558,12 +2656,14 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                  last={"ok": not failed, "action": "apply_fill", "queue": queue.summary(),
-                       "fill_plan": rows, "fill_summary": summary, "pace": xs.describe(style),
+                       "fill_plan": rows, "fill_summary": summary, "sections": sections,
+                       "pace": xs.describe(style),
                        "detail": f"Filled {len(filled)} field(s) at {style.name} pace."
                                  + (f" {len(failed)} would not take: {', '.join(failed)}."
                                     if failed else "")
                                  + (f" Still need you for: {', '.join(summary['missing'])}."
-                                    if summary["missing"] else "")})
+                                    if summary["missing"] else "")
+                                 + (f" {caveat}" if caveat else "")})
 
 
 class OrientStepBody(BaseModel):

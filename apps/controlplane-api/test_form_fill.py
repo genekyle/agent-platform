@@ -80,3 +80,63 @@ def test_summary_counts_and_lists_the_missing():
     assert s["fillable"] == 2                        # first, last (how-did-you-hear is a prompt now)
     assert "Address Line 1" in s["missing"] and "City" in s["missing"]
     assert s["by_source"][ff.SRC_IDENTITY] == 2
+
+
+# ---------------------------------------------------------------------------------------------
+# ACCORDION FORMS. The bug these guard against produces no error and no empty result — it
+# produces a CONFIDENT, ACCURATE summary of a page nobody opened.
+# ---------------------------------------------------------------------------------------------
+
+#: Verbatim shape of an /ax_scan candidate for a SAP section bar. `expanded` is tri-state.
+def _bar(name, expanded=None, role="button"):
+    return {"role": role, "name": name, "expanded": expanded}
+
+
+_ALL_SHUT = [
+    _bar("My Documents", False), _bar("Profile Information", False),
+    _bar("Search Options and Privacy", False), _bar("Jobs Applied (2)", False),
+    _bar("Saved Applications", False), _bar("Employment History", False),
+    _bar("Formal Education", False), _bar("Language Skills", False),
+    _bar("Geographic Mobility", False),
+]
+
+
+def test_a_flat_ats_reports_none_rather_than_asserting_flatness():
+    # Absent from SECTION_BARS means "flat, or nobody checked". Those must not look alike, and a
+    # None here is what keeps apply_fill from claiming a form has no sections when it has never
+    # been looked at.
+    assert ff.section_status("greenhouse", _ALL_SHUT) is None
+
+
+def test_every_bar_shut_is_reported_as_shut_not_as_an_empty_form():
+    s = ff.section_status("successfactors", _ALL_SHUT)
+    assert len(s["closed"]) == 9 and s["open"] == [] and s["all_open"] is False
+
+
+def test_the_caveat_distinguishes_zero_fields_from_zero_because_shut():
+    # The whole point: "0 fields" and "0 fields, nine sections closed" must not read alike.
+    shut = ff.section_status("successfactors", _ALL_SHUT)
+    assert "9 sections still closed" in ff.sections_caveat(shut, 0)
+    assert "Nothing is open yet" in ff.sections_caveat(shut, 0)
+    # ...and once everything is open there is nothing to warn about, so the card stays quiet.
+    open_all = ff.section_status("successfactors", [_bar(b["name"], True) for b in _ALL_SHUT])
+    assert open_all["all_open"] is True
+    assert ff.sections_caveat(open_all, 13) == ""
+
+
+def test_a_bar_we_cannot_read_is_not_a_bar_we_know_is_shut():
+    # `expanded=None` means the node never claimed to be expandable; a MISSING bar means we are
+    # probably not even on the profile. Folding either into "closed" invents knowledge, and would
+    # make "Open all sections" offer to click things that are not there.
+    s = ff.section_status("successfactors", [_bar("Profile Information", None)])
+    assert s["closed"] == [] and len(s["unknown"]) == 9
+    assert ff.sections_caveat(s, 0) == ""
+
+
+def test_the_bar_whose_name_carries_a_count_still_matches():
+    # "Jobs Applied (2)" becomes "(3)" the next time we apply. Exact match cannot hold it, so the
+    # substring fallback is load-bearing — and the LIVE label is carried through so the operator
+    # sees the real count rather than our generic name.
+    s = ff.section_status("successfactors", [_bar("Jobs Applied (7)", True)])
+    row = next(r for r in s["sections"] if r["field"] == "profile_section_jobs_applied")
+    assert row["state"] == "open" and row["label"] == "Jobs Applied (7)"

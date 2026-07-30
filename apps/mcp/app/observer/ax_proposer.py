@@ -245,6 +245,20 @@ def _ax_value(node: dict[str, Any], key: str) -> str:
     return str(field_val or "")
 
 
+def _ax_property(node: dict[str, Any], key: str) -> Any:
+    """One AX PROPERTY (`node['properties']` is a list of {name, value:{value}}), or None.
+
+    Separate from `_ax_value` because properties live in a different place from the top-level
+    role/name fields, and the miss is silent: `node.get('expanded')` is always None on a real AX
+    node no matter how expanded the thing is.
+    """
+    for prop in node.get("properties") or []:
+        if prop.get("name") == key:
+            val = prop.get("value")
+            return val.get("value") if isinstance(val, dict) else val
+    return None
+
+
 def _enumerate_frame_ids(frame_tree: dict[str, Any]) -> list[str]:
     """Flatten Page.getFrameTree into a list of frame ids (main frame first, then
     children depth-first). Gmail/Docs/Workday/Salesforce render their real UI
@@ -384,12 +398,20 @@ async def propose_ax_candidates(
 
                 bbox = {k: v * device_scale_factor for k, v in bbox_css.items()}
                 st.boxed += 1
+                # DISCLOSURE STATE, first-class. A collapsed container hides its fields from this
+                # very scan, so "did the form look empty" and "is the section shut" are the same
+                # question — and without this the only answers left are chevron pixels or row
+                # pitch, both of which are geometry-inference we have been bitten by. None means
+                # the node does not claim to be expandable at all, which is NOT the same as
+                # closed and must not be flattened to False.
+                expanded = _ax_property(node, "expanded")
                 out.append({
                     "candidate_id": _candidate_id(bbox, role, name),
                     "bbox": bbox,
                     "confidence": _confidence(role, name),
                     "caption": name,
                     "role": role,
+                    "expanded": bool(expanded) if expanded is not None else None,
                     # Stable AX identity — first-class so the SELECT stage can key
                     # cache + result on it (not just the screenshot-relative bbox).
                     "backend_node_id": backend_id,

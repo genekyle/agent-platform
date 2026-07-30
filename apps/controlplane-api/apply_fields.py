@@ -457,11 +457,28 @@ SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
         widget_type=WidgetType.UNKNOWN,
         note="Section bar. Click toggles aria-expanded; verified false->true live, with the bars "
              "below shifting ~514px down. Holds the thirteen identity fields below."),
+    "profile_section_my_documents": _f(
+        ats="successfactors", role="button", name="My Documents",
+        widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
+    "profile_section_search_options": _f(
+        ats="successfactors", role="button", name="Search Options and Privacy",
+        widget_type=WidgetType.UNKNOWN,
+        note="Section bar — contents not yet mapped. Named 'and Privacy', so expect consent-ish "
+             "toggles here; read before ticking anything (§4)."),
+    "profile_section_saved_applications": _f(
+        ats="successfactors", role="button", name="Saved Applications",
+        widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
     "profile_section_employment_history": _f(
         ats="successfactors", role="button", name="Employment History",
         widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
     "profile_section_formal_education": _f(
         ats="successfactors", role="button", name="Formal Education",
+        widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
+    "profile_section_language_skills": _f(
+        ats="successfactors", role="button", name="Language Skills",
+        widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
+    "profile_section_geographic_mobility": _f(
+        ats="successfactors", role="button", name="Geographic Mobility",
         widget_type=WidgetType.UNKNOWN, note="Section bar — contents not yet mapped."),
     # MATCH THIS ONE BY PREFIX. Its accessible name carries a live COUNT — "Jobs Applied (2)" —
     # so an exact match breaks the moment an application lands. Same shape as LinkedIn's
@@ -570,6 +587,58 @@ def known_fields(ats: str) -> list[str]:
 
 def known_ats() -> list[str]:
     return sorted(_BY_ATS)
+
+
+# --- forms that hide behind section bars --------------------------------------------------
+#: Which ATS forms are ACCORDIONS, and which field keys open them.
+#:
+#: This exists because of a specific silent failure: a scan of a collapsed form does not report
+#: "closed", it reports NOTHING. SAP's candidate profile offered 25 AX candidates and zero
+#: textboxes shut, 41 with all thirteen after one bar was opened (2026-07-30). A fill planner
+#: reading the shut page sees an empty form and says so confidently, and every downstream number
+#: — fields found, fields fillable, fields missing — is a truthful summary of a page nobody
+#: opened. The operator then reads "0 of 0 fields" as "nothing to do here".
+#:
+#: A per-ATS DECLARATION rather than an `if ats == "successfactors"` at the scan site, because
+#: the next accordion ATS is a table row, not a second code path (the readers-are-not-cadence
+#: rule). Absent from this table means "this form is flat, or nobody has checked" — and those
+#: two are distinguished the same way password policies distinguish them: `has_section_bars`
+#: stays False rather than the scan quietly asserting flatness.
+#:
+#: The bars are read through the AX candidate's `expanded` flag (ax_proposer) — never from row
+#: pitch or chevron pixels, which is geometry-inference of exactly the kind that has cost us
+#: before.
+SECTION_BARS: dict[str, dict[str, Any]] = {
+    "successfactors": {
+        "expand_all": "profile_expand_all",
+        "sections": [
+            "profile_section_my_documents",
+            "profile_section_profile_information",
+            "profile_section_search_options",
+            "profile_section_jobs_applied",
+            "profile_section_saved_applications",
+            "profile_section_employment_history",
+            "profile_section_formal_education",
+            "profile_section_language_skills",
+            "profile_section_geographic_mobility",
+        ],
+        # Measured twice: on first sight, and again after a manual re-login on 2026-07-30. Both
+        # times every bar came up shut. So opening them is a step on EVERY session, not a
+        # one-time setup — a drive that expanded them yesterday starts closed today.
+        "collapsed_by_default": True,
+        "page": "Candidate Profile (career<N>.sapsf.com/portalcareer)",
+    },
+}
+
+
+def section_bars(ats: str) -> Optional[dict[str, Any]]:
+    """The accordion declaration for an ATS, or None if its form is flat / unchecked."""
+    return SECTION_BARS.get((ats or "").strip().lower())
+
+
+def has_section_bars(ats: str) -> bool:
+    """True only when we have actually looked. Absent != flat — see the note above."""
+    return section_bars(ats) is not None
 
 
 # --- password policies ------------------------------------------------------------------
