@@ -70,10 +70,17 @@ INDEED_HOME = "https://www.indeed.com/"
 ENGINES: list[dict[str, Any]] = [
     {"id": "indeed_jobs", "platform": "indeed", "host": "indeed.com", "results_path": "/jobs",
      "query_param": "q", "page_size": 10, "home": INDEED_HOME, "search_tab": "indeed.com/jobs",
+     # HOW THE QUERY IS COMMITTED. Indeed has a real Search button; LinkedIn has none and commits on
+     # Enter (measured from the operator's own /observe recording, 2026-07-28). `_run_query` used to
+     # require a submit CONTROL on every engine, so on LinkedIn it reported "found submit" — it had
+     # matched `Skip to search`, the skip-link `linkedin_recipe` warns about — and refused to run.
+     "commit": "button",
      "label": "Indeed", "spa": False},
     {"id": "linkedin_jobs", "platform": "linkedin", "host": "linkedin.com", "results_path": "/jobs",
      "query_param": "keywords", "page_size": 25, "home": "https://www.linkedin.com/jobs/",
      "search_tab": "linkedin.com/jobs", "label": "LinkedIn",
+     # No submit button exists on the jobs home; Enter on the query box is the commit.
+     "commit": "enter",
      # A SINGLE-PAGE APP: query, filters and pagination all pushState and re-render in place, so
      # nothing here may treat a navigation (or its absence) as proof an action landed.
      "spa": True},
@@ -849,12 +856,26 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
 
     scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
                                timeout=25.0)
-    controls = search_cadence.find_search_controls(scan.get("candidates") or [])
-    if "query" not in controls or "submit" not in controls:
-        seen = len(scan.get("candidates") or [])
+    candidates = scan.get("candidates") or []
+    # THE ENGINE'S OWN MATCHER FIRST. The shared one is Indeed's: its query hints do not match
+    # LinkedIn's "I'm looking for…" box, and its submit hints DO match `Skip to search` — a
+    # skip-link that would jump the caret to a landmark and report a query. `linkedin_recipe`
+    # documented both and nothing consulted it, so the rung refused to run on a page it was
+    # looking straight at (live 2026-07-30: "81 elements scanned; found submit").
+    commit_by = engine.get("commit", "button")
+    if engine.get("platform") == "linkedin":
+        import linkedin_recipe
+        found = linkedin_recipe.search_controls(candidates)
+        controls = {k: v for k, v in found.items() if k in ("query", "submit") and v}
+    else:
+        controls = search_cadence.find_search_controls(candidates)
+    needs_submit = commit_by == "button"
+    if "query" not in controls or (needs_submit and "submit" not in controls):
+        seen = len(candidates)
         return {"ok": False, "action": "run_query", "awaiting": "operator_search_box",
-                "detail": f"Could not find a search box and a submit button on this page "
-                          f"({seen} elements scanned; found "
+                "detail": f"Could not find a search box"
+                          + (" and a submit button" if needs_submit else "")
+                          + f" on this page ({seen} elements scanned; found "
                           f"{', '.join(controls) or 'neither'}). Open {engine['label']}'s job "
                           f"search, then step again."}
 
@@ -893,7 +914,13 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
         NOT that the page accepted the action. Confirming is this tier-2 caller's job.
         """
         before = await _tab_urls()
-        ok, detail = await _act("click", controls["submit"])
+        # COMMIT THE WAY THIS ENGINE COMMITS. `submit` on the query box dispatches Enter to the
+        # focused element (the fill just focused it) — which is the only way in on an engine with
+        # no submit control, and is what the operator's recording measured LinkedIn doing.
+        if commit_by == "enter":
+            ok, detail = await _act("submit", controls["query"])
+        else:
+            ok, detail = await _act("click", controls["submit"])
         if not ok:
             return False, None, False, detail
         await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
@@ -928,6 +955,32 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
                             "location widget; clicking Search once more")
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         clicked, tab, moved, why = await _submit_and_confirm()
+
+    if tab is None and moved:
+        # ROUTE B: THE COMMIT LANDED ON THE BLENDED SEARCH, WHICH IS ONE CLICK SHORT OF RESULTS.
+        # Measured 2026-07-28 and again live 2026-07-30: committing from the jobs home can land on
+        # `/search/results/all/?...&origin=GLOBAL_SEARCH_HEADER` — LinkedIn's everything-search
+        # (people, posts, courses, groups AND jobs). It is not a failure and it is not a different
+        # query; it is the same query one navigation short of the jobs results, and the way on is
+        # the JOBS section's "Show all".
+        #
+        # FIVE links share that accessible name, one per section. Picking by document order happens
+        # to be right today and is precisely the mistake that clicked the wrong company on
+        # 2026-07-26, so it is chosen BY HREF — the jobs one is the only `/jobs/search-results/`.
+        # A CSS selector is the honest addressing here: the name cannot distinguish them, and this
+        # is the case `/execute`'s `selector` exists for.
+        landed = ((await _tab_urls()) or [""])[0]
+        if "/search/results/" in landed and engine.get("platform") == "linkedin":
+            bb.log("run_query", "landed on the blended search — taking the jobs section's "
+                                "'Show all' (chosen by href, not by document order)")
+            res = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+                "target_bbox": {}, "selector": 'a[href^="/jobs/search-results/"]',
+                "driver": "humanized"})
+            if res.get("outcome") in _ACTED_OK:
+                await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+                after = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+                tab = _find_search_tab(after.get("tabs") or [], query)
 
     if tab is None and moved:
         # Something happened, just not what we asked for. Never click again into an unknown.
