@@ -19,6 +19,7 @@ import json
 
 import accounts
 import apply_state_store as store
+import apply_landing as al
 import apply_steps as aps
 import main
 import pytest
@@ -4421,3 +4422,34 @@ def test_indeed_wording_still_wins_on_indeed():
     ctrl = sc._find_apply_control([{"role": "link", "name": "Apply on company site"}],
                                   apply_type="company_site", job_title="Sr. Reporting Analyst")
     assert ctrl["name"] == "Apply on company site"
+
+
+# --- the account rung must LOOK before it offers a credential -----------------------------------
+def test_the_account_rung_refuses_when_the_page_is_still_a_job_posting():
+    """Live 2026-07-30: classify correctly named appvault (read off the careers front's APPLY NOW
+    href), and the account rung then offered "Sign in — Ahold Delhaize USA" while the browser was
+    still on the careers-front JOB POSTING with APPLY NOW un-clicked. No wall on screen, no account
+    to sign into, and the panel said the account existed. The operator called it brainless, which is
+    the right diagnosis: it walked a recipe instead of reading a page.
+
+    This pins the classification the rung now depends on — a careers front carrying an apply link is
+    a JOB POSTING on a named ATS, not an account gate."""
+    front = ("Join Our Talent Community Sr. Reporting Analyst Posting Date: 07/22/2026 Quincy, MA "
+             "APPLY NOW Category/Area of Expertise: Procurement & Logistics Job Requisition: 533857 "
+             "Responsibilities Qualifications")
+    seen = aps.classify_landing(
+        "https://aholddelhaizeusa.careerswithus.com/job/Procurement-%26-Logistics/"
+        "Sr.-Reporting-Analyst/Quincy-MA/ADUSA",
+        front,
+        apply_hrefs=["https://aholddelhaizeapply.appvault.com/external/home?jobId=533857"])
+    assert seen.platform == "appvault"          # the signpost still names the vendor…
+    assert seen.kind == al.JOB_POSTING          # …and the page is still a posting, not a wall
+    assert seen.kind not in (al.ACCOUNT_GATE, al.APPLICATION_FORM)
+
+
+def test_an_account_gate_is_still_recognised_as_one():
+    """The guard must not swallow the case it sits in front of."""
+    gate = ("Sign in to continue your application. Email address Password Sign in "
+            "Create an account Forgot password?")
+    seen = aps.classify_landing("https://aholddelhaizeapply.appvault.com/external/home", gate)
+    assert seen.kind == al.ACCOUNT_GATE

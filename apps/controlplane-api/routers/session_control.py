@@ -40,6 +40,7 @@ from starlette.concurrency import run_in_threadpool
 import account_forms
 import applied_index
 import apply_fields
+import apply_landing as al
 import apply_steps as aps
 import google_recipe
 import session_windows
@@ -3595,6 +3596,38 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             detail = ("I cannot tell whose account this would be — the step has no company. "
                       "Name it before creating credentials anywhere.")
         else:
+            # LOOK BEFORE OFFERING A CREDENTIAL. This rung used to go straight to ensure_account +
+            # "Sign in", asserting the wall rather than observing it. Live 2026-07-30: classify had
+            # correctly named appvault (from the careers front's APPLY NOW href) and this then
+            # offered "Sign in — Ahold Delhaize USA (appvault)" while the browser was still sitting
+            # on the careers-front JOB POSTING with APPLY NOW un-clicked. There was no account wall
+            # on screen, no account to sign into yet, and the panel said the account existed.
+            #
+            # The operator's word for it was "brainless", and that is the right diagnosis: the
+            # ladder was walking a recipe instead of reading a page. A rung that assumes the screen
+            # it needs will always be confident and will sometimes be nowhere near it.
+            here = await _capture_post("/page_content",
+                                       {"browser_url": browser_url,
+                                        "tab_url": _apply_tab_url(bb, obs)}, timeout=15.0)
+            seen = aps.classify_landing(_apply_tab_url(bb, obs),
+                                        page_text=here.get("text") or "",
+                                        frames=here.get("frames") or [],
+                                        apply_hrefs=here.get("apply_hrefs") or [])
+            if seen.kind in (al.JOB_POSTING, al.JOB_LIST):
+                # The way on is the posting's own apply control, not a credential.
+                step.record("account", aps.UNKNOWN,
+                            f"not at an account wall — the page is a {seen.kind.replace('_', ' ')} "
+                            f"({seen.state}). The way in from here is the posting's own apply "
+                            f"control, not a sign-in.", initiator=body.initiator)
+                bb.world = dict(bb.world or {})
+                bb.world.pop("account_handoff", None)
+                return _save_queue_and_view(
+                    session, bb, ledger, queue, obs, ok=False, pace=style,
+                    detail=(f"We are not at {company}'s account wall — the tab is still a "
+                            f"{seen.kind.replace('_', ' ')} on {seen.platform}. Nothing to sign "
+                            f"into yet: press its apply control to enter the application, then "
+                            f"work this rung again."))
+
             # ensure_account REGISTERS the company-ATS pair (idempotent); next_account_action
             # reads back which leg is due from its lifecycle state.
             ats_accounts.ensure_account(company, platform, login_url=_apply_tab_url(bb, obs))
