@@ -4725,3 +4725,41 @@ now records `open_pane/ok` and advances to `verify_identity`.
 ("did it change", "did the call return ok") instead of the WORLD ("is the world in the state I
 asked for") fails in whichever direction is least convenient. The scroll lesson wanted `moved` AND
 `new_ids`; the search commit wanted the path, not `origin=`; this one wants the id, not the diff.
+
+---
+
+## 2026-07-30 (11) — Teaching while driving: the orientation corpus, and the sequencing debt
+
+**Operator:** *"make sure to teach while you're creating the solutions for our inner layers so
+that's the flow for your drive."* The observer already assembles, on every render, exactly the
+features a perception witness would train on — and threw them away. `orientation_log` keeps them.
+
+**A row is (features, label, outcome):** the witnesses' claims and the URL at the moment of the
+decision; the fused verdict; and — filled in when the operator presses one of the card's buttons —
+whether they took the offered action (`confirmed`) or did something else (`corrected`). **The
+correction is the valuable row**: a labelled mistake is the teacher-correction signal at the
+observer's altitude, and it is the only row that says the verdict was actually wrong.
+
+**The dedupe is the design, not an optimisation.** `_orient_now` fires on every poll, so a parked
+tab would write hundreds of identical rows and a model trained on that learns *whatever we stare at
+longest is the truth*. One row per distinct situation (host + state + mismatch), and only the LAST
+verdict suppresses — returning to a situation after leaving it IS new knowledge, because the
+transition is what a sequencing model most needs. Verified live: two polls, one row.
+
+**And the corpus caught its own first poisoning.** Wired naively, the first `stats()` showed six
+rows — `workday_unreadable`, `icims_unreadable`, `successfactors_unreadable` — all from the TEST
+SUITE driving the observer against fakes, indistinguishable from live observations once written.
+Poisoned training data is invisible until a model has learned it, so `record()` refuses to write
+under pytest unconditionally, and this module's own tests opt back in through an explicit flag
+(not an env var: pytest re-sets `PYTEST_CURRENT_TEST` per test, so unsetting it does not hold, and
+a bypass that silently stops working is worse than no bypass).
+
+**THE SEQUENCING DEBT, stated so it is not mistaken for done.** There are now TWO surfaces that
+answer "what next": the ladder's rungs (`apply_step`) and the observer's plan (`orient_action`).
+They are computed from different things — the recipe's position and the live page — which was the
+whole point, but nothing RESOLVES them into a single next action, so the panel can show two
+suggestions and the operator has to arbitrate. That is the "flow feels off". The shape of the fix
+is one `next_action` on the view: the observer wins whenever `mismatch` is set (the world contradicts
+the recipe), the rung wins otherwise, and the loser stays visible as the secondary option. Stubbed
+deliberately at the operator's direction — the observer had to exist before anything could arbitrate
+with it.

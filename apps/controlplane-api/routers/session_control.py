@@ -599,6 +599,16 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str) -> Optiona
     )
     out = o.as_dict()
     out["url"] = url[:200]
+    # TEACH WHILE DRIVING. The verdict is written to the orientation corpus when the SITUATION
+    # changes — the features a perception witness will train on are exactly what was just fused,
+    # and reconstructing them later is the backfill that L3/L4 already proved impossible. The log
+    # dedupes by fingerprint, so a parked tab polled for an hour contributes one row, not hundreds.
+    try:
+        import orientation_log
+        orientation_log.record(getattr(bb, "session_id", "") or "", out,
+                               step_job_id=step.job_id, rung=(nr.id if nr else "submit"))
+    except Exception:  # noqa: BLE001 — the corpus must never break the panel
+        pass
     return out
 
 
@@ -689,6 +699,16 @@ async def orient_action(session_id: int, body: OrientActionBody,
 
     # RE-OBSERVE AFTER ACTING, ALWAYS. The action's own `ok` means CDP dispatched it; where we
     # ended up is a separate question, and it is the only one worth reporting.
+    # THE OPERATOR JUST LABELLED THE VERDICT. Pressing an action the observer proposed is a
+    # confirmation; anything else is a correction, and a labelled mistake is the most valuable row
+    # in the corpus. This is the teacher-correction signal at the observer's altitude.
+    try:
+        import orientation_log
+        orientation_log.resolve(session.id, action_id=body.action_id,
+                                agreed=body.action_id in offered)
+    except Exception:  # noqa: BLE001
+        pass
+
     obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=True, pace=style,
                                       detail=detail)
