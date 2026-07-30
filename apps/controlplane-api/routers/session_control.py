@@ -1628,7 +1628,12 @@ async def sso_step(session_id: int, body: SsoStepBody,
 
 class LoginActionBody(BaseModel):
     control_name: str                   # the accessible NAME of the control to click
-    role: str = "button"
+    # THE SURVEY ALREADY KNOWS THE ROLE, so the default is "ask it" rather than "assume button".
+    # This defaulted to "button" and role-gated the click to it, which meant every way in that the
+    # survey reported as a `link` — Indeed's own "Sign in" among them — was offered and then could
+    # never be clicked. Worse, the failure blamed the page ("it may have moved") for a control
+    # sitting right where it was. A caller may still pin the role explicitly; the UI does.
+    role: Optional[str] = None
     initiator: str = "operator"
 
 
@@ -1660,11 +1665,16 @@ async def login_action(session_id: int, body: LoginActionBody,
             detail=f"{body.control_name!r} is not one of the ways in I can see "
                    f"({', '.join(o['name'] for o in before['options']) or 'none'}). Re-check first.")
 
+    # Click it as the SURVEY saw it. Falling back to the surveyed role keeps the role gate — which
+    # is what stops a name owned by two controls resolving in document order — without requiring
+    # every caller to know a detail the survey just reported.
+    role = body.role or next((o.get("role") for o in before["options"]
+                              if o["name"] == body.control_name), None)
     tab = (obs.get("tabs") or [{}])[0]
     res = await _capture_post("/execute", {
         "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
         "target_bbox": {},   # required by ExecuteRequest even here, where it goes unused
-        "target_role": body.role, "target_name": body.control_name, "driver": "humanized",
+        "target_role": role, "target_name": body.control_name, "driver": "humanized",
     })
     await asyncio.sleep(2.0)
 
