@@ -2842,7 +2842,26 @@ async def rebuild_queue(session_id: int, body: RebuildQueueBody,
 #: Names that mean "start the application", most-specific first. Indeed labels this differently
 #: depending on where the application actually goes, and the label is our first hint at the
 #: platform — "Apply on company site" is telling us we are about to leave.
-_APPLY_HINTS = ("apply now", "easily apply", "apply on company site", "apply with indeed", "apply")
+#: MEASURED 2026-07-30: LinkedIn's off-site control is "Apply on company WEBSITE" where Indeed's is
+#: "Apply on company SITE". One word, and without it the specific hint missed and matching fell
+#: through to the bare "apply" — which found a result card. Both wordings, ordered before the
+#: generic ones.
+_APPLY_HINTS = ("apply now", "easily apply", "apply on company website", "apply on company site",
+                "apply with indeed", "apply")
+
+#: An apply button is LABELLED, not narrated. MEASURED 2026-07-30 on LinkedIn: a result card is
+#: `role=button` whose accessible name is the WHOLE CARD — "Business Intelligence Analyst Lumicity
+#: Greater Boston (On-site) Dismiss … Posted 1 week ago · Easy Apply", 139 characters — so it
+#: contains an apply word and is a button, and it beat the real control on a page where the pane's
+#: own link is called "Apply on company website" (24 chars).
+#:
+#: This is the THIRD fix to this matcher for the same class of bug: it clicked a card in document
+#: order (2026-07-26), then found nothing because it demanded role=button, and now this. The
+#: previous guards were name blocklists, which only ever catch the phrasing already seen. A length
+#: bound is different in kind: it says what an apply control IS. Every real one measured across both
+#: engines — "Apply", "Apply now", "Easily apply", "Apply on company site/website", "Easy Apply" —
+#: is under 30 characters.
+_MAX_APPLY_NAME_CHARS = 60
 
 #: Platforms that take an application without an identity. `account` is SKIPPED on these — a real
 #: answer, not an omission, and the difference matters: an unwalked rung stalls the ladder forever.
@@ -2872,9 +2891,14 @@ def _find_apply_control(candidates: list[dict], *, apply_type: str = "",
     """
     want = list(_APPLY_HINTS)
     if apply_type == "company_site":
-        want = ["apply on company site", "apply on employer site"] + want
+        want = ["apply on company website", "apply on company site", "apply on employer site"] + want
     elif apply_type == "quick_apply":
         want = ["apply now", "easily apply", "apply with indeed"] + want
+    elif apply_type == "linkedin_easy_apply":
+        # The on-engine apply, LinkedIn's side of the same fork Indeed calls quick_apply. Its
+        # control is named exactly "Easy Apply" — and so is a chip on every Easy-Apply CARD, which
+        # is why the length bound below is doing the real work here rather than the wording.
+        want = ["easy apply", "easily apply"] + want
 
     title_words = {w for w in "".join(c if c.isalnum() else " " for c in job_title.lower()).split()
                    if len(w) > 3}
@@ -2889,6 +2913,12 @@ def _find_apply_control(candidates: list[dict], *, apply_type: str = "",
         if (c.get("role") or "").lower() not in ("button", "link"):
             return False
         if any(bad in name for bad in _NOT_THE_PANE):
+            return False
+        # A NAME THAT LONG IS A CARD, NOT A BUTTON. See _MAX_APPLY_NAME_CHARS — this is the guard
+        # that does not depend on having seen the phrasing before, and on LinkedIn it is the only
+        # one that separates the pane's "Apply on company website" from a card whose name happens
+        # to end in "· Easy Apply".
+        if len(name) > _MAX_APPLY_NAME_CHARS:
             return False
         # A control naming a job that is NOT ours is a card, whatever else it says.
         other = {w for w in "".join(ch if ch.isalnum() else " " for ch in name).split()

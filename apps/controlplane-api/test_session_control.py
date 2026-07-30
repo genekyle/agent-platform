@@ -4360,3 +4360,57 @@ def test_a_gate_that_never_appears_is_not_a_failure(monkeypatch):
         _teardown()
 
     assert out["last_step"]["ok"] is True
+
+
+# --- LinkedIn's pane, measured live 2026-07-30 (session 22) --------------------------------------
+# The four apply-ish controls in a real AX scan of the signed-in results page, verbatim. Two of them
+# are RESULT CARDS: on LinkedIn a card is `role=button` whose accessible name is the entire card,
+# ending in "· Easy Apply". That is the trap this fixture exists for.
+_LINKEDIN_PANE_AX = [
+    {"role": "button", "name": "Business Intelligence Analyst Lumicity Greater Boston (On-site) "
+                               "Dismiss Business Intelligence Analyst job Actively reviewing "
+                               "applicants Posted 1 week ago · Easy Apply"},
+    {"role": "button", "name": "SIOP Data Analyst - Direct Hire Advantage Technical Wayland, MA "
+                               "(On-site) $80K/yr - $115K/yr Dismiss SIOP Data Analyst job "
+                               "Posted 2 weeks ago · Easy Apply"},
+    {"role": "radio", "name": "Filter by Easy Apply"},
+    {"role": "link", "name": "Apply on company website"},          # the pane's own
+]
+
+
+def test_linkedin_says_website_where_indeed_says_site():
+    """One word. Without it the specific hint missed, matching fell through to the bare 'apply'
+    hint, and that matched a result card — an application to a different company than the pane was
+    showing (caught before it was pressed, live 2026-07-30)."""
+    ctrl = sc._find_apply_control(_LINKEDIN_PANE_AX, apply_type="company_site",
+                                  job_title="Sr. Reporting Analyst")
+    assert ctrl["name"] == "Apply on company website"
+    assert ctrl["role"] == "link"
+
+
+def test_a_linkedin_result_card_is_not_an_apply_button_however_it_is_named():
+    """THE THIRD FIX TO THIS MATCHER FOR THE SAME CLASS OF BUG. The 'names another job' guard does
+    not save us here: 'Sr. Reporting Analyst' and 'Business Intelligence Analyst' share a word, so
+    the card passed. What separates them is that an apply control is LABELLED and a card is
+    NARRATED — 139 characters of title, company, location, salary, dismiss and posting age."""
+    cards = [c for c in _LINKEDIN_PANE_AX if len(c["name"]) > 60]
+    assert len(cards) == 2, "fixture drifted — the point is that these are long"
+    assert sc._find_apply_control(cards, apply_type="company_site",
+                                  job_title="Sr. Reporting Analyst") is None
+    # and specifically not by luck of ordering: the card is refused even when it is the only option
+    assert sc._find_apply_control(cards[:1], apply_type="linkedin_easy_apply",
+                                  job_title="Business Intelligence Analyst") is None
+
+
+def test_the_easy_apply_filter_chip_is_not_the_apply_button():
+    """LinkedIn's filter bar carries a 'Filter by Easy Apply' radio, the exact sibling of Indeed's
+    'Encouraged to apply filter' — same trap, different engine."""
+    assert sc._find_apply_control([{"role": "radio", "name": "Filter by Easy Apply"}],
+                                  apply_type="linkedin_easy_apply", job_title="Anything") is None
+
+
+def test_indeed_wording_still_wins_on_indeed():
+    """The LinkedIn wording is additive. Indeed's 'site' spelling must not regress."""
+    ctrl = sc._find_apply_control([{"role": "link", "name": "Apply on company site"}],
+                                  apply_type="company_site", job_title="Sr. Reporting Analyst")
+    assert ctrl["name"] == "Apply on company site"

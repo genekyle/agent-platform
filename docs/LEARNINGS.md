@@ -4173,3 +4173,55 @@ would stop a LinkedIn sweep before it reached the list.
 `/probe` (journaled, with the question recorded) rather than by reasoning about what LinkedIn
 probably renders. Four probes replaced three days of inference, which is the same result the
 operator's `/observe` recording produced on 2026-07-28. The instrument keeps winning.
+
+---
+
+## 2026-07-30 (3) — "Just like Indeed" was right, and it would have applied to the wrong company
+
+**The ask.** Bring the apply flow to LinkedIn the way it works on Indeed: find the Apply control,
+decide whether it is an on-engine application or an "apply on company website" hop, and route.
+
+**What was already right, and is worth saying because it saved the work.** The apply ladder is
+ALREADY engine-agnostic: `apply_steps.PREFIX` (open_pane → verify_identity → enter_apply → classify
+→ account) plus a never-automatic `submit`; `apply_landing` answers "what kind of page" from CONTENT
+so it works for any vendor; `ats_registry.CAREER_SEARCH` already groups the engines and
+`_ON_ENGINE_APPLY` already names `linkedin_easy_apply` beside `indeed_quick_apply`; `enter_apply`
+executes by AX scan → role+name click, with nothing Indeed-shaped in it. So the honest answer to
+"build LinkedIn apply" was **measure what actually differs first**, not write a second flow.
+
+**What differs is one word and one shape, and together they are a near-miss.** An AX scan of the
+live pane, with the pane reporting `apply_type=company_site` for Ahold Delhaize's "Sr. Reporting
+Analyst":
+
+    link   'Apply on company website'      <- the real control
+    button 'Business Intelligence Analyst Lumicity Greater Boston (On-site) Dismiss …· Easy Apply'
+    button 'SIOP Data Analyst - Direct Hire Advantage Technical Wayland, MA …· Easy Apply'
+    radio  'Filter by Easy Apply'
+
+`_find_apply_control` picked **the Lumicity card**. Two independent causes:
+
+1. **LinkedIn says "Apply on company WEBSITE"; Indeed says "SITE".** The specific hint missed, so
+   matching fell through to the bare `"apply"` hint.
+2. **A LinkedIn result card is `role=button` whose accessible name is the WHOLE CARD**, ending in
+   "· Easy Apply" — so it contains an apply word and is a button.
+
+And the guard that exists for exactly this — "a control naming a DIFFERENT job is a card" — did not
+fire, because *Sr. Reporting **Analyst*** and *Business Intelligence **Analyst*** share a word. On a
+job search, near-duplicate titles are the norm, so that guard is weakest precisely where it matters.
+
+**The fix that is different in kind from the previous two.** This is the THIRD correction to this
+one matcher for the same class of bug (clicked a card in document order 2026-07-26; then found
+nothing because it demanded `role=button`; now this). The first two were name blocklists, which can
+only catch phrasing already seen. The new guard says what an apply control IS: **it is LABELLED, not
+NARRATED.** Every real one measured across both engines — "Apply", "Apply now", "Easily apply",
+"Apply on company site/website", "Easy Apply" — is under 30 characters; the cards are 139 and 131.
+A 60-character bound separates them without knowing any wording in advance.
+
+**Caught before anything was pressed**, because the AX scan was read and reasoned about rather than
+dispatched. Had this run, the ladder would have recorded `enter_apply OK` and opened an application
+to Lumicity while `verify_identity` had just confirmed the pane was Ahold Delhaize — the same
+end state as the 2026-07-26 near-miss, one engine over.
+
+**Still untested:** the `linkedin_easy_apply` branch. The pane on screen was a company_site posting,
+so there was no Easy Apply control to match; the ordering for it is written but has never chosen
+anything. Named here rather than left to look covered.
