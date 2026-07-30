@@ -288,8 +288,12 @@ def test_every_sweep_call_is_aimed_at_this_engines_tab(monkeypatch):
     finally:
         _teardown()
     aimed = {path: tab for path, tab in cap.seen}
-    for path in ("/auth_state", "/set_distance", "/extract_jobs", "/open_job_card", "/next_page"):
+    # `/set_distance` is deliberately NOT in this list: LinkedIn exposes no distance control, so
+    # the sweep skips the call entirely rather than aiming it anywhere (2026-07-30). Every call it
+    # DOES make must still carry this engine's tab — which is what this test is actually for.
+    for path in ("/auth_state", "/extract_jobs", "/open_job_card", "/next_page"):
         assert aimed.get(path) == "linkedin.com/jobs", f"{path} was aimed at {aimed.get(path)!r}"
+    assert "/set_distance" not in aimed, "asked an engine with no distance filter to set one"
 
 
 def test_indeed_sweep_is_unchanged_when_no_domain_is_named(monkeypatch):
@@ -473,3 +477,39 @@ def test_the_detail_cap_reports_what_it_dropped(monkeypatch):
         _teardown()
     assert cap.opened == ["a1"]
     assert r["details_skipped_by_cap"] == 1
+
+
+def test_a_sweep_does_not_stop_over_a_filter_the_engine_does_not_have(monkeypatch):
+    """The distance gate is the FIRST thing the sweep does, so on LinkedIn it stopped the run
+    before a single card was read — enforcing a 50-mile floor about a widget that does not exist
+    there. Indeed still refuses to gather when its pill cannot be set; the floor is scoped, not
+    retired."""
+    cap = _openers_capture()
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=cap, db=_both_rows("linkedin"))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    assert r["ok"] is True and r["stopped_reason"] != "distance_filter_failed"
+    assert r["jobs_found"] == 2 and cap.opened == ["a1", "w9"]
+
+
+def test_indeed_still_refuses_to_gather_when_its_distance_pill_fails(monkeypatch):
+    """The scoping must not leak: an engine that HAS the control and cannot set it still stops."""
+    def capture(path, _b):
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True}
+        if path == "/set_distance":
+            return {"ok": True, "applied": False}
+        return {"ok": True}
+
+    _install(monkeypatch, tabs=[{"url": "https://www.indeed.com/jobs"}], block=None,
+             capture=capture, db=_FakeDB())
+    try:
+        r = client.post("/api/search/sweep", json={"training_session_id": 1}).json()
+    finally:
+        _teardown()
+    assert r["ok"] is False and r["stopped_reason"] == "distance_filter_failed"

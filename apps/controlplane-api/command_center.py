@@ -30,6 +30,9 @@ DOMAINS: list[dict[str, Any]] = [
      "profile": "facebook", "host": "facebook", "capture_domain": "facebook_marketplace"},
     {"id": "indeed_jobs", "label": "Indeed", "kind": "jobs", "profile": None, "host": "indeed",
      "capture_domain": "indeed", "platform": "indeed", "search_tab": "indeed.com/jobs",
+     # Indeed has a Distance pill; LinkedIn's results page has no distance control at all
+     # (measured 2026-07-30). A sweep must not refuse to gather over a filter that cannot exist.
+     "distance_filter": True,
      "spa": False},
     # LinkedIn — the second career-search AGGREGATOR, a sibling of Indeed under the Career Search
     # group (not an ATS). Same `kind`, so it inherits the whole jobs operating pattern; only the
@@ -41,6 +44,7 @@ DOMAINS: list[dict[str, Any]] = [
      # with pushState and re-render the list in place. Nothing navigates, so no caller may use "the
      # context tore down" or "the URL changed" as proof an action landed — they must compare a
      # SIGNATURE of the results before and after. See `/await_results` in the capture server.
+     "distance_filter": False,
      "spa": True},
     # Gmail — the first member of the `google` PROVIDER group, and the first domain here that
     # exists to be CALLED rather than driven for its own sake: other domains detour into it for a
@@ -316,3 +320,16 @@ def build_summary(db: Session) -> dict[str, Any]:
             "grounding_accuracy": _latest_grounding_accuracy(),
         },
     }
+
+
+def has_distance_filter(domain_id: str) -> bool:
+    """Does this engine expose a distance/radius control at all?
+
+    The 50-mile floor exists so we never gather a 5-mile Indeed radius by accident. On an engine
+    with no distance control the floor has nothing to bite on, and refusing to gather would be
+    enforcing a rule about a widget that does not exist — which is how LinkedIn's sweep stopped
+    before it read a single card (2026-07-30). Unknown engines default True: the conservative
+    direction is to keep asking for the filter, not to quietly drop the floor.
+    """
+    d = _BY_ID.get(domain_id)
+    return bool((d or {}).get("distance_filter", True))

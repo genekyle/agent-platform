@@ -1217,7 +1217,11 @@ _LINKEDIN_JOBS_JS = r"""
     //
     // So: title, company, location, then chips. The class selectors below are kept as a FIRST try
     // for the other renderings (public/logged-out cards do carry them) and simply miss here.
-    const lns = lines(card);
+    // MEASURED 2026-07-30: the card that is currently OPEN has "Selected," prepended to its text,
+    // which shifted every positional read by one line — the open row came back with
+    // title="Selected, Sr. Reporting Analyst" and company="Sr. Reporting Analyst". One row per
+    // page, always the one being looked at, which is the row most likely to be acted on.
+    const lns = lines(card).map((s) => clean(s.replace(/^selected,\s*/i, ''))).filter(Boolean);
     const badge = /\s*\((verified job|promoted|reposted)\)\s*$/i;
     const money = /\$|\bper (hour|year)\b|\ban? (hour|year)\b|\/yr\b|\/hr\b|\bK\/yr\b/i;
     const chip = new RegExp('^(promoted|viewed|easy apply|actively (hiring|reviewing)|reposted'

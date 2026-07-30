@@ -2017,13 +2017,22 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
 
     # --- DISTANCE: force >= min_miles by clicking the filter. If it can't be set, STOP — we never
     # gather sub-floor results (honors the always->=50mi rule). ---------------------------------
-    dist = await _capture_post("/set_distance",
-                               {"browser_url": browser_url, "tab_url": search_tab,
-                                "min_miles": min_miles})
-    if not dist.get("applied"):
-        store.save(bb)
-        return _sweep_stop("distance_filter_failed", distance=dist, platform=platform)
-    await asyncio.sleep(1.0)
+    # AN ENGINE WITH NO DISTANCE CONTROL CANNOT FAIL TO SET ONE. This gate is the first thing the
+    # sweep does, so on LinkedIn it stopped the run before a single card was read — enforcing a
+    # floor about a widget that does not exist there. Skipped explicitly and reported, never
+    # recorded as a radius we applied (see command_center.has_distance_filter).
+    if not command_center.has_distance_filter(body.domain_id):
+        dist = {"applied": False, "skipped": True, "selected_miles": None,
+                "detail": f"{platform} exposes no distance filter; geography comes from its "
+                          f"location filter"}
+    else:
+        dist = await _capture_post("/set_distance",
+                                   {"browser_url": browser_url, "tab_url": search_tab,
+                                    "min_miles": min_miles})
+        if not dist.get("applied"):
+            store.save(bb)
+            return _sweep_stop("distance_filter_failed", distance=dist, platform=platform)
+        await asyncio.sleep(1.0)
 
     # Human pace between actions. Defaults to the cadence bound; min_pause_seconds lets a run go
     # SLOWER (longer, more human-like pauses) on request — floored at the bound, never faster.
