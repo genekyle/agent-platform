@@ -1055,12 +1055,42 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     # the answer six steps into an ATS, which is exactly how this page's own BIDMC pick was spent.
     applied = applied_index.check_many(db, cards, platform=engine["platform"])
 
-    results = [{"job_id": f"{engine['platform']}:{c.get('external_id')}", "external_id": c.get("external_id"),
-                "title": c.get("title"), "company": c.get("company"),
-                "location": c.get("location"), "salary": c.get("salary"),
-                "url": c.get("url"),
-                "applied": (applied.get(c.get("external_id")) or applied_index.AppliedVerdict()
-                            ).as_dict()} for c in cards if c.get("external_id")]
+    # WHAT THE DATABASE ALREADY KNOWS ABOUT EACH CARD. The applied check above answers "have we
+    # applied"; these answer "have we SEEN it, and what do we hold on it" — which is the other half
+    # of choosing well. Operator-directed 2026-07-30: the picker is connected to the database so a
+    # choice is made against history rather than against a title. One query for the whole page.
+    # Read per card via `get`: these rows were just upserted in this same session, so each is an
+    # identity-map hit rather than a round trip — and `get` is the seam the whole test suite fakes.
+    from models import ObservedJob as _OJ
+
+    def _history(job_id: str, card: dict) -> dict:
+        row = db.get(_OJ, job_id)
+        return {
+            # `apply_type` is read off the CARD at scan time — the third-party vs in-app fork the
+            # operator wants visible before picking, not discovered six steps into an ATS.
+            "apply_type": card.get("apply_type") or (row.apply_type if row else "") or "",
+            "seen_count": (row.seen_count if row else 1) or 1,
+            "first_seen_at": (row.first_seen_at.isoformat() if row and row.first_seen_at else ""),
+            "status": (row.application_status if row else "") or "",
+            # Whether we already hold the full posting. A card with a description behind it can be
+            # judged now; one without still needs the click.
+            "has_description": bool(row and (row.description or "").strip()),
+            "description_chars": len((row.description or "") if row else ""),
+        }
+
+    results = []
+    for c in cards:
+        if not c.get("external_id"):
+            continue
+        job_id = f"{engine['platform']}:{c.get('external_id')}"
+        results.append({
+            "job_id": job_id, "external_id": c.get("external_id"),
+            "title": c.get("title"), "company": c.get("company"),
+            "location": c.get("location"), "salary": c.get("salary"),
+            "url": c.get("url"),
+            "applied": (applied.get(c.get("external_id")) or applied_index.AppliedVerdict()).as_dict(),
+            **_history(job_id, c),
+        })
     already = sum(1 for r in results if r["applied"]["status"] == applied_index.STATUS_APPLIED)
     maybe = sum(1 for r in results if r["applied"]["status"] == applied_index.STATUS_LIKELY)
     bb.search_state.page = page
