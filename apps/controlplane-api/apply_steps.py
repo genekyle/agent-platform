@@ -113,6 +113,35 @@ SUBMIT_RUNG = MiniRung(
     "submit", "Submit",
     "The irreversible one. The operator confirms every submission, on every platform, always.")
 
+#: Platforms that take an application WITHOUT an identity of their own. Indeed's quick apply runs
+#: inside the session we are already signed into; Greenhouse asks for nothing.
+#:
+#: THIS LIVES BESIDE THE LADDER because it decides whether a RUNG EXISTS, and it was living in a
+#: router while a second surface answered the same question differently. Live 2026-07-30: classify
+#: correctly said `platform=indeed`, the account rung would have skipped cleanly on execution — and
+#: the cockpit still rendered a "Create Account automatically" handoff for BRISTOL COUNTY SAVINGS
+#: BANK over a page that was the finished review module with the resume already uploaded. The rung
+#: knew and the read model did not. One authority, consulted by both.
+NO_ACCOUNT_PLATFORMS = frozenset({"greenhouse", "indeed", "indeed_quick_apply"})
+
+
+def rung_applies(rung_id: str, *, platform: Optional[str]) -> tuple[bool, str]:
+    """Does this rung EXIST for the landing we discovered? -> (applies, why-not).
+
+    `classify` is documented as the discovery point — "the rungs after this one do not exist until
+    this is answered" — and then the ladder walked a fixed tuple regardless of the answer, which is
+    what the operator named as falling back into recipe mode the moment the reasoner had spoken.
+    This is the seam where the discovery is allowed to change the ladder.
+
+    A rung that does not apply is SKIPPED WITH A REASON, never silently dropped: the panel still
+    shows it, greyed, saying why. A ladder that quietly loses a step reads as a ladder that never
+    had one.
+    """
+    if rung_id == "account" and (platform or "") in NO_ACCOUNT_PLATFORMS:
+        return False, f"{platform} takes an application without an account of its own"
+    return True, ""
+
+
 PREFIX_IDS = tuple(r.id for r in PREFIX)
 
 
@@ -198,6 +227,16 @@ class ApplyStep:
                 return rung
         return None
 
+    def inapplicable_rungs(self) -> list[dict[str, str]]:
+        """Prefix rungs the discovery ruled out, and why — so the panel can show them greyed
+        rather than have them vanish. Silently dropping a rung reads as never having had one."""
+        out: list[dict[str, str]] = []
+        for rung in PREFIX:
+            applies, why = rung_applies(rung.id, platform=self.platform)
+            if not applies:
+                out.append({"id": rung.id, "label": rung.label, "why": why})
+        return out
+
     def record(self, rung: str, outcome: str, detail: str = "",
                initiator: str = "operator", staged: Optional[bool] = None) -> MiniStep:
         mini = MiniStep(rung=rung, outcome=outcome, detail=detail, initiator=initiator,
@@ -264,6 +303,8 @@ class ApplyStep:
                 "archived_minis": self.archived_minis,
                 "needs_operator": self.needs_operator(),
                 "next_rung": (nr.id if (nr := self.next_rung()) else None),
+                # Shown greyed rather than dropped — see inapplicable_rungs.
+                "inapplicable_rungs": self.inapplicable_rungs(),
                 "minis": [m.as_dict() for m in self.minis]}
 
     @classmethod

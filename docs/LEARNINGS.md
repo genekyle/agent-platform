@@ -4763,3 +4763,63 @@ is one `next_action` on the view: the observer wins whenever `mismatch` is set (
 the recipe), the rung wins otherwise, and the loser stays visible as the secondary option. Stubbed
 deliberately at the operator's direction — the observer had to exist before anything could arbitrate
 with it.
+
+---
+
+## 2026-07-30 (7) — Classify spoke, and the ladder walked the tuple anyway
+
+**The operator's words, and they name the architecture problem exactly:** *"as soon as we hit
+classify it correctly identified the indeed application… then it went back to recipe mode again,
+nullifying any use we gave to our reasoner, because we ended up directly at the review application
+page which was abnormal — but instead our UI thought we had to create an account."*
+
+**What was on screen.** `smartapply.indeed.com/beta/indeedapply/form/review-module` — Indeed's own
+finished review page, name filled, `GM_Res.pdf` uploaded "just now", one press from Submit. What the
+cockpit offered: **"Create Account automatically"** for BRISTOL COUNTY SAVINGS BANK.
+
+**Three separate things were true at once, and only the first was wrong-looking.**
+
+1. `classify` had worked. It recorded `platform=indeed`, `landing_state=indeed_unknown`, outcome ok.
+2. `_NO_ACCOUNT_PLATFORMS` **already contained `indeed`**, so the account rung would have skipped
+   cleanly the moment it ran.
+3. And the cockpit still rendered a full create-account handoff — because `_account_state()`, the
+   read model behind that card, **never asked**. Two surfaces answered "does this need an account"
+   and only one of them knew. The rung knew; the card asserted.
+
+**So the bug is not a missing fact. It is a fact with no single owner.** The set lived in a router
+next to one of its two consumers. Moved to `apply_steps.NO_ACCOUNT_PLATFORMS`, beside the ladder,
+because it decides **whether a rung exists** — and both the rung and the read model now go through
+`aps.rung_applies(rung_id, platform=…)`.
+
+**The deeper correction, which is the operator's real point.** `PREFIX`'s own docstring for
+`classify` says *"THE DISCOVERY POINT. The rungs after this one do not exist until this is
+answered."* The code then walked a fixed tuple regardless of the answer. That is the fallback into
+recipe mode: the reasoner is consulted, and then the ladder proceeds as if it had not been.
+`apply_step` now walks PAST rungs the discovery ruled out before presenting one.
+
+**But the skip stays an EVENT, not an absence** — and this is where the first attempt was wrong.
+Making `next_rung()` filter inapplicable rungs made them vanish, and a test caught it:
+`test_a_platform_that_needs_no_account_skips_the_rung_cleanly` asserts a `SKIPPED` mini is
+*recorded*. It should. A corpus that loses the skip cannot tell **"not needed here"** from **"never
+got that far"**, and those are opposite facts about a drive. So the auto-advance RECORDS each
+ruled-out rung as it passes: the ladder now reads `… classify ok · account skipped · Past the known
+prefix`. `inapplicable_rungs()` exists for the panel to grey them rather than drop them.
+
+**The window was invisible, and it is where the state lives.** The cockpit's entire vocabulary for
+the browser was a count — and it read **"1 Tabs"** while the apply had opened a SECOND tab and
+navigated it three times, so the page the operator was being asked to judge lived in a tab the panel
+never named. `/windows` (`session_windows`) had every bit of this — 2 open tabs, roles
+`{apply:1, search:1}`, openers, a timeline — and nothing rendered it. The view now carries `tabs`
+with each tab's role, classified by `controller.window.classify_tab` — **the same function the drift
+detector uses**, so the panel and the ledger cannot disagree about which tab is the application —
+plus `is_search` / `is_apply`. `WindowTabs` renders it permanently beside the checkpoints, not
+behind a press. Two Indeed tabs are identical by host; only these flags say which is the results
+list and which is the application in progress.
+
+**Still open, and it is the honest remainder.** With `account` correctly skipped the step now reads
+*"Past the known prefix. The rungs from here depend on the platform (indeed), and those are not
+built yet."* That is true and it is the real gap: **Indeed quick apply has no tail.** The observer
+says so too — the Orientation card reads `indeed_quick_apply_unknown · Unrecognised page · 3
+witnesses · nothing recognises this page`. Observation is running and honest; nothing downstream
+consumes it to propose the next rung. That — letting the observed state, not a tuple position,
+generate the next rung — is the piece the operator is pointing at and it is not built.

@@ -413,3 +413,43 @@ def test_both_sides_of_the_correction_stay_on_the_record():
     step.record("account", aps.UNKNOWN, "corrected")
     outcomes = [m.outcome for m in step.minis if m.rung == "account"]
     assert outcomes == [aps.OK, aps.UNKNOWN]
+
+
+# ---------------------------------------------------------------------------------------------
+# THE DISCOVERY IS ALLOWED TO CHANGE THE LADDER. `classify` documents itself as the point where
+# "the rungs after this one do not exist until this is answered" — and the ladder then walked a
+# fixed tuple regardless. Live 2026-07-30, session 24.
+# ---------------------------------------------------------------------------------------------
+
+def test_a_platform_with_no_account_wall_rules_the_account_rung_out():
+    applies, why = aps.rung_applies("account", platform="indeed")
+    assert applies is False and "without an account" in why
+    assert aps.rung_applies("account", platform="greenhouse")[0] is False
+
+
+def test_a_platform_that_does_want_an_account_keeps_the_rung():
+    assert aps.rung_applies("account", platform="successfactors")[0] is True
+    assert aps.rung_applies("account", platform="workday")[0] is True
+    # An unclassified landing must NOT lose the rung — "we do not know yet" is not "not needed".
+    assert aps.rung_applies("account", platform=None)[0] is True
+    assert aps.rung_applies("account", platform="")[0] is True
+
+
+def test_rungs_other_than_account_are_untouched():
+    for rung_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        assert aps.rung_applies(rung_id, platform="indeed")[0] is True
+
+
+def test_a_ruled_out_rung_is_named_with_its_reason_rather_than_vanishing():
+    # Silently dropping it reads as a ladder that never had the step. The panel greys it instead.
+    step = aps.ApplyStep(job_id="indeed:abc", title="t", company="BRISTOL COUNTY SAVINGS BANK")
+    step.platform = "indeed"
+    out = {r["id"]: r for r in step.inapplicable_rungs()}
+    assert "account" in out and "indeed" in out["account"]["why"]
+    assert out["account"]["label"] == "Get past the account wall"
+    assert step.as_dict()["inapplicable_rungs"] == step.inapplicable_rungs()
+
+
+def test_an_unclassified_step_rules_nothing_out():
+    # Before classify has spoken there is no discovery to act on, so the full prefix stands.
+    assert aps.ApplyStep(job_id="x:1", title="t", company="C").inapplicable_rungs() == []

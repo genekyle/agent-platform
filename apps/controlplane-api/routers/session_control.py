@@ -46,6 +46,7 @@ import apply_landing as al
 import apply_steps as aps
 import google_recipe
 import session_windows
+from controller import window as _win
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
@@ -325,6 +326,12 @@ def _account_state(bb: Any) -> Optional[dict[str, Any]]:
         step = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
         if step is None or not step.company or not step.platform:
             return None
+        # THE SAME AUTHORITY THE RUNG USES. This read model answered "which account leg is due"
+        # for platforms that need no account at all, so the cockpit offered "Create Account
+        # automatically" for BRISTOL COUNTY SAVINGS BANK over Indeed's own finished review page
+        # (live 2026-07-30). The account rung would have skipped it; the card asserted it first.
+        if not aps.rung_applies("account", platform=step.platform)[0]:
+            return None
         action = ats_accounts.next_account_action(step.company, step.platform)
         rec = accounts_mod.get_account(action["account_id"]) or {}
         return {
@@ -375,6 +382,18 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "observer": observer,
         "block": obs.get("block"),
         "tab_count": len(obs.get("tabs") or []),
+        # THE WINDOW, IN THE PANEL. A bare count is the definition of out-of-sight-out-of-mind: an
+        # apply opens a SECOND tab and navigates it three times, and the cockpit's only word for
+        # that was "1 Tabs" — while the page the operator was being asked about lived in the tab
+        # nobody could see. Operator-directed 2026-07-30. Roles come from session_windows'
+        # classifier, the same one the drift detector uses, so the panel and the ledger cannot
+        # disagree about which tab is the application.
+        "tabs": [{"tab_id": tb.get("tab_id"), "url": tb.get("url", ""),
+                  "title": tb.get("title", ""),
+                  "role": _win.classify_tab(tb.get("url", "")),
+                  "is_search": bool((obs.get("search_tab") or {}).get("tab_id") == tb.get("tab_id")),
+                  "is_apply": bool(_apply_tab(bb, obs).get("tab_id") == tb.get("tab_id"))}
+                 for tb in (obs.get("tabs") or [])],
         "results": results if results is not None else (bb.world or {}).get("page_results", []),
         "picks": list(ss.approved or []),
         # The apply queue for this page: N picks, N steps, and what each one is waiting on.
@@ -3404,7 +3423,10 @@ _MAX_APPLY_NAME_CHARS = 60
 
 #: Platforms that take an application without an identity. `account` is SKIPPED on these — a real
 #: answer, not an omission, and the difference matters: an unwalked rung stalls the ladder forever.
-_NO_ACCOUNT_PLATFORMS = frozenset({"greenhouse", "indeed", "indeed_quick_apply"})
+#: Moved to `apply_steps.NO_ACCOUNT_PLATFORMS` — it decides whether a RUNG EXISTS, so it belongs
+#: beside the ladder, and having it here let a read model disagree with the rung. Alias kept for
+#: any caller still importing it; `aps.rung_applies` is the question to ask.
+_NO_ACCOUNT_PLATFORMS = aps.NO_ACCOUNT_PLATFORMS
 
 
 #: Names that belong to the RESULTS LIST or the filter bar, never to the open pane's apply
@@ -3545,7 +3567,17 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                     ok=False, detail="A challenge is up — clear it yourself. "
                                                      "We never auto-solve.")
 
-    rung = step.next_rung()
+    # WALK PAST THE RUNGS THE DISCOVERY RULED OUT, recording each as it goes. `classify` is the
+    # discovery point — "the rungs after this one do not exist until this is answered" — and until
+    # now the ladder answered the question and then walked the fixed tuple anyway, which is the
+    # fallback-into-recipe-mode the operator named. A ruled-out rung is still WRITTEN DOWN (the
+    # skip is an event, not an absence; a corpus that loses it cannot tell "not needed" from "never
+    # reached"), it just is not handed to the operator as the next thing to do.
+    while (rung := step.next_rung()) is not None:
+        applies, why_not = aps.rung_applies(rung.id, platform=step.platform)
+        if applies:
+            break
+        step.record(rung.id, aps.SKIPPED, why_not, initiator=body.initiator)
     if rung is None:
         return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
                                     detail="Past the known prefix. The rungs from here depend on "
@@ -3748,9 +3780,9 @@ async def apply_step(session_id: int, body: ApplyStepBody,
 
         platform = step.platform or ""
         company = step.company or ""
-        if platform in _NO_ACCOUNT_PLATFORMS:
-            step.record("account", aps.SKIPPED,
-                        f"{platform} takes an application without one", initiator=body.initiator)
+        applies, why_not = aps.rung_applies("account", platform=platform)
+        if not applies:
+            step.record("account", aps.SKIPPED, why_not, initiator=body.initiator)
             detail = f"No account needed on {platform} — skipped, not skipped over."
         elif not company:
             step.record("account", aps.UNKNOWN,

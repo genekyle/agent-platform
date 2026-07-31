@@ -5,6 +5,7 @@ import { PickOrb } from "./OrderedPicks";
 import { useOrderedPicks } from "./useOrderedPicks";
 import FormSections from "./FormSections";
 import FillPlan from "./FillPlan";
+import WindowTabs from "./WindowTabs";
 
 // The Session Control Panel — the one place the local side turns the loop.
 //
@@ -486,6 +487,11 @@ export function SessionControlPanel({ domain }) {
           <p className="mode-hint">
             No end flag: the ladder grows a rung per page. It stops when there is no next page.
           </p>
+
+          {/* THE WINDOW LIVES HERE, always on, beside where we are on the ladder — not behind a
+              press. On this system the next step is often a tab that just opened, and a count in
+              a badge is how that stayed invisible. */}
+          <WindowTabs tabs={p.tabs} drift={p.tab_drift} />
         </div>
 
         {/* --- 3. the crank + the page ------------------------------------------------ */}
@@ -496,7 +502,12 @@ export function SessionControlPanel({ domain }) {
               {p.location ? ` · ${p.location}` : ""}
             </span>
             <span className="badge badge--muted">page {p.page ?? 1}</span>
-            {p.tab_count ? <span className="badge badge--muted">{p.tab_count} tabs</span> : null}
+            {p.tab_count ? (
+              <span className="badge badge--muted"
+                    title={(p.tabs || []).map((t) => `${t.role}: ${t.url}`).join("\n")}>
+                {p.tab_count} tabs
+              </span>
+            ) : null}
             <StalenessChip stale={p.staleness} />
           </div>
 
