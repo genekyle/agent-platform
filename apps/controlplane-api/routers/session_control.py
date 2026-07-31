@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 import apply_landing as al
 import apply_steps as aps
 import google_recipe
+import job_dedup
 import session_windows
 from controller import window as _win
 import execution_style as xs
@@ -1347,6 +1348,13 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     cards = ex.get("jobs") or []
     new_count, dup_count = upsert_observed_jobs(db, cards, engine["platform"], bb.search_state.query)
     db.commit()
+
+    # Give every card just written a canonical job. The other two scrape endpoints in `main.py`
+    # already did this and this one never has — measured 2026-07-30: all ten sightings from session
+    # 24's page carried `canonical_job_key = NULL`, so Indeed serving one Bristol County Savings
+    # Bank requisition four times never even reached the matcher. A sighting with no canonical job
+    # is invisible to every question asked of the `jobs` table.
+    job_dedup.resolve_after_commit(db)
 
     # THE APPLIED CHECK, AT SCAN TIME. One query for the whole page, so every card arrives already
     # knowing whether the database has an application on file for it — by id, by requisition, or

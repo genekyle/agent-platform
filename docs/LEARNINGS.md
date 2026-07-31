@@ -4882,3 +4882,70 @@ otherwise make the fused confidence depend on which employers this machine has d
 **Still open, unchanged:** nothing yet lets the OBSERVED STATE generate a rung. Arbitration picks
 between two existing answers; when the prefix is walked and no tail exists, the honest answer is
 still "past the known prefix". That remains the piece from 2026-07-30 (7).
+
+## 2026-07-30 (12) — "One requisition, four rows"
+
+**The picture.** Session 24's page 1 returned 16 cards with 16 distinct `external_id`s and about 13
+distinct roles. Indeed had served ONE Bristol County Savings Bank requisition four times inside a
+single result page — same title, same employer, same address, same pay, four ids — and the cockpit
+offered the operator four chances to apply to it. Meanwhile the same page carried Liberty Mutual's
+"Principal SAP PaPM Configuration Engineer" in Boston AND in Portsmouth: same title, same employer,
+same pay band, two real jobs. Any rule that collapses the first by title and company alone destroys
+the second.
+
+**Three faults, and the interesting one is that they pull in opposite directions.**
+
+**1. The sweep the cockpit actually uses never resolved its sightings.** `_review_page` in
+`session_control.py` upserted the cards and stopped; the two scrape endpoints in `main.py` both
+called `resolve_after_commit` and this one never had. All ten sightings from that page sat with
+`canonical_job_key = NULL`, so the duplicates never reached the matcher at all. **A sighting with
+no canonical job is invisible to every question asked of the `jobs` table** — the matcher was not
+wrong about Bristol, it was never consulted.
+
+**2. `resolve_sighting` was a second dedup path, and nobody had noticed it was one.** It attached a
+fresh card to an existing job on employer + title with **no location test whatsoever**, wrote no
+`JobMatch`, and left no evidence. Measured on the live table: seven jobs held sightings from more
+than one stated place, and four were real pairs in real different cities — Liberty Mutual
+(Boston/Portsmouth), Wellington Management (Boston/Needham), Husch Blackwell (Boston/Providence),
+Northwestern Mutual (Manchester/Newington). Four jobs already destroyed, silently, before this task
+was ever opened. The other three were the same office written two ways.
+
+**3. `compare` was stricter in the OTHER direction** — identical title at one employer only ever
+PROPOSED. So the system simultaneously refused to merge the Bristol four unattended and had already
+merged Liberty Mutual unattended. **Two unattended decision points that disagree about the same
+question are worse than either rule alone**, because whichever one you read, the other is what ran.
+
+**The fix is one rule, asked by both.** `conflict_reason` / `duplicate_tier` in `job_dedup.py`, used
+by `resolve_sighting` and by `compare` alike. An unattended decision is held to the same evidence
+wherever it is made — otherwise the invariant survives only as long as nobody edits the other
+caller.
+
+**The distinction that does the work: CORROBORATES vs FAILS-TO-CONTRADICT.** A blank location is
+UNKNOWN, not "nowhere" — DEKA's back-end engineer is on file twice, once with no location, and it
+is one job. So there are two predicates, not one: `locations_conflict` (both known and different →
+veto) and `locations_agree` (both known and equal → evidence). Attaching a card is held to the
+first; writing a merge tombstone is held to the second. Same shape for pay. The new `same_posting`
+tier — one engine, one employer, one role, locations agree, pay does not disagree — is the second
+tier ever allowed to auto-merge, and it merges the Bristol four while `locations_conflict` ends the
+Liberty Mutual comparison outright (not queued: a stated address that disagrees is the answer, not
+a near-miss awaiting a human).
+
+**Normalisation had to learn that an arrangement is not an address.** `Hybrid work in Boston, MA`,
+`Boston, MA (Remote)`, `Burlington, MA (Hybrid)`, `Taunton, MA 02780` — the board decorates a place
+without changing which place it is. `_same_location` had been calling `normalize_company` on a
+location, which sorts the words and made `Boston, MA` equal `MA, Boston`. Replaced by
+`normalize_location`, which is order-preserving because a location is a hierarchy.
+
+**A repair that can overwrite a human's answer is not a repair.** The first cut of
+`split_conflicting_sightings` dutifully offered to undo DEKA Research's blank-company merge — which
+the operator had approved BY HAND (`decided_by='human'`). A merged job legitimately holds sightings
+whose fields differ from the row that survived; that is what merging means. So the repair skips any
+sighting whose own minted key exists and carries a tombstone: that attachment is a recorded
+decision. What it repairs is the attachments that were never decisions at all — no `JobMatch`, no
+evidence, nothing to review.
+
+**Measured, on the real table, not on the docstring** (per the standing rule): 371 live jobs before,
+382 after — 11 sightings resolved that never had been, 4 wrongly-collapsed cities split back apart,
+2 genuine questions queued for the operator, 0 wrong merges. Bristol: one job, five sightings.
+Liberty Mutual: two jobs, one sighting each. Both pairs are now pinned as tests with their real
+field values, so the next person to loosen this finds out which employer they just collapsed.
