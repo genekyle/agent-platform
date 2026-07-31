@@ -218,14 +218,40 @@ class ApplyStep:
         which one the LADDER reads. A record that cannot be corrected is not a record of the world,
         it is a record of the first thing we believed about it.
         """
-        latest: dict[str, str] = {}
-        for m in self.minis:
-            latest[m.rung] = m.outcome
-        settled = {rung for rung, outcome in latest.items() if outcome in (OK, SKIPPED)}
+        settled = self._settled_rungs()
         for rung in PREFIX:
             if rung.id not in settled:
                 return rung
         return None
+
+    def _settled_rungs(self) -> set[str]:
+        """The prefix rungs this step counts as walked — the LATEST verdict for each, never the
+        best one ever recorded. `next_rung` explains why that distinction is load-bearing."""
+        latest: dict[str, str] = {}
+        for m in self.minis:
+            latest[m.rung] = m.outcome
+        return {rung for rung, outcome in latest.items() if outcome in (OK, SKIPPED)}
+
+    def walk_to_next_rung(self) -> tuple[Optional[MiniRung], list[tuple[str, str]]]:
+        """The rung to PRESENT next, and the ruled-out rungs passed on the way — each (id, why).
+
+        `next_rung` says where the ladder stands; this says what the crank will actually hand the
+        operator, and they differ exactly when the discovery has ruled a rung out. The crank walks
+        past those, RECORDING a skip for each (the skip is an event, not an absence); a read model
+        must reach the same answer without writing anything. So the walk lives here once and only
+        the recording stays with the caller — two copies of this walk is how the read model and the
+        rung came to disagree about the account wall in the first place (2026-07-30).
+        """
+        passed: list[tuple[str, str]] = []
+        settled = self._settled_rungs()
+        for rung in PREFIX:
+            if rung.id in settled:
+                continue
+            applies, why_not = rung_applies(rung.id, platform=self.platform)
+            if applies:
+                return rung, passed
+            passed.append((rung.id, why_not))
+        return None, passed
 
     def inapplicable_rungs(self) -> list[dict[str, str]]:
         """Prefix rungs the discovery ruled out, and why — so the panel can show them greyed
@@ -302,7 +328,10 @@ class ApplyStep:
                 "terminal_detail": self.terminal_detail, "done": self.done,
                 "archived_minis": self.archived_minis,
                 "needs_operator": self.needs_operator(),
-                "next_rung": (nr.id if (nr := self.next_rung()) else None),
+                # THE RUNG THE CRANK WILL ACTUALLY HAND YOU, not merely where the ladder stands:
+                # naming a rung the discovery has ruled out is a read model promising work that
+                # will be skipped the moment the button is pressed. The skip stays visible below.
+                "next_rung": (nr.id if (nr := self.walk_to_next_rung()[0]) else None),
                 # Shown greyed rather than dropped — see inapplicable_rungs.
                 "inapplicable_rungs": self.inapplicable_rungs(),
                 "minis": [m.as_dict() for m in self.minis]}

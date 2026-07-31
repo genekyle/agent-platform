@@ -4823,3 +4823,62 @@ says so too — the Orientation card reads `indeed_quick_apply_unknown · Unreco
 witnesses · nothing recognises this page`. Observation is running and honest; nothing downstream
 consumes it to propose the next rung. That — letting the observed state, not a tuple position,
 generate the next rung — is the piece the operator is pointing at and it is not built.
+
+---
+
+## 2026-07-31 — The sequencing debt paid: one `next_action`, and the loser stays on the record
+
+**The debt, restated from 2026-07-30 (11).** Two surfaces answered "what next" — the ladder's rung
+(`apply_step`, computed from the RECIPE'S POSITION) and the observer's plan (`orient_action`,
+computed from the LIVE PAGE) — and each rendered its own primary-looking button. Computing them
+apart is the whole design: one source cannot disagree with itself, and the disagreement is the
+finding. What was missing was the arbitration, so the panel showed two suggestions and the operator
+did the resolving. That is the "flow feels off".
+
+**The rule, and it is one line.** `_resolve_next_action` in `routers/session_control.py`, composed
+into the view beside `observer`: **the observer wins whenever `mismatch` is set**, because a page
+that contradicts the recipe means the recipe is the thing that is wrong; **otherwise the rung wins**,
+because no disagreement means the recipe is on track. Two properties keep it from becoming a THIRD
+surface answering the same question:
+
+- **It invents nothing.** Both options are already computed elsewhere — `walk_to_next_rung()` and
+  the observer's own `plan[0]`, carried verbatim, `driveable` flag included. It picks one and says
+  why. The moment arbitration composes a move of its own it is a new opinion, not a resolution.
+- **The loser stays visible** as `secondary`, with `demoted_because`. Both sides of a disagreement
+  stay on the record (PRINCIPLES §10), and an operator who can only see the winner cannot correct
+  it — which is the same as not having recorded it.
+
+**Low confidence is an ABSTENTION, not an objection.** An unsure observer with no mismatch has
+nothing to overrule the recipe with, so the rung stands — but `observer_abstained` says so out loud
+and the read is kept beside it. A verdict dropped in silence is indistinguishable from one that was
+never taken, which is exactly the failure mode the orientation corpus exists to avoid.
+
+**And it turned up a live bug one layer down.** `_orient_now` oriented against `step.next_rung()` —
+where the ladder STANDS — while the crank works `walk_to_next_rung()` — what it will actually hand
+you. They differ precisely when the discovery has ruled a rung out, so on Indeed quick apply
+(`account` in `NO_ACCOUNT_PLATFORMS`) the observer was asked "does this page suit the `account`
+rung?" about a rung that would be skipped without ever being run. On the finished review module that
+manufactures a mismatch — and under the new rule **a false disagreement hands the wheel to the
+observer**. Arbitration made a latent inconsistency load-bearing: two readings of "the next rung"
+were harmless while nothing chose between them.
+
+**So the walk has one home.** `ApplyStep.walk_to_next_rung()` returns `(rung, ruled_out)` and is now
+the single answer to "what will the crank present": `apply_step` walks it and RECORDS each skip (the
+skip is an event, not an absence), `_orient_now` orients against it, `reconcile_step` names it, and
+`as_dict()["next_rung"]` reports it — a read model that names a rung the discovery ruled out is
+promising work that will be skipped the moment the button is pressed. The greyed
+`inapplicable_rungs` list still shows what was passed.
+
+**Where it landed.** `_resolve_next_action` / `_rung_option` / `_observer_option` /
+`_decided` (`routers/session_control.py`), `next_action` on the view payload,
+`ApplyStep.walk_to_next_rung` + `_settled_rungs` (`apply_steps.py`), and the panel's single
+primary-action band (`SessionControlPanel.jsx`) — where the observer card's plan is filtered to what
+the band does NOT already present (`planRest`), and the queue's "Work this" button is primary only
+while the rung is what won. Three tests in `test_session_control.py` pin the rule end to end
+(mismatch → observer, agreement → rung, low-confidence-no-mismatch → rung + stated abstention);
+their fixture stubs `ats_for_company`, which reads the learned company→ATS store off disk and would
+otherwise make the fused confidence depend on which employers this machine has driven.
+
+**Still open, unchanged:** nothing yet lets the OBSERVED STATE generate a rung. Arbitration picks
+between two existing answers; when the prefix is walked and no tail exists, the honest answer is
+still "past the known prefix". That remains the piece from 2026-07-30 (7).

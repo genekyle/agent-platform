@@ -367,6 +367,20 @@ export function SessionControlPanel({ domain }) {
   // follows still needs somewhere to be pressed.
   const accountState = p.account_state || null;
   const observer = p.observer || null;
+  // THE ARBITRATION. Two surfaces answer "what next" — the observer's plan (the world) and the
+  // ladder's rung (the recipe) — and this panel used to render each as its own primary-looking
+  // button, which left the operator to decide which one the flow meant. The backend resolves them
+  // now; the UI's job is to have exactly ONE primary action on screen and to keep the loser
+  // visible beside it rather than hidden.
+  const nextAction = p.next_action || null;
+  const rungIsPrimary = !nextAction || nextAction.source === "rung";
+  // Which of the observer's plan steps the band above already presents. The card below renders
+  // what is LEFT, so no action appears twice — a duplicated button is the same ambiguity in a
+  // smaller font.
+  const bandIds = new Set(
+    [nextAction?.source === "observer" ? nextAction.id : null,
+     nextAction?.secondary?.source === "observer" ? nextAction.secondary.id : null].filter(Boolean));
+  const planRest = (observer?.plan || []).filter((st) => !bandIds.has(st.id));
   const signInDue = accountState && accountState.leg === "sign_in" && accountState.has_creds;
 
   const flagStep = (jobId, flag, detail = "") =>
@@ -766,6 +780,70 @@ export function SessionControlPanel({ domain }) {
             )}
           </div>
 
+          {/* --- ONE next action, arbitrated ---------------------------------------
+              The observer's plan and the ladder's rung are computed from different things on
+              purpose — the live page and the recipe's position — and that is exactly why one of
+              them has to win before this reaches a person. The rule (backend, `_resolve_next_action`):
+              the observer wins when the page CONTRADICTS the recipe, the rung wins otherwise.
+              The loser is rendered right here, demoted and labelled with why, because a
+              disagreement resolved out of sight is indistinguishable from one that never happened
+              (PRINCIPLES §10). This band is the panel's only primary button. */}
+          {nextAction && (
+            <div className="sc-next"
+                 style={{border: "1px solid var(--line, #333)", borderRadius: 8,
+                         padding: "10px 12px", margin: "10px 0"}}>
+              <div style={{display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap"}}>
+                <AppIcon name="arrowRight" size={14} />
+                <strong>Next</strong>
+                <span className="badge badge--muted">
+                  {nextAction.source === "observer" ? "from the page" : "from the recipe"}
+                </span>
+              </div>
+
+              <div style={{display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+                           margin: "8px 0 0"}}>
+                {/* A step we cannot perform is still the right next move to SAY; what it must
+                    never be is a button, because a button that cannot act is how a panel lies. */}
+                {nextAction.driveable ? (
+                  <button className="btn btn-primary" disabled={busy} title={nextAction.why}
+                          onClick={() => call(nextAction.endpoint,
+                                              {...(nextAction.body || {}), initiator: "operator"})}>
+                    {busy ? "…" : nextAction.label}
+                  </button>
+                ) : (
+                  <span style={{fontSize: 15, fontWeight: 600}}>{nextAction.label}</span>
+                )}
+                <span style={{fontSize: 12, opacity: 0.7}}>{nextAction.why}</span>
+              </div>
+
+              {/* WHY THIS ONE. The arbitration says its reasoning out loud so the operator can
+                  disagree with the reason rather than only with the outcome. */}
+              <p style={{margin: "6px 0 0", fontSize: 12, opacity: 0.6}}>{nextAction.reason}</p>
+
+              {nextAction.secondary && (
+                <div style={{marginTop: 8, paddingTop: 8,
+                             borderTop: "1px dashed var(--line, #333)", display: "flex", gap: 8,
+                             alignItems: "center", flexWrap: "wrap"}}>
+                  <span style={{fontSize: 12, opacity: 0.55}}>or</span>
+                  {nextAction.secondary.driveable ? (
+                    <button className="btn btn-sm btn-ghost" disabled={busy}
+                            title={nextAction.secondary.why}
+                            onClick={() => call(nextAction.secondary.endpoint,
+                                                {...(nextAction.secondary.body || {}),
+                                                 initiator: "operator"})}>
+                      {busy ? "…" : nextAction.secondary.label}
+                    </button>
+                  ) : (
+                    <span style={{fontSize: 13, opacity: 0.75}}>{nextAction.secondary.label}</span>
+                  )}
+                  <span style={{fontSize: 12, opacity: 0.55}}>
+                    — {nextAction.secondary.demoted_because}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* --- the observer: where the browser ACTUALLY is, on every render --------
               Operator, 2026-07-30: "the UI should reflect that something is going on wrong …
               constantly monitoring so that way we understand what's always going on and not just
@@ -802,17 +880,17 @@ export function SessionControlPanel({ domain }) {
                 </p>
               )}
 
-              {/* WHAT TO DO ABOUT IT. A step we know how to perform renders as a button; one we do
-                  not renders as a line of guidance, because a button that cannot act is how a panel
-                  starts lying again. The endpoint re-orients before honouring any of them. */}
-              {(observer.plan || []).length > 0 && (
+              {/* THE REST OF THE PLAN. Whatever the Next band already presents is filtered out
+                  here (`planRest`) so no action is offered twice, and nothing left is primary —
+                  the one primary action on this screen lives in the band above. A step we know
+                  how to perform still renders as a button; one we do not renders as a line of
+                  guidance, because a button that cannot act is how a panel starts lying again.
+                  The endpoint re-orients before honouring any of them. */}
+              {planRest.length > 0 && (
                 <div style={{display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
                              marginTop: 4}}>
-                  {observer.plan.map((st, i) => st.driveable ? (
-                    <button key={i}
-                            className={"btn btn-sm" + (i === 0 ? " btn-primary" : "")}
-                            disabled={busy}
-                            title={st.why}
+                  {planRest.map((st, i) => st.driveable ? (
+                    <button key={i} className="btn btn-sm" disabled={busy} title={st.why}
                             onClick={() => call("/orient_action",
                                                 {action_id: st.id, initiator: "operator"})}>
                       {busy ? "…" : st.label}
@@ -824,9 +902,9 @@ export function SessionControlPanel({ domain }) {
                   ))}
                 </div>
               )}
-              {(observer.plan || []).some((st) => st.driveable) && (
+              {planRest.some((st) => st.driveable) && (
                 <p style={{margin: "6px 0 0", fontSize: 11, opacity: 0.5}}>
-                  {observer.plan.find((st) => st.driveable)?.why}
+                  {planRest.find((st) => st.driveable)?.why}
                 </p>
               )}
 
@@ -1141,9 +1219,18 @@ export function SessionControlPanel({ domain }) {
 
                           {/* WORK THE STEP. This is the button the first cut was missing: the
                               queue shipped with only ways to END a step, so every application
-                              looked like something to dismiss rather than something to do. */}
+                              looked like something to dismiss rather than something to do.
+
+                              It is PRIMARY only while the rung is what the arbitration chose. When
+                              the page contradicts the recipe the observer leads, and a rung still
+                              styled as the obvious thing to press is how the panel came to offer
+                              two answers to one question. It stays pressable either way — demoted
+                              is not hidden, and the operator may always overrule the read. */}
                           <div className="sc-flags">
-                            <button className="btn btn-sm btn-primary" disabled={busy}
+                            <button className={"btn btn-sm" + (rungIsPrimary ? " btn-primary" : "")}
+                                    disabled={busy}
+                                    title={rungIsPrimary ? "" : nextAction?.secondary?.demoted_because
+                                                                || "the page disagrees with this rung"}
                                     onClick={() => call("/apply_step", { initiator: "operator" })}>
                               {busy ? "…" : s.next_rung
                                 ? `Work this · ${s.next_rung.replace(/_/g, " ")}`

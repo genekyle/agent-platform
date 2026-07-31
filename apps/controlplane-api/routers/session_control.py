@@ -350,6 +350,116 @@ def _account_state(bb: Any) -> Optional[dict[str, Any]]:
         return None
 
 
+# --- arbitration: the ONE next action -----------------------------------------------------------
+# TWO SURFACES ANSWER "WHAT NEXT", AND SOMETHING HAS TO RESOLVE THEM.
+#
+# The ladder's rungs are computed from the RECIPE'S POSITION; the observer's plan from the LIVE
+# PAGE. Computing them apart is the whole point — one source cannot disagree with itself, and the
+# disagreement is the finding. But both were rendered as their own primary-looking button, so the
+# panel offered two suggestions and left the operator to arbitrate. That is the "flow feels off"
+# recorded as the sequencing debt on 2026-07-30.
+#
+# The rule is one line: THE OBSERVER WINS WHENEVER THE WORLD CONTRADICTS THE RECIPE, because in
+# that case the recipe is the thing that is wrong. Otherwise the rung wins — no disagreement means
+# the recipe is on track.
+#
+# Two properties this must keep, or it becomes a third surface answering the same question:
+#   * IT INVENTS NOTHING. Both options are computed elsewhere (the ladder, the observer's plan);
+#     this picks one and says why. It never composes a move of its own.
+#   * THE LOSER STAYS VISIBLE as `secondary`, with the reason it was demoted. Both sides of a
+#     disagreement stay on the record (PRINCIPLES §10), and an operator who can only see the winner
+#     cannot correct it — which is the same as not having recorded it.
+def _rung_option(step: Optional[Any]) -> Optional[dict[str, Any]]:
+    """The RECIPE's answer, worded as the crank will actually work it — `walk_to_next_rung`, not
+    `next_rung`, so a rung the discovery ruled out is never offered as the thing to press."""
+    if step is None or step.done:
+        return None
+    rung, _ruled_out = step.walk_to_next_rung()
+    if rung is None:
+        return {"source": "rung", "id": "", "label": "Work this step",
+                "why": (f"Past the known prefix — the rungs from here depend on the platform "
+                        f"({step.platform or 'unclassified'}), and those are not built yet."),
+                "endpoint": "/apply_step", "body": {}, "driveable": True}
+    return {"source": "rung", "id": rung.id, "label": f"Work this · {rung.label}",
+            "why": rung.why, "endpoint": "/apply_step", "body": {}, "driveable": True}
+
+
+def _observer_option(observer: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """The WORLD's answer: the first step of the observer's own plan, carried verbatim.
+
+    Verbatim includes `driveable`. A step we cannot perform is often still the right next move
+    ("screenshot and hand to me"); what it must never become is a button, and losing the flag here
+    is exactly how it would.
+    """
+    plan = (observer or {}).get("plan") or []
+    if not plan:
+        return None
+    first = plan[0]
+    driveable = bool(first.get("driveable"))
+    return {"source": "observer", "id": first.get("id", ""), "label": first.get("label", ""),
+            "why": first.get("why", ""),
+            "endpoint": "/orient_action" if driveable else "",
+            "body": {"action_id": first.get("id", "")} if driveable else {},
+            "driveable": driveable}
+
+
+def _decided(winner: dict[str, Any], loser: Optional[dict[str, Any]], *, reason: str,
+             abstained: bool = False, demoted: str = "") -> dict[str, Any]:
+    """One winner, the reason it won, and the loser kept beside it rather than dropped."""
+    return {**winner, "reason": reason, "observer_abstained": abstained,
+            "secondary": ({**loser, "demoted_because": demoted} if loser else None)}
+
+
+def _resolve_next_action(step: Optional[Any],
+                         observer: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Pick between the rung and the observer's plan — see the note above for the rule."""
+    rung_opt, obs_opt = _rung_option(step), _observer_option(observer)
+    if rung_opt is None and obs_opt is None:
+        return None
+
+    mismatch = (observer or {}).get("mismatch") or None
+    confidence = (observer or {}).get("confidence") or ""
+    headline = (observer or {}).get("headline") or (observer or {}).get("state") or "this page"
+    # LOW CONFIDENCE IS AN ABSTENTION, NOT AN OBJECTION. An unsure observer that raised no mismatch
+    # has nothing to overrule the recipe with — but it is said out loud, because a verdict dropped
+    # in silence reads exactly like one that was never taken.
+    abstained = bool(obs_opt) and not mismatch and confidence == "low"
+
+    if mismatch and obs_opt is not None:
+        return _decided(
+            obs_opt, rung_opt,
+            reason=("The world contradicts the recipe — " + (mismatch.get("detail") or "") +
+                    ". The observation leads."),
+            demoted="the recipe's position, kept in view — take it only if the page reads wrong.")
+
+    if rung_opt is None:
+        return _decided(obs_opt, None,
+                        reason="No application step is open, so the page's own next move is all "
+                               "there is to go on.")
+
+    if mismatch:
+        # Contradicted, with nowhere to go: the observer says the rung is wrong and offers no move
+        # of its own. Presenting the rung anyway is honest only if the warning travels with it.
+        reason = ("The world contradicts the recipe — " + (mismatch.get("detail") or "") +
+                  " — and the observer offers no move here, so the rung is all there is. "
+                  "Look at the page before working it.")
+    elif abstained:
+        reason = (f"The observer abstained: {confidence} confidence on {headline}, and no mismatch "
+                  f"to raise. The rung stands, and the observer's read is kept below rather than "
+                  f"dropped — an unsure witness is not a silent one.")
+    elif obs_opt is not None:
+        reason = (f"{headline} — nothing there contradicts "
+                  + (f"the `{rung_opt['id']}` rung" if rung_opt["id"] else "the ladder")
+                  + ", so the recipe is on track.")
+    else:
+        reason = ("Nothing is watching an application tab, so the ladder's own position is the "
+                  "next move.")
+    return _decided(rung_opt, obs_opt, abstained=abstained, reason=reason,
+                    demoted=("the observer's read, kept in view — too unsure to overrule the rung."
+                             if abstained else
+                             "the observer's way out, offered with no disagreement to resolve."))
+
+
 def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, Any], *,
           page: int, results: Optional[list[dict]] = None,
           awaiting: Optional[str] = None, last: Optional[dict] = None,
@@ -358,6 +468,7 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     which page we are on, and this page's results."""
     ss = bb.search_state
     observed = obs.get("observed", {})
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
     # The rungs are worded for the engine actually being driven. They used to read "Signed in to
     # Indeed" on every ladder, which a LinkedIn session renders as an instruction to go and sign in
     # to the wrong site — found the first time a LinkedIn session was started, 2026-07-27.
@@ -380,6 +491,11 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # The panel renders this INSTEAD of trusting the recipe position — where they disagree,
         # `observer.mismatch` says so and `observer.plan` says the way out.
         "observer": observer,
+        # THE ONE NEXT ACTION, arbitrated between the two above — the world's plan and the recipe's
+        # rung. Without it the panel showed both as primary buttons and the operator did the
+        # resolving; with it there is one thing to press and the loser is beside it, demoted and
+        # labelled with why. See `_resolve_next_action` for the rule.
+        "next_action": _resolve_next_action(queue.current(), observer),
         "block": obs.get("block"),
         "tab_count": len(obs.get("tabs") or []),
         # THE WINDOW, IN THE PANEL. A bare count is the definition of out-of-sight-out-of-mind: an
@@ -397,7 +513,7 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "results": results if results is not None else (bb.world or {}).get("page_results", []),
         "picks": list(ss.approved or []),
         # The apply queue for this page: N picks, N steps, and what each one is waiting on.
-        "queue": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).as_dict(),
+        "queue": queue.as_dict(),
         # What the teacher intends next, if anything — the pause the operator steers from.
         "proposal": (bb.world or {}).get("apply_proposal"),
         # A pending account-creation handoff (durable, survives reloads like the proposal).
@@ -424,7 +540,7 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # context every proposal is made against: "have we been here before" is a question the
         # reasoner should never have to spend a drive answering.
         "applied_check": (bb.world or {}).get("applied_check"),
-        "queue_summary": aps.Queue.from_dict((bb.world or {}).get("apply_queue")).summary(),
+        "queue_summary": queue.summary(),
         "awaiting": awaiting,
         # WHICH ATSes hide their form behind section bars. The panel needs this to know whether to
         # offer the section reader at all, and the declaration lives in apply_fields — so it is
@@ -605,7 +721,11 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str) -> Optiona
                                                         "tab_url": url}, timeout=12.0)
     except Exception:  # noqa: BLE001 — an unreadable tab is an abstaining witness, not a crash
         content = {}
-    nr = step.next_rung()
+    # ORIENT AGAINST THE RUNG THAT WILL ACTUALLY RUN. `next_rung` can name one the discovery has
+    # ruled out — `account` on Indeed quick apply — and orienting against it manufactures a
+    # mismatch for a rung the crank would skip without ever asking. A false disagreement is worse
+    # than none: the arbitration below hands the wheel to the observer on the strength of it.
+    nr, _ruled_out = step.walk_to_next_rung()
     o = orientation.orient(
         url,
         page_text=content.get("text") or "",
@@ -3311,7 +3431,7 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     _persist(bb, ledger)
     obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     stuck = step.needs_operator()
-    nxt = step.next_rung()
+    nxt, _ruled_out = step.walk_to_next_rung()
     if stuck:
         tail = "Identity could not be auto-confirmed — check it before continuing."
     elif nxt:
@@ -3573,11 +3693,9 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     # fallback-into-recipe-mode the operator named. A ruled-out rung is still WRITTEN DOWN (the
     # skip is an event, not an absence; a corpus that loses it cannot tell "not needed" from "never
     # reached"), it just is not handed to the operator as the next thing to do.
-    while (rung := step.next_rung()) is not None:
-        applies, why_not = aps.rung_applies(rung.id, platform=step.platform)
-        if applies:
-            break
-        step.record(rung.id, aps.SKIPPED, why_not, initiator=body.initiator)
+    rung, ruled_out = step.walk_to_next_rung()
+    for rung_id, why_not in ruled_out:
+        step.record(rung_id, aps.SKIPPED, why_not, initiator=body.initiator)
     if rung is None:
         return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
                                     detail="Past the known prefix. The rungs from here depend on "

@@ -1543,6 +1543,112 @@ def test_apply_step_refuses_when_the_queue_is_drained(monkeypatch):
     assert r.status_code == 409
 
 
+# --- ONE next action: arbitrating between the recipe and the world -----------------------------
+# The panel grew two surfaces answering "what next" — the ladder's rung (the recipe's position) and
+# the observer's plan (the live page) — and rendered each as its own primary-looking button, so the
+# operator did the arbitrating. That is the sequencing debt recorded on 2026-07-30. These pin the
+# rule: the observer wins when the world CONTRADICTS the recipe, the rung wins otherwise, and
+# whichever loses stays on the record as the secondary option.
+#
+# The live fixture: an apply click that landed on an employer's careers front (a branded wrapper)
+# while the ladder believed it was at the account wall.
+_POSTING_TEXT = ("Sr. Reporting Analyst Quincy, MA APPLY NOW Job Requisition: 533857 "
+                 "Responsibilities Qualifications")
+_GATE_TEXT = ("Returning Candidate? Log back in! Already have an account? "
+              "Sign in to continue with your application.")
+
+
+def _oriented(monkeypatch, apply_url, page_text, *, rungs=(), platform=None):
+    """A session with one application open on `apply_url`, so the panel's observer fires on GET.
+
+    `ats_for_company` is STUBBED to know nothing. It reads the learned company->ATS store off
+    disk, so left live the memory witness — and with it the fused confidence these tests turn on —
+    would depend on which employers this machine happens to have driven. A test whose result
+    depends on the developer's files is not a test.
+    """
+    import ats_registry
+    monkeypatch.setattr(ats_registry, "ats_for_company", lambda _c: None)
+    bb = _with_queue(("indeed:a1", "Sr. Reporting Analyst", "Globex"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].platform = platform
+    for r_id in rungs:
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    return _install(monkeypatch,
+                    {"/list_tabs": _tabs(SEARCH_URL, apply_url),
+                     "/auth_state": {"ok": True, "logged_in": True},
+                     "/page_content": {"ok": True, "text": page_text, "frames": [],
+                                       "apply_hrefs": []}},
+                    blackboard=bb)
+
+
+#: The prefix up to the account wall — the position the ladder was in when it offered a sign-in
+#: for a wall that was not on screen.
+_TO_THE_ACCOUNT_RUNG = ("open_pane", "verify_identity", "enter_apply", "classify")
+
+
+def test_a_mismatch_hands_the_next_action_to_the_observer(monkeypatch):
+    """THE LIVE CASE. The `account` rung needs a sign-in wall; the page is a job posting. The world
+    contradicts the recipe, so the observation leads — and the rung is demoted, not deleted."""
+    _oriented(monkeypatch,
+              "https://aholddelhaizeusa.careerswithus.com/job/Sr-Reporting-Analyst",
+              _POSTING_TEXT, platform="workday", rungs=_TO_THE_ACCOUNT_RUNG)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["observer"]["mismatch"] is not None            # the disagreement the rule turns on
+    nxt = r["next_action"]
+    assert nxt["source"] == "observer"
+    assert (nxt["id"], nxt["endpoint"]) == ("press_apply", "/orient_action")
+    assert nxt["body"] == {"action_id": "press_apply"}
+    assert "contradicts the recipe" in nxt["reason"]
+    # THE LOSER STAYS VISIBLE. A demoted option is still evidence, and an operator who cannot see
+    # the rung cannot judge the observation that overruled it.
+    assert nxt["secondary"]["source"] == "rung"
+    assert (nxt["secondary"]["id"], nxt["secondary"]["endpoint"]) == ("account", "/apply_step")
+    assert nxt["secondary"]["demoted_because"]
+
+
+def test_no_mismatch_leaves_the_next_action_with_the_rung(monkeypatch):
+    """Agreement means the recipe is on track: the `account` rung meets an actual account wall, so
+    the ladder leads and the observer's own plan is the secondary."""
+    _oriented(monkeypatch,
+              "https://globex.wd1.myworkdayjobs.com/en-US/careers/login",
+              _GATE_TEXT, platform="workday", rungs=_TO_THE_ACCOUNT_RUNG)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["observer"]["mismatch"] is None
+    assert r["observer"]["confidence"] != "low"             # it agreed; it did not merely abstain
+    nxt = r["next_action"]
+    assert nxt["source"] == "rung"
+    assert (nxt["id"], nxt["endpoint"]) == ("account", "/apply_step")
+    assert nxt["observer_abstained"] is False
+    assert nxt["secondary"]["source"] == "observer"
+    # "Work the account step" is guidance, not something we can perform from here — and the flag
+    # survives the demotion, so the panel cannot render it as a button that does nothing.
+    assert nxt["secondary"]["driveable"] is False
+
+
+def test_a_low_confidence_observer_yields_to_the_rung_and_says_it_abstained(monkeypatch):
+    """An unsure observer with nothing to object to does not get the wheel — but its abstention is
+    STATED. A verdict dropped in silence is indistinguishable from one that was never taken."""
+    _oriented(monkeypatch, "https://careers.globex.io/apply/1", _POSTING_TEXT)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["observer"]["confidence"] == "low"             # nothing named an owner for this host
+    assert r["observer"]["mismatch"] is None                # and it has no objection to raise
+    nxt = r["next_action"]
+    assert nxt["source"] == "rung" and nxt["id"] == "open_pane"
+    assert nxt["observer_abstained"] is True
+    assert "abstained" in nxt["reason"]
+    assert nxt["secondary"]["source"] == "observer" and nxt["secondary"]["id"] == "press_apply"
+
+
 # --- teaching inside an apply step ------------------------------------------------------------
 def _teach_ready():
     bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
