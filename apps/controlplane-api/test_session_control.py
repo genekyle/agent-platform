@@ -1434,7 +1434,11 @@ def _with_queue(*jobs):
 def test_apply_step_opens_the_pane_for_the_current_job(monkeypatch):
     harness, saved = _install(
         monkeypatch,
-        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True},
+        # The tab carries ?vjk=a1 because that is what a real open DOES to the SERP's URL — and
+        # the StepRunner now verifies the world moved, so a fixture whose world never moves is a
+        # fixture of a broken page, not of a working one (PLAN_step_runner.md).
+        {"/list_tabs": _tabs(SEARCH_URL + "&vjk=a1"),
+         "/auth_state": {"ok": True, "logged_in": True},
          "/open_job_card": {"ok": True, "title": "Compliance Reporting Analyst",
                             "apply_type": "indeed_apply"}},
         blackboard=_with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS")))
@@ -3454,7 +3458,7 @@ def test_a_fuzzy_applied_match_warns_but_lets_the_step_continue(monkeypatch):
     """
     harness, saved = _install(
         monkeypatch,
-        {"/list_tabs": _tabs(SEARCH_URL),
+        {"/list_tabs": _tabs(SEARCH_URL + "&vjk=b2"),   # the world moves when the pane opens
          "/auth_state": {"ok": True, "logged_in": True},
          "/open_job_card": {"ok": True, "title": "Healthcare Data Analyst - Reporting",
                             "apply_type": "company_site"},

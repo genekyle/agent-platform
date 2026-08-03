@@ -44,6 +44,13 @@ SKIPPED = "skipped"              # NOT NEEDED HERE, and that is a real answer. G
 
 #: Flags that mean the step cannot proceed on its own. `UNKNOWN` is here deliberately: not
 #: recognising a screen is a reason to stop and ask, never a reason to press on hopefully.
+#: The StepRunner's demotion (PLAN_step_runner.md): the rung CLAIMED ok and the observed world
+#: disagrees. Not in NEEDS_OPERATOR — the policy is reobserve/retry, and because the latest
+#: verdict wins, recording it reopens the rung so the next press IS the retry. Not FAILED either:
+#: failed means "tried and know why"; this means "the action reported success and the page did
+#: not move the way it predicted", which is a different fact and trains a different model.
+MISMATCH = "mismatch"
+
 NEEDS_OPERATOR = frozenset({BLOCKED, HUMAN_REQUIRED, UNKNOWN})
 
 # --- terminal flags: how a step ENDS ------------------------------------------------------------

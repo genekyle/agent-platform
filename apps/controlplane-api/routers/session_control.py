@@ -3712,6 +3712,26 @@ async def apply_step(session_id: int, body: ApplyStepBody,
 
     tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
     _note_tab_drift(bb, obs, step)      # recorded on the view; never acts on its own
+
+    # --- THE STEPRUNNER (PLAN_step_runner.md): observe before → act → observe after → verify.
+    # No rung marks itself complete: the body's `step.record(...)` below is a CLAIM, and after
+    # the act the deterministic diff gets to demote it. Best-effort by construction — a blind
+    # observation yields `unobserved` and the ladder behaves exactly as it did before the
+    # StepRunner existed. The pair + diff + verdict is appended to the transition corpus either
+    # way, because that row IS the training data this system runs on.
+    import step_runner as sr
+    _ext = step.job_id.split(":", 1)[-1]
+    _expect = sr.expectation_for(rung.id, external_id=_ext)
+    _observe_tab = (obs.get("search_tab") or {}).get("tab_id") or tab_id
+    _before = await sr.observe(_capture_post, browser_url=browser_url, tab_id=_observe_tab,
+                               session_id=session.id)
+    # Hard-stop ONLY before the irreversible: acting on top of an unresolved mismatch there is
+    # the one place a verification failure blocks rather than retries.
+    if rung.id in sr.IRREVERSIBLE_RUNGS and step.last_flag == aps.MISMATCH:
+        return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
+                                    detail=f"{rung.label}: the previous step's verification is "
+                                           f"unresolved — not acting irreversibly on top of a "
+                                           f"mismatch. Re-run the step or resolve it first.")
     style = xs.pick_style()
     await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
@@ -3982,8 +4002,34 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                           f"confirm to create it.")
 
 
+    # --- STEPRUNNER, the after half: observe → diff → verify → settle. The rung's record above
+    # is a claim; this is the world's answer. The verifier only DEMOTES a claimed ok — a rung
+    # that already reported failure needs no second witness, and a blind observation challenges
+    # nothing. Every pair lands in the transition corpus regardless of verdict, because rows
+    # where claim and world agree are training data too (they are the easy half the verifier
+    # model learns first).
+    _after = await sr.observe(_capture_post, browser_url=browser_url, tab_id=_observe_tab,
+                              session_id=session.id)
+    _changes = sr.diff(_before, _after)
+    _verdict, _evidence = sr.verify(_expect, _changes, _after)
+    _claimed = step.last_flag or "none"
+    if _verdict == sr.MISMATCH and _claimed == aps.OK:
+        step.record(rung.id, aps.MISMATCH, f"world disagrees: {_evidence}",
+                    initiator="step_runner")
+        detail = (f"{rung.label}: the action reported ok, but {_evidence}. The rung stays open — "
+                  f"press again to retry, and if it keeps happening the recipe is wrong about "
+                  f"this page.")
+    sr.record_transition(session_id=session.id, rung_id=rung.id,
+                         action={"rung": rung.id, "job_id": step.job_id,
+                                 "initiator": body.initiator},
+                         expect=_expect, before=_before, after=_after, changes=_changes,
+                         verdict=_verdict, evidence=_evidence, claimed=_claimed)
+
     return await _save_queue_and_view(session, bb, ledger, queue, obs,
-                                ok=step.last_flag == aps.OK, detail=detail, pace=style)
+                                ok=step.last_flag == aps.OK, detail=detail, pace=style,
+                                verification={"rung": rung.id, "verdict": _verdict,
+                                              "evidence": _evidence, "claimed": _claimed,
+                                              "expected": _expect.as_row()})
 
 
 class ApplyProposeBody(BaseModel):
@@ -4253,7 +4299,8 @@ def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
 
 
 async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool,
-                               detail: str, pace=None) -> dict[str, Any]:
+                               detail: str, pace=None,
+                               verification: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Persist, then render — WITH a fresh observation. Async so the observer fires on every
     apply-step render, not only on the poll: the moment after an action is exactly when the world
     is most likely to have moved (operator-directed 2026-07-30)."""
@@ -4262,6 +4309,10 @@ async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok
     _persist(bb, ledger)
     last: dict[str, Any] = {"ok": ok, "action": "apply_step", "detail": detail,
                             "queue": queue.summary()}
+    if verification is not None:
+        # The StepRunner's verdict, beside the claim it judged — so the cockpit can render
+        # "the action said ok and the page carries vjk=…" instead of a bare flag.
+        last["verification"] = verification
     if pace is not None:
         last["pace"] = xs.describe(pace)
     observer = await _orient_now(bb, obs, _session_browser_url(session))

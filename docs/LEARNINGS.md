@@ -4949,3 +4949,51 @@ evidence, nothing to review.
 2 genuine questions queued for the operator, 0 wrong merges. Bristol: one job, five sightings.
 Liberty Mutual: two jobs, one sighting each. Both pairs are now pinned as tests with their real
 field values, so the next person to loosen this finds out which employer they just collapsed.
+
+---
+
+## 2026-08-03 — The StepRunner: the rung's outcome becomes a claim
+
+**The operator's finding, which stands as the design's indictment:** the perception stack was
+real — two calibrated witnesses, a live seam, a transition trainer — and the ladder path the
+operator actually drives never called any of it. Every rung recorded its own outcome and the
+ladder advanced on that claim. "Every action counted as a positive flag." The controller path
+(`live_actuator`) had eyes; the cockpit path had none. The work was connection, not construction —
+again (2026-07-16, and every week since).
+
+**What landed (PLAN_step_runner.md, operator-authored).** `step_runner.py`: observe before → act →
+observe after → deterministic diff → verify → settle, wrapped around every apply-ladder rung in
+`apply_step`.
+
+* **The verifier only demotes.** A rung that claimed OK against a world that did not move the way
+  the rung's own *declared-in-advance* expectation predicted gets re-recorded `mismatch` — and
+  because the latest verdict wins (2026-07-30), that reopens the rung, so the next press IS the
+  retry. It never promotes a failure and never blocks a rung it could not see: `unobserved` is a
+  real verdict and behaves exactly like the pre-StepRunner world. A blind verifier that blocks is
+  worse than no verifier.
+* **Expectations are predictions, not rationalisations** (PRINCIPLES §13): declared before the
+  act, from measurements this week — `open_pane` predicts the window carries `vjk=<id>` (measured
+  live 2026-07-30); `enter_apply` predicts a tab opens/navigates to an application host (in the
+  window ledger the same day); the read-only rungs predict nothing and are paired for the corpus
+  without judgement.
+* **The transition corpus is the point**: JSONL rows beside the capture artifacts — before ·
+  evidence · action · expected · after · actual changes · verdict · the rung's own claim ·
+  teacher_correction (null until someone overrides; both sides then kept, §10). This row — not a
+  screenshot folder, not a transcript — is what the state classifier, the action-result verifier,
+  the target ranker and the recovery selector train on, in that order.
+* **Apple Vision rides in shadow from day one**: `sense()` runs over the same captured artifact,
+  so the belief (state, uncertainty, novelty, per-witness views) and before/after visual agreement
+  land in every row while gating nothing. The corpus becomes trainable material, not unlabeled
+  images.
+* **Hard-stop only before the irreversible** (`submit`): acting there on top of an unresolved
+  mismatch refuses; everywhere else a mismatch is a retry, not a halt.
+
+**The fixture lesson, worth its own line.** Wiring the verifier broke two tests whose faked world
+never moved — `/open_job_card` said ok while the fake tabs never gained `vjk`. The fixtures were
+modelling a broken page and asserting success on it; they now model a page that moves. When a
+verifier of world-state arrives, every fixture that fakes only the *reply* and not the *world* is
+retroactively wrong — expect this again wherever the StepRunner spreads.
+
+**Not yet live-proven.** The current step had already walked its prefix, so no live transition row
+exists yet; the first one lands on the next rung walked. The checks themselves are grounded in this
+week's live measurements rather than guesses.
