@@ -22,6 +22,28 @@ from models import ObservedJob, utcnow
 router = APIRouter()
 
 
+async def _cap_post(path: str, payload: dict, timeout: float = 30.0) -> dict:
+    """POST to the capture server for the StepRunner's observations. Never raises — same contract
+    as session_control's `_capture_post`: a browser that will not answer is an honest
+    {ok: false}, which the StepRunner reads as "the eyes were unavailable"."""
+    import httpx
+
+    from settings import settings
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(f"{settings.capture_server_url}{path}", json=payload)
+            return r.json() or {}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+
+
+def _account_session_key(company: str, ats_id: str) -> str:
+    """A stable per-account key for the transition corpus: account creation is operator-triggered
+    and not bound to a training session, but its steps are still steps and still train."""
+    import re
+    return "account-" + re.sub(r"[^a-z0-9_-]+", "-", f"{company} {ats_id}".lower()).strip("-")
+
+
 def _match_create_account_fields(candidates: list) -> dict:
     """{email, password, verify, acknowledge, submit} backend_node_ids from a Workday Create-Account
     form's AX candidates. SKIPS the bot honeypot ('robot'/'website' inputs). Matches by accessible
@@ -134,24 +156,41 @@ async def _create_appvault_account(body, username: str, password: str) -> dict[s
                     "action_id": "click", "target_role": role, "target_name": name,
                     "target_bbox": {}, **base})
 
-            await _type("[data-av=email]", username)
-            await _type("#outlined-adornment-password", password)
-            await _type("#outlined-adornment-re-password", password)
-            await _type("[data-av=first]", first)
-            await _type("[data-av=last]", last)
-            # Terms: the link opens a "Term of Use Policy" MODAL — must click Agree (buttons: Print /
-            # Disagree / Agree). Only then does Continue enable (verified live 2026-07-14, Ahold).
-            await _click("link", "Click Here to Accept Terms of Use")
-            await _click("button", "Agree")
-            await _click("button", "Continue")
-            # VERIFY it actually submitted before touching the account record — else a stall (a field
-            # that didn't validate, terms not agreed) would falsely mark the account 'created'. Success
-            # = the create form is gone OR we advanced to email-verification.
-            await asyncio.sleep(2.0)
-            advanced = await _probe(
-                "!document.querySelector('#outlined-adornment-re-password') "
-                "|| /verif|confirm your email|check your email|code (was |has been )?sent/i.test(document.body.innerText)",
-                "did the AppVault create-account form actually submit?")
+            async def _drive() -> dict[str, Any]:
+                await _type("[data-av=email]", username)
+                await _type("#outlined-adornment-password", password)
+                await _type("#outlined-adornment-re-password", password)
+                await _type("[data-av=first]", first)
+                await _type("[data-av=last]", last)
+                # Terms: the link opens a "Term of Use Policy" MODAL — must click Agree (buttons:
+                # Print / Disagree / Agree). Only then does Continue enable (verified live
+                # 2026-07-14, Ahold).
+                await _click("link", "Click Here to Accept Terms of Use")
+                await _click("button", "Agree")
+                await _click("button", "Continue")
+                # VERIFY it actually submitted before touching the account record — else a stall
+                # (a field that didn't validate, terms not agreed) would falsely mark the account
+                # 'created'. Success = the create form is gone OR we advanced to email-verification.
+                await asyncio.sleep(2.0)
+                adv = await _probe(
+                    "!document.querySelector('#outlined-adornment-re-password') "
+                    "|| /verif|confirm your email|check your email|code (was |has been )?sent/i.test(document.body.innerText)",
+                    "did the AppVault create-account form actually submit?")
+                return {"ok": bool(adv), "advanced": bool(adv)}
+
+            # THE STEPRUNNER WRAPS THE DRIVE (PLAN_step_runner.md) — credential posture: a
+            # password is typed, so `collect=False` (identity-only looks, no artifacts, §4) and
+            # the row carries field names, never values. The `advanced` probe stays the claim's
+            # authority; the wrapper adds the before/after pair and diff to the corpus.
+            import step_runner as sr
+            report = await sr.run_step(
+                _drive,
+                action={"action": "create_account", "ats": "appvault", "company": body.company},
+                expect=sr.Expectation(kind="content_changed"),
+                capture_post=_cap_post, browser_url=body.browser_url, tab_id=body.tab_id,
+                tab_url=tab_url, session_id=_account_session_key(body.company, "appvault"),
+                rung_id="account_create", collect=False)
+            advanced = report.result["advanced"]
         if not advanced:
             event_log.log_event("account", f"AppVault create did NOT advance: {body.company}",
                                 domain="career_search", detail="Continue no-op — account left pending")
@@ -359,26 +398,42 @@ async def create_account_on_site(body: CreateAccountOnSite, db: Session = Depend
                 await _exec("clear", node_id)
                 await _exec("type", node_id, value)
 
-            if "email" in fields:
-                await _type(fields["email"], username)
-            await _type(fields["password"], password)
-            if "verify" in fields:
-                await _type(fields["verify"], password)
-            if "acknowledge" in fields:
-                await _exec("click", fields["acknowledge"])
-            await _exec("click", fields["submit"])
+            async def _drive() -> dict[str, Any]:
+                if "email" in fields:
+                    await _type(fields["email"], username)
+                await _type(fields["password"], password)
+                if "verify" in fields:
+                    await _type(fields["verify"], password)
+                if "acknowledge" in fields:
+                    await _exec("click", fields["acknowledge"])
+                await _exec("click", fields["submit"])
 
-            # VERIFY the form actually submitted before touching the account record. This leg used to
-            # mark the account 'active' purely because the click returned — so a stalled form (bad
-            # password, unticked ack) would leave a phantom 'active' account with no login behind it.
-            await asyncio.sleep(2.0)
-            gone = (await client.post(f"{settings.capture_server_url}/probe", json={
-                "browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id,
-                "expression": ("(()=>{const f=document.querySelector('[data-automation-id=password]');"
-                               "const t=document.body.innerText||'';"
-                               "return !f || /verif|check your email|candidate home|my applications/i.test(t);})()"),
-                "note": "did the Workday create-account form actually submit?", "ats": "workday",
-            })).json().get("value")
+                # VERIFY the form actually submitted before touching the account record. This leg
+                # used to mark the account 'active' purely because the click returned — so a
+                # stalled form (bad password, unticked ack) would leave a phantom 'active' account
+                # with no login behind it.
+                await asyncio.sleep(2.0)
+                g = (await client.post(f"{settings.capture_server_url}/probe", json={
+                    "browser_url": body.browser_url, "tab_url": body.tab_url, "tab_id": body.tab_id,
+                    "expression": ("(()=>{const f=document.querySelector('[data-automation-id=password]');"
+                                   "const t=document.body.innerText||'';"
+                                   "return !f || /verif|check your email|candidate home|my applications/i.test(t);})()"),
+                    "note": "did the Workday create-account form actually submit?", "ats": "workday",
+                })).json().get("value")
+                return {"ok": bool(g), "advanced": bool(g)}
+
+            # THE STEPRUNNER WRAPS THE DRIVE — credential posture (`collect=False`, §4): the row
+            # keeps identity and diff, never a typed value. The `gone` probe stays the claim's
+            # authority; the pair + verdict land in the transition corpus.
+            import step_runner as sr
+            report = await sr.run_step(
+                _drive,
+                action={"action": "create_account", "ats": body.ats_id, "company": body.company},
+                expect=sr.Expectation(kind="content_changed"),
+                capture_post=_cap_post, browser_url=body.browser_url, tab_id=body.tab_id,
+                tab_url=body.tab_url, session_id=_account_session_key(body.company, body.ats_id),
+                rung_id="account_create", collect=False)
+            gone = report.result["advanced"]
             # If it did NOT advance, is it because the email is ALREADY REGISTERED? That's the common
             # "I think I already have an account" case — surface it distinctly so the operator edits
             # the password + signs in, instead of an opaque "didn't submit".

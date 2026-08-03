@@ -4997,3 +4997,51 @@ retroactively wrong — expect this again wherever the StepRunner spreads.
 **Not yet live-proven.** The current step had already walked its prefix, so no live transition row
 exists yet; the first one lands on the next rung walked. The checks themselves are grounded in this
 week's live measurements rather than guesses.
+
+---
+
+## 2026-08-03 (2) — The StepRunner spreads: every execution path, one corpus
+
+**Operator-directed the same day the plan was adopted:** everything in Career Search that runs an
+execution attempt goes through the step plan — not just the apply ladder. What existed after the
+first commit was one wrapped endpoint (`apply_step`); every other acting path (the checkpoint
+ladder's `/step`, `orient_action`, the SSO/login drives, `apply_account`/`apply_fill`/
+`apply_sections`, the career_search create-account legs, the controller loop) still executed on
+its own claim.
+
+**What landed.** `step_runner.run_step()` — observe before → act → observe after → diff → verify →
+record as ONE call, with recording INSIDE the wrapper so no caller can act without feeding the
+corpus. Every path above now goes through it (the controller loop instead assembles the same row
+at its `on_step`/`on_supervise` seam — it already observes, predicts `expected_next`, acts and
+supervises, so nothing is re-observed; `live_actuator.transition_recorder`).
+
+* **Three new expectation kinds, honesty-ranked.** `url_value` (encoding-tolerant — a landed query
+  rides as `data+warehouse` or `data%20warehouse`, and demoting over percent-encoding would reopen
+  the CONSUMING rung); `content_changed` (the floor for a click whose landing is unmeasured: the
+  page moves at all, SPA in-place swaps counting via AX elements added/removed); `unmodeled`
+  (DECLARED blindness → `unobserved` — the step changes the world, nobody has measured how, and
+  inventing a check post-hoc is the §13 rationalisation. The row is how the expectation eventually
+  gets written from data). `apply_fill` is `unmodeled` on purpose: typed values live in AX value
+  space the role+name observation cannot see.
+* **The credential posture is mechanical now.** `collect=False` = identity-only looks (URL, tabs,
+  role+name): no /capture, no screenshot, and the belief still rides on the DOM witness (§4).
+  Used by sso_step, login_action, apply_account, and both create-account legs. Rows carry field
+  NAMES, never values — same rule /execute already enforced by logging targets.
+* **No auto-release on the checkpoint ladder.** `/step` records + surfaces a mismatch but never
+  reopens a rung: `query_entered` is consuming, and a verifier false-alarm that reopened it would
+  invite the double-spend the ladder forbids. Demotion acts only where retry is safe
+  (orient/apply rungs, sso_step, login_action responses).
+* **The fixture lesson, second round, with the cure.** Four fixtures failed exactly as predicted
+  on 2026-08-03 (1) — but the deeper rot was fixtures that flip on a CALL COUNT (`_scan_seq`:
+  "accepted from read N"). The StepRunner observes whenever it likes, so any look could advance a
+  scripted page. The cure is a WORLD keyed to the act: `_sap_page()` flips consent on the Accept
+  CLICK; the raced-submit page flips on the click; the login page grows a way-in on the click.
+  **A fixture whose world advances on reads is wrong the moment anything observes freely.**
+* One residual granularity gap, named rather than hidden: `_drive_login`'s inner reasoner loop
+  (engine-credential login) verifies per-step by design but writes no per-step transition rows —
+  it gets one outer row via the wrapped `auth_probe` dispatch. Worth its own pass only if those
+  drives become frequent.
+
+1409 tests green. Not yet live-proven beyond `apply_step`'s wiring; the next real drive writes
+rows from every path it touches (`observer_artifacts/transitions/`, keyed `session_*`,
+`account-*`, `controller-*`).

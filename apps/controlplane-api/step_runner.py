@@ -5,6 +5,16 @@ own outcome and the ladder advanced on that claim — "every action counted as a
 which is how open_pane failed three times over a working pane and an account card was offered over
 a finished review page. The rung's outcome is now a CLAIM; the world settles it.
 
+This module is MANDATORY for every execution path in the domain, not just the apply ladder:
+the checkpoint ladder (`/step`), the observer's offered actions (`/orient_action`), the login and
+SSO drives, the account and form fills, and the controller loop all pass through `run_step` (or
+assemble the same row at their own seam). One wrapper, one corpus — a path that acts without
+leaving a transition row is training nothing, which is the original sin this plan corrects.
+
+Credential flows observe with `collect=False`: state identity only (URL, tab list, role+name),
+no /capture artifact and no screenshot — PRINCIPLES §4. The belief still rides (the DOM witness
+needs only roles and names); what never lands anywhere is a secret value.
+
 Three layers, cheapest first (the observation stack):
 
   1. URL + tabs + AX tree           — `observe()`, all local CDP sockets, always taken
@@ -111,6 +121,8 @@ async def observe(capture_post: Callable[..., Awaitable[dict]], *, browser_url: 
     if collect and obs.ok:
         # The corpus grows on every look (the always-be-collecting directive, 2026-07-22) — and
         # the screenshot this writes is what lets the visual witness testify in shadow.
+        # `collect=False` is the credential-flow posture (§4): no artifact, no screenshot,
+        # state identity only.
         try:
             cap = await capture_post("/capture", {
                 "browser_url": browser_url, "tab_id": tab_id, "tab_url": tab_url,
@@ -120,6 +132,11 @@ async def observe(capture_post: Callable[..., Awaitable[dict]], *, browser_url: 
             obs.screenshot = cap.get("screenshot") or cap.get("screenshot_path")
         except Exception:  # noqa: BLE001
             pass
+    if obs.ok:
+        # The belief rides on EVERY successful look, collected or not: the DOM witness reads only
+        # roles, names and the URL, so it is credential-safe, and a login screen's state identity
+        # is exactly what §4 says we may keep. The visual witness joins in only when a screenshot
+        # was collected.
         try:
             from perception import live as perception_live
             obs.belief = perception_live.sense(
@@ -174,10 +191,25 @@ def _visual_agreement(b: Optional[dict], a: Optional[dict]) -> Optional[bool]:
 
 @dataclass
 class Expectation:
-    """A rung's declared postcondition. `kind` picks the check; the fields feed it."""
-    kind: str                              # url_param | new_tab_or_nav | read_only
+    """A rung's declared postcondition. `kind` picks the check; the fields feed it.
+
+    Kinds, and what each honestly claims to know:
+      url_param       — some URL in the window carries `param=value` (measured, e.g. vjk=<id>)
+      url_value       — some URL in the window carries `value` (encoding-tolerant; a query landing)
+      new_tab_or_nav  — a tab opens or navigates to one of `hosts_hint`
+      content_changed — the step predicts the page moves AT ALL (URL, tabs, or AX content —
+                        the honest floor for a click whose exact landing we have not measured;
+                        SPA screens that swap content in place count via elements added/removed)
+      read_only       — the step predicts NO change; the pair is kept for the corpus unjudged
+      unmodeled       — the step DOES change the world but no postcondition has been measured
+                        yet; verdict is `unobserved` by construction, never a guess. The corpus
+                        row is the point — when enough rows exist, the expectation gets written
+                        from measurements, not invented here.
+    """
+    kind: str                              # url_param | url_value | new_tab_or_nav |
+                                           # content_changed | read_only | unmodeled
     param: str = ""                        # url_param: the query key…
-    value: str = ""                        # …and the value it must hold
+    value: str = ""                        # …and the value it must hold (url_value: the value)
     hosts_hint: tuple[str, ...] = ()       # new_tab_or_nav: hosts that count as "the application"
 
     def as_row(self) -> dict[str, Any]:
@@ -202,13 +234,66 @@ def expectation_for(rung_id: str, *, external_id: str = "") -> Expectation:
     return Expectation(kind="read_only")
 
 
+def expectation_for_checkpoint(action: str, *, query: str = "") -> Expectation:
+    """The checkpoint ladder's predictions (`/step`), one per executor action.
+
+    Same discipline as `expectation_for`: a prediction is declared only where a live measurement
+    backs it. `run_query` is the one rung with a clean, engine-agnostic postcondition — the
+    results URL carries the query (q= on Indeed, keywords= on LinkedIn, both measured live).
+    `auth_probe` may navigate, survey or drive a login depending on what it finds, and
+    `set_distance`'s effect on the URL differs per engine and has not been pinned down — both are
+    `unmodeled` (the row still lands; the expectation gets written when the rows say what it is).
+    """
+    if action == "run_query":
+        return Expectation(kind="url_value", value=query)
+    if action in ("probe_browser", "review_page"):
+        return Expectation(kind="read_only")
+    return Expectation(kind="unmodeled")
+
+
 def verify(expect: Expectation, d: Optional[dict[str, Any]],
            after: Observation) -> tuple[str, str]:
     """(verdict, evidence). Only ever demotes a claimed success; never promotes a failure."""
     if expect.kind == "read_only":
         return READ_ONLY, "read-only rung — pair kept for the corpus, nothing to verify"
+    if expect.kind == "unmodeled":
+        # DECLARED BLINDNESS, not a judgement. The step changes the world and nobody has measured
+        # how yet — inventing a check here would be the rationalisation §13 forbids. The pair and
+        # diff still land in the corpus, which is how the expectation eventually gets written.
+        return UNOBSERVED, "no measured postcondition for this step yet — pair kept for the corpus"
     if d is None:
         return UNOBSERVED, "could not observe both sides — the claim stands unchallenged"
+    if expect.kind == "content_changed":
+        moved = (d.get("url_changed") or d.get("tabs_opened") or d.get("tabs_closed")
+                 or d.get("tabs_navigated") or d.get("elements_added")
+                 or d.get("elements_removed"))
+        if moved:
+            what = ("url changed" if d.get("url_changed") else
+                    "tabs moved" if (d.get("tabs_opened") or d.get("tabs_closed")
+                                     or d.get("tabs_navigated")) else
+                    f"content moved (+{len(d.get('elements_added') or [])}/"
+                    f"-{len(d.get('elements_removed') or [])} elements)")
+            return CONFIRMED, f"the page moved — {what}"
+        return MISMATCH, ("nothing observable changed — no URL, tab or AX-content movement "
+                          "between the two looks")
+    if expect.kind == "url_value":
+        if not expect.value:
+            return UNOBSERVED, "no value declared to look for — the claim stands"
+        urls = [u for u in [after.url] + [t["url"] for t in after.tabs] if u]
+        if not urls:
+            return UNOBSERVED, "no URLs visible to compare against — the claim stands"
+        # Encoding-tolerant on purpose: 'data warehouse' rides in a URL as data+warehouse or
+        # data%20warehouse depending on the engine, and a verifier that demotes a landed query
+        # over percent-encoding would reopen the one CONSUMING rung this ladder protects.
+        from urllib.parse import quote, quote_plus, unquote_plus
+        want = " ".join(expect.value.split()).lower()
+        variants = {want, quote(want), quote_plus(want)}
+        for u in urls:
+            low = u.lower()
+            if any(v in low for v in variants) or want in unquote_plus(low):
+                return CONFIRMED, f"a window URL carries {expect.value!r}"
+        return MISMATCH, (f"expected {expect.value!r} in some window URL and found it nowhere "
+                          f"(url: {after.url[:80]})")
     if expect.kind == "url_param":
         needle = f"{expect.param}={expect.value}"
         urls = [u for u in [after.url] + [t["url"] for t in after.tabs] if u]
@@ -292,3 +377,76 @@ def read_transitions(session_id: Any, *, limit: int = 200) -> list[dict[str, Any
         except Exception:  # noqa: BLE001
             continue
     return rows
+
+
+# --------------------------------------------------------------------------------------------
+# run_step — the whole sequence as one call, for every path that executes anything
+# --------------------------------------------------------------------------------------------
+
+@dataclass
+class StepReport:
+    """What one wrapped step produced: the action's own result, plus the world's answer."""
+    result: Any
+    before: Observation
+    after: Observation
+    changes: Optional[dict[str, Any]]
+    verdict: str
+    evidence: str
+    claimed: str
+
+    def verification(self) -> dict[str, Any]:
+        """The block responses attach beside the claim, so the cockpit can render "the action
+        said ok and the page carries vjk=…" instead of a bare flag."""
+        return {"verdict": self.verdict, "evidence": self.evidence, "claimed": self.claimed}
+
+    @property
+    def demotes(self) -> bool:
+        """True when the action claimed ok and the world disagrees — the one combination the
+        verifier acts on. Callers with a rung to reopen use this; callers without one surface it."""
+        return self.verdict == MISMATCH and self.claimed == "ok"
+
+
+def default_claimed(result: Any) -> str:
+    """Read an action's claim off the reply shapes this codebase actually returns: tier-1
+    /execute replies carry `outcome`; endpoint-level results carry `ok`. Anything else is `none`
+    — an unrecognised reply is not a claim (the 422-sailed-through lesson, 2026-07-24)."""
+    if isinstance(result, dict):
+        if result.get("outcome") is not None:
+            return "ok" if result["outcome"] in ("ok", "committed_unconfirmed") else "failed"
+        if "ok" in result:
+            return "ok" if result.get("ok") else "failed"
+    return "none"
+
+
+async def run_step(act: Callable[[], Awaitable[Any]], *, action: dict[str, Any],
+                   expect: Expectation, capture_post: Callable[..., Awaitable[dict]],
+                   browser_url: str, tab_id: Optional[str] = None,
+                   tab_url: Optional[str] = None, session_id: Any = None,
+                   rung_id: str = "", collect: bool = True,
+                   claimed_of: Callable[[Any], str] = default_claimed) -> StepReport:
+    """Observe before → act → observe after → diff → verify → record. One call, no way to
+    forget the row — recording lives INSIDE the wrapper precisely so no caller can act without
+    feeding the corpus.
+
+    `action` is the row's metadata and MUST NEVER carry a secret value: field NAMES, control
+    names, rung ids — yes; a password, a typed credential — never (§4, same rule /execute
+    enforces by logging targets, not values). `collect=False` is the credential-flow posture:
+    identity-only observations, no artifacts.
+
+    Best-effort by construction, like everything here: a failed observation yields `unobserved`
+    and the caller's behaviour is exactly what it was before the StepRunner existed. The act
+    itself is never wrapped in a try — its exceptions are the caller's own contract.
+    """
+    before = await observe(capture_post, browser_url=browser_url, tab_id=tab_id, tab_url=tab_url,
+                           collect=collect, session_id=session_id)
+    result = await act()
+    after = await observe(capture_post, browser_url=browser_url, tab_id=tab_id, tab_url=tab_url,
+                          collect=collect, session_id=session_id)
+    changes = diff(before, after)
+    verdict, evidence = verify(expect, changes, after)
+    claimed = claimed_of(result)
+    record_transition(session_id=session_id, rung_id=rung_id or str(action.get("action") or ""),
+                      action=action, expect=expect, before=before, after=after, changes=changes,
+                      verdict=verdict, evidence=evidence, claimed=claimed)
+    return StepReport(result=result, before=before, after=after, changes=changes,
+                      verdict=verdict, evidence=evidence, claimed=claimed)

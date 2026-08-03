@@ -799,6 +799,7 @@ async def orient_action(session_id: int, body: OrientActionBody,
     step = queue.current()
     style = xs.pick_style()
     detail = ""
+    verification: Optional[dict[str, Any]] = None   # set when a wrapped step actually acted
 
     if body.action_id == om.REORIENT:
         detail = (f"Re-read the page: {(before.get('state') or 'unknown').replace('_', ' ')}"
@@ -822,16 +823,41 @@ async def orient_action(session_id: int, body: OrientActionBody,
                                        "press. Look at it — this one is yours.")
         host = (urlparse(target).hostname or "")
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
-        res = await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_url": before.get("url") or "",
-            "action_id": "click", "target_bbox": {},
-            "selector": f'a[href*="{host}"]', "driver": "humanized"})
-        await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+
+        async def _press() -> dict[str, Any]:
+            res = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_url": before.get("url") or "",
+                "action_id": "click", "target_bbox": {},
+                "selector": f'a[href*="{host}"]', "driver": "humanized"})
+            await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+            return res
+
+        # THE STEPRUNNER WRAPS THE PRESS. The expectation is unusually strong here: the apply
+        # href already NAMES the destination host, so "did it work" is "did a tab open or
+        # navigate there" — the same signpost that identified the platform verifies the click.
+        import step_runner as sr
+        report = await sr.run_step(
+            _press,
+            action={"action": om.PRESS_APPLY, "target_host": host, "initiator": body.initiator},
+            expect=(sr.Expectation(kind="new_tab_or_nav", hosts_hint=(host,)) if host
+                    else sr.Expectation(kind="content_changed")),
+            capture_post=_capture_post, browser_url=browser_url,
+            tab_url=before.get("url") or "", session_id=session.id, rung_id="orient")
+        res = report.result
+        verification = {**report.verification(), "rung": "orient"}
         if res.get("outcome") not in _ACTED_OK:
             detail = (f"Could not press the apply link ({res.get('outcome') or 'no outcome'}). "
                       f"Nothing moved — the page is still a posting.")
             if step is not None:
                 step.record("orient", aps.FAILED, detail, initiator=body.initiator)
+        elif report.demotes:
+            # The click dispatched; the world never gained the destination. A dispatched click on
+            # a landing that swallowed it is exactly the drift this endpoint exists to catch.
+            detail = (f"Pressed the apply link, but {report.evidence}. The rung stays open — "
+                      f"press again, or look at the window.")
+            if step is not None:
+                step.record("orient", aps.MISMATCH, f"world disagrees: {report.evidence}",
+                            initiator="step_runner")
         else:
             detail = f"Pressed the apply link → {host}."
             if step is not None:
@@ -851,7 +877,7 @@ async def orient_action(session_id: int, body: OrientActionBody,
 
     obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=True, pace=style,
-                                      detail=detail)
+                                      detail=detail, verification=verification)
 
 
 # --- the read model ------------------------------------------------------------------------------
@@ -923,8 +949,29 @@ async def step(session_id: int, body: StepBody,
                      last={"ok": False, "action": "recover", "checkpoint": nxt.checkpoint.id,
                            "detail": nxt.reason, "recovery": nxt.checkpoint.recovery})
 
-    result = await _dispatch(nxt, session=session, bb=bb, ledger=ledger, obs=obs,
-                             browser_url=browser_url, page=page, initiator=body.initiator, db=db)
+    # THE STEPRUNNER WRAPS THE DISPATCH (PLAN_step_runner.md): observe before → act → observe
+    # after → diff → verify → record. The ladder's own evidence rules stay exactly as they are —
+    # each branch still marks its rung only on proof — but the pair + diff + verdict now lands in
+    # the transition corpus for every crank of the ladder, and the verdict rides back on the
+    # response. NO AUTO-RELEASE on mismatch here: `query_entered` is the CONSUMING rung, and a
+    # verifier false-alarm that reopened it would invite the exact double-spend the ladder
+    # forbids. Disagreement is surfaced to the operator, never spent.
+    import step_runner as sr
+    _tab_id = ((obs.get("search_tab") or (obs.get("tabs") or [{}])[0]) or {}).get("tab_id", "")
+    _report = await sr.run_step(
+        lambda: _dispatch(nxt, session=session, bb=bb, ledger=ledger, obs=obs,
+                          browser_url=browser_url, page=page, initiator=body.initiator, db=db),
+        action={"action": nxt.checkpoint.action, "checkpoint": nxt.checkpoint.id,
+                "initiator": body.initiator},
+        expect=sr.expectation_for_checkpoint(nxt.checkpoint.action, query=query),
+        capture_post=_capture_post, browser_url=browser_url, tab_id=_tab_id,
+        session_id=session.id, rung_id=nxt.checkpoint.id)
+    result = _report.result
+    result["verification"] = _report.verification()
+    if _report.demotes:
+        result["detail"] = (str(result.get("detail") or "") +
+                            f" — but the verifier disagrees: {_report.evidence}. The rung is NOT "
+                            f"reopened automatically (it may be consuming); check the browser.")
     _persist(bb, ledger)
 
     # RE-OBSERVE AFTER ACTING. `obs` was taken BEFORE the dispatch, so reusing it renders the
@@ -1977,7 +2024,27 @@ async def sso_step(session_id: int, body: SsoStepBody,
                     "leaves a screen that looks live but is dead. Re-send with attended=true when "
                     "you are at the keyboard."))
 
-    res = await _drive_sso_step(browser_url, popup, username, approved=body.approved)
+    # THE STEPRUNNER WRAPS THE SSO STEP — with the credential-flow posture: `collect=False`
+    # observes state identity only (URL, tab list, role+name), no /capture artifact and no
+    # screenshot on the identity provider's screens (§4). The expectation is the one thing every
+    # SSO step predicts: the screen ADVANCES. `_drive_sso_step` already re-classifies and says
+    # "did not change" in prose while claiming ok — the verifier turns that into a demotion, so
+    # a no-op Next stops reading as progress.
+    import step_runner as sr
+    report = await sr.run_step(
+        lambda: _drive_sso_step(browser_url, popup, username, approved=body.approved),
+        action={"action": "sso_step", "initiator": body.initiator},
+        expect=sr.Expectation(kind="content_changed"),
+        capture_post=_capture_post, browser_url=browser_url,
+        tab_id=popup.get("tab_id", ""), session_id=session.id, rung_id="sso_step",
+        collect=False)
+    res = report.result
+    if report.demotes:
+        res["ok"] = False
+        res["detail"] = (str(res.get("detail") or "") +
+                         f" The verifier read the screen twice and {report.evidence} — treated "
+                         f"as not advanced.")
+    res["verification"] = report.verification()
     bb.log("sso", f"{res.get('state')} -> {res.get('landed') or 'no change'}"[:160])
     _persist(bb, ledger)
     obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
@@ -2036,17 +2103,35 @@ async def login_action(session_id: int, body: LoginActionBody,
     # `.click()` on that lands on nothing. Sending the frame's RECT instead makes the humanized
     # driver do what a hand does — move to the point and press — and the press lands on the button
     # inside. Named for identity, point for delivery.
-    if chosen.get("by_point") and chosen.get("bbox"):
-        res = await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
-            "target_bbox": chosen["bbox"], "driver": "humanized"})
-    else:
-        res = await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
-            "target_bbox": {},   # required by ExecuteRequest even here, where it goes unused
-            "target_role": role, "target_name": body.control_name, "driver": "humanized",
-        })
-    await asyncio.sleep(2.0)
+    async def _click() -> dict[str, Any]:
+        if chosen.get("by_point") and chosen.get("bbox"):
+            r = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
+                "target_bbox": chosen["bbox"], "driver": "humanized"})
+        else:
+            r = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
+                "target_bbox": {},   # required by ExecuteRequest even here, where it goes unused
+                "target_role": role, "target_name": body.control_name, "driver": "humanized",
+            })
+        await asyncio.sleep(2.0)
+        return r
+
+    # THE STEPRUNNER WRAPS THE CLICK — credential-flow posture (`collect=False`, §4): this is
+    # the road TO a login screen, so identity-only looks, no artifacts. A way-in click predicts
+    # the page moves (a menu opens, a login screen renders, an SSO popup appears — all visible
+    # as tab or AX-content movement); a dispatched click that moved nothing gets demoted instead
+    # of reading as "clicked".
+    import step_runner as sr
+    report = await sr.run_step(
+        _click,
+        action={"action": "login_action", "control": body.control_name, "role": role,
+                "initiator": body.initiator},
+        expect=sr.Expectation(kind="content_changed"),
+        capture_post=_capture_post, browser_url=browser_url,
+        tab_id=tab.get("tab_id", ""), session_id=session.id, rung_id="login_action",
+        collect=False)
+    res = report.result
 
     obs_after = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     # SAME ARGUMENTS AS THE `before` SURVEY. This one dropped `engine` and `bb`, and it is the one
@@ -2057,15 +2142,21 @@ async def login_action(session_id: int, body: LoginActionBody,
                                 engine_for(session, obs_after.get("search_tab")), bb)
     # Only a recognised outcome counts as a click. A reply with no `outcome` is an error body,
     # not a result — reading one as success is what let a whole drive report work it never did.
-    ok = res.get("outcome") in _ACTED_OK
+    ok = res.get("outcome") in _ACTED_OK and not report.demotes
+    if report.demotes:
+        detail = (f"Clicked {body.control_name!r}, but {report.evidence} — the click landed on "
+                  f"nothing. Re-check.")
+    elif ok:
+        detail = f"Clicked {body.control_name!r}. " + after["detail"]
+    else:
+        detail = (f"Could not find {body.control_name!r} on the page any more — "
+                  f"it may have moved. Re-check.")
     bb.log("login_step", f"clicked {body.control_name!r} -> {after['state']}")
     _persist(bb, ledger)
     return _view(session, bb, ledger, obs_after, page=_current_page(obs_after, bb),
                  awaiting=None if obs_after["observed"].get("authenticated") else "operator_login",
                  last={"ok": ok, "action": "login_action", "login": after,
-                       "detail": (f"Clicked {body.control_name!r}. " + after["detail"]) if ok
-                                 else f"Could not find {body.control_name!r} on the page any more — "
-                                      f"it may have moved. Re-check."})
+                       "verification": report.verification(), "detail": detail})
 
 
 # --- the apply queue: one step per pick -------------------------------------------------------
@@ -2660,9 +2751,26 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                 ApplicationAnswer.answer_key.in_(tuple(wanted)))).all()
             extra = {r.answer_key: str(r.value or "") for r in rows
                      if getattr(r, "answer_key", None) in wanted}
-        drive = await _drive_account_form(browser_url, tab_id, creds, ats=step.platform,
-                                          leg=action.get("leg") or "create_account",
-                                          submit=(body.mode == "auto"), extra=extra)
+        # THE STEPRUNNER WRAPS THE DRIVE — credential-flow posture (`collect=False`, §4): a
+        # password is typed in here, so the looks are identity-only and the row carries field
+        # NAMES, never values. The driver's own internal proofs (dialog appeared, consent proof
+        # text, submit control gone) remain the semantic verification; the wrapper adds the
+        # before/after pair and diff the corpus needs. Expectation: a SUBMIT predicts the page
+        # moves (these forms replace themselves on success); a fill-only leg changes values AX
+        # names cannot see, so it is `unmodeled` rather than a check that would demote honest work.
+        import step_runner as sr
+        _submitting = body.mode == "auto"
+        _report = await sr.run_step(
+            lambda: _drive_account_form(browser_url, tab_id, creds, ats=step.platform,
+                                        leg=action.get("leg") or "create_account",
+                                        submit=_submitting, extra=extra),
+            action={"action": "apply_account", "leg": action.get("leg"), "ats": step.platform,
+                    "mode": body.mode, "initiator": body.initiator},
+            expect=(sr.Expectation(kind="content_changed") if _submitting
+                    else sr.Expectation(kind="unmodeled")),
+            capture_post=_capture_post, browser_url=browser_url, tab_id=tab_id,
+            session_id=session.id, rung_id=_ACCOUNT_RUNG, collect=False)
+        drive = _report.result
         if not drive.get("ok"):
             step.record(_ACCOUNT_RUNG, aps.FAILED, f"create leg: {drive.get('detail', '')}"[:200],
                         initiator=body.initiator,
@@ -2676,6 +2784,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
             obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                          last={"ok": False, "action": "apply_account", "queue": queue.summary(),
+                               "verification": _report.verification(),
                                "detail": drive.get("detail")})
 
         if not drive.get("submitted"):
@@ -2759,6 +2868,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_account", "queue": queue.summary(),
                            "credentials_stored": saved,
+                           "verification": _report.verification(),
                            "detail": (f"Signed in to {company} automatically. " if signing_in else
                                       f"Created the {company} account automatically. ")
                                      + "The application can continue — orient, then the form."
@@ -3012,17 +3122,36 @@ async def apply_sections(session_id: int, body: ApplySectionsBody,
     keys = [before["expand_all"]] if body.expand == "all" else [body.expand]
     style = xs.pick_style()
     clicked, refused = [], []
+    # Resolve every address BEFORE acting — an unknown key is a caller error (400), not a step.
+    addrs: dict[str, dict] = {}
     for key in keys:
         try:
-            addr = af.addressing_for(body.ats, key)
+            addrs[key] = af.addressing_for(body.ats, key)
         except af.FieldNotFound as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        res = await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
-            "target_bbox": {}, "target_role": addr.get("role"), "target_name": addr.get("name"),
-            "driver": "humanized"})
-        (clicked if res.get("outcome") in ("ok", "committed_unconfirmed") else refused).append(key)
-        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    async def _expand_bars() -> dict[str, Any]:
+        for key, addr in addrs.items():
+            res = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+                "target_bbox": {}, "target_role": addr.get("role"),
+                "target_name": addr.get("name"), "driver": "humanized"})
+            (clicked if res.get("outcome") in ("ok", "committed_unconfirmed")
+             else refused).append(key)
+            await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        return {"ok": bool(clicked) and not refused, "clicked": clicked, "refused": refused}
+
+    # THE STEPRUNNER WRAPS THE EXPAND. Opening a section pours its fields into the AX tree, so
+    # the honest expectation is `content_changed`. The section re-read below stays the response's
+    # authority (it names WHICH bar stayed shut); the wrapper's job is the corpus row.
+    import step_runner as sr
+    _report = await sr.run_step(
+        _expand_bars,
+        action={"action": "apply_sections", "expand": keys, "ats": body.ats,
+                "initiator": body.initiator},
+        expect=sr.Expectation(kind="content_changed"),
+        capture_post=_capture_post, browser_url=browser_url, tab_id=tab_id,
+        session_id=session.id, rung_id="apply_sections")
 
     after = form_fill.section_status(body.ats, await _scan_ax(browser_url, tab_id))
     opened = sorted(set(before["closed"]) - set(after["closed"]))
@@ -3039,7 +3168,8 @@ async def apply_sections(session_id: int, body: ApplySectionsBody,
     detail += _sections_detail(after)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                  last={"ok": ok, "action": "apply_sections", "sections": after,
-                       "opened": opened, "pace": xs.describe(style), "detail": detail})
+                       "opened": opened, "verification": _report.verification(),
+                       "pace": xs.describe(style), "detail": detail})
 
 
 def _sections_detail(status: dict[str, Any]) -> str:
@@ -3103,15 +3233,34 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
 
     style = xs.pick_style()
     filled, failed = [], []
-    for r in rows:
-        if not r["fillable"] or r["widget"] != "text":     # this pass does text fields only
-            continue
-        res = await _capture_post("/execute", {
-            "browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
-            "target_bbox": {}, "target_role": "textbox", "target_name": r["field"],
-            "value": r["value"], "driver": "humanized"})
-        (filled if res.get("outcome") in ("ok", "committed_unconfirmed") else failed).append(r["field"])
-        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    async def _fill_bunch() -> dict[str, Any]:
+        for r in rows:
+            if not r["fillable"] or r["widget"] != "text":     # this pass does text fields only
+                continue
+            res = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
+                "target_bbox": {}, "target_role": "textbox", "target_name": r["field"],
+                "value": r["value"], "driver": "humanized"})
+            (filled if res.get("outcome") in ("ok", "committed_unconfirmed")
+             else failed).append(r["field"])
+            await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        return {"ok": not failed, "filled": len(filled), "failed": len(failed)}
+
+    # THE STEPRUNNER WRAPS THE BUNCH. One step = one bunch, not one keystroke — the rung the
+    # ladder reasons about is "fill this form step". Typed VALUES live in AX value space, which
+    # the role+name observation cannot see, so the expectation is `unmodeled`: the pair + diff
+    # land in the corpus (this is profile data on an apply form, a capturable state), and no
+    # invented check gets to demote honest work it cannot observe.
+    import step_runner as sr
+    _report = await sr.run_step(
+        _fill_bunch,
+        action={"action": "apply_fill",
+                "fields": [r["field"] for r in rows if r["fillable"] and r["widget"] == "text"],
+                "initiator": body.initiator},
+        expect=sr.Expectation(kind="unmodeled"),
+        capture_post=_capture_post, browser_url=browser_url, tab_id=tab_id,
+        session_id=session.id, rung_id="form_fill")
 
     step.record("form_fill", aps.OK if filled and not failed else
                 (aps.FAILED if failed else aps.OK),
@@ -3126,6 +3275,7 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                  last={"ok": not failed, "action": "apply_fill", "queue": queue.summary(),
                        "fill_plan": rows, "fill_summary": summary, "sections": sections,
+                       "verification": _report.verification(),
                        "pace": xs.describe(style),
                        "detail": f"Filled {len(filled)} field(s) at {style.name} pace."
                                  + (f" {len(failed)} would not take: {', '.join(failed)}."

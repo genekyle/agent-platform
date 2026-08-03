@@ -735,6 +735,71 @@ class LiveActuator:
         return _outcome_of(res) == Outcome.OK.value
 
 
+def transition_recorder(session_key: str):
+    """(on_supervise, on_step) hooks that append every acting turn to the StepRunner's transition
+    corpus (PLAN_step_runner.md).
+
+    The controller loop is already the full shape — it observes (Bundle), declares its prediction
+    (`expected_next`), acts, and the supervisor judges the result — so nothing is re-observed
+    here: this just writes that fact pattern as the SAME training row the ladder paths write,
+    so the cockpit drives and the controller drives feed ONE corpus instead of two journals no
+    trainer joins. Params are value-stripped before recording: a `type` decision's value may be
+    an answer or a credential, and the row keeps field NAMES only (§4).
+
+    Best-effort like everything in the StepRunner: a recording failure never touches the drive.
+    """
+    from datetime import datetime, timezone
+
+    import step_runner as sr
+
+    pending: dict[str, Any] = {"verdict": None}
+
+    def on_supervise(bundle, decision, verdict) -> None:
+        pending["verdict"] = verdict
+
+    def on_step(bundle, decision, result) -> None:
+        try:
+            v = pending.pop("verdict", None)
+            pending["verdict"] = None
+            now = datetime.now(timezone.utc).isoformat()
+            before = sr.Observation(ts=now, ok=True, url=bundle.url or "")
+            before.belief = {"state": bundle.state, "ats": bundle.ats,
+                            "fingerprint": bundle.fingerprint}
+            after = sr.Observation(ts=now, ok=result is not None, url=bundle.url or "")
+            if result is not None:
+                after.belief = {"state": result.landed_state}
+                after.ax_count = len(result.ax_identities or ())
+            params = {k: val for k, val in (decision.params or {}).items() if k != "value"}
+            expect = sr.Expectation(kind="expected_next",
+                                    value="|".join(decision.expected_next or ()))
+            if result is None:
+                verdict_name, evidence, claimed = (
+                    sr.UNOBSERVED, "held at the consequential gate — never acted", "held")
+            else:
+                claimed = sr.default_claimed({"outcome": result.outcome})
+                if decision.intent in _READ_INTENTS:
+                    verdict_name, evidence = sr.READ_ONLY, "read intent — pair kept for the corpus"
+                elif v is not None:
+                    nominal = bool(getattr(v, "nominal", False))
+                    verdict_name = sr.CONFIRMED if nominal else sr.MISMATCH
+                    evidence = (v.expectation_delta or v.state_hypothesis
+                                or v.failure_class or "")[:300]
+                else:
+                    verdict_name, evidence = sr.UNOBSERVED, "no supervisor verdict for this turn"
+            sr.record_transition(
+                session_id=session_key, rung_id=str(decision.rung or decision.intent),
+                action={"intent": decision.intent, "rung": decision.rung, "params": params},
+                expect=expect, before=before, after=after,
+                changes=({"landed_state": result.landed_state,
+                          "unanswered_after": result.unanswered_after}
+                         if result is not None else None),
+                verdict=verdict_name, evidence=evidence, claimed=claimed)
+        except Exception:  # noqa: BLE001 — the corpus must never sink the drive it observes
+            logger.debug("transition_recorder: failed to record a turn", exc_info=True)
+
+    return on_supervise, on_step
+
+
 def run_live_apply(*, browser_url: str, tab_id: str, task: str = "indeed_apply",
                    capture_server_url: Optional[str] = None, use_model: bool = False,
                    budget_limit: Optional[float] = None, reviewer=None, record_only: bool = False,
@@ -757,5 +822,9 @@ def run_live_apply(*, browser_url: str, tab_id: str, task: str = "indeed_apply",
     if use_model:
         from controller.reason import HaikuReasoner
         model = HaikuReasoner(budget_limit=budget_limit)
+    # Every live acting turn lands in the StepRunner's transition corpus — the controller path
+    # and the cockpit-ladder path write the SAME training row (PLAN_step_runner.md).
+    on_supervise, on_step = transition_recorder(f"controller-{session_id or tab_id or 'live'}")
     return run_controller(actuator, programs=programs_mod.ProgramStore(), model=model,
-                          reviewer=reviewer, session_id=session_id, max_steps=max_steps)
+                          reviewer=reviewer, session_id=session_id, max_steps=max_steps,
+                          on_step=on_step, on_supervise=on_supervise)

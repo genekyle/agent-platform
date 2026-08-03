@@ -605,7 +605,9 @@ def test_auth_probe_that_cannot_open_indeed_leaves_the_rung_alone(monkeypatch):
     assert r["awaiting"] == "operator_open_engine"
     # The survey reads the page in front of it. Run here it would classify about:blank — or a
     # Workday application — as an Indeed login screen and offer "ways in" that lead elsewhere.
-    assert "/ax_scan" not in harness.paths()
+    # (The StepRunner's OBSERVATIONS may scan freely — a look is not a survey — so the invariant
+    # is "no ways in were offered", not "no scan ever ran".)
+    assert "login" not in r["last_step"]
     assert not cps.Ledger.from_dict(saved["bb"].checkpoints).holds("authenticated")
 
 
@@ -834,12 +836,19 @@ def test_a_submit_whose_confirmation_raced_the_navigation_is_never_clicked_twice
 
     Here the window HAS moved (a results page, just not one carrying our query). The retry must
     not fire on that: a page that moved means the click did something."""
-    seen = {"n": 0}
+    # A WORLD, not a call script (the StepRunner fixture lesson, 2026-08-03): the page flips on
+    # the CLICK, never on a read count — the StepRunner observes whenever it likes, and a look
+    # must not advance the page. Before the click: the home page. After: a results page for the
+    # WRONG query (the race's outcome).
+    world = {"clicked": False}
+
+    def _execute(payload):
+        if payload.get("action_id") == "click":
+            world["clicked"] = True
+        return {"outcome": "ok"}
 
     def _list_tabs(_payload):
-        seen["n"] += 1
-        # probe, then pre-click, then a results page for the WRONG query (the race's outcome).
-        if seen["n"] <= 2:
+        if not world["clicked"]:
             return _tabs("https://www.indeed.com/")
         return _tabs("https://www.indeed.com/jobs?q=&l=Lowell%2C+MA&from=searchOnDesktopSerp")
 
@@ -847,7 +856,7 @@ def test_a_submit_whose_confirmation_raced_the_navigation_is_never_clicked_twice
                               {"/list_tabs": _list_tabs,
                                "/auth_state": {"ok": True, "logged_in": True},
                                "/ax_scan": _SEARCH_PAGE_AX,
-                               "/execute": {"outcome": "ok"}},
+                               "/execute": _execute},
                               blackboard=_ready_for_query())
     try:
         r = client.post("/api/session_control/1/step", json={}).json()
@@ -1229,11 +1238,25 @@ def test_a_password_screen_offers_nothing_to_drive(monkeypatch):
 
 
 def test_login_action_clicks_a_way_in_through_the_ax_layer(monkeypatch):
+    # A page that MOVES on the click (the StepRunner fixture lesson, 2026-08-03): the account
+    # menu opens and a way in appears. A static page here would model a click that landed on
+    # nothing — which the verifier now rightly demotes.
+    world = {"clicked": False}
+
+    def _execute(payload):
+        if payload.get("action_id") == "click":
+            world["clicked"] = True
+        return {"outcome": "ok"}
+
+    def _scan(_payload):
+        return (_ax(("button", "Account"), ("link", "Sign in")) if world["clicked"]
+                else _ax(("button", "Account")))
+
     harness, _ = _install(monkeypatch,
                           {"/list_tabs": _tabs("https://www.indeed.com/"),
                            "/auth_state": {"ok": True, "logged_in": False},
-                           "/ax_scan": _ax(("button", "Account")),
-                           "/execute": {"outcome": "ok"}},
+                           "/ax_scan": _scan,
+                           "/execute": _execute},
                           blackboard=_ready_for_provisioned())
     try:
         r = client.post("/api/session_control/1/login_action",
@@ -3815,22 +3838,27 @@ def test_the_real_username_is_used_for_matching_and_never_returned(monkeypatch, 
 
 
 
-def _scan_seq(accepted_from: int = 1, dialog: bool = True):
-    """An /ax_scan stub whose page CHANGES: unconsented on the first read, accepted afterwards.
+def _sap_page(*, accepted: bool = False, dialog: bool = True):
+    """A tiny WORLD, not a call script (the StepRunner fixture lesson, 2026-08-03): /ax_scan
+    reads the page's consent state, and only the Accept CLICK flips it — so observation reads,
+    which the StepRunner takes whenever it likes, can never advance the page by themselves.
 
-    `dialog` controls whether the consent dialog's Accept is visible — the driver now polls for it
-    rather than trusting the opener's `ok`, so a stub with no Accept is how the did-not-open path
-    gets exercised."""
-    calls = {"n": 0}
+    Returns (scan, saw_execute): route /ax_scan to `scan`, and call `saw_execute(payload)` from
+    the test's own /execute stub so the world sees the clicks. `dialog` controls whether the
+    consent dialog's Accept is visible — the driver polls for it rather than trusting the
+    opener's `ok`, so a page with no Accept is how the did-not-open path gets exercised."""
+    state = {"accepted": accepted}
 
-    def _scan(_payload):
-        n = calls["n"]
-        calls["n"] += 1
-        text = "Data privacy statement has been accepted." if n >= accepted_from else ""
+    def scan(_payload):
+        text = "Data privacy statement has been accepted." if state["accepted"] else ""
         cands = [{"role": "button", "name": "Accept"}] if dialog else []
         return {"ok": True, "page_text": text, "candidates": cands}
 
-    return _scan
+    def saw_execute(payload) -> None:
+        if payload.get("target_name") == "Accept":
+            state["accepted"] = True
+
+    return scan, saw_execute
 
 
 def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
@@ -3839,10 +3867,12 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
     the same page are absent from every list — a field this driver never names is one it can never
     tick by accident."""
     acted = []
+    scan, saw_execute = _sap_page()
 
     def _execute(payload):
         acted.append((payload.get("action_id"),
                       payload.get("target_name") or payload.get("selector")))
+        saw_execute(payload)
         return {"outcome": "ok"}
 
     class _Answer:
@@ -3866,10 +3896,10 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
         {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/execute": _execute,
-         # The consent proof appears only AFTER Accept — the first scan is the idempotence
-         # pre-check and must read as "not yet accepted", or the driver rightly skips the whole
-         # consent. Modelling both states is the point: one value could only ever test one path.
-         "/ax_scan": _scan_seq()},
+         # The consent proof appears only AFTER the Accept click — the idempotence pre-check
+         # must read as "not yet accepted", or the driver rightly skips the whole consent.
+         # Modelling both states is the point: one value could only ever test one path.
+         "/ax_scan": scan},
         blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
@@ -4167,7 +4197,7 @@ def test_a_consent_already_accepted_is_not_clicked_again(monkeypatch):
                                     or {"outcome": "ok"},
               "/check_group": {"ok": True},
               # Accepted from the very first read — the page was already consented.
-              "/ax_scan": _scan_seq(accepted_from=0)},
+              "/ax_scan": _sap_page(accepted=True)[0]},
              blackboard=bb, answers=[_Answer("country", "United States")])
     try:
         out = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
@@ -4311,7 +4341,7 @@ def test_a_consent_whose_dialog_never_opened_names_the_real_cause(monkeypatch):
                                     or {"outcome": "ok"},
               "/check_group": {"ok": True},
               # No Accept anywhere: the dialog did not open.
-              "/ax_scan": _scan_seq(accepted_from=99, dialog=False),
+              "/ax_scan": _sap_page(dialog=False)[0],
               "/scan_required": {"ok": True, "unanswered": [
                   {"field": "Choose Password: *", "selector": "#fbclc_pwd"}]}},
              blackboard=bb, answers=[_Answer("country", "United States")])
