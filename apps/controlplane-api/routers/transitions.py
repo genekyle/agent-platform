@@ -280,10 +280,27 @@ def train_from_corpus() -> dict[str, Any]:
 
     eligible: list[_CorpusEdge] = []
     skipped = {"no_belief": 0, "uncertain": 0}
+    taught = 0
     for c in sr.list_corpora():
         for row in sr.read_transitions(c["key"], limit=1000):
             before = (row.get("before") or {}).get("belief") or {}
             after = (row.get("after") or {}).get("belief") or {}
+            # A TEACHER WHO WATCHED THE DRIVE OUTRANKS TWO WITNESSES THAT SPLIT. The observer
+            # clamps any split to uncertainty >= 0.5 — correctly, since it measures the leader as
+            # right one time in five there — so a witness-only gate trains on nothing until the
+            # prototypes are strong, and the prototypes only get strong from labeled data. The
+            # teacher's label is the way out of that circle, and it is exactly what the review
+            # surface produces. The witnesses' own belief stays untouched in the row.
+            correction = row.get("teacher_correction") or {}
+            t_before, t_after = correction.get("before_state"), correction.get("after_state")
+            if t_before and t_after:
+                eligible.append(_CorpusEdge(
+                    filename=(row.get("before") or {}).get("artifact")
+                    or f"{c['key']}:{row.get('index')}",
+                    from_state=t_before, to_state=t_after,
+                    action=str(row.get("rung") or "any")))
+                taught += 1
+                continue
             b_state, a_state = before.get("state"), after.get("state")
             if not b_state or not a_state:
                 skipped["no_belief"] += 1
@@ -301,15 +318,16 @@ def train_from_corpus() -> dict[str, Any]:
 
     if len(eligible) < _MIN_TRAIN_ROWS:
         return {"ok": False, "reason": "insufficient_confident_rows",
-                "eligible": len(eligible), "skipped": skipped,
-                "detail": (f"Only {len(eligible)} row(s) passed the confidence gate "
-                           f"(uncertainty < {MAX_TRAIN_UNCERTAINTY} on both sides): "
-                           f"{skipped['no_belief']} had no belief, {skipped['uncertain']} were "
-                           f"too uncertain. The gate is the message — drive with working "
-                           f"observations before training.")}
+                "eligible": len(eligible), "taught": taught, "skipped": skipped,
+                "detail": (f"Only {len(eligible)} row(s) are trainable "
+                           f"({taught} teacher-labeled, the rest needing uncertainty < "
+                           f"{MAX_TRAIN_UNCERTAINTY} on both sides): {skipped['no_belief']} had "
+                           f"no belief, {skipped['uncertain']} were too uncertain. Label rows in "
+                           f"the review panel — a teacher who watched the drive outranks two "
+                           f"witnesses that split.")}
 
     result = state_transition.train_transition_model(_artifacts_root(), captures=eligible)
-    return {**result, "eligible": len(eligible), "skipped": skipped}
+    return {**result, "eligible": len(eligible), "taught": taught, "skipped": skipped}
 
 
 class CorrectionBody(BaseModel):
@@ -319,6 +337,10 @@ class CorrectionBody(BaseModel):
     verdict: Optional[str] = None
     note: str
     by: str = "operator"
+    # Ground-truth STATE labels. Supply both and the row becomes trainable regardless of what
+    # the witnesses made of the page — this is the seam that turns review into training data.
+    before_state: str = ""
+    after_state: str = ""
 
 
 @router.post("/api/transitions/{key}/correct")
@@ -329,9 +351,15 @@ def correct_row(key: str, body: CorrectionBody) -> dict[str, Any]:
         raise HTTPException(status_code=422,
                             detail="A correction needs a note citing the row's own evidence — "
                                    "an unexplained override teaches nothing.")
+    if bool(body.before_state) != bool(body.after_state):
+        raise HTTPException(status_code=422,
+                            detail="A state label needs BOTH sides — a transition is an edge, and "
+                                   "half an edge trains nothing.")
     try:
         row = sr.correct_transition(key, body.index, verdict=body.verdict,
-                                    note=body.note.strip(), by=body.by, expected_ts=body.ts)
+                                    note=body.note.strip(), by=body.by, expected_ts=body.ts,
+                                    before_state=body.before_state.strip(),
+                                    after_state=body.after_state.strip())
     except IndexError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

@@ -413,7 +413,8 @@ def list_corpora() -> list[dict[str, Any]]:
 
 
 def correct_transition(session_id: Any, index: int, *, verdict: Optional[str], note: str,
-                       by: str = "operator", expected_ts: str = "") -> dict[str, Any]:
+                       by: str = "operator", expected_ts: str = "",
+                       before_state: str = "", after_state: str = "") -> dict[str, Any]:
     """Write a teacher correction onto one row — BOTH SIDES KEPT (PRINCIPLES §10): the row's
     original verdict and evidence are never touched; the correction sits beside them, carrying
     who, when, the corrected verdict (None = a note without a verdict change, e.g. an explicit
@@ -440,6 +441,15 @@ def correct_transition(session_id: Any, index: int, *, verdict: Optional[str], n
         row["teacher_correction"] = {
             "ts": _utc(), "by": by, "verdict": verdict, "note": note,
             "original_verdict": row.get("verdict"),
+            # THE GROUND-TRUTH LABELS, when the teacher supplied them. The witnesses' own belief
+            # is never overwritten — it stays in `before`/`after` as what the system thought at
+            # the time, which is the whole point of the row (§10, both sides kept). These are a
+            # SECOND opinion with a name attached, and the trainer prefers them because a teacher
+            # who watched the drive outranks two witnesses that split.
+            "before_state": before_state or None,
+            "after_state": after_state or None,
+            "witness_before": ((row.get("before") or {}).get("belief") or {}).get("state"),
+            "witness_after": ((row.get("after") or {}).get("belief") or {}).get("state"),
         }
         lines[index] = json.dumps(row, default=str)
         tmp = path.with_suffix(".jsonl.tmp")

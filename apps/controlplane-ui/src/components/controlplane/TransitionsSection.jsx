@@ -59,11 +59,11 @@ export function TransitionsSection() {
 
   useEffect(() => { loadLanding(); }, [loadLanding]);
 
-  const correct = useCallback(async (row, verdict, note) => {
+  const correct = useCallback(async (row, verdict, note, states = {}) => {
     const r = await fetch(`${API}/api/transitions/${encodeURIComponent(corpusKey)}/correct`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ index: row.index, ts: row.ts, verdict, note }),
+      body: JSON.stringify({ index: row.index, ts: row.ts, verdict, note, ...states }),
     });
     if (!r.ok) {
       const detail = (await r.json().catch(() => ({})))?.detail;
@@ -189,20 +189,25 @@ function HealthStrip({ health, scope }) {
 function TransitionRow({ row, onCorrect }) {
   const [expanded, setExpanded] = useState(false);
   const [overriding, setOverriding] = useState(false);
+  const [labeling, setLabeling] = useState(false);
   const [note, setNote] = useState("");
   const [verdict, setVerdict] = useState("mismatch");
   const [busy, setBusy] = useState(false);
   const [rowError, setRowError] = useState(null);
+  const witnessBefore = row.before?.belief?.state ?? "";
+  const witnessAfter = row.after?.belief?.state ?? "";
+  const [beforeState, setBeforeState] = useState(witnessBefore);
+  const [afterState, setAfterState] = useState(witnessAfter);
 
   const n = row.narration ?? {};
   const meta = VERDICT_META[row.verdict] ?? { tone: "neutral", hint: "" };
   const corrected = row.teacher_correction;
 
-  const submit = async (v, text) => {
+  const submit = async (v, text, states) => {
     setBusy(true);
     setRowError(null);
     try {
-      await onCorrect(row, v, text);
+      await onCorrect(row, v, text, states);
     } catch (e) {
       setRowError(e.message);
     } finally {
@@ -248,6 +253,10 @@ function TransitionRow({ row, onCorrect }) {
                 <button className="ghost-btn small-btn" disabled={busy} onClick={() => setOverriding(true)}>
                   Override…
                 </button>
+                <button className="ghost-btn small-btn" disabled={busy} onClick={() => setLabeling((x) => !x)}
+                  title="Label the two states this step moved between. A teacher who watched the drive outranks two witnesses that split — a labeled row becomes trainable whatever the witnesses made of the page.">
+                  {labeling ? "Hide label" : "Label states…"}
+                </button>
               </>
             ) : (
               <>
@@ -274,6 +283,28 @@ function TransitionRow({ row, onCorrect }) {
             )}
             {rowError ? <span className="capture-error">{rowError}</span> : null}
           </div>
+
+          {labeling ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+              <span className="chrome-label muted" style={{ minWidth: 74, textAlign: "right" }}>states</span>
+              <input style={{ minWidth: 180 }} value={beforeState} placeholder="state before"
+                onChange={(e) => setBeforeState(e.target.value)} />
+              <span aria-hidden>→</span>
+              <input style={{ minWidth: 180 }} value={afterState} placeholder="state after"
+                onChange={(e) => setAfterState(e.target.value)} />
+              <button className="ghost-btn small-btn"
+                disabled={busy || !beforeState.trim() || !afterState.trim()}
+                onClick={() => submit(null,
+                  `teacher-labeled ${beforeState.trim()} → ${afterState.trim()}`,
+                  { before_state: beforeState.trim(), after_state: afterState.trim() })}>
+                Save labels
+              </button>
+              <span className="chrome-label muted">
+                witnesses said {witnessBefore || "—"} → {witnessAfter || "—"}; yours becomes the
+                training label and theirs is kept.
+              </span>
+            </div>
+          ) : null}
 
           <details style={{ marginTop: 4 }}>
             <summary className="chrome-label muted" style={{ cursor: "pointer" }}>raw row</summary>

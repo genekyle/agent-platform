@@ -168,7 +168,44 @@ def test_training_refuses_a_corpus_the_witnesses_never_confidently_saw(corpus):
     out = client.post("/api/transitions/train").json()
     assert out["ok"] is False and out["reason"] == "insufficient_confident_rows"
     assert out["skipped"]["uncertain"] == 3
-    assert "drive with working observations" in out["detail"]
+    # The refusal names the REMEDY, not just the shortfall — labelling is the way out.
+    assert "Label rows in the review panel" in out["detail"]
+
+
+def test_a_teacher_label_makes_an_unsure_row_trainable(corpus, tmp_path, monkeypatch):
+    """The way out of the circle: the observer clamps a witness SPLIT to uncertainty >= 0.5 (it
+    measures the leader as right one time in five there), so a witness-only gate trains on
+    nothing until the prototypes are strong — and the prototypes only get strong from labeled
+    data. A teacher who watched the drive breaks it. Their label trains; the witnesses' belief
+    is kept untouched beside it (§10)."""
+    from routers import transitions as tr
+    monkeypatch.setattr(tr, "_artifacts_root", lambda: tmp_path)
+    for _ in range(2):
+        _seed_belief_row(62, b_state="indeed_login_email", a_state="indeed_login_email",
+                         b_unc=1.0, a_unc=1.0)
+    assert client.post("/api/transitions/train").json()["ok"] is False   # nothing trainable yet
+
+    for row in client.get("/api/transitions/62").json()["rows"]:
+        client.post("/api/transitions/62/correct", json={
+            "index": row["index"], "ts": row["ts"],
+            "note": "drove this step myself: about:blank, then indeed.com home",
+            "before_state": "about_blank", "after_state": "indeed_home"})
+
+    out = client.post("/api/transitions/train").json()
+    assert out["ok"] is True and out["taught"] == 2 and out["eligible"] == 2
+    stored = client.get("/api/transitions/62").json()["rows"][0]
+    # The teacher's label trains; the witnesses' own reading survives in the row.
+    assert stored["teacher_correction"]["before_state"] == "about_blank"
+    assert stored["teacher_correction"]["witness_before"] == "indeed_login_email"
+    assert stored["before"]["belief"]["state"] == "indeed_login_email"
+
+
+def test_half_an_edge_is_refused(corpus):
+    _seed_belief_row(63, b_state="a", a_state="b", b_unc=0.1, a_unc=0.1)
+    row = client.get("/api/transitions/63").json()["rows"][0]
+    out = client.post("/api/transitions/63/correct", json={
+        "index": row["index"], "ts": row["ts"], "note": "n", "before_state": "only_this_side"})
+    assert out.status_code == 422 and "half an edge" in out.json()["detail"]
 
 
 def test_training_fits_the_edge_table_from_confident_rows(corpus, tmp_path, monkeypatch):
