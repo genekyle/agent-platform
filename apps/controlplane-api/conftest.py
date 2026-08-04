@@ -8,6 +8,15 @@ mined-taxonomy counts that motivated the supervisor.
 
 `INTERACTION_ARTIFACTS_DIR` already existed as the override; there was simply no conftest to set
 it. This is that conftest. It is session-scoped and autouse, so no test can opt out by forgetting.
+
+**And again on 2026-08-04, with the StepRunner** — the same bug, one directory over. Every
+transition row in `output/transitions/session_1.jsonl` (45 of them) was fixture traffic: tab ids
+`t0`/`t1`, `ax_count: 0`, beliefs at uncertainty 1.0 over a page no browser ever served. A
+session's worth of analysis was spent diagnosing "the live AX scans ran dry" against a corpus
+that had never seen a live drive. The lesson generalises past both incidents: **a NEW append-only
+writer inherits nothing from this file — it must be routed here by hand, or it writes to
+production the first time a test touches it.** The transitions corpus lives under
+`settings.observer_artifacts_dir`, which this now redirects too.
 """
 
 from __future__ import annotations
@@ -35,3 +44,30 @@ def _isolate_interaction_artifacts():
                 os.environ.pop("INTERACTION_ARTIFACTS_DIR", None)
             else:
                 os.environ["INTERACTION_ARTIFACTS_DIR"] = previous
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_observer_artifacts():
+    """The same protection for `observer_artifacts_dir` — captures, screenshots, and the
+    StepRunner's TRANSITION CORPUS all hang off it.
+
+    The env var alone is not enough: `settings` is a module-level singleton constructed at import
+    time, and pytest imports the app long before a session fixture runs. So the ATTRIBUTE is
+    reassigned as well, which is what `step_runner._transitions_dir()` actually reads (it resolves
+    the path per call, by design, so this takes effect immediately).
+    """
+    from settings import settings
+
+    previous_env = os.environ.get("OBSERVER_ARTIFACTS_DIR")
+    previous_value = settings.observer_artifacts_dir
+    with tempfile.TemporaryDirectory(prefix="observer-test-artifacts-") as tmp:
+        os.environ["OBSERVER_ARTIFACTS_DIR"] = tmp
+        settings.observer_artifacts_dir = tmp
+        try:
+            yield tmp
+        finally:
+            settings.observer_artifacts_dir = previous_value
+            if previous_env is None:
+                os.environ.pop("OBSERVER_ARTIFACTS_DIR", None)
+            else:
+                os.environ["OBSERVER_ARTIFACTS_DIR"] = previous_env

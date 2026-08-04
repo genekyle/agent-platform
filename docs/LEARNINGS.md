@@ -5068,12 +5068,12 @@ the argument for building inspection before more drives, in miniature:**
    did not exist. Fixed additively in `main_server.py`. *A shadow-mode feature can be silently
    dead for weeks precisely because it gates nothing — the health panel's `with_screenshot: 0/45`
    is what caught it.*
-2. **Every belief sat at uncertainty 1.0** — the live AX scans returned zero candidates
+2. **Every belief sat at uncertainty 1.0** — the AX scans returned zero candidates
    (`ax_count: 0`, empty URL on the scan), so the DOM witness read url/title alone and labeled a
    SERP `indeed_login_email` at novelty 1.00. The observations were `ok=True` yet content-empty.
-   OPEN: diagnose why `/ax_scan` ran dry on those looks (target discovery? tab_id routing?)
-   before the varied-path drives — StepRunner verdicts held up anyway because they read tabs/URLs,
-   but belief-hungry consumers (the train gate, the state classifier) rightly refuse this corpus.
+   ~~OPEN: diagnose why `/ax_scan` ran dry~~ — **WRONG, corrected the same day: there was no
+   browser. Every row was test-suite fixture traffic.** See the next entry; this is what a
+   confident diagnosis of a corpus nobody validated the provenance of looks like.
 3. **Two narration dishonesties caught against real rows:** a mismatch under a non-ok claim read
    as "the world DISAGREED" when claim and world *agree* nothing landed; and the belief-agreement
    line credited "the visual witness" for looks the eyes never took. Both fixed; both are the
@@ -5081,3 +5081,34 @@ the argument for building inspection before more drives, in miniature:**
 
 **Numbers at first read:** 45 rows · 15 mismatch (7 true demotions) · claim agreement 29% ·
 2 distinct states · unmodeled 0% (the ladder rungs all had declared expectations) · corrected 1.
+
+---
+
+## 2026-08-04 (2) — The corpus had never seen a browser: the same isolation bug, one directory over
+
+**The whole of `session_1.jsonl` (45 rows) was test-suite fixture traffic.** Proof took two
+commands: count the rows, run five `test_session_control.py` tests, count again — 45 → 47. The
+tell was in the data the entire time: `tab_id: "t0"`, the id `_tabs()` hands out in the fixtures.
+No CDP target is named `t0`.
+
+**This is the 2026-07-20 journal-pollution bug, exactly, one directory over.** `conftest.py`
+exists *because of that incident* and redirects `INTERACTION_ARTIFACTS_DIR`; the StepRunner writes
+under `settings.observer_artifacts_dir`, which nothing redirected. The enforcement point existed
+and the new writer simply did not route through it.
+
+**The generalised rule, now written into that conftest:** *a new append-only writer inherits
+nothing from the isolation fixture — route it by hand, or it writes to production the first time
+a test touches it.* The fix redirects `observer_artifacts_dir` too, and reassigns the ATTRIBUTE
+as well as the env var, because `settings` is a module-level singleton constructed at import,
+long before a session fixture runs. Verified: 47 → 47 with the same five tests. The polluted file
+is archived at `output/transitions-quarantine/`, not deleted.
+
+**What it cost, and the lesson that outlives the fix.** A full session of analysis was spent on
+this corpus: a "0/45 visual witness" finding (real, and worth fixing — `/capture` genuinely never
+returned the screenshot path), a "the live AX scans ran dry" finding (**pure fiction — no browser
+existed**), and a confident LEARNINGS entry asserting the second as measured fact. Every number in
+that entry was computed correctly off data whose PROVENANCE was never checked. `state-is-context-
+bound` says values are not self-validating and provenance must travel with the data; the corpus
+row carries `before.tabs[].tab_id`, which *is* the provenance field, and nothing looked at it.
+**Before analysing any corpus: confirm it came from where you think it did.** One `tab_id` would
+have done it.
