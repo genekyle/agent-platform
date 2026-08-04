@@ -5112,3 +5112,50 @@ bound` says values are not self-validating and provenance must travel with the d
 row carries `before.tabs[].tab_id`, which *is* the provenance field, and nothing looked at it.
 **Before analysing any corpus: confirm it came from where you think it did.** One `tab_id` would
 have done it.
+
+---
+
+## 2026-08-04 (3) — The first real drives: the corpus is alive, and the witnesses have no vocabulary
+
+**Two full ladder climbs, live, every rung through the StepRunner:** Indeed session 25 and
+LinkedIn session 26, each `probe_browser → auth_probe → run_query → set_distance → review_page`
+(21 and 25 results read). Ten transition rows, **10/10 carrying a real belief AND a screenshot** —
+against 0/45 in the fixture corpus. The `/capture` screenshot fix works live and Apple Vision now
+testifies on every look.
+
+**What the verifier did live, on its own:**
+* `run_query` — the CONSUMING rung — was **confirmed by the world on both platforms**, and the
+  encoding-tolerant `url_value` check is why: Indeed lands `q=data+engineer`, LinkedIn lands
+  `keywords=data%20engineer`. A naive substring check would have demoted the one rung the ladder
+  most needs to trust.
+* `auth_probe` and `set_distance` recorded `unobserved` with "no measured postcondition for this
+  step yet" — declared blindness doing its job rather than inventing a check.
+* Zero demotions across ten rungs, claim agreement 100% on the rows the verifier could judge.
+
+**The finding worth the whole exercise: the perception witnesses have NO LinkedIn vocabulary.**
+On LinkedIn pages the DOM witness returns Indeed state names (`indeed_did_you_apply` for a SERP)
+and the visual witness returns `fb_marketplace_seller_dashboard` — both snap to the nearest
+prototype in a bank fitted on other domains. Novelty 1.00, uncertainty ~0.98: **the system is
+honestly saying "I have never seen this", and it is right.** The labels are nonsense; the
+confidence is correct. That is the witnesses working as designed on a domain nobody has taught
+them yet.
+
+**The cold-start circle, and the way out.** A witness-only train gate (uncertainty < 0.5) admitted
+ZERO of the ten rows, because the observer clamps any witness SPLIT to >= 0.5 — correctly, since
+it measures the leader as right one time in five there. But the prototypes only get strong from
+labeled data, and labeled data only comes from confident witnesses: a closed circle. **The teacher
+label breaks it.** A correction may now carry ground-truth `before_state`/`after_state`; a labeled
+row trains regardless of the witnesses, and their belief is kept beside it (`witness_before`/
+`witness_after`). Labeled both drives from each row's OWN URL evidence → 0 trainable → 10, and the
+edge table learned `about_blank --authenticated--> {indeed_home, linkedin_jobs_home}`.
+**Accuracy at n=10 proves the pipeline, not the model.**
+
+**Also fixed, found live:** both session browsers were up with ZERO page targets and the ladder
+could not climb at all — `probe_browser` refused and asked a human to open a tab. That is the
+2026-07-25 front-door gap fixed one rung too high (`auth_probe` learned to navigate; `provisioned`
+gates it). `/navigate` now opens the first page when the window holds none, and only then.
+
+**Open next:** the `unmodeled` share is 40% (`auth_probe`, `set_distance`) — two drives is not
+enough measurement to write those expectations; a third and fourth climb makes them writable.
+Sessions 25/26 are left at the `choose` boundary with results loaded, which is where the apply
+path (orient → account → fill) would begin exercising the rungs that have never been driven.
