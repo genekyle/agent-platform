@@ -230,6 +230,57 @@ def test_run_step_demotes_a_claimed_ok_over_a_world_that_never_moved(tmp_path, m
     assert report.demotes and report.verdict == sr.MISMATCH
 
 
+def test_run_step_follows_the_work_to_a_new_tab(tmp_path, monkeypatch):
+    """Measured live 2026-08-04: clicking Apply opened the ATS, and because the observation tab
+    was pinned once, every apply-path row recorded the SERP's AX tree and a belief about the
+    search page while the application form sat open in the next tab. The verdicts survived (the
+    diff reads the tab LIST) — the perception half of the corpus was simply about the wrong
+    page. The tab is now resolved PER LOOK."""
+    import asyncio
+    monkeypatch.setattr(sr, "_transitions_dir", lambda: tmp_path)
+    cap = _FakeCapture()
+    seen: list = []
+
+    async def _act():
+        cap.moved = True                       # the click opens the application tab
+        return {"outcome": "ok"}
+
+    async def _tab_for():
+        return "apply_tab" if cap.moved else "search_tab"
+
+    original = sr.observe
+
+    async def _spy(capture_post, **kw):
+        seen.append(kw.get("tab_id"))
+        return await original(capture_post, **kw)
+
+    monkeypatch.setattr(sr, "observe", _spy)
+    asyncio.run(sr.run_step(
+        _act, action={"action": "enter_apply"}, expect=sr.Expectation(kind="content_changed"),
+        capture_post=cap, browser_url="http://b", tab_id="search_tab", session_id=80,
+        rung_id="enter_apply", tab_for=_tab_for))
+    assert seen == ["search_tab", "apply_tab"], "the after-look must follow the work"
+
+
+def test_a_tab_resolver_that_fails_falls_back_rather_than_sinking_the_step(tmp_path, monkeypatch):
+    import asyncio
+    monkeypatch.setattr(sr, "_transitions_dir", lambda: tmp_path)
+    cap = _FakeCapture()
+
+    async def _boom():
+        raise RuntimeError("the browser hung up")
+
+    async def _act():
+        cap.moved = True
+        return {"outcome": "ok"}
+
+    report = asyncio.run(sr.run_step(
+        _act, action={"action": "demo"}, expect=sr.Expectation(kind="content_changed"),
+        capture_post=cap, browser_url="http://b", tab_id="t1", session_id=81,
+        rung_id="demo", tab_for=_boom))
+    assert report.verdict == sr.CONFIRMED          # the step ran; resolution is an aid, not a dep
+
+
 def test_run_step_collect_false_is_the_credential_posture(tmp_path, monkeypatch):
     # The §4 rule made mechanical: identity-only looks — /capture is never called, no artifact
     # and no screenshot land in the row, and the belief may still ride on the DOM witness.

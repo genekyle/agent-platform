@@ -503,7 +503,8 @@ async def run_step(act: Callable[[], Awaitable[Any]], *, action: dict[str, Any],
                    browser_url: str, tab_id: Optional[str] = None,
                    tab_url: Optional[str] = None, session_id: Any = None,
                    rung_id: str = "", collect: bool = True,
-                   claimed_of: Callable[[Any], str] = default_claimed) -> StepReport:
+                   claimed_of: Callable[[Any], str] = default_claimed,
+                   tab_for: Optional[Callable[[], Awaitable[Optional[str]]]] = None) -> StepReport:
     """Observe before → act → observe after → diff → verify → record. One call, no way to
     forget the row — recording lives INSIDE the wrapper precisely so no caller can act without
     feeding the corpus.
@@ -517,11 +518,26 @@ async def run_step(act: Callable[[], Awaitable[Any]], *, action: dict[str, Any],
     and the caller's behaviour is exactly what it was before the StepRunner existed. The act
     itself is never wrapped in a try — its exceptions are the caller's own contract.
     """
-    before = await observe(capture_post, browser_url=browser_url, tab_id=tab_id, tab_url=tab_url,
-                           collect=collect, session_id=session_id)
+    async def _tab() -> Optional[str]:
+        """OBSERVE THE TAB THE WORK IS ON *NOW*, resolved per look rather than pinned once.
+        An action that moves the work to a new tab — clicking Apply opens the ATS — leaves the
+        after-observation pointed at the tab we started from unless this is dynamic. Measured
+        live 2026-08-04: the application form sat open at smartapply while every apply-path row
+        recorded the SERP's 243 AX elements and a belief about the search page. The verdicts
+        survived (the diff reads the tab LIST), but the perception half of the corpus described
+        the wrong page entirely."""
+        if tab_for is None:
+            return tab_id
+        try:
+            return await tab_for() or tab_id
+        except Exception:  # noqa: BLE001 — resolution is an aid, never a dependency
+            return tab_id
+
+    before = await observe(capture_post, browser_url=browser_url, tab_id=await _tab(),
+                           tab_url=tab_url, collect=collect, session_id=session_id)
     result = await act()
-    after = await observe(capture_post, browser_url=browser_url, tab_id=tab_id, tab_url=tab_url,
-                          collect=collect, session_id=session_id)
+    after = await observe(capture_post, browser_url=browser_url, tab_id=await _tab(),
+                          tab_url=tab_url, collect=collect, session_id=session_id)
     changes = diff(before, after)
     verdict, evidence = verify(expect, changes, after)
     claimed = claimed_of(result)

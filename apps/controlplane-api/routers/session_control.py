@@ -3898,7 +3898,24 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     import step_runner as sr
     _ext = step.job_id.split(":", 1)[-1]
     _expect = sr.expectation_for(rung.id, external_id=_ext)
-    _observe_tab = (obs.get("search_tab") or {}).get("tab_id") or tab_id
+    async def _observe_tab_now() -> Optional[str]:
+        """THE TAB THE WORK IS ON *NOW*, re-resolved at each look. Before the apply is entered
+        that is the search tab (the card and its pane live there); the instant Apply opens the
+        ATS it is the application tab. Pinning it once meant every apply-path row recorded the
+        SERP's AX tree and a belief about the search page while the application form sat open
+        in the next tab (measured live 2026-08-04). The diff still caught the tab opening, so
+        the verdicts were right and the perception half of the corpus was about the wrong page —
+        the quiet kind of wrong."""
+        live = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+        tabs = [{"tab_id": t.get("tab_id", ""), "url": t.get("url", "")}
+                for t in (live.get("tabs") or [])]
+        if tabs:
+            apply_tab = _apply_tab(bb, {"tabs": tabs})
+            if apply_tab.get("tab_id"):
+                return apply_tab["tab_id"]
+        return (obs.get("search_tab") or {}).get("tab_id") or tab_id
+
+    _observe_tab = await _observe_tab_now()
     _before = await sr.observe(_capture_post, browser_url=browser_url, tab_id=_observe_tab,
                                session_id=session.id)
     # Hard-stop ONLY before the irreversible: acting on top of an unresolved mismatch there is
@@ -4184,7 +4201,8 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     # nothing. Every pair lands in the transition corpus regardless of verdict, because rows
     # where claim and world agree are training data too (they are the easy half the verifier
     # model learns first).
-    _after = await sr.observe(_capture_post, browser_url=browser_url, tab_id=_observe_tab,
+    _after = await sr.observe(_capture_post, browser_url=browser_url,
+                              tab_id=await _observe_tab_now(),
                               session_id=session.id)
     _changes = sr.diff(_before, _after)
     _verdict, _evidence = sr.verify(_expect, _changes, _after)
