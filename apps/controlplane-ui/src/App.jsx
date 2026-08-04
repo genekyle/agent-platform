@@ -20,6 +20,7 @@ import { TrainingSection } from "./components/controlplane/TrainingSection";
 import { PageStatesSection } from "./components/controlplane/PageStatesSection";
 import { CoverageSection } from "./components/controlplane/CoverageSection";
 import { ScorecardSection } from "./components/controlplane/ScorecardSection";
+import { TransitionsSection } from "./components/controlplane/TransitionsSection";
 import { TrainingSpaceSection } from "./components/controlplane/TrainingSpaceSection";
 import { StateGraphSection } from "./components/controlplane/StateGraphSection";
 import { CommandCenter } from "./components/controlplane/workspace/CommandCenter";
@@ -1041,6 +1042,8 @@ export default function App() {
     sectionContent = <ControllerSection />;
   } else if (activePrimaryView === "learning" && ["models", "eval-runs", "run-detail"].includes(activeSectionId)) {
     sectionContent = <ModelsSection section={activeSectionId === "models" ? "registry" : activeSectionId} />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "transitions") {
+    sectionContent = <TransitionsSection />;
   } else if (activePrimaryView === "learning" && activeSectionId === "scorecard") {
     sectionContent = <ScorecardSection />;
   } else if (activePrimaryView === "learning" && activeSectionId === "training-space") {

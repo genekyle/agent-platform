@@ -33,6 +33,7 @@ export const CONTROL_PLANE_NAV = {
       { id: "dataset-browser", label: "Dataset", subtitle: "Browse and curate captured artifacts." },
       { id: "review-label", label: "Inspect", subtitle: "Inspect one capture, its proposals, and candidate set." },
       { id: "page-states", label: "Page States", subtitle: "Manage the page-state taxonomy." },
+      { id: "transitions", label: "Transitions", subtitle: "Review each step's thinking: believed → predicted → did → saw → settled; correct verdicts." },
       { id: "controller", label: "Controller", subtitle: "Inspect the teachable decision layer and reasoning feed." },
       { id: "models", label: "Models", subtitle: "View registered models and their latest evaluation." },
       { id: "scorecard", label: "Corpus", subtitle: "Review train-eligible and quarantined examples." },
@@ -66,6 +67,7 @@ export const CONTROL_PLANE_NAV = {
 export const LEARNING_PRIMARY_TABS = [
   { id: "overview", label: "Overview" },
   { id: "label", label: "Label" },
+  { id: "transitions", label: "Transitions" },
   { id: "coverage", label: "Coverage" },
   { id: "session-setup", label: "Sessions" },
   { id: "controller", label: "Controller" },

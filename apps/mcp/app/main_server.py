@@ -4689,10 +4689,18 @@ async def trigger_capture(body: CaptureRequest, background_tasks: BackgroundTask
     _dom = (body.training_metadata or {}).get("domain_id") if body.training_metadata else None
     _log_event("capture", f"Captured '{body.scenario}' — {ax_candidate_count} AX candidates",
                detail=f"{path.name} · {body.tab_url or ''}", domain=_dom)
+    # The screenshot's absolute path, surfaced so callers can hand it to the visual witness.
+    # The artifact always carried it (acquisition.screenshots[0].path) and the response never
+    # did — which is why 0 of the first 45 StepRunner transition rows had the eyes testify:
+    # `observe()` read `cap.get("screenshot")` from a reply that had no such key (2026-08-04).
+    shots = (artifact.get("acquisition") or {}).get("screenshots") or []
+    shot = shots[0] if shots else {}
     return {
         "filename": path.name,
         "candidate_count": candidate_count,
         "ax_candidate_count": ax_candidate_count,
+        "screenshot": shot.get("path"),
+        "screenshot_filename": shot.get("filename"),
     }
 
 

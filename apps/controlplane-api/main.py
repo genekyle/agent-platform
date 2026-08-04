@@ -113,6 +113,7 @@ from routers import inventory as inventory_router  # noqa: E402
 from routers import providers as providers_router  # noqa: E402
 from routers import session_control as session_control_router  # noqa: E402
 from routers import sessions as sessions_router  # noqa: E402
+from routers import transitions as transitions_router  # noqa: E402
 from routers import workspace as workspace_router  # noqa: E402
 
 router = APIRouter()
@@ -5330,6 +5331,7 @@ def create_app() -> FastAPI:
     app.include_router(providers_router.router)
     app.include_router(session_control_router.router)
     app.include_router(sessions_router.router)
+    app.include_router(transitions_router.router)
     app.include_router(workspace_router.router)
 
     app.on_event("startup")(on_startup)  # same hook as before, registered by the factory

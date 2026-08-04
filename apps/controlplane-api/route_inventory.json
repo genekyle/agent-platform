@@ -98,6 +98,8 @@
   "GET /api/training/state_graph",
   "GET /api/training/target-comparison",
   "GET /api/training/tasks",
+  "GET /api/transitions",
+  "GET /api/transitions/{key}",
   "GET /api/usage/anthropic",
   "GET /api/workers/{worker_id}/next-step",
   "GET /docs",
@@ -230,6 +232,7 @@
   "POST /api/training/train_perception",
   "POST /api/training/train_stage_observer",
   "POST /api/training/train_state_transition",
+  "POST /api/transitions/{key}/correct",
   "POST /api/workers/{worker_id}/heartbeat",
   "PUT /api/accounts/{account_id}/credentials",
   "PUT /api/domains/{domain_id}/settings"

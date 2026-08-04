@@ -366,17 +366,87 @@ def record_transition(*, session_id: Any, rung_id: str, action: dict[str, Any],
 
 
 def read_transitions(session_id: Any, *, limit: int = 200) -> list[dict[str, Any]]:
-    """The stored rows for one session, oldest first. For review surfaces and the trainers."""
+    """The stored rows for one session, oldest first. For review surfaces and the trainers.
+
+    Each row gains an `index` — its LINE NUMBER in the file — which is the row's address for
+    `correct_transition`. Line numbers are stable because the file is append-only; a correction
+    rewrites a line in place and never reorders."""
     path = _transitions_dir() / f"session_{session_id}.jsonl"
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = max(0, len(lines) - limit)
+    for i, line in enumerate(lines[start:], start=start):
         try:
-            rows.append(json.loads(line))
+            row = json.loads(line)
+            row["index"] = i
+            rows.append(row)
         except Exception:  # noqa: BLE001
             continue
     return rows
+
+
+def list_corpora() -> list[dict[str, Any]]:
+    """Every transition corpus on disk, with enough shape to pick one: key, row count, verdict
+    mix, when it last grew. Keys mirror who wrote them: numeric = a cockpit session, `account-*`
+    = a create-account drive, `controller-*` = a controller loop."""
+    out: list[dict[str, Any]] = []
+    for path in sorted(_transitions_dir().glob("session_*.jsonl")):
+        key = path.name[len("session_"):-len(".jsonl")]
+        verdicts: dict[str, int] = {}
+        corrected = 0
+        last_ts = ""
+        n = 0
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            n += 1
+            verdicts[row.get("verdict") or "?"] = verdicts.get(row.get("verdict") or "?", 0) + 1
+            corrected += 1 if row.get("teacher_correction") else 0
+            last_ts = row.get("ts") or last_ts
+        out.append({"key": key, "rows": n, "verdicts": verdicts,
+                    "corrected": corrected, "last_ts": last_ts})
+    return out
+
+
+def correct_transition(session_id: Any, index: int, *, verdict: Optional[str], note: str,
+                       by: str = "operator", expected_ts: str = "") -> dict[str, Any]:
+    """Write a teacher correction onto one row — BOTH SIDES KEPT (PRINCIPLES §10): the row's
+    original verdict and evidence are never touched; the correction sits beside them, carrying
+    who, when, the corrected verdict (None = a note without a verdict change, e.g. an explicit
+    agreement) and the reviewer's note. A correction should cite what the row's own evidence
+    shows — it is a training signal, not a second opinion.
+
+    `expected_ts` guards the address: rows are addressed by line number, and refusing a write
+    whose timestamp does not match means a stale review screen can never annotate the wrong row.
+    Raises ValueError/IndexError on a bad address; the router turns those into 409/404.
+    """
+    if verdict is not None and verdict not in (CONFIRMED, MISMATCH, UNOBSERVED, READ_ONLY):
+        raise ValueError(f"unknown verdict {verdict!r}")
+    path = _transitions_dir() / f"session_{session_id}.jsonl"
+    if not path.exists():
+        raise IndexError(f"no corpus for {session_id!r}")
+    with _write_lock:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if not 0 <= index < len(lines):
+            raise IndexError(f"row {index} is out of range (corpus has {len(lines)} rows)")
+        row = json.loads(lines[index])
+        if expected_ts and row.get("ts") != expected_ts:
+            raise ValueError("the row at this index has a different timestamp — the corpus moved "
+                             "under the review screen; reload and re-check")
+        row["teacher_correction"] = {
+            "ts": _utc(), "by": by, "verdict": verdict, "note": note,
+            "original_verdict": row.get("verdict"),
+        }
+        lines[index] = json.dumps(row, default=str)
+        tmp = path.with_suffix(".jsonl.tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    row["index"] = index
+    return row
 
 
 # --------------------------------------------------------------------------------------------
