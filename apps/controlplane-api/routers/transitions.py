@@ -243,6 +243,75 @@ def read_corpus(key: str, limit: int = 200) -> dict[str, Any]:
             "rows": [{**row, "narration": narrate(row)} for row in rows]}
 
 
+#: Belief-uncertainty ceiling for a row to feed the transition table. The observer clamps a
+#: witness SPLIT to >= 0.5 and a lone visual witness higher still, so `< 0.5` admits only rows
+#: where the witnesses actually agreed on a state. The first real corpus (45 rows, every belief
+#: at uncertainty 1.0 — the AX scan ran dry) is exactly what this gate exists to keep out:
+#: training the planner's edges on states nobody confidently observed teaches junk roads.
+MAX_TRAIN_UNCERTAINTY = 0.5
+
+_MIN_TRAIN_ROWS = 2      # the trainer's own floor; below it there is no split to fit
+
+
+def _artifacts_root():
+    from deps import _artifacts_dir
+    return _artifacts_dir()
+
+
+class _CorpusEdge:
+    """The attribute shape `state_transition.build_transition_dataset` reads — a transition-
+    corpus row wearing a capture's interface, so the existing trainer is reused, not rebuilt."""
+
+    def __init__(self, *, filename: str, from_state: str, to_state: str, action: str):
+        self.artifact_filename = filename
+        self.observed_page_state = from_state
+        self.post_action_state = to_state
+        self.action_type_hint = action
+        self.domain_id = "career_search"
+
+
+@router.post("/api/transitions/train")
+def train_from_corpus() -> dict[str, Any]:
+    """Train-as-we-go: rebuild the planner's state-transition table from every corpus row whose
+    witnesses were CONFIDENT on both sides. Skips are counted loudly, never silently — when
+    nothing is eligible the response says which gate ate the rows, because "0 trained" and
+    "45 rows all blind" must not read alike."""
+    import state_transition
+
+    eligible: list[_CorpusEdge] = []
+    skipped = {"no_belief": 0, "uncertain": 0}
+    for c in sr.list_corpora():
+        for row in sr.read_transitions(c["key"], limit=1000):
+            before = (row.get("before") or {}).get("belief") or {}
+            after = (row.get("after") or {}).get("belief") or {}
+            b_state, a_state = before.get("state"), after.get("state")
+            if not b_state or not a_state:
+                skipped["no_belief"] += 1
+                continue
+            b_unc = (before.get("uncertainty") or {}).get("state")
+            a_unc = (after.get("uncertainty") or {}).get("state")
+            if (b_unc is None or a_unc is None
+                    or b_unc >= MAX_TRAIN_UNCERTAINTY or a_unc >= MAX_TRAIN_UNCERTAINTY):
+                skipped["uncertain"] += 1
+                continue
+            eligible.append(_CorpusEdge(
+                filename=(row.get("before") or {}).get("artifact")
+                or f"{c['key']}:{row.get('index')}",
+                from_state=b_state, to_state=a_state, action=str(row.get("rung") or "any")))
+
+    if len(eligible) < _MIN_TRAIN_ROWS:
+        return {"ok": False, "reason": "insufficient_confident_rows",
+                "eligible": len(eligible), "skipped": skipped,
+                "detail": (f"Only {len(eligible)} row(s) passed the confidence gate "
+                           f"(uncertainty < {MAX_TRAIN_UNCERTAINTY} on both sides): "
+                           f"{skipped['no_belief']} had no belief, {skipped['uncertain']} were "
+                           f"too uncertain. The gate is the message — drive with working "
+                           f"observations before training.")}
+
+    result = state_transition.train_transition_model(_artifacts_root(), captures=eligible)
+    return {**result, "eligible": len(eligible), "skipped": skipped}
+
+
 class CorrectionBody(BaseModel):
     index: int
     ts: str = ""                 # the row's own timestamp — guards against a moved corpus

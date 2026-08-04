@@ -144,3 +144,44 @@ def test_the_landing_view_lists_every_corpus_with_its_shape(corpus):
     assert "account-acme-workday" in keys and "50" in keys
     assert keys["50"]["verdicts"] == {sr.MISMATCH: 1}
     assert r["health"]["rows"] == 2
+
+
+# --- train-as-we-go: the corpus feeds the planner's edge table, confidence-gated ---------------
+
+def _seed_belief_row(session_key, *, b_state, a_state, b_unc, a_unc, rung="open_pane"):
+    before = sr.Observation(ts="t0", ok=True, url="https://a.test/1")
+    before.belief = {"state": b_state, "uncertainty": {"state": b_unc}, "rationale": "r"}
+    after = sr.Observation(ts="t1", ok=True, url="https://a.test/2")
+    after.belief = {"state": a_state, "uncertainty": {"state": a_unc}, "rationale": "r"}
+    sr.record_transition(session_id=session_key, rung_id=rung, action={"rung": rung},
+                         expect=sr.Expectation(kind="content_changed"), before=before,
+                         after=after, changes=sr.diff(before, after), verdict=sr.CONFIRMED,
+                         evidence="e", claimed="ok")
+
+
+def test_training_refuses_a_corpus_the_witnesses_never_confidently_saw(corpus):
+    # The first real corpus's exact shape: beliefs present, every uncertainty 1.0 (the AX scan
+    # ran dry). Training the planner's edges on that would teach junk roads — the gate says so.
+    for _ in range(3):
+        _seed_belief_row(60, b_state="search_results", a_state="job_posting",
+                         b_unc=1.0, a_unc=1.0)
+    out = client.post("/api/transitions/train").json()
+    assert out["ok"] is False and out["reason"] == "insufficient_confident_rows"
+    assert out["skipped"]["uncertain"] == 3
+    assert "drive with working observations" in out["detail"]
+
+
+def test_training_fits_the_edge_table_from_confident_rows(corpus, tmp_path, monkeypatch):
+    from routers import transitions as tr
+    monkeypatch.setattr(tr, "_artifacts_root", lambda: tmp_path)
+    for _ in range(4):
+        _seed_belief_row(61, b_state="search_results", a_state="job_posting",
+                         b_unc=0.2, a_unc=0.3)
+    _seed_belief_row(61, b_state="search_results", a_state="job_posting",
+                     b_unc=0.9, a_unc=0.2)          # the one uncertain row stays out
+    out = client.post("/api/transitions/train").json()
+    assert out["ok"] is True
+    assert out["eligible"] == 4 and out["skipped"]["uncertain"] == 1
+    assert out["metrics"]["distinct_transitions"] == 1
+    # The model landed on disk where every other trainer writes.
+    assert list(tmp_path.glob("models/*state_transition*/model.json"))

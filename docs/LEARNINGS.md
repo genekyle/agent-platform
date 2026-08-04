@@ -5045,3 +5045,39 @@ supervises, so nothing is re-observed; `live_actuator.transition_recorder`).
 1409 tests green. Not yet live-proven beyond `apply_step`'s wiring; the next real drive writes
 rows from every path it touches (`observer_artifacts/transitions/`, keyed `session_*`,
 `account-*`, `controller-*`).
+
+---
+
+## 2026-08-04 — The review surface pays out on its first real render
+
+**Built (operator-directed):** the transition-corpus review surface — `routers/transitions.py` +
+Learning → Transitions in the cockpit. Rows render in the order the system lived them: *believed*
+(the witnesses' `rationale` VERBATIM — surfacing their own words is the whole point) → *predicted*
+→ *did* → *saw* → *settled*, with a claim-vs-world headline. Corrections write
+`teacher_correction` beside the untouched original (§10), require a note citing the row's own
+evidence, and refuse a stale screen by timestamp. Plus train-as-we-go: `POST /api/transitions/train`
+rebuilds the planner's state-transition table from corpus rows, **confidence-gated**
+(uncertainty < 0.5 on both sides) so blind beliefs cannot teach junk edges.
+
+**Inspecting the first real corpus (45 rows, session 1) found three defects in one sitting —
+the argument for building inspection before more drives, in miniature:**
+
+1. **The visual witness never testified — 0/45 rows had a screenshot.** Root cause was not
+   perception: `/capture`'s HTTP response never included the screenshot path, even though the
+   artifact always carried it (`acquisition.screenshots[0].path`). `observe()` read a key that
+   did not exist. Fixed additively in `main_server.py`. *A shadow-mode feature can be silently
+   dead for weeks precisely because it gates nothing — the health panel's `with_screenshot: 0/45`
+   is what caught it.*
+2. **Every belief sat at uncertainty 1.0** — the live AX scans returned zero candidates
+   (`ax_count: 0`, empty URL on the scan), so the DOM witness read url/title alone and labeled a
+   SERP `indeed_login_email` at novelty 1.00. The observations were `ok=True` yet content-empty.
+   OPEN: diagnose why `/ax_scan` ran dry on those looks (target discovery? tab_id routing?)
+   before the varied-path drives — StepRunner verdicts held up anyway because they read tabs/URLs,
+   but belief-hungry consumers (the train gate, the state classifier) rightly refuse this corpus.
+3. **Two narration dishonesties caught against real rows:** a mismatch under a non-ok claim read
+   as "the world DISAGREED" when claim and world *agree* nothing landed; and the belief-agreement
+   line credited "the visual witness" for looks the eyes never took. Both fixed; both are the
+   class of wording that quietly mis-teaches an operator reading the panel.
+
+**Numbers at first read:** 45 rows · 15 mismatch (7 true demotions) · claim agreement 29% ·
+2 distinct states · unmodeled 0% (the ladder rungs all had declared expectations) · corrected 1.

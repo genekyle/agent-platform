@@ -25,6 +25,8 @@ export function TransitionsSection() {
   const [corpus, setCorpus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [training, setTraining] = useState(false);
+  const [trainResult, setTrainResult] = useState(null);
 
   const loadLanding = useCallback(async () => {
     setLoading(true);
@@ -86,12 +88,40 @@ export function TransitionsSection() {
             the verifier will train on.
           </p>
         </div>
-        <button className="ghost-btn small-btn" onClick={() => (corpusKey ? loadCorpus(corpusKey) : loadLanding())} disabled={loading}>
-          {loading ? "…" : "Refresh"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className="ghost-btn small-btn"
+            disabled={training}
+            title="Rebuild the planner's state-transition table from every corpus row whose witnesses were confident on both sides. Blind or uncertain rows are counted and skipped, never trained on."
+            onClick={async () => {
+              setTraining(true);
+              setTrainResult(null);
+              try {
+                const r = await fetch(`${API}/api/transitions/train`, { method: "POST" });
+                setTrainResult(await r.json());
+              } catch (e) {
+                setTrainResult({ ok: false, detail: e.message });
+              } finally {
+                setTraining(false);
+              }
+            }}
+          >
+            {training ? "Training…" : "Train from corpus"}
+          </button>
+          <button className="ghost-btn small-btn" onClick={() => (corpusKey ? loadCorpus(corpusKey) : loadLanding())} disabled={loading}>
+            {loading ? "…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {error ? <span className="capture-error">{error}</span> : null}
+      {trainResult ? (
+        <div className="chrome-label" style={{ marginBottom: 10, color: trainResult.ok ? "var(--success)" : "var(--warning)" }}>
+          {trainResult.ok
+            ? `Trained the transition table: ${trainResult.eligible} confident row(s) → ${trainResult.metrics?.distinct_transitions ?? "?"} distinct edge(s), top-1 ${trainResult.metrics?.top1_accuracy ?? "—"} (skipped: ${trainResult.skipped?.no_belief ?? 0} blind, ${trainResult.skipped?.uncertain ?? 0} uncertain).`
+            : trainResult.detail || "Training refused."}
+        </div>
+      ) : null}
 
       {health ? <HealthStrip health={health} scope={corpusKey ?? "all corpora"} /> : null}
 

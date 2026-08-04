@@ -232,6 +232,7 @@
   "POST /api/training/train_perception",
   "POST /api/training/train_stage_observer",
   "POST /api/training/train_state_transition",
+  "POST /api/transitions/train",
   "POST /api/transitions/{key}/correct",
   "POST /api/workers/{worker_id}/heartbeat",
   "PUT /api/accounts/{account_id}/credentials",
