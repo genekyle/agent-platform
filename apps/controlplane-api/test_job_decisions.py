@@ -1,0 +1,116 @@
+"""The decision ledger: every card under review, picked AND passed, with its choice set.
+
+The invariant that matters: a corpus of picks alone teaches "apply to everything". The passes
+are what make a boundary learnable, and they are the half that disappears when the page moves.
+"""
+
+from __future__ import annotations
+
+import job_decisions as jd
+import pytest
+from db import Base
+from models import JobDecision, ObservedJob
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+@pytest.fixture()
+def db(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path}/decisions.db")
+    Base.metadata.create_all(engine)
+    with sessionmaker(bind=engine)() as session:
+        yield session
+
+
+def _cards(n=4):
+    return [{"job_id": f"indeed:j{i}", "title": f"Data Engineer {i}", "company": f"Co{i}",
+             "location": "Nashua, NH", "salary": "$120k", "url": f"https://x/{i}"}
+            for i in range(n)]
+
+
+def test_the_passes_are_recorded_not_just_the_picks(db):
+    counts = jd.record_page_decisions(db, cards=_cards(4), picked={"indeed:j1"},
+                                      decided_by="operator", session_id=7, page=1,
+                                      query="data engineer")
+    db.commit()
+    assert counts == {"picked": 1, "passed": 3, "skipped": 0}
+    rows = db.query(JobDecision).all()
+    assert {r.decision for r in rows} == {"picked", "passed"}
+    # Without the passes there is no boundary to learn — this is the whole point of the table.
+    assert sum(1 for r in rows if r.decision == "passed") == 3
+
+
+def test_each_row_carries_the_choice_set_it_was_decided_in(db):
+    jd.record_page_decisions(db, cards=_cards(4), picked={"indeed:j2"}, decided_by="operator",
+                             session_id=7, page=2, query="data engineer")
+    db.commit()
+    row = db.query(JobDecision).filter_by(job_id="indeed:j2").one()
+    assert row.shown_count == 4 and row.page == 2 and row.query == "data engineer"
+    assert row.rank == 3                       # position on the page, 1-based, in render order
+    assert row.decision == "picked" and row.decided_by == "operator"
+    # The card AS SEEN, not the canonical job, which drifts once the ATS enriches it.
+    assert row.card["title"] == "Data Engineer 2" and row.card["company"] == "Co2"
+
+
+def test_rank_is_recorded_because_position_bias_is_real(db):
+    jd.record_page_decisions(db, cards=_cards(5), picked=set(), decided_by="operator",
+                             session_id=7, page=1, query="q")
+    db.commit()
+    ranks = sorted(r.rank for r in db.query(JobDecision).all())
+    assert ranks == [1, 2, 3, 4, 5]
+
+
+def test_choosing_again_revises_the_page_rather_than_stacking_duplicates(db):
+    # `choose` is a standing rung the operator re-presses; a second press is a REVISED decision.
+    jd.record_page_decisions(db, cards=_cards(3), picked=set(), decided_by="operator",
+                             session_id=7, page=1, query="q")
+    db.commit()
+    jd.record_page_decisions(db, cards=_cards(3), picked={"indeed:j0"}, decided_by="operator",
+                             session_id=7, page=1, query="q",
+                             reasons={"indeed:j0": "senior, in range, hybrid"})
+    db.commit()
+    rows = db.query(JobDecision).all()
+    assert len(rows) == 3                                   # revised, not doubled
+    picked = [r for r in rows if r.decision == "picked"]
+    assert len(picked) == 1 and picked[0].reason == "senior, in range, hybrid"
+
+
+def test_a_reason_is_optional_and_never_invented(db):
+    jd.record_page_decisions(db, cards=_cards(2), picked={"indeed:j0"}, decided_by="operator",
+                             session_id=7, page=1, query="q")
+    db.commit()
+    assert all(r.reason == "" for r in db.query(JobDecision).all())
+
+
+def test_a_job_that_cannot_be_canonicalised_is_still_recorded(db):
+    # No sighting row, no canonical Job — the decision is still worth keeping, keyed by job_id.
+    jd.record_page_decisions(db, cards=[{"job_id": "indeed:orphan", "title": "T"}],
+                             picked=set(), decided_by="operator", session_id=7, page=1, query="q")
+    db.commit()
+    row = db.query(JobDecision).one()
+    assert row.job_id == "indeed:orphan" and row.decision == "passed"
+
+
+def test_a_decision_follows_the_job_through_a_merge(db):
+    import job_dedup
+    from models import Job
+    sighting = ObservedJob(job_id="indeed:j0", platform="indeed", external_id="j0",
+                           title="Data Engineer", company="Co0")
+    db.add(sighting)
+    key = job_dedup.mint_job_key("indeed:j0")
+    db.add(Job(job_key=key, company="Co0", title="Data Engineer"))
+    db.commit()
+    jd.record_page_decisions(db, cards=_cards(1), picked={"indeed:j0"}, decided_by="operator",
+                             session_id=7, page=1, query="q")
+    db.commit()
+    # The key is resolved at WRITE time, so the outcome join (ApplicationEvent -> job_key) holds.
+    assert db.query(JobDecision).one().job_key == key
+
+
+def test_the_summary_watches_the_ratio_that_matters(db):
+    jd.record_page_decisions(db, cards=_cards(4), picked={"indeed:j0"}, decided_by="operator",
+                             session_id=7, page=1, query="q", reasons={"indeed:j0": "in range"})
+    db.commit()
+    s = jd.summary(db)
+    assert s["decisions"] == 4 and s["picked"] == 1 and s["passed"] == 3
+    assert s["with_reason"] == 1 and s["by_decider"] == {"operator": 4}

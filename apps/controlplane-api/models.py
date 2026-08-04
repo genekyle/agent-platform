@@ -650,3 +650,63 @@ class ApplicationEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     application: Mapped["Application"] = relationship(back_populates="events")
+
+
+class JobDecision(Base):
+    """One triage decision about one job — AND the choice set it was made in.
+
+    Separate from `Job.status` on purpose. That column is current state: it says the job is
+    `skipped` and cannot say it was skipped on page 2 of a 21-card 'data engineer' search where
+    three others were picked instead. A decision is an EVENT, and the alternatives are half of it.
+
+    **The negatives are the perishable half.** Recording only what was picked cannot teach a
+    boundary — a model trained on picks alone learns "everything is worth applying to". The
+    twenty-one cards on screen at the moment of choosing exist nowhere else once the page moves,
+    which is why every job under review gets a row here, `picked` or `passed`, the instant the
+    operator decides (operator, 2026-08-04: *"the actual decisions should be saved"*).
+
+    **This is not a training target yet, and saying so is the point.** The reward signal for
+    "was this a good choice" is a reply, a callback, an interview — sparse, weeks late, and
+    confounded by resume and timing. It arrives on `ApplicationEvent`, joins here through
+    `job_key`, and until there are enough of them this table is an audit log that happens to be
+    shaped like training data. `decided_by` already distinguishes `operator` from `rule:` /
+    `classifier:`, so the day a decider proposes picks, its agreements and its overrides are
+    separable in the same table without a migration.
+    """
+    __tablename__ = "job_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # The canonical key, tombstone-resolved at write time so a later merge cannot orphan the
+    # decision. `job_id` is kept beside it because a sighting we could not canonicalise is still
+    # a decision worth having.
+    job_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    job_id: Mapped[str] = mapped_column(String(160), index=True)
+
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    # picked | passed — what the decider did with THIS job at this moment.
+    decision: Mapped[str] = mapped_column(String(20), index=True)
+    # operator | rule:<name> | classifier:<name> — same vocabulary `choose` already enforces.
+    decided_by: Mapped[str] = mapped_column(String(60), default="operator", index=True)
+    # Why, in the decider's own words. Empty is honest and common; an invented reason would be
+    # worse than none, so nothing fabricates this.
+    reason: Mapped[str] = mapped_column(String(500), default="")
+
+    # --- the choice set: what else was on the table when this was decided
+    session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    page: Mapped[int] = mapped_column(Integer, default=1)
+    # Position on the page. Recorded because position bias is real — a model that cannot see rank
+    # will happily learn the search engine's ordering and call it judgement — and because it is
+    # free now and unreconstructible later.
+    rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    shown_count: Mapped[int] = mapped_column(Integer, default=0)
+    # The search that surfaced it: provenance travels WITH the row (state is context-bound).
+    query: Mapped[str] = mapped_column(String(300), default="")
+    platform: Mapped[str] = mapped_column(String(40), default="", index=True)
+
+    # A snapshot of what the decider could actually SEE at decision time — title, company,
+    # location, salary as rendered on the card. The canonical Job drifts (a description gets
+    # enriched from the ATS later); the decision was made on THIS, and training on the enriched
+    # version would be training on evidence the decider never had.
+    card: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

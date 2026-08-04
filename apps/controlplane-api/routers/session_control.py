@@ -27,6 +27,7 @@ Testability: every browser/capture-server call goes through the `_capture_post` 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -4858,6 +4859,10 @@ class ChooseBody(BaseModel):
     #: selection already on the record says who made it. A shortlist with no decider cannot be
     #: audited and cannot train the thing meant to inherit the job.
     decided_by: str = cps.DECIDER_OPERATOR
+    #: Per-job WHY, keyed by job_id — for picks and passes alike. Optional and usually sparse:
+    #: an unexplained decision is still worth recording, and an invented reason would be worse
+    #: than none, so nothing fabricates these.
+    reasons: dict[str, str] = {}
 
 
 @router.post("/api/session_control/{session_id}/choose")
@@ -4917,6 +4922,24 @@ async def choose(session_id: int, body: ChooseBody,
                 evidence=f"{len(body.picks)} of {len(known)} picked by {body.decided_by}"
                          + (f" — {body.note}" if body.note else ""),
                 initiator=body.initiator)
+    # THE DECISION LEDGER — every card under review, PICKED AND PASSED (operator, 2026-08-04:
+    # "the actual decisions should be saved"). The passes are the perishable half: the twenty
+    # cards you did not choose exist nowhere once the page moves, and a corpus of picks alone
+    # teaches "apply to everything". Best-effort by construction — a ledger failure must never
+    # cost the operator their selection, which is the thing that actually took judgement.
+    try:
+        import job_decisions
+        counts = job_decisions.record_page_decisions(
+            db, cards=list((bb.world or {}).get("page_results", [])), picked=set(body.picks),
+            decided_by=body.decided_by, session_id=session.id, page=page,
+            query=bb.search_state.query or "", reasons=body.reasons)
+        db.commit()
+        bb.log("decisions", f"page {page}: recorded {counts['picked']} picked / "
+                            f"{counts['passed']} passed by {body.decided_by}")
+    except Exception:  # noqa: BLE001
+        logging.getLogger("session_control").exception(
+            "could not record the decision ledger for page %s", page)
+
     bb.log("choose", f"page {page}: picked {len(body.picks)} of {len(known)} "
                      f"by {body.decided_by} ({added} queued to apply)"
                      + (f" — {body.note}" if body.note else ""))
