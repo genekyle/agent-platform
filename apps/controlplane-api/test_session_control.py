@@ -557,6 +557,57 @@ def _auth_rung_next(query="reporting analyst"):
     return bb
 
 
+def test_an_empty_window_opens_the_front_door_instead_of_stalling_the_whole_ladder(monkeypatch):
+    """Found live 2026-08-04: both session browsers were up with ZERO page targets, and
+    `probe_browser` refused — "open a tab yourself". That is the 2026-07-25 front-door gap fixed
+    one rung too high: `auth_probe` learned to navigate home, and `provisioned` gates it, so it
+    never ran. An empty window is the CLEANEST possible window; refusing it made the whole ladder
+    unclimbable from a fresh session.
+
+    The world moves on the NAVIGATE (the fixture law, 2026-08-03): the window has no tabs until
+    something opens one."""
+    world = {"opened": False}
+
+    def _list_tabs(_payload):
+        return _tabs("https://www.indeed.com/") if world["opened"] else {"ok": True, "tabs": []}
+
+    def _navigate(payload):
+        world["opened"] = True
+        return {"ok": True, "landed_url": payload["url"], "created_tab": True}
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs,
+                               "/navigate": _navigate,
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX},
+                              blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+
+    nav = [p for path, p in harness.calls if path == "/navigate"]
+    assert len(nav) == 1 and nav[0]["url"] == sc.INDEED_HOME, "the HOME page, never a deep URL"
+    assert r["last_step"]["ok"] is True
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("provisioned")
+
+
+def test_a_window_that_already_has_tabs_is_never_given_another(monkeypatch):
+    """Tab churn is a bot-safety signature, and a non-provisioned reading over EXISTING tabs means
+    something else is wrong — opening another tab would drive a page nobody asked for."""
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": {"ok": False, "tabs": [{"tab_id": "t0", "url": "x"}]},
+                           "/auth_state": {"ok": True, "logged_in": True},
+                           "/ax_scan": _SEARCH_PAGE_AX},
+                          blackboard=store.new_blackboard(1, query="reporting analyst"))
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+    assert "/navigate" not in harness.paths()
+    assert r["awaiting"] == "operator_browser"
+
+
 def test_a_fresh_session_opens_indeed_itself_instead_of_asking_the_operator_to(monkeypatch):
     """Found live 2026-07-25 provisioning session 20 — the first fresh session the panel ever
     started. The window is one about:blank tab, so nothing could be probed and nothing could be

@@ -4228,9 +4228,34 @@ async def navigate(body: NavigateRequest):
     import asyncio
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
+    created_tab = False
     try:
-        target = await _discover_target(body.browser_url, tab_id=body.tab_id,
-                                        tab_url=body.tab_url)
+        try:
+            target = await _discover_target(body.browser_url, tab_id=body.tab_id,
+                                            tab_url=body.tab_url)
+        except Exception:
+            # AN EMPTY WINDOW IS THE DEGENERATE CASE OF "GO HERE", NOT A FAILURE. A freshly
+            # provisioned session Chrome holds no page target at all, so discovery raises and
+            # every rung above it stalls asking a human to open a tab by hand (found live
+            # 2026-08-04 on sessions 23 and 24, both live with zero targets). Opening the FIRST
+            # page is this primitive's job; the §3 URL-forcing rule is about jumping into a deep
+            # state we should have clicked to, and there is nothing to click on an empty window.
+            #
+            # ONLY when the window holds NO page whatsoever. A tab_id/tab_url that matched
+            # nothing while other tabs exist must keep raising — silently opening a new tab
+            # there would drive a different page than the caller named, which is the exact
+            # wrong-tab failure `_discover_target` was hardened against.
+            import urllib.parse
+
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                listed = (await client.get(f"{body.browser_url}/json/list")).json()
+                if any(t.get("type") == "page" for t in (listed or [])):
+                    raise
+                await client.put(f"{body.browser_url}/json/new?"
+                                 + urllib.parse.urlencode({"url": body.url}))
+            target = await _discover_target(body.browser_url, tab_id=None, tab_url=None)
+            created_tab = True
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             await cdp.send("Page.navigate", {"url": body.url})
@@ -4243,7 +4268,7 @@ async def navigate(body: NavigateRequest):
                    detail=landed.get("url", "")[:120])
         return {"ok": True, "requested_url": body.url,
                 "landed_url": landed.get("url", ""), "title": landed.get("title", ""),
-                "tab_id": target.get("id")}
+                "tab_id": target.get("id"), "created_tab": created_tab}
     except Exception as exc:  # noqa: BLE001
         logger.warning("navigate failed: %s", exc)
         return {"ok": False, "detail": str(exc), "requested_url": body.url}

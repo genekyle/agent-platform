@@ -1002,9 +1002,34 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
 
     if action == "probe_browser":
         tabs = obs.get("tabs") or []
+        if not obs["observed"].get("provisioned") and obs.get("reachable") and not tabs:
+            # OPEN THE FRONT DOOR OURSELVES. A freshly provisioned session Chrome holds zero
+            # page targets, and this rung used to stop there and ask a human to open a tab by
+            # hand — which is the 2026-07-25 "nobody ever opened the front door" gap, fixed one
+            # rung too high up: `auth_probe` learned to navigate to the engine's home page, but
+            # `provisioned` gates it and never let it run (found live 2026-08-04, both session
+            # browsers up with no tabs, the whole ladder unclimbable).
+            #
+            # Opening a site's HOME PAGE is not the URL-forcing §3 warns about — that rule is
+            # about jumping into a DEEP state we should have clicked our way to. There is nothing
+            # to click on an empty window, and typing indeed.com is exactly what a person does
+            # first. Every deep state after this is still reached by clicking.
+            #
+            # ONLY when the window is EMPTY. With tabs present a non-provisioned reading means
+            # something else is wrong, and opening another tab would be tab churn on a live
+            # session (bot-safety).
+            style = xs.pick_style()
+            nav = await _capture_post("/navigate", {
+                "browser_url": browser_url, "url": engine["home"], "settle_seconds": 3.0})
+            await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+            if nav.get("ok"):
+                bb.log("nav", f"opened {engine['label']}'s home page in an empty window "
+                              f"({style.name} pace)")
+                obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+                tabs = obs.get("tabs") or []
         if not obs["observed"].get("provisioned"):
-            detail = ("Session Chrome is up but has no tabs open — there is nothing to drive. "
-                      "Open Indeed in that window, then step again."
+            detail = ("Session Chrome is up but has no tabs open, and this session could not open "
+                      "one. Open the job site in that window, then step again."
                       if obs.get("reachable") else
                       "Session Chrome is not answering. Start it before stepping.")
             return {"ok": False, "action": action, "awaiting": "operator_browser",
