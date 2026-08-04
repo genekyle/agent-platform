@@ -5159,3 +5159,45 @@ gates it). `/navigate` now opens the first page when the window holds none, and 
 enough measurement to write those expectations; a third and fourth climb makes them writable.
 Sessions 25/26 are left at the `choose` boundary with results loaded, which is where the apply
 path (orient → account → fill) would begin exercising the rungs that have never been driven.
+
+---
+
+## 2026-08-04 (4) — The first recorded apply drive: decisions saved, and the corpus caught watching the wrong tab
+
+**The decision ledger (operator: *"the actual decisions should be saved"*).** `job_decisions`
+writes one row per card under review on every `/choose` — **picked AND passed**. The passes are
+the perishable half: twenty cards on screen at the moment of judgement, gone the instant the page
+moves, and a corpus of picks alone teaches "apply to everything". Each row carries the choice set
+it was decided in: `rank` on the page (position bias is real, free now, unreconstructible later),
+`shown_count`, the query that surfaced it, and the card **as seen** rather than the canonical job,
+which drifts once the ATS enriches it. First page recorded 21 decisions — 1 picked, 20 passed,
+5 with reasons. `job_key` is tombstone-resolved AT WRITE so the eventual outcome join
+(`ApplicationEvent` → `job_key`) survives a merge. **It is not a training target yet** and the
+model docstring says so: the reward signal is a reply weeks later, sparse and confounded.
+
+**The apply ladder verified itself live.** `open_pane` → **confirmed** ("the window carries
+vjk=2e022e52b143f16b" — the exact rung that used to fail three times over a working pane);
+`verify_identity` → read_only; `enter_apply` → **confirmed** ("the window gained
+smartapply.indeed.com"); `classify` → "Indeed's in-app application". The application drove itself
+to `indeed_apply_review` and stopped, one action short of the irreversible gate.
+
+**And the drive immediately caught a defect nothing else could have.** Every apply-path row
+recorded the **SEARCH tab** — 243 AX elements of the results page, a belief about
+`indeed_search_results` — while the application form sat open in the next tab. The observation tab
+was pinned once, before the act, and clicking Apply moves the work to a tab that did not exist
+yet.
+
+*Why it was quiet:* the verdicts were all **correct**. `diff()` reads the tab LIST, so
+`enter_apply` confirmed properly. The judgement half was right and the **perception** half — the
+screenshot, the AX candidates, the witnesses' belief, the part that trains the state classifier —
+described the wrong page. A bug that only shows up in the half of the row nobody was checking.
+
+*The fix generalises the rule:* **observe the tab the work is on NOW**, re-resolved at each look
+rather than pinned once (`run_step(tab_for=...)`). Before-look sees where we acted from,
+after-look sees wherever the work went.
+
+**The four pre-fix apply rows are deliberately left UNLABELED**, and the reasoning is worth
+keeping: labeling them with apply states would mislabel the artifact (the screenshot IS the SERP),
+and labeling them honestly as `SERP → SERP` for `enter_apply` would teach the planner a false
+edge. A row that cannot be labeled truthfully for BOTH the perception model and the edge model is
+worth less than no row. Delete the temptation, not the evidence.
