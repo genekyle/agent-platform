@@ -5249,3 +5249,56 @@ two thresholds, both deliberate.
 **Named limit:** nothing here measures how far along a form is. The 2026-08-04 application reached
 review without us typing a character — Indeed prefilled it — so `parked:operator` covers that case
 by naming the next actor, not by seeing the form's depth. That measurement does not exist yet.
+
+---
+
+## 2026-08-04 (6) — Vision joins the fusion, and earns its keep on the first page
+
+**The seam had been designed, documented and EMPTY since the fusion was written.**
+`orientation.orient()` takes `extra_witnesses` and its docstring promises *"perception witnesses —
+screenshot/DOM similarity — join through `extra_witnesses` once trained; the fusion does not
+change shape when they arrive."* Meanwhile `step_runner.observe()` computed exactly those
+witnesses on every look and filed them in the transition corpus. Two halves of one idea, built
+apart, never introduced. (Fifth instance of this pattern in one session.)
+
+**Two calibration rules, both from measurements rather than taste:**
+
+* **They claim a PLATFORM, never a state.** Apple Vision runs ~93% on platform and ~55% on state,
+  and the fusion's vocabulary is platforms and kinds anyway. Ask each witness the question it is
+  good at.
+* **A witness at the NOVELTY CEILING abstains** — it still testifies (its detail renders, so "I
+  have never seen this" stays visible) but casts no vote. On LinkedIn both witnesses sat at
+  novelty 1.00 saying `indeed_*` and `fb_marketplace_*`; letting those vote would drag a correct
+  verdict down on the strength of announced ignorance. **Abstention is what a novelty score is
+  for.**
+* The claim comes from the LABEL alone, never the url — `platform_for` prefers a live host when
+  given one, which would make this witness echo the `url` witness verbatim: two votes from one
+  fact, manufacturing agreement out of a single source.
+* Weight 0.5 until calibrated: enough to break a tie and to show as dissent, never enough to
+  overturn two witnesses that agree.
+
+**The first live page paid for the whole exercise.** On smartapply's resume-selection screen:
+`dom:tfidf` abstained (similarity 0.42), the deterministic content classifier answered *"the page
+text answered unknown"* — and **`visual:apple` recognised it at 0.9368 similarity**
+(`indeed_apply_resume_selection`). Vision was the ONLY witness that knew where we were, on exactly
+the kind of page PLAN_step_runner §2 predicted it would be needed for: a JS-rendered app screen
+where the text says nothing and the picture is unmistakable. The operator's instinct — *"the best
+way to understand what's going on is to literally look at what we're seeing"* — is right
+**precisely where the DOM goes quiet**, which is a sharper claim than "vision is the primary
+sense" and the reason to keep both.
+
+**Then the panel showed it wasn't showing.** The belief reached exactly one response — the acting
+step's — while the card re-orients on every heartbeat, so the learned witnesses were computed
+always and rendered never. **A witness the operator cannot see is back to being shadow.** The fix
+splits the two by COST: the DOM witness is free (url + page text, already fetched) so it is
+recomputed every poll; the visual witness needs a screenshot, which is the one thing too expensive
+on a heartbeat, so it is reused from the last acting step's capture and only while the tab is
+still on the url that belief was taken on. Fresh always beats remembered, and a reused witness
+says so with the time of its capture.
+
+**Open calibration gap, found immediately and deliberately not hacked:** the learned witness
+claims the coarse platform (`indeed`) while the registry witness claims the specific one
+(`indeed_quick_apply`). The fusion compares claim STRINGS, so substantive agreement is scored as
+dissent and costs a confidence grade. The fix is a family-aware comparison in `_fuse`, which
+touches every witness — worth doing deliberately with the corpus to check it against, not at the
+end of a session.
