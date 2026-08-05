@@ -74,8 +74,7 @@ export const DOMAIN_CATALOG = [
     blurb: "Find and apply to jobs on Indeed.",
     tabs: [
       { id: "overview", label: "Overview" },
-      { id: "control", label: "Session control" },
-      { id: "live", label: "Live drive" },
+      { id: "control", label: "Cockpit" },
       { id: "terminal", label: "Activity" },
       { id: "jobs", label: "Jobs" },
       { id: "database", label: "Job Database" },
@@ -167,8 +166,7 @@ export const DOMAIN_CATALOG = [
     blurb: "Find and apply to jobs on LinkedIn.",
     tabs: [
       { id: "overview", label: "Overview" },
-      { id: "control", label: "Session control" },
-      { id: "live", label: "Live drive" },
+      { id: "control", label: "Cockpit" },
       { id: "terminal", label: "Activity" },
       { id: "jobs", label: "Jobs" },
       { id: "database", label: "Job Database" },

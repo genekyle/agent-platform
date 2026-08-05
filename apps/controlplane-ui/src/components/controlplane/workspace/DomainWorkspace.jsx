@@ -5,7 +5,6 @@ import { AutomationMode } from "./AutomationMode";
 import { GoalsPanel } from "./GoalsPanel";
 import { TasksPanel } from "./TasksPanel";
 import { AttentionInbox } from "./AttentionInbox";
-import { LiveDrivePanel } from "./LiveDrivePanel";
 import { SessionControlPanel } from "./SessionControlPanel";
 import { ActivityFeed } from "./ActivityFeed";
 import { DomainTerminal } from "./DomainTerminal";
@@ -35,8 +34,10 @@ const TAB_TO_SECTION = {
 };
 
 function DataTab({ domain, tab, onOpenTraining, sessionId }) {
+  // The cockpit. It absorbed both prior session surfaces — the Session control panel and the
+  // Live drive coaching pane (superseded per PLAN_session_control_panel.md: a keyhole into a loop
+  // only the teacher could turn). One live session, one surface.
   if (tab === "control") return <SessionControlPanel domain={domain} />;
-  if (tab === "live") return <LiveDrivePanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
   if (tab === "errands") return <ErrandsPanel domain={domain} />;
   // The cross-platform job database. Available on the Career Search parent (all boards) and

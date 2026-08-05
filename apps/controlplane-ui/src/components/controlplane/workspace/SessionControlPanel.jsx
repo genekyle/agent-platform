@@ -73,7 +73,12 @@ export function SessionControlPanel({ domain }) {
     return () => clearInterval(t);
   }, [domain.id]);
 
-  const live = sessions.find((x) => x.live) || sessions[0] || null;
+  // Prefer a session that is ACTIVE and answering, not merely answering. Found live 2026-08-05:
+  // stopped sessions share the live one's debug port, so the port answers for all of them and
+  // `live` alone claimed nine live Indeed sessions — eight of them stopped. `status` is the
+  // control plane's own record and outranks a port probe.
+  const live = sessions.find((x) => x.status === "active" && x.live)
+    || sessions.find((x) => x.live) || sessions[0] || null;
   const chosen = sessions.find((x) => x.id === chosenId) || null;
   const active = chosen || live;
 
@@ -275,19 +280,25 @@ function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSession }) {
         {siblings.length > 1 && (
           <label className="cockpit-bar__sessions">
             <span>session</span>
+            {/* Labelled by STATUS, the control plane's own record — not by the port probe.
+                Stopped sessions share the active one's debug port, so `live` alone read as nine
+                live sessions with eight of them stopped. Active first; stopped history stays
+                reachable because a left-open session is a fixture worth looking at. */}
             <select value={sessionId}
                     onChange={(e) => onChooseSession(Number(e.target.value))}>
-              {siblings.map((s) => (
-                <option key={s.id} value={s.id}>
-                  #{s.id}{s.live ? " · live" : ""}
-                </option>
-              ))}
+              {[...siblings].sort((a, b) =>
+                (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1) || b.id - a.id)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    #{s.id} · {s.status}
+                  </option>
+                ))}
             </select>
           </label>
         )}
-        {!sessionMeta.live && (
-          <span className="badge badge--warn" title="This session is not the domain's live one — reads only, unless you know why you're driving it.">
-            not live
+        {sessionMeta.status !== "active" && (
+          <span className="badge badge--warn" title="This session is not active — its record is readable, but drive its browser only if you know why.">
+            {sessionMeta.status}
           </span>
         )}
         <button type="button" className="cockpit-live" data-busy={busy} disabled={busy}

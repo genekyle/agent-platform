@@ -5477,3 +5477,25 @@ local draft or its own select rung's evidence.
 
 Verified on five fixtures (added "page 2, page 1 walked" for the grouping case) at
 `/cockpit-preview.html`. Still not driven live.
+
+---
+
+## 2026-08-05 (4) — The cockpit goes live, and `live` wasn't
+
+Driven against real session #25 (the left-open Indeed session — a stale session is a fixture, and
+this one WAS the 2026-08-05 screenshot state, which says the fixtures were faithful). The cockpit
+replaced both old session surfaces: the **Session control** tab is now the **Cockpit**, and the
+**Live drive** tab is deleted (`LiveDrivePanel` + its orphans `ContextView`, `WindowCard`) — the
+panel plan had already declared it superseded; now the code agrees.
+
+**The live render caught what no fixture could: the session picker listed nine "live" Indeed
+sessions, eight of them stopped.** Stopped sessions share the active one's debug port, so the
+port-probe `live` flag answers true for every one of them. `status` is the control plane's own
+record and outranks a port probe — the picker now labels by status and the auto-pick prefers
+`status === "active" && live`. Same family as "never trust URL-implies-state": a port answering is
+not a session running.
+
+Console-error triage note: vite's error log in a long-lived tab is HISTORY — six stale
+`does not provide an export named 'PHASES'` entries survived a server restart and two reloads. The
+page mounting with no error overlay is the truth; the log is an archive.
+
