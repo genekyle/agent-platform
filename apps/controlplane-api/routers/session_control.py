@@ -619,6 +619,20 @@ def _mini_staged_input(m: Any) -> bool:
     return bool(staged) if staged is not None else rung not in _READ_ONLY_RUNGS
 
 
+def _mini_typed(m: Any) -> bool:
+    """Did this mini-step SAY it typed? Explicit `staged=True` only — no rung fallback.
+
+    Deliberately stricter than `_mini_staged_input`, because the two callers want opposite safe
+    errors from the same fact. Protecting a RELOAD: assume staged unless told otherwise, since
+    over-protecting a page is the recoverable mistake. Deciding whether to TIDY a tab: assuming
+    staged means never tidying anything, and the tab accumulation that follows is the failure
+    `_apply_cleanup` exists to prevent. So the tidy path asks for evidence rather than the
+    absence of a denial — `enter_apply` clicks, it does not type, and the fallback cannot tell.
+    """
+    staged = m.get("staged") if isinstance(m, dict) else getattr(m, "staged", None)
+    return staged is True
+
+
 def _queue_in_progress(bb: Any) -> bool:
     """Is an application holding input a reload would throw away?
 
@@ -4204,7 +4218,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     _after = await sr.observe(_capture_post, browser_url=browser_url,
                               tab_id=await _observe_tab_now(),
                               session_id=session.id)
-    _changes = sr.diff(_before, _after)
+    _changes = sr.diff(_before, _after, expect_new_tab=(_expect.kind == "new_tab_or_nav"))
     _verdict, _evidence = sr.verify(_expect, _changes, _after)
     _claimed = step.last_flag or "none"
     if _verdict == sr.MISMATCH and _claimed == aps.OK:
@@ -4223,7 +4237,12 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style,
                                 verification={"rung": rung.id, "verdict": _verdict,
                                               "evidence": _evidence, "claimed": _claimed,
-                                              "expected": _expect.as_row()})
+                                              "expected": _expect.as_row(),
+                                              # The rest of the window, when it did something
+                                              # this rung did not account for. Raises a hand;
+                                              # never acts (closing a tab on our own initiative
+                                              # is how a half-finished application dies).
+                                              "window_alert": (_changes or {}).get("window_alert")})
 
 
 class ApplyProposeBody(BaseModel):
@@ -4568,8 +4587,17 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     # RECORD BEFORE CLOSE — the epilogue's own rule. A closed tab with no record is unrecoverable,
     # and the record is what the NEXT session gets to ask (applied_index).
     recorded = _record_outcome(db, step, ats_url=_apply_tab(bb, obs).get("url", ""))
-    cleanup = await _apply_cleanup(bb, obs, _session_browser_url(session), step)
-    bb.world.pop("apply_tab", None)          # the record dies with the tab it pointed at
+    # DOES THE TAB HAVE TO SURVIVE? Terminal for the ladder is not finished in the world.
+    # Measured live 2026-08-04: an application sitting on smartapply's review step — complete,
+    # one click from sent — was parked because Submit is the operator's gate, and the cleanup
+    # crew closed the tab underneath it. `leaves_work_open` owns the rule (who acts next, and
+    # where); this only supplies the staged-input fact, which lives on the mini-steps.
+    _staged = any(_mini_typed(m) for m in (step.minis or ()))
+    if aps.leaves_work_open(body.flag, staged=_staged):
+        cleanup = {"closed": [], "preserved": True}
+    else:
+        cleanup = await _apply_cleanup(bb, obs, _session_browser_url(session), step)
+        bb.world.pop("apply_tab", None)      # the record dies with the tab it pointed at
     _persist(bb, ledger)
     if cleanup["closed"]:
         obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
@@ -4584,6 +4612,9 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
                        "detail": (f"{body.job_id} ended as {body.flag}. "
                                   + (f"Closed {tidied} finished tab(s); back on the search. "
                                      if tidied else "")
+                                  + ("Its tab is LEFT OPEN — parked means you are coming back "
+                                     "to it, and closing it would throw away whatever is filled "
+                                     "in. " if cleanup.get("preserved") else "")
                                   + (f"Next up: {nxt.title or nxt.job_id}."
                                      if nxt else
                                      "Every application from this page is accounted for — "

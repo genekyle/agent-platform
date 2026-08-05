@@ -80,6 +80,38 @@ TERMINAL_FLAGS = frozenset({
 #: requisition is an observed fact, not a judgement call — asking about it would be theatre.
 OPERATOR_FLAGS = frozenset(TERMINAL_FLAGS - {SUBMITTED, ABANDONED_GONE})
 
+
+def leaves_work_open(flag: str, *, staged: bool = False) -> bool:
+    """Must this application's tab SURVIVE the flag?
+
+    Terminal for the ladder is not the same as finished in the world, and the cleanup crew could
+    not tell the difference. Found live 2026-08-04: an application sitting on smartapply's review
+    step — complete, one click from sent — was flagged `parked:operator` because Submit is the
+    operator's gate, and the tab was closed underneath it.
+
+    The axis is WHO ACTS NEXT AND WHERE, which is finer than parked-vs-abandoned:
+
+      * `parked:operator` — the operator's own next action, on THIS page. They cannot take it if
+        the tab is gone. Always preserved.
+      * the other `parked:*` — blocked by a gate the operator clears ELSEWHERE (create an
+        account, sit an assessment, talk to a recruiter) and resumes later. The tab is not where
+        that happens, so tidying it keeps the window honest for the next prospect.
+      * `submitted` / `abandoned:*` — the work is genuinely over. Tidy.
+
+    `staged` overrides within the parked family: a form WE typed into is unfinished work
+    regardless of what is blocking it, and a reload throws away both the input and the operator's
+    review of it (the same fact `_queue_in_progress` guards the refresh button with).
+
+    Note what this deliberately does NOT claim to see: an application the SITE prefilled, which
+    is how the 2026-08-04 case got to review without us typing a character. `parked:operator`
+    covers it because the operator was named as the next actor — not because anything here can
+    measure how far along the form is. That measurement does not exist yet.
+    """
+    flag = str(flag or "")
+    if flag == PARKED_OPERATOR:
+        return True
+    return staged and flag.startswith("parked:")
+
 STATUS_QUEUED, STATUS_OPEN, STATUS_DONE = "queued", "open", "done"
 
 

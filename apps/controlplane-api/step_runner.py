@@ -85,13 +85,80 @@ class Observation:
     #: The /capture artifact this look wrote (filename), when collection succeeded.
     artifact: Optional[str] = None
     screenshot: Optional[str] = None
+    #: THE WHOLE WINDOW, not just the tab we drove — `controller.window.survey().as_dict()`:
+    #: each tab's role, duplicate anomalies, health, over-budget. Costs NOTHING: the tab list is
+    #: already fetched for `tabs`, and the survey is a pure function over it. That module's own
+    #: docstring says this projection is "small on purpose — this rides in a prompt and into every
+    #: journaled row"; until now nothing put it in one.
+    window: Optional[dict[str, Any]] = None
 
     def as_row(self) -> dict[str, Any]:
         return {"ts": self.ts, "ok": self.ok, "url": self.url, "title": self.title,
                 "tabs": self.tabs, "ax_count": self.ax_count,
                 "candidates": [(c.get("role"), c.get("name")) for c in self.candidates],
                 "belief": self.belief, "artifact": self.artifact,
-                "screenshot": self.screenshot}
+                "screenshot": self.screenshot, "window": self.window}
+
+
+def window_census(tabs: list[dict[str, str]], *, active_tab_id: str = "") -> Optional[dict]:
+    """The whole window's shape, from the tab list we already hold. FREE — no I/O.
+
+    This is the answer to "when should the tab manager involve itself": ALWAYS, because taking
+    the census costs nothing (`controller.window.survey` is a pure function over a list we
+    fetched anyway). What is expensive is INVESTIGATING a tab — scanning its AX tree, capturing
+    it — and that stays gated behind an alert. Census always, investigation on cause.
+    """
+    try:
+        from controller import window as window_mod
+        return window_mod.survey(tabs, active_tab_id=active_tab_id).as_dict()
+    except Exception:  # noqa: BLE001 — the census is an aid, never a dependency
+        return None
+
+
+#: Tab roles whose ARRIVAL mid-step is news: an errand tab (a mail/login detour), a terminal
+#: page (a confirmation we did not expect yet), or something unplaceable. A new APPLY tab during
+#: `enter_apply` is the thing working as designed, so roles are judged against what the step
+#: predicted rather than flagged blanket-fashion.
+NOTEWORTHY_ARRIVALS = frozenset({"errand", "terminal", "unknown"})
+
+
+def window_alert(before: Optional[dict], after: Optional[dict], *,
+                 expected_new_tab: bool = False) -> Optional[dict[str, Any]]:
+    """Did something happen in the WINDOW that the step itself did not account for?
+
+    Pure, and deliberately conservative — this raises a hand, it never acts. The tab manager
+    closing something on its own is how you discard a half-finished application; the operator's
+    own rule. So the output is a flag with a reason, carried on the row and rendered on the
+    response, and the deciding stays where it was.
+
+    Three things count as news:
+      * the window's HEALTH degraded (a duplicate application appeared, or it went over budget);
+      * a tab arrived whose ROLE the step did not predict (an errand, a terminal page, an
+        unplaceable one) — the popup/interstitial/second-window case;
+      * the window emptied of the role we were working in.
+    """
+    if not before or not after:
+        return None
+    reasons: list[str] = []
+    if before.get("health") == "ok" and after.get("health") == "warn":
+        kinds = [a.get("kind") for a in (after.get("anomalies") or [])]
+        reasons.append("the window became unhealthy"
+                       + (f" ({', '.join(k for k in kinds if k)})" if kinds else
+                          " (over the tab budget)"))
+    b_roles, a_roles = before.get("roles") or {}, after.get("roles") or {}
+    for role in sorted(NOTEWORTHY_ARRIVALS):
+        if a_roles.get(role, 0) > b_roles.get(role, 0):
+            reasons.append(f"a {role} tab appeared")
+    if not expected_new_tab and (after.get("count") or 0) > (before.get("count") or 0) \
+            and not reasons:
+        reasons.append("a tab opened that this step did not predict")
+    for role in ("apply", "search"):
+        if b_roles.get(role, 0) and not a_roles.get(role, 0):
+            reasons.append(f"the {role} tab is gone")
+    if not reasons:
+        return None
+    return {"why": "; ".join(reasons), "health": after.get("health"),
+            "anomalies": after.get("anomalies") or [], "roles": a_roles}
 
 
 async def observe(capture_post: Callable[..., Awaitable[dict]], *, browser_url: str,
@@ -115,6 +182,7 @@ async def observe(capture_post: Callable[..., Awaitable[dict]], *, browser_url: 
         obs.ax_count = int(scan.get("count") or len(obs.candidates))
         obs.url = str(scan.get("target_url") or "")
         obs.ok = bool(tabs_res.get("ok", True)) and bool(scan.get("ok", True))
+        obs.window = window_census(obs.tabs, active_tab_id=tab_id or "")
     except Exception:  # noqa: BLE001 — an observation must never sink the step it observes
         return obs
 
@@ -152,9 +220,14 @@ async def observe(capture_post: Callable[..., Awaitable[dict]], *, browser_url: 
 # Diff — layer 2, pure and deterministic
 # --------------------------------------------------------------------------------------------
 
-def diff(before: Observation, after: Observation) -> Optional[dict[str, Any]]:
+def diff(before: Observation, after: Observation, *,
+         expect_new_tab: bool = False) -> Optional[dict[str, Any]]:
     """What changed between two looks. None when either side was blind — a diff against a failed
-    observation is not evidence, and pretending it is would let a dead tab veto a good rung."""
+    observation is not evidence, and pretending it is would let a dead tab veto a good rung.
+
+    `expect_new_tab` says the STEP predicted a tab would open (clicking Apply), so a new tab is
+    the plan working rather than window news worth flagging.
+    """
     if not (before.ok and after.ok):
         return None
     b_tabs = {t["tab_id"]: t["url"] for t in before.tabs}
@@ -174,6 +247,13 @@ def diff(before: Observation, after: Observation) -> Optional[dict[str, Any]]:
         "ax_count_before": before.ax_count, "ax_count_after": after.ax_count,
         # Before/after visual agreement, when both looks had eyes — SHADOW, recorded not gating.
         "visual_agreement": _visual_agreement(before.belief, after.belief),
+        # THE REST OF THE WINDOW. Every step happens inside a window that holds other tabs, and
+        # until now a step could only see the one it drove. `window_alert` is None on the normal
+        # case and costs nothing to compute — the census it reads was already taken.
+        "window_alert": window_alert(before.window, after.window,
+                                     expected_new_tab=(expect_new_tab)),
+        "window_before": (before.window or {}).get("roles"),
+        "window_after": (after.window or {}).get("roles"),
     }
 
 
@@ -476,8 +556,17 @@ class StepReport:
 
     def verification(self) -> dict[str, Any]:
         """The block responses attach beside the claim, so the cockpit can render "the action
-        said ok and the page carries vjk=…" instead of a bare flag."""
-        return {"verdict": self.verdict, "evidence": self.evidence, "claimed": self.claimed}
+        said ok and the page carries vjk=…" instead of a bare flag. Carries the window alert
+        when the rest of the window did something this step did not account for."""
+        block = {"verdict": self.verdict, "evidence": self.evidence, "claimed": self.claimed}
+        alert = (self.changes or {}).get("window_alert")
+        if alert:
+            block["window_alert"] = alert
+        return block
+
+    @property
+    def window_alert(self) -> Optional[dict[str, Any]]:
+        return (self.changes or {}).get("window_alert")
 
     @property
     def demotes(self) -> bool:
@@ -538,7 +627,7 @@ async def run_step(act: Callable[[], Awaitable[Any]], *, action: dict[str, Any],
     result = await act()
     after = await observe(capture_post, browser_url=browser_url, tab_id=await _tab(),
                           tab_url=tab_url, collect=collect, session_id=session_id)
-    changes = diff(before, after)
+    changes = diff(before, after, expect_new_tab=(expect.kind == "new_tab_or_nav"))
     verdict, evidence = verify(expect, changes, after)
     claimed = claimed_of(result)
     record_transition(session_id=session_id, rung_id=rung_id or str(action.get("action") or ""),

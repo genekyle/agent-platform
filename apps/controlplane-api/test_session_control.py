@@ -3972,6 +3972,84 @@ def test_the_account_driver_handles_selects_and_required_consents(monkeypatch):
     assert names[-1] == "Create Account"                       # submit is last
 
 
+def test_parking_an_application_leaves_its_tab_open(monkeypatch):
+    """Found live 2026-08-04: an application filled all the way to smartapply's review step was
+    flagged `parked:operator` — Submit is the operator's gate — and the cleanup crew closed its
+    tab, discarding a completed form nobody had submitted. Terminal for the LADDER is not
+    finished in the WORLD: parked means someone is coming back."""
+    bb = _with_queue(("indeed:a1", "Senior Data Engineer", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://smartapply.indeed.com/beta/x/review"}
+
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs(SEARCH_URL,
+                                               "https://smartapply.indeed.com/beta/x/review"),
+                           "/auth_state": {"ok": True, "logged_in": True},
+                           "/ax_scan": {"ok": True, "candidates": []}},
+                          blackboard=bb)
+    try:
+        out = client.post("/api/session_control/1/apply_flag",
+                          json={"job_id": "indeed:a1", "flag": "parked:operator",
+                                "note": "submit is the operator's"}).json()
+    finally:
+        _teardown()
+    assert "/close_tab" not in harness.paths(), "a parked application's tab must survive"
+    assert "LEFT OPEN" in out["last_step"]["detail"]
+
+
+def test_a_half_typed_form_survives_whatever_parked_it(monkeypatch):
+    """The other half of the rule: input WE typed is unfinished work regardless of the blocking
+    cause, and a reload throws away both the input and the operator's review of it."""
+    bb = _with_queue(("indeed:a1", "Senior Data Engineer", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].record("account", aps.HUMAN_REQUIRED, "filled, awaiting Create", staged=True)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"}
+
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs(SEARCH_URL,
+                                               "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                           "/auth_state": {"ok": True, "logged_in": True},
+                           "/close_tab": {"ok": True},
+                           "/ax_scan": {"ok": True, "candidates": []}},
+                          blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_flag",
+                    json={"job_id": "indeed:a1", "flag": "parked:account_wall"}).json()
+    finally:
+        _teardown()
+    assert "/close_tab" not in harness.paths(), "a half-typed form must never be tidied away"
+
+
+def test_a_submitted_application_is_still_tidied(monkeypatch):
+    """The other half of the rule: submitted means the work IS over, so the inert tab goes."""
+    bb = _with_queue(("indeed:a1", "Senior Data Engineer", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://smartapply.indeed.com/beta/x/done"}
+
+    harness, _ = _install(monkeypatch,
+                          {"/list_tabs": _tabs(SEARCH_URL,
+                                               "https://smartapply.indeed.com/beta/x/done"),
+                           "/auth_state": {"ok": True, "logged_in": True},
+                           "/close_tab": {"ok": True},
+                           "/ax_scan": {"ok": True, "candidates": []}},
+                          blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_flag",
+                    json={"job_id": "indeed:a1", "flag": "submitted"}).json()
+    finally:
+        _teardown()
+    assert "/close_tab" in harness.paths()
+
+
 def _sap_step(bb):
     """A Teradyne/SuccessFactors step, classified and standing at the account wall."""
     q = aps.Queue.from_dict(bb.world["apply_queue"])

@@ -115,6 +115,64 @@ def test_the_transition_row_is_the_full_training_row(tmp_path, monkeypatch):
     assert sr.read_transitions(99)[-1]["verdict"] == "confirmed"
 
 
+# --- the window census: the external context a step operates inside ---------------------------
+
+def _win(*urls, active=""):
+    return sr.window_census([{"tab_id": f"t{i}", "url": u} for i, u in enumerate(urls)],
+                            active_tab_id=active)
+
+
+def test_the_census_is_free_and_names_every_tab_role():
+    w = _win("https://www.indeed.com/jobs?q=x",
+             "https://smartapply.indeed.com/beta/indeedapply/form/review-module",
+             "about:blank")
+    assert w["roles"].get("search") == 1 and w["roles"].get("apply") == 1
+    assert w["count"] == 3 and w["health"] == "ok"
+
+
+def test_an_unexpected_tab_raises_a_hand_and_an_expected_one_does_not():
+    before = _win("https://www.indeed.com/jobs?q=x")
+    after = _win("https://www.indeed.com/jobs?q=x",
+                 "https://smartapply.indeed.com/beta/indeedapply/form/contact-info")
+    # enter_apply PREDICTED a new tab — that is the plan working, not window news.
+    assert sr.window_alert(before, after, expected_new_tab=True) is None
+    # The same arrival on a step that predicted nothing of the sort IS news.
+    alert = sr.window_alert(before, after, expected_new_tab=False)
+    assert alert and "did not predict" in alert["why"]
+
+
+def test_an_errand_tab_appearing_is_always_news():
+    # A mail/login detour opening mid-apply is exactly the external context that used to be
+    # invisible — flagged even when the step legitimately expected a new tab.
+    before = _win("https://www.indeed.com/jobs?q=x")
+    after = _win("https://www.indeed.com/jobs?q=x", "https://mail.google.com/mail/u/0/#inbox")
+    alert = sr.window_alert(before, after, expected_new_tab=True)
+    assert alert and "errand tab appeared" in alert["why"]
+
+
+def test_losing_the_tab_we_were_working_in_is_news():
+    before = _win("https://www.indeed.com/jobs?q=x",
+                  "https://smartapply.indeed.com/beta/indeedapply/form/review-module")
+    after = _win("https://www.indeed.com/jobs?q=x")
+    alert = sr.window_alert(before, after)
+    assert alert and "the apply tab is gone" in alert["why"]
+
+
+def test_a_duplicate_application_degrades_health_and_is_flagged():
+    before = _win("https://smartapply.indeed.com/beta/indeedapply/form/a")
+    after = _win("https://smartapply.indeed.com/beta/indeedapply/form/a",
+                 "https://smartapply.indeed.com/beta/indeedapply/form/b")
+    alert = sr.window_alert(before, after, expected_new_tab=True)
+    assert alert and "unhealthy" in alert["why"]
+    assert any(a["kind"] == "duplicate_application" for a in alert["anomalies"])
+
+
+def test_a_quiet_window_produces_no_alert_at_all():
+    same = _win("https://www.indeed.com/jobs?q=x")
+    assert sr.window_alert(same, same) is None
+    assert sr.window_alert(None, same) is None       # blind on one side: no claim either way
+
+
 def test_submit_is_the_irreversible_one():
     assert "submit" in sr.IRREVERSIBLE_RUNGS
     assert "open_pane" not in sr.IRREVERSIBLE_RUNGS

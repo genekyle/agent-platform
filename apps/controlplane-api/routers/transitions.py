@@ -157,6 +157,20 @@ def _headline(row: dict[str, Any]) -> str:
     return f"claimed {claimed}; the world could not testify — {evidence}"
 
 
+def _narrate_window(row: dict[str, Any]) -> str:
+    """The rest of the window — the context a step operates inside and used to be blind to."""
+    after = (row.get("after") or {}).get("window") or {}
+    if not after:
+        return "no window census taken"
+    roles = after.get("roles") or {}
+    shape = ", ".join(f"{n} {role}" for role, n in sorted(roles.items())) or "no tabs"
+    line = f"{after.get('count', 0)} tab(s) — {shape}; window {after.get('health', '?')}"
+    alert = (row.get("changes") or {}).get("window_alert")
+    if alert:
+        line += f" — NEEDS A LOOK: {alert.get('why')}"
+    return line
+
+
 def narrate(row: dict[str, Any]) -> dict[str, str]:
     """The row as the system lived it: believed → predicted → did → saw → settled."""
     return {
@@ -166,6 +180,7 @@ def narrate(row: dict[str, Any]) -> dict[str, str]:
         "did": _narrate_action(row.get("action") or {}, str(row.get("rung") or "")),
         "saw": _narrate_belief(row.get("after")),
         "changed": _narrate_changes(row.get("changes")),
+        "window": _narrate_window(row),
     }
 
 
