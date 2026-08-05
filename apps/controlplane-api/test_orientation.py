@@ -116,12 +116,36 @@ def test_an_undriven_form_plans_an_attended_drive_not_an_autofill():
     assert "attended" in o.plan[0]["label"].lower()
 
 
-def test_nothing_recognised_plans_a_screenshot_and_a_human():
-    """…and offers NO button. An unrecognised page is exactly where a driveable action would be a
-    guess wearing a control, so this one is named and left to the operator."""
+def test_nothing_recognised_offers_a_second_look_and_always_the_human():
+    """SHARPENED 2026-08-05, operator-directed: *"if we do get lost we figure out what to do on our
+    own without the teacher but we always know that the teacher is always there."*
+
+    The rule this replaces said an unrecognised page offers NO button, because "a driveable action
+    would be a guess wearing a control". That is right about every action except one. Pressing
+    Apply on a page we cannot read IS a guess wearing a control; READING IT AGAIN is not a guess
+    about the page at all — it is read-only, it cannot do the wrong thing, and the worst it can do
+    is fail to help. It is also the only move a person makes on a page that has not finished
+    loading, which `unreadable` most often is.
+
+    So the invariant is no longer "no button" but the sharper pair: **no guessing action is ever
+    offered here, and the escalation is never removed** — only ever moved down one."""
     o = om.orient("https://x.example.com/", "", rung="account")
-    assert o.plan[0]["id"] == om.ESCALATE
-    assert o.plan[0]["driveable"] is False
+    assert [s["id"] for s in o.plan] == [om.REORIENT, om.ESCALATE]
+    # The way out is still on the list, and still the operator's.
+    assert o.plan[-1]["id"] == om.ESCALATE
+    assert o.plan[-1]["driveable"] is False
+    # And nothing that would ACT on a page we cannot read is on offer.
+    assert not {s["id"] for s in o.plan} & {om.PRESS_APPLY, om.WORK_RUNG, om.OPEN_JOB}
+
+
+def test_a_lost_page_hands_over_what_it_did_work_out():
+    """The teacher is always there — and we arrive carrying the useful half. "Unrecognised page"
+    starts a human from nothing; "unrecognised page, but it is Workday" does not."""
+    o = om.orient("https://acme.wd5.myworkdayjobs.com/en-US/careers/unknown-screen", "",
+                  rung="classify")
+    assert o.kind in (al.UNKNOWN, al.UNREADABLE)
+    assert o.plan[-1]["id"] == om.ESCALATE
+    assert "workday" in o.plan[-1]["why"]
 
 
 # --- the prediction, in the words a person would use ---------------------------------------------
@@ -198,3 +222,46 @@ def test_a_learned_witness_cannot_overturn_two_that_agree():
 def test_no_belief_leaves_the_fusion_exactly_as_it_was():
     assert om.perception_witnesses(None) == []
     assert om.perception_witnesses({}) == []
+
+
+# --- agreement is judged by FAMILY, the verdict is reported at its finest grain -----------------
+
+def test_one_owner_named_two_ways_is_agreement_not_dissent():
+    """The gap left open on 2026-08-04 and measured on the transition corpus 2026-08-05: the url
+    witness reads a registry id (`indeed_quick_apply`), a learned witness reads its own label
+    through `platform_for` (`indeed`), and comparing them as raw STRINGS scored one owner named
+    two ways as a disagreement. It cost two grades, not one — `high` fell to `low` — and on the
+    nine distinct live situations in the corpus, six were this and NOTHING ever reached `high`."""
+    o = om.orient("https://smartapply.indeed.com/beta/indeedapply/form/resume",
+                  page_text="Choose a resume", rung="classify",
+                  extra_witnesses=om.perception_witnesses(
+                      _belief(("visual:apple", "indeed_apply_resume_selection", 0.9368, 0.5))))
+    assert o.confidence == "high"
+    # THE FINEST GRAIN WINS. `indeed_quick_apply` names the recipe that can drive this page and
+    # `indeed` does not, so recognising the agreement must not coarsen the answer.
+    assert o.platform == "indeed_quick_apply"
+
+
+def test_family_agreement_does_not_swallow_a_real_disagreement():
+    """A GUARD, not a demonstration — it passes on the pre-fix string comparison too, and is here
+    to stay passing. Collapsing granularity is not collapsing dissent, and the way this fix could
+    go wrong later is a `family_of` that grows too eager. Measured live 2026-08-04: the visual
+    witness answered `appvault_login` on an Indeed results page at novelty 0.894 — under the
+    ceiling, so it votes, and it is WRONG. A different family must still cost confidence."""
+    o = om.orient("https://www.indeed.com/jobs?q=data+engineer", page_text="", rung="classify",
+                  extra_witnesses=om.perception_witnesses(
+                      _belief(("visual:apple", "appvault_login", 0.9142, 0.894))))
+    assert o.platform == "indeed_quick_apply"
+    assert o.confidence == "medium"
+
+
+def test_the_shrug_never_joins_a_family():
+    """`company_site` is the url witness shrugging, and a shrug collapsed into a named vendor
+    would erase the branded-wrapper diagnosis — the one case this fusion exists for."""
+    from perception import facets
+    assert facets.family_of("company_site") == "company_site"
+    assert facets.family_of("indeed_quick_apply") == "indeed"
+    assert facets.family_of("linkedin_easy_apply") == "linkedin"
+    # An ATS outside the facet vocabulary is its own family, compared against itself.
+    assert facets.family_of("smartrecruiters") == "smartrecruiters"
+    assert facets.family_of("workday") == "workday"

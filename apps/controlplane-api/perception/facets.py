@@ -192,6 +192,34 @@ class StateFacets:
                 "phase": self.phase, "condition": self.condition, "variant": self.variant}
 
 
+def family_of(claim: str) -> str:
+    """The coarse platform a platform CLAIM belongs to — the bridge between `ats_registry`'s ids
+    and this module's `PLATFORMS`, so that two witnesses naming the same owner at different
+    granularity can be recognised as agreeing rather than disagreeing.
+
+    `indeed_quick_apply` and `indeed` are one owner said two ways: the url witness reads the host
+    through the registry, a learned witness reads its own label through `platform_for`, and until
+    2026-08-05 the fusion compared the two as raw strings and scored substantive agreement as
+    dissent. Measured on the nine distinct live situations in the transition corpus, six of them
+    were that exact false dissent and NOTHING ever reached `high` confidence.
+
+    Identity is the right answer for everything else, and deliberately so:
+
+      * already coarse (`workday`, `appvault`) — its own family
+      * outside this vocabulary (`smartrecruiters`, `brassring`, …) — its own family too. Those
+        ids only ever come from the url/signpost/memory witnesses, which speak registry ids; a
+        learned witness cannot emit one, so there is no granularity gap to bridge.
+      * `company_site` — the url witness SHRUGGING, and a shrug must never be collapsed into a
+        named vendor. Its own family, which is what keeps `company_site` vs `appvault` scored as
+        the dissent that IS the branded-wrapper diagnosis.
+
+    The only true bridges are `ats_registry._ON_ENGINE_APPLY`: an engine's on-page apply is the
+    engine, not a platform of its own. That is `_ATS_PLATFORM`, which already existed for exactly
+    this reason.
+    """
+    return _ATS_PLATFORM.get((claim or "").strip().lower(), (claim or "").strip().lower())
+
+
 def platform_for(state_id: str = "", *, url: str = "", domain_id: str = "") -> str:
     """Strongest evidence first: the live host, then the registry's domain_id, then the prefix."""
     if url:

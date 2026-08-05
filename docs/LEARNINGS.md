@@ -5302,3 +5302,79 @@ claims the coarse platform (`indeed`) while the registry witness claims the spec
 dissent and costs a confidence grade. The fix is a family-aware comparison in `_fuse`, which
 touches every witness — worth doing deliberately with the corpus to check it against, not at the
 end of a session.
+
+---
+
+## 2026-08-05 — The fusion was calling a witness that agreed with it a dissenter
+
+**The gap left open, deliberately, at the end of 2026-08-04 (6):** the learned witness claims the
+coarse platform (`indeed`) while the registry witness claims the specific one
+(`indeed_quick_apply`), and `_fuse` compared claim STRINGS. The note said it "costs a confidence
+grade". **Measured, it cost two** — `high` -> `low` on three witnesses that all meant Indeed.
+
+**Run against the real transition corpus (18 rows, 9 distinct situations, provenance checked
+first — real CDP target ids, no `t0`), before any change:**
+
+* **`{medium: 9}`. Nothing in the entire live corpus ever reached `high`.** Six of the nine were
+  the false dissent; the agreement path was effectively dead code in production.
+* After: **`{high: 5, medium: 4}`** — and the discrimination is right. The 2026-08-04 `appvault`
+  row (the visual witness answering `appvault_login` on an Indeed SERP at novelty 0.894, under
+  the ceiling, and WRONG) **stays `medium`**, as do both lone-witness rows.
+
+**The fix is a vocabulary bridge, not a similarity heuristic.** `facets.family_of()` collapses a
+claim to its coarse platform via `_ATS_PLATFORM`, which already existed for exactly this reason —
+the only true bridges are `ats_registry._ON_ENGINE_APPLY` (an engine's on-page apply is the
+engine, not a platform of its own). Everything else is its own family *on purpose*:
+`smartrecruiters` and friends are outside the facet vocabulary and a learned witness cannot emit
+one, so there is no granularity gap to bridge; and **`company_site` is the url witness SHRUGGING**,
+which must never be collapsed into a named vendor or the branded-wrapper diagnosis disappears.
+Agreement is judged by family; the WINNER stays the finest grain claimed, because
+`indeed_quick_apply` names the recipe that can drive the page and `indeed` does not.
+
+**Why a confirming learned witness cannot manufacture a false `high`, which is what made
+count-based tiers safe to keep:** a wrong visual witness lands in a DIFFERENT family, so its
+failure mode is dissent (confidence down), not false agreement. To raise confidence it must land
+in the family the deterministic witness already named — which means the deterministic witness was
+right. The risk is bounded by construction, not by the 0.5 weight.
+
+### The lost page was the one page with no way out but the teacher
+
+Operator: *"if we do get lost we figure out what to do on our own without the teacher but we
+always know that the teacher is always there."* `_short_plan`'s fallback — the ONLY branch reached
+with no recognised kind — was a single non-driveable `escalate`. **Backwards twice over:** it
+offered a driveable move on the page we understand best (a posting gets `press_apply` AND
+`reorient`) and none at all on the page we understand least, and it threw away what the fusion had
+established on the way down.
+
+The prior rule was explicit and tested — *"an unrecognised page offers NO button; a driveable
+action would be a guess wearing a control"* — and it is right about every action except one.
+**Pressing Apply on a page we cannot read is a guess wearing a control; reading it again is not a
+guess about the page at all.** It is read-only, it cannot do the wrong thing, its worst outcome is
+failing to help, and it is what a person does with a page that has not finished loading — which
+`unreadable` ("nothing to read — not the same as nothing there") most often is. So the invariant
+is sharpened rather than dropped: **no guessing action is ever offered here, and the escalation is
+never removed — only ever moved down one.** The panel needed no change; `planRest` already renders
+a driveable step as a button and the rest as visible guidance. And the hand-off now carries the
+useful half: "unrecognised page" starts a human from nothing, "unrecognised page, but it is
+Workday" does not.
+
+*Named limit:* `_short_plan` is pure and has no memory, so it cannot tell a first look from a
+fifth. Nothing loops on its own (`orient_action` is one action per call), and a repeated verdict
+is already an unchanged fingerprint in the orientation corpus — which is where a "stop asking"
+rule should be built from measurement rather than guessed at now.
+
+### And the confidence fix promoted a non-observation into a confirmation
+
+Found by hand-checking the arbitration rather than by a test: a KNOWN host with an unreadable page
+now scores `medium` instead of `low`, which walks straight past the `abstained` branch into
+*"nothing there contradicts the `submit` rung, so the recipe is on track."* **We read nothing.**
+"Nothing contradicts it" is vacuously true, and wording it as on-track claims a confirmation from
+an observation that never happened — the 2026-08-04 narration-dishonesty class, one branch over.
+**A confidence fix must not silently turn a non-observation into a confirmation.** Now worded as
+what it is, and keeping the module's own distinction between its two non-answers: `unreadable` is
+*there was nothing on it to read*, `unknown` is *we read it and recognised nothing in it*.
+
+1453 controlplane-api green (+5), 84 mcp, 7 controller-evals. Corpora verified unpolluted after
+the runs (3 orientation rows, 18 transition rows, unchanged). **Not yet live-driven** — every
+number here is replayed off the existing corpus, and the `high` verdicts want a live drive to
+confirm they are earned.

@@ -449,6 +449,24 @@ def _resolve_next_action(step: Optional[Any],
         reason = (f"The observer abstained: {confidence} confidence on {headline}, and no mismatch "
                   f"to raise. The rung stands, and the observer's read is kept below rather than "
                   f"dropped — an unsure witness is not a silent one.")
+    elif (observer or {}).get("kind") in (al.UNKNOWN, al.UNREADABLE):
+        # SILENCE IS NOT AGREEMENT. "Nothing contradicts the rung" is vacuously true when nothing
+        # was READ at all, and wording it "so the recipe is on track" claims a confirmation from
+        # an observation that never happened — the same class as the two narration dishonesties
+        # caught against real rows on 2026-08-04. Found 2026-08-05 while checking this arbitration
+        # by hand: a known host with an unreadable page now scores `medium` rather than `low`
+        # (correctly — we do know whose site it is), which walks straight past the `abstained`
+        # branch that used to word this honestly. A confidence fix must not silently promote a
+        # non-observation into a confirmation.
+        # And the two non-answers are not the same non-answer: `unreadable` is nothing to read,
+        # `unknown` is words we read and recognised nothing in. The module's own vocabulary makes
+        # that distinction ("not the same as nothing there") and the sentence should keep it.
+        blind = ("there was nothing on it to read" if (observer or {}).get("kind") == al.UNREADABLE
+                 else "we read it and recognised nothing in it")
+        reason = (f"{headline} — {blind}, so there is nothing here that confirms "
+                  + (f"the `{rung_opt['id']}` rung" if rung_opt["id"] else "the ladder")
+                  + " or contradicts it. The rung stands because it is all there is, not because "
+                    "the page agreed with it — read the page before working it.")
     elif obs_opt is not None:
         reason = (f"{headline} — nothing there contradicts "
                   + (f"the `{rung_opt['id']}` rung" if rung_opt["id"] else "the ladder")

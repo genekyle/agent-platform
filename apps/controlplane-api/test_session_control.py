@@ -4722,3 +4722,24 @@ def test_an_account_gate_is_still_recognised_as_one():
             "Create an account Forgot password?")
     seen = aps.classify_landing("https://aholddelhaizeapply.appvault.com/external/home", gate)
     assert seen.kind == al.ACCOUNT_GATE
+
+
+def test_an_unreadable_page_is_never_narrated_as_agreement(monkeypatch):
+    """SILENCE IS NOT AGREEMENT. A page with nothing on it to read cannot confirm a rung, and the
+    old wording ("nothing there contradicts the rung, so the recipe is on track") turned a
+    non-observation into a confirmation — the 2026-08-04 narration-dishonesty class, one branch
+    over. Reachable because a KNOWN host with an unreadable page scores `medium` rather than
+    `low`, so it walks straight past the `abstained` branch that used to word this honestly."""
+    _oriented(monkeypatch, "https://globex.wd1.myworkdayjobs.com/en-US/careers/loading",
+              "", platform="workday", rungs=_TO_THE_ACCOUNT_RUNG)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r["observer"]["kind"] == "unreadable"
+    reason = r["next_action"]["reason"]
+    assert "on track" not in reason                     # the claim that was never earned
+    assert "nothing on it to read" in reason
+    assert "not because the page agreed with it" in reason
+    # The way out is still offered, and the human is still on the list.
+    assert [s["id"] for s in r["observer"]["plan"]] == ["reorient", "escalate"]

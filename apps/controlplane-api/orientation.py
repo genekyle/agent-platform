@@ -200,23 +200,49 @@ def _platform_witnesses(url: str, apply_hrefs: list[str], company: str,
 
 def _fuse(witnesses: list[Witness], *, prefer_specific: bool = True) -> tuple[str, str]:
     """(winner, confidence) from weighted agreement. `company_site` is a SHRUG, not a vendor —
-    any named ATS beats it regardless of count, which is precisely the branded-wrapper case."""
-    votes: dict[str, float] = {}
+    any named ATS beats it regardless of count, which is precisely the branded-wrapper case.
+
+    **Agreement is judged by FAMILY, the answer is reported at its finest grain.** Witnesses speak
+    at different granularities about the same owner — the url witness reads a registry id
+    (`indeed_quick_apply`), a learned witness reads its own label through `platform_for` (`indeed`)
+    — and comparing those as raw strings scored real agreement as dissent, costing two confidence
+    grades (`high` -> `low` on three concurring witnesses). So votes are tallied per
+    `facets.family_of`, while the WINNER stays the most specific claim inside the winning family:
+    `indeed_quick_apply` names the recipe that can drive the page, and `indeed` does not.
+
+    What this deliberately does NOT do is manufacture agreement. Distinct families still dissent —
+    including the two that matter most: `company_site` (the shrug) against any named vendor, and
+    the live 2026-08-04 case where the visual witness answered `appvault` on an Indeed results
+    page. Collapsing granularity is not the same as collapsing disagreement.
+    """
+    from perception import facets as facets_mod
+
+    votes: dict[str, float] = {}                     # by family — who is being named
+    grains: dict[str, dict[str, float]] = {}         # family -> {claim: weight}, how finely
     for w in witnesses:
-        if w.claim:
-            votes[w.claim] = votes.get(w.claim, 0.0) + w.weight
+        if not w.claim:
+            continue
+        fam = facets_mod.family_of(w.claim) or w.claim
+        votes[fam] = votes.get(fam, 0.0) + w.weight
+        grain = grains.setdefault(fam, {})
+        grain[w.claim] = grain.get(w.claim, 0.0) + w.weight
     if not votes:
         return "", "low"
     named = {k: v for k, v in votes.items() if k not in ("company_site", "unknown", "")}
     pool = named if (prefer_specific and named) else votes
-    winner = max(pool, key=lambda k: pool[k])
+    family = max(pool, key=lambda k: pool[k])
     # A SHRUG CANNOT BE CONFIDENT. `company_site` means "no witness recognised an owner" — it wins
     # only when nothing better testified, and reporting it above `low` would dress ignorance as a
     # finding. Named platforms earn confidence through agreement; the shrug never does.
-    if winner in ("company_site", "unknown", ""):
-        return winner, "low"
-    agree = sum(1 for w in witnesses if w.claim == winner)
-    dissent = sum(1 for w in witnesses if w.claim and w.claim != winner)
+    if family in ("company_site", "unknown", ""):
+        return family, "low"
+    # The finest grain anyone claimed for this family, heaviest witness first (ties broken by name
+    # so the verdict is reproducible). Falling back to the family name is the honest answer when
+    # only coarse witnesses testified.
+    leaves = {c: wt for c, wt in grains[family].items() if c != family}
+    winner = max(sorted(leaves), key=lambda c: leaves[c]) if leaves else family
+    agree = sum(1 for w in witnesses if w.claim and facets_mod.family_of(w.claim) == family)
+    dissent = sum(1 for w in witnesses if w.claim and facets_mod.family_of(w.claim) != family)
     if agree >= 2 and dissent == 0:
         return winner, "high"
     if agree >= 1 and dissent <= 1:
@@ -275,8 +301,43 @@ def _short_plan(kind: str, platform: str, rung: Optional[str], known_recipe: boo
     if kind == al.GONE:
         return [_step(WORK_RUNG, "Flag the job gone",
                       "the requisition outlived the posting; nothing here to apply to")]
-    return [_step(ESCALATE, "Screenshot and hand to me",
-                  "nothing recognises this page — a human look beats a guess")]
+
+    # LOST — the only branch reached with no recognised kind, and until 2026-08-05 the ONLY branch
+    # whose entire plan was "hand it to a human". That was backwards in two ways. It offered a
+    # driveable move on the page we understand best (a posting) and none at all on the page we
+    # understand least, and it threw away what the fusion HAD established on the way down.
+    #
+    # A second look is the one recovery this module can honestly perform by itself: read-only,
+    # cheap, and aimed at the two situations that actually resolve on one — a page with nothing to
+    # read yet, and a landing still in flight on a host we do recognise. It is offered FIRST and
+    # the escalation stays on the list underneath it, because the point is never to keep the
+    # operator out of the loop; it is to stop calling them for a page that had not finished
+    # loading.
+    #
+    # NAMED LIMIT: this is a pure function with no memory, so it cannot tell a first look from a
+    # fifth and will keep offering the re-read. Nothing here loops on its own (`orient_action` is
+    # one action per call, initiator-checked), and a verdict that repeats is already visible as an
+    # unchanged fingerprint in the orientation corpus — which is where a "stop asking" rule should
+    # be built from measurement, not guessed at here.
+    steps: list[dict[str, Any]] = []
+    known_platform = platform and platform not in ("company_site", "unknown", "")
+    if kind == al.UNREADABLE:
+        steps.append(_step(REORIENT, "Read the page again",
+                           "there was nothing to read yet — that is usually a page caught "
+                           "mid-load or mid-redirect rather than a page we have never met"))
+    elif known_platform:
+        steps.append(_step(REORIENT, "Read the page again",
+                           f"we know this is {platform} and only the page is unrecognised — "
+                           f"a second look settles a landing still in flight"))
+    # THE TEACHER IS ALWAYS ON THE LIST — never removed, only ever moved down one. And we arrive
+    # carrying what we did work out: a human handed "unrecognised page" starts from nothing, while
+    # a human handed "unrecognised page, but it is Workday" starts from the useful half.
+    steps.append(_step(ESCALATE, "Screenshot and hand to me",
+                       (f"nothing recognises this page, though the host reads as {platform} — "
+                        f"a human look beats a guess, and that much is worth saying out loud")
+                       if known_platform else
+                       "nothing recognises this page — a human look beats a guess"))
+    return steps
 
 
 def orient(url: str, page_text: str = "", frames: Optional[list[dict]] = None,
