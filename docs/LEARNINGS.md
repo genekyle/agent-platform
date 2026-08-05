@@ -5201,3 +5201,51 @@ keeping: labeling them with apply states would mislabel the artifact (the screen
 and labeling them honestly as `SERP → SERP` for `enter_apply` would teach the planner a false
 edge. A row that cannot be labeled truthfully for BOTH the perception model and the edge model is
 worth less than no row. Delete the temptation, not the evidence.
+
+---
+
+## 2026-08-04 (5) — The window census: the tab manager finally knows when to involve itself
+
+**Operator's diagnosis, which was exactly right:** *"the tab manager should be more involved…
+the problem is it doesn't know when to involve itself… a lot of the external context isn't being
+considered."*
+
+**It was the perception-stack shape a third time.** `controller/window.py` already classifies
+every tab's role, detects duplicate applications, rates window health and plans hygiene — and its
+own docstring says the projection is *"small on purpose — this rides in a prompt and into every
+journaled row."* Nothing ever put it in one. It ran at hygiene moments (clean start, the
+controller path) and never during a step, while `step_runner.observe()` fetched the full tab list
+on every single look and kept only `{tab_id, url}`.
+
+**The answer to "when":** *always* for the census, because it costs **nothing** — `survey()` is a
+pure function over a list already in hand. What is expensive is INVESTIGATING a tab (an AX scan, a
+capture), and that stays gated behind a cause. **Census always, investigation on cause.** That is
+the cheap ping the operator asked for, and it turns out to be free rather than cheap.
+
+`window_alert()` raises a hand and never acts — the tab manager closing something on its own
+initiative is how a half-finished application dies. It fires when the window did something the
+step did not account for: health degraded, an errand/terminal/unplaceable tab arrived, a tab
+opened the step did not predict, or the tab we were working in vanished. A new apply tab during
+`enter_apply` is the plan working, so roles are judged against what the step PREDICTED rather than
+flagged blanket-fashion.
+
+**And it immediately caught a live defect of its own class.** Parking the drive
+(`parked:operator`, because Submit is the operator's gate) closed the tab holding an application
+filled all the way to smartapply's **review step** — one click from sent. The cleanup crew read
+the LADDER's terminal-ness and could not see the tab still held work.
+
+*The axis is not parked-vs-abandoned; it is WHO ACTS NEXT AND WHERE.* `parked:operator` means the
+operator's next action is on THAT page, so the tab always survives. The other `parked:*` flags
+mean a gate cleared elsewhere (create an account, sit an assessment) and resumed later, so tidying
+keeps the window honest. Explicit typed input preserves regardless of the parking reason.
+
+**A subtlety worth keeping:** the same staged-input fact wants OPPOSITE safe errors from its two
+callers. Protecting a reload: assume staged unless told otherwise (over-protecting is the
+recoverable mistake). Deciding to tidy: require *evidence* of typing, because assuming staged
+means never tidying and the accumulation is the failure the cleanup exists to prevent. Hence
+`_mini_typed` (explicit `staged=True` only) beside `_mini_staged_input` (rung fallback). One fact,
+two thresholds, both deliberate.
+
+**Named limit:** nothing here measures how far along a form is. The 2026-08-04 application reached
+review without us typing a character — Indeed prefilled it — so `parked:operator` covers that case
+by naming the next actor, not by seeing the form's depth. That measurement does not exist yet.
