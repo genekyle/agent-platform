@@ -715,12 +715,20 @@ async def initialize(session_id: int, body: InitializeBody,
     return _view(session, bb, ledger, obs, page=bb.search_state.page or 1)
 
 
-async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str) -> Optional[dict]:
+async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
+                      belief: Optional[dict[str, Any]] = None) -> Optional[dict]:
     """One observation of the live APPLY tab, fused into a verdict — or None when no apply is open.
 
     This runs on EVERY panel render (the poll is the heartbeat, so the observer fires constantly
     while the operator is looking) and after every apply_step. One /page_content call on a local
     CDP socket — free in low-data mode, and the same read the classify rung already makes.
+
+    `belief` is the perception stack's reading of the SAME moment — the DOM and Apple-Vision
+    witnesses the StepRunner already computed for this step. Passing it is what finally fills
+    `orient()`'s `extra_witnesses` seam, which has been designed, documented and empty since the
+    fusion was written: the belief went into the transition corpus and the observer that most
+    needed it never saw it. Omitted (the poll path, where no step just ran) the fusion behaves
+    exactly as before — deterministic witnesses only.
     """
     import orientation
     from ats_registry import ats_for_company
@@ -751,6 +759,10 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str) -> Optiona
         company=step.company or "",
         ats_lookup=ats_for_company,
         known_recipe=(step.platform or "") in DRIVEN_PLATFORMS_VIEW,
+        # THE LEARNED WITNESSES, joining the fusion at last. They claim a platform (their measured
+        # strength) and abstain at the novelty ceiling, so a witness announcing "I have never seen
+        # this page" is rendered without being allowed to vote.
+        extra_witnesses=orientation.perception_witnesses(belief),
     )
     out = o.as_dict()
     out["url"] = url[:200]
@@ -4235,6 +4247,10 @@ async def apply_step(session_id: int, body: ApplyStepBody,
 
     return await _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style,
+                                # The same look that judged the rung also feeds the orienter, so
+                                # the card the operator reads and the row the corpus keeps are
+                                # two renderings of ONE observation rather than two guesses.
+                                belief=_after.belief,
                                 verification={"rung": rung.id, "verdict": _verdict,
                                               "evidence": _evidence, "claimed": _claimed,
                                               "expected": _expect.as_row(),
@@ -4513,7 +4529,8 @@ def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
 
 async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool,
                                detail: str, pace=None,
-                               verification: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                               verification: Optional[dict[str, Any]] = None,
+                               belief: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Persist, then render — WITH a fresh observation. Async so the observer fires on every
     apply-step render, not only on the poll: the moment after an action is exactly when the world
     is most likely to have moved (operator-directed 2026-07-30)."""
@@ -4528,7 +4545,7 @@ async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok
         last["verification"] = verification
     if pace is not None:
         last["pace"] = xs.describe(pace)
-    observer = await _orient_now(bb, obs, _session_browser_url(session))
+    observer = await _orient_now(bb, obs, _session_browser_url(session), belief=belief)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
                  awaiting="apply", last=last, observer=observer)
 

@@ -121,6 +121,58 @@ class Orientation:
                 "mismatch": self.mismatch, "plan": self.plan}
 
 
+#: What a learned witness's testimony is worth in the fusion, before anyone has measured how
+#: often it agrees with the deterministic ones ON THIS QUESTION. Half a vote: enough to break a
+#: tie and to show up as dissent, never enough to overturn two witnesses that agree. The
+#: docstring's promise is that learned observers join "with their own weight" and earn
+#: calibration later — this is the honest starting value, not a measurement.
+LEARNED_WEIGHT = 0.5
+
+
+def perception_witnesses(belief: Optional[dict[str, Any]]) -> list["Witness"]:
+    """The perception stack's belief, translated into testimony this fusion can hear.
+
+    Two deliberate choices, both from measurements rather than taste:
+
+    **They claim a PLATFORM, never a state.** Apple Vision runs ~93% on platform and ~55% on
+    state; the fusion's vocabulary is platforms and kinds anyway. Asking each witness the
+    question it is good at is the whole reason to have more than one.
+
+    **A witness at the novelty ceiling ABSTAINS.** It still testifies — its detail is rendered,
+    so "I have never seen this page" stays visible — but it casts no vote. Measured live
+    2026-08-04: on a LinkedIn results page the visual witness said `fb_marketplace_seller_dashboard`
+    and the DOM witness said `indeed_did_you_apply`, both at novelty 1.00. Those are honest
+    "unknown page" signals, and letting them vote would have dragged a correct `linkedin` verdict
+    down to `medium` on the strength of two witnesses that were announcing their own ignorance.
+    Abstention is what a novelty score is FOR.
+    """
+    from interaction.belief import NOVELTY_CEILING
+    from perception import facets as facets_mod
+
+    out: list[Witness] = []
+    for view in ((belief or {}).get("witnesses") or []):
+        name = str(view.get("name") or "perception")
+        label = str(view.get("label") or "")
+        novelty = view.get("novelty")
+        if not label:
+            continue
+        blind = novelty is None or float(novelty) >= NOVELTY_CEILING
+        # FROM THE LABEL ALONE — never the url. `platform_for` prefers the live host when given
+        # one, which would make this witness echo the `url` witness verbatim: two votes from one
+        # source, manufacturing agreement out of a single fact. A second witness is only worth
+        # having while it testifies from what IT saw.
+        platform = "" if blind else facets_mod.platform_for(label)
+        detail = (f"nearest known page is {label}"
+                  + (f" (similarity {view.get('similarity')})" if view.get("similarity") is not None
+                     else "")
+                  + (f", novelty {novelty}" if novelty is not None else ""))
+        if blind:
+            detail += " — never seen anything like this, so it abstains"
+        out.append(Witness(source=name, claim=platform or "", detail=detail,
+                           weight=LEARNED_WEIGHT))
+    return out
+
+
 def _platform_witnesses(url: str, apply_hrefs: list[str], company: str,
                         ats_lookup: Optional[Callable[[str], Optional[str]]]) -> list[Witness]:
     """The who-owns-this-page witnesses, cheapest first. Each testifies alone."""

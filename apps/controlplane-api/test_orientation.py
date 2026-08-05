@@ -144,3 +144,57 @@ def test_a_page_nobody_recognises_gets_no_confident_headline():
     o = om.orient("https://x.example.com/", "", rung="classify")
     assert o.headline in ("Unrecognised page", "Unreadable page")
     assert o.confidence == "low"
+
+
+# --- the learned witnesses join the fusion (the extra_witnesses seam, filled 2026-08-04) --------
+
+def _belief(*views):
+    return {"witnesses": [{"name": n, "label": l, "similarity": s, "novelty": v}
+                          for n, l, s, v in views]}
+
+
+def test_a_confident_perception_witness_votes_and_a_novel_one_abstains():
+    """Measured live 2026-08-04: on a LinkedIn results page the visual witness said
+    `fb_marketplace_seller_dashboard` and the DOM witness said `indeed_did_you_apply`, both at
+    novelty 1.00 — honest "I have never seen this" signals. Letting those vote would drag a
+    correct verdict down on the strength of two witnesses announcing their own ignorance.
+    Abstention is what a novelty score is FOR."""
+    ws = om.perception_witnesses(_belief(
+        ("dom:tfidf", "indeed_search_results", 0.62, 0.41),
+        ("visual:apple", "fb_marketplace_seller_dashboard", 0.47, 1.0)))
+    by = {w.source: w for w in ws}
+    assert by["dom:tfidf"].claim == "indeed"
+    assert by["visual:apple"].claim == ""                      # abstains, no vote
+    # …but it still TESTIFIES: the ignorance is rendered, never hidden.
+    assert "never seen anything like this" in by["visual:apple"].detail
+    assert "fb_marketplace_seller_dashboard" in by["visual:apple"].detail
+
+
+def test_a_learned_witness_testifies_from_what_IT_saw_not_from_the_url():
+    """`platform_for` prefers the live host when given one, which would make this witness echo
+    the `url` witness verbatim — two votes from one fact, manufacturing agreement. A second
+    witness is only worth having while it is independent."""
+    ws = om.perception_witnesses(_belief(
+        ("visual:apple", "workday_account_gate", 0.71, 0.2)))
+    assert ws[0].claim == "workday"          # from the LABEL, on an unrelated page entirely
+
+
+def test_a_learned_witness_cannot_overturn_two_that_agree():
+    """Half a vote: enough to break a tie and to show as dissent, never enough to overrule the
+    deterministic witnesses before anyone has measured how often it is right here."""
+    o = om.orient("https://smartapply.indeed.com/beta/indeedapply/form/review-module",
+                  page_text="Review your application", rung="submit",
+                  extra_witnesses=om.perception_witnesses(
+                      _belief(("visual:apple", "workday_account_gate", 0.9, 0.05))))
+    assert o.platform == "indeed_quick_apply"     # the deterministic reading stands
+    # …but the disagreement COSTS confidence rather than being swallowed. That is the point of
+    # hearing a second witness at all: a page two witnesses read differently is less certain.
+    assert o.confidence == "medium"
+    # And the dissent is rendered, never hidden — the dissent is often the finding.
+    assert any(w["source"] == "visual:apple" and w["claim"] == "workday"
+               for w in o.as_dict()["witnesses"])
+
+
+def test_no_belief_leaves_the_fusion_exactly_as_it_was():
+    assert om.perception_witnesses(None) == []
+    assert om.perception_witnesses({}) == []

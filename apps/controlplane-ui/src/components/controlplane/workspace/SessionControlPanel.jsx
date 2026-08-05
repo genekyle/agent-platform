@@ -908,14 +908,30 @@ export function SessionControlPanel({ domain }) {
                 </p>
               )}
 
+              {/* THE WITNESSES, deterministic and LEARNED together. The learned ones (the DOM
+                  similarity witness and Apple Vision) are tagged so the operator can see the
+                  perception stack actually participating rather than sitting in shadow — and
+                  see it ABSTAIN, which is the honest thing a witness does on a page it has
+                  never met. A dissent is never hidden: the dissent is often the finding. */}
               <details style={{marginTop: 6}}>
                 <summary style={{cursor: "pointer", fontSize: 12, opacity: 0.7}}>
                   {(observer.witnesses || []).length} witnesses
+                  {(() => {
+                    const learned = (observer.witnesses || []).filter((w) => w.source.includes(":"));
+                    if (!learned.length) return null;
+                    const voting = learned.filter((w) => w.claim).length;
+                    return ` · ${learned.length} learned (${voting} voting, ${learned.length - voting} abstaining)`;
+                  })()}
                 </summary>
                 <ul style={{margin: "4px 0 0", paddingLeft: 16, fontSize: 12}}>
                   {(observer.witnesses || []).map((w, i) => (
                     <li key={i} style={{opacity: w.claim ? 1 : 0.55}}>
-                      <code>{w.source}</code> → {w.claim || "abstains"}
+                      <code>{w.source}</code>
+                      {w.source.includes(":") && (
+                        <span className="badge badge--muted" style={{marginLeft: 4, fontSize: 10}}>
+                          learned{w.weight != null && w.weight !== 1 ? ` ·${w.weight}` : ""}
+                        </span>
+                      )} → {w.claim || "abstains"}
                       <span style={{opacity: 0.65}}> · {w.detail}</span>
                     </li>
                   ))}
