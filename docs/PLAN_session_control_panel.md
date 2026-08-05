@@ -208,6 +208,23 @@ Still owed from §9: pause (queued, honored at a safe seam), safe exit + cleanup
 single-active guard, and initialize actually *provisioning* Chrome rather than probing one that
 already exists.
 
+## 13. The panel was rebuilt as a cockpit (2026-08-05)
+
+§6's layout — five numbered sections stacked top to bottom — is **superseded**. It was the right
+inventory of what the surface must show and the wrong instruction for how, because a stack has no
+way to say which of its sections is live. Every capability added after it arrived as one more card
+in the stack, and by 2026-08-05 six of them were claiming the operator's attention at once.
+
+Replaced by a three-pane cockpit (rail · work surface · decision inspector) over five cycling
+lifecycle phases, with one pure derivation owning the whole workflow state. §6's five items all
+survive — they are now *registers* rather than *sections*: the header is the session bar, goals and
+the ladder are the rail, the four stages are the inspector's fixed order, coaching is a focus kind,
+and session memory is the inspector's record.
+
+**Source of truth: `docs/ui/09-session-cockpit.md`.** Still owed from §9 and unchanged by this
+rebuild: pause (queued, honored at a safe seam), safe exit + cleanup, micro-step, the single-active
+guard, and initialize actually *provisioning* Chrome.
+
 ## 8. The `session/step` contract (sketch — to be firmed in the build plan)
 
 One call = one crank. Carries provenance and granularity; returns the whole beat.

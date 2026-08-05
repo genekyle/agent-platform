@@ -5378,3 +5378,66 @@ what it is, and keeping the module's own distinction between its two non-answers
 the runs (3 orientation rows, 18 transition rows, unchanged). **Not yet live-driven** — every
 number here is replayed off the existing corpus, and the `high` verdicts want a live drive to
 confirm they are earned.
+
+---
+
+## 2026-08-05 (2) — The cockpit had no idea which moment it was in, and every fix had been a new card
+
+**The picture.** Two screenshots of the Indeed session controller, about 2.5 viewport-heights of one
+column. Operator: *"too many buttons to press and too much information and to a point where we don't
+even know what's going on… our ui no longer has a sense of direction."*
+
+Measured before touching anything: **1,289 lines, 38 interactive controls on one screen, 12 API
+endpoints, 12 top-level conditional cards, 33 inline style objects.**
+
+**The state that names the problem.** That screen showed, simultaneously: an **unsaved pick** for
+*Azure Data Engineer / Stellar IT*; an **in-flight application** for a *different* job, *Senior Data
+Engineer / MFS Investment*; and a rung asserting **"Page 1 picks made ✓"** about neither. Three
+answers to "what are we doing now", none labelled as the live one. That is not a styling problem and
+no amount of hierarchy fixes it — **it is what happens when a screen has no single source of truth
+about its own state.**
+
+**The mechanism, and it is the generalisable part.** Every past fix in that file was correct in
+isolation and *additive*: "the choice goes first", "the picker collapses", "this band is the panel's
+only primary button", "the window lives here, not behind a press". The arbitration band was built
+specifically to end the two-primary-buttons problem — and it shipped **beside** the button it was
+meant to replace, so `Work this step` rendered twice, same label, same `/apply_step` endpoint, both
+styled primary, ~700px apart. **A UI regression is rarely a wrong decision; it is a right decision
+that was allowed to arrive as a new card.**
+
+**Two counters that lied, and one stylesheet that did.**
+- `Checkpoints 4/4` counted only the four *preamble* rungs while six were listed — "complete" beside
+  an unfinished list. Rung 5 (*Page 1 reviewed*, next) rendered above rung 6 (*picks made*, held).
+- **`.btn-primary` sat ABOVE `.btn`/`.btn-sm` in `ai-ops.css` at equal specificity.** On the usual
+  markup (`class="btn btn-sm btn-primary"`) the later rule won, so **every primary button in the
+  product had been rendering as a plain one.** That is most of "everything looks equally important",
+  and it was invisible because the JSX said `btn-primary` everywhere it meant to. **A hierarchy that
+  exists only in the JSX is not a hierarchy — check the cascade before blaming the layout.**
+
+**What was built.** Three panes, operator-specified: **rail** (where we are) · **work surface** (the
+one thing to act on) · **decision inspector** (a persistent "Why?"). Five lifecycle phases —
+Setup · Discover · Decide · Execute · Verify — which **cycle** per results page rather than running
+straight. One pure derivation, `cockpit/lifecycle.js`, owns the whole thing: current phase, focus,
+blocker, and the single primary action. The rail carries **no actions at all** — a second place that
+can act is a second question.
+
+The current phase resolves in priority order, and the branch that fixes the screenshot is the
+second: **an application in flight holds the page open, so it IS the work** — the ladder saying "page
+1 reviewed, next" was true and was not the work.
+
+**Enforcement, because a rule without one is a comment.** A dev-time assertion counts
+`.cockpit .btn-primary` after every render and warns when there is more than one (two are allowed for
+a teacher proposal, where Correct is a deliberate peer of Go). `done` now means done: a phase behind
+the current one with unfinished steps renders `open`, never ticked.
+
+**A fixture harness instead of a live drive.** `/cockpit-preview.html` renders the three panes
+against captured payloads — no API, no browser, no bandwidth. Four states, and **the 2026-08-05
+screenshot state is kept deliberately**: it is the one the old panel could not narrate, so it is the
+one a future change should be looked at against first. Verified there; **not yet driven live.**
+
+**Said out loud rather than faked.** The operator asked for screenshots in the inspector. The capture
+server writes them but no session-scoped read endpoint exists, so the inspector renders `not
+measured` with the reason. An inspector that always has something to say cannot be trusted on the
+occasions when it does.
+
+Design: `docs/ui/09-session-cockpit.md`. Code: `apps/controlplane-ui/src/components/controlplane/workspace/cockpit/`.

@@ -14,6 +14,7 @@ The redesign is intentionally split by concern. Visual styling must not be used 
 6. [`06-frontend-architecture.md`](06-frontend-architecture.md) — separation of app shell, features, data access, domain configuration, primitives, and styles.
 7. [`07-implementation-roadmap.md`](07-implementation-roadmap.md) — phased delivery, acceptance criteria, and validation.
 8. [`08-implementation-notes.md`](08-implementation-notes.md) — what shipped in the first redesign pass, file ownership, validation evidence, and remaining debt.
+9. [`09-session-cockpit.md`](09-session-cockpit.md) — the live session control surface: the three panes, the five-phase lifecycle, the one authoritative workflow state, and the rules that keep it from growing back.
 
 ## Non-negotiable decisions
 
@@ -27,6 +28,7 @@ The redesign is intentionally split by concern. Visual styling must not be used 
 - “Lab” is not a primary product destination. Learning, models, controller, and corpus tools are organized under **Learning** with an advanced-tools boundary.
 - Every route must be deep-linkable, refresh-safe, keyboard reachable, and usable without depending on color alone.
 - New UI code follows the feature and primitive boundaries in `06-frontend-architecture.md`; do not add new sections to the root `App.jsx` or new global rules to the current monolithic `App.css`.
+- On the live session surface, a new capability becomes a focus kind or an inspector row, **never a new top-level card**. Adding a card is how that screen degraded the first time; see `09-session-cockpit.md` §1.
 
 ## Change-note ritual
 

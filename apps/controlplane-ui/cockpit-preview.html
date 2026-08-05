@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cockpit preview — dev harness</title>
+  </head>
+  <body>
+    <!-- Dev-only. The session cockpit rendered against captured payloads: no API, no browser, no
+         live session. Not an app route; reachable at /cockpit-preview.html on the dev server. -->
+    <div id="root"></div>
+    <script type="module" src="/src/dev/cockpit-preview.jsx"></script>
+  </body>
+</html>

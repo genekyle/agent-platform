@@ -1309,24 +1309,6 @@ textarea:focus-visible {
   box-shadow: none;
 }
 
-.primary-btn,
-.btn-primary {
-  color: #141712;
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: none;
-}
-
-.primary-btn:hover,
-.primary-btn:hover:not(:disabled),
-.btn-primary:hover,
-.btn-primary:hover:not(:disabled) {
-  color: #10120f;
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  transform: none;
-}
-
 .ghost-btn,
 .secondary-btn,
 .btn,
@@ -1348,6 +1330,32 @@ textarea:focus-visible {
   color: var(--text);
   background: var(--surface-3);
   border-color: var(--line-strong);
+  transform: none;
+}
+
+/* THE PRIMARY MUST COME AFTER THE BASE.
+ *
+ * These rules used to sit ABOVE `.btn` / `.btn-sm`, at equal specificity — so on the usual markup
+ * (`class="btn btn-sm btn-primary"`) the later, weaker rule won and every primary button in the
+ * product rendered as a plain one. Found 2026-08-05 while auditing the session panel, and it
+ * explains a lot of "everything looks the same": the panel had been setting an emphasis the
+ * stylesheet then quietly took back. A hierarchy that only exists in the JSX is not a hierarchy.
+ */
+.primary-btn,
+.btn-primary {
+  color: #141712;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+.primary-btn:hover,
+.primary-btn:hover:not(:disabled),
+.btn-primary:hover,
+.btn-primary:hover:not(:disabled) {
+  color: #10120f;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   transform: none;
 }
 
