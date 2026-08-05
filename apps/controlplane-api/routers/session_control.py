@@ -715,6 +715,65 @@ async def initialize(session_id: int, body: InitializeBody,
     return _view(session, bb, ledger, obs, page=bb.search_state.page or 1)
 
 
+def _cache_belief(bb: Any, observation: Any) -> Optional[dict[str, Any]]:
+    """Remember the belief this step took, keyed to the page it was taken on.
+
+    The panel re-orients on every heartbeat and never runs the perception stack itself (a
+    screenshot per poll is exactly the cost this system refuses). So the step that DOES take one
+    leaves it here for the poll to render, and `_orient_now` only reuses it while the tab is
+    still on that url. Returns the belief so the caller can pass it straight through.
+    """
+    belief = getattr(observation, "belief", None)
+    url = getattr(observation, "url", "") or ""
+    if belief and url:
+        bb.world = dict(bb.world or {})
+        bb.world["last_belief"] = {"url": url, "ts": getattr(observation, "ts", ""),
+                                   "belief": belief}
+    return belief
+
+
+def _learned_witnesses(bb: Any, url: str, belief: Optional[dict[str, Any]],
+                       page_text: str) -> list:
+    """The perception witnesses for THIS page, at the right cost for each one.
+
+    The two witnesses have very different prices, so they are sourced differently rather than
+    being treated as one blob:
+
+      * **the DOM witness is free** — it reads url + page text, and `/page_content` has just
+        fetched both. So it is recomputed on every poll and is always current.
+      * **the visual witness needs a SCREENSHOT**, which is the one thing too expensive to take
+        on a heartbeat. It is reused from whatever the last acting step captured, and only while
+        the tab is still on the url that belief was taken on.
+
+    Without this the learned witnesses reached exactly one response — the step's — while the
+    panel re-orients constantly, so they were computed always and rendered never (found the
+    moment the card was first opened, 2026-08-04). A witness the operator cannot see is back to
+    being shadow.
+    """
+    import orientation
+
+    witnesses = []
+    seen: set[str] = set()
+    if belief is None:
+        try:
+            from perception import live as perception_live
+            belief = perception_live.sense(url=url, page_text=page_text)
+        except Exception:  # noqa: BLE001 — perception is an aid, never a dependency
+            belief = None
+    for w in orientation.perception_witnesses(belief):
+        witnesses.append(w)
+        seen.add(w.source)
+
+    cached = (bb.world or {}).get("last_belief") or {}
+    if cached.get("belief") and cached.get("url") == url:
+        for w in orientation.perception_witnesses(cached["belief"]):
+            if w.source in seen:
+                continue                      # the fresh reading wins over the remembered one
+            w.detail += f" (from the last capture, {cached.get('ts', '')[11:19]})"
+            witnesses.append(w)
+    return witnesses
+
+
 async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
                       belief: Optional[dict[str, Any]] = None) -> Optional[dict]:
     """One observation of the live APPLY tab, fused into a verdict — or None when no apply is open.
@@ -762,7 +821,7 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
         # THE LEARNED WITNESSES, joining the fusion at last. They claim a platform (their measured
         # strength) and abstain at the novelty ceiling, so a witness announcing "I have never seen
         # this page" is rendered without being allowed to vote.
-        extra_witnesses=orientation.perception_witnesses(belief),
+        extra_witnesses=_learned_witnesses(bb, url, belief, content.get("text") or ""),
     )
     out = o.as_dict()
     out["url"] = url[:200]
@@ -4250,7 +4309,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                 # The same look that judged the rung also feeds the orienter, so
                                 # the card the operator reads and the row the corpus keeps are
                                 # two renderings of ONE observation rather than two guesses.
-                                belief=_after.belief,
+                                belief=_cache_belief(bb, _after),
                                 verification={"rung": rung.id, "verdict": _verdict,
                                               "evidence": _evidence, "claimed": _claimed,
                                               "expected": _expect.as_row(),
