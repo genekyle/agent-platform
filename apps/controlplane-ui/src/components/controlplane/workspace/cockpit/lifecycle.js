@@ -12,40 +12,45 @@
 // current. That is not a styling problem and no amount of hierarchy fixes it: it is what happens
 // when a screen has no single source of truth about its own state.
 //
-// So: one derivation, five lifecycle phases, exactly one CURRENT phase, exactly one FOCUS, and one
-// PRIMARY action inside that focus. If a new capability does not fit, it becomes a new focus kind
-// or a new evidence row — never a new top-level card. That rule is the whole point.
+// So: one derivation, one CURRENT group, exactly one FOCUS, and one PRIMARY action inside that
+// focus. If a new capability does not fit, it becomes a new focus kind or a new inspector row —
+// never a new top-level card. That rule is the whole point.
+//
+// THE GROUPING FOLLOWS THE LADDER, NOT A TEXTBOOK PIPELINE (operator-directed, 2026-08-05 second
+// pass). The first cut imposed five fixed phases — Setup · Discover · Decide · Execute · Verify —
+// which was a shape the work does not have: the checkpoint ladder is four preamble rungs walked
+// ONCE, then a cycle PER RESULTS PAGE (read it → pick from it → work each pick to a terminal flag).
+// Forcing every page through one shared "Decide" box meant page 2's choice would overwrite page 1's
+// in the display, exactly the contextual clobbering the operator asked to prevent. So the rail now
+// mirrors the ladder itself:
+//
+//   Session          — the preamble: browser, sign-in, query, radius. Climbed once, held always.
+//   Page 1, Page 2…  — one group per page rung, each carrying its own read + picks + applications.
+//                      Past pages collapse to their record; the current page is the work.
 
-//: The lifecycle, in order. Setup happens once; Discover → Decide → Execute → Verify then CYCLE,
-//: once per results page (and Execute/Verify cycle again per application inside a page). The rail
-//: says so rather than drawing a straight line the work does not walk.
-export const PHASES = [
-  { id: "setup", label: "Setup", blurb: "a reachable browser, signed in, nothing inherited" },
-  { id: "discover", label: "Discover", blurb: "the query, the radius, and this page's results" },
-  { id: "decide", label: "Decide", blurb: "which of these to apply to, and in what order" },
-  { id: "execute", label: "Execute", blurb: "work each chosen application to a terminal flag" },
-  { id: "verify", label: "Verify", blurb: "what actually landed, and what it landed as" },
-];
+//: The preamble rung ids, in ladder order — mirrors session_checkpoints.PREAMBLE.
+export const PREAMBLE_IDS = ["provisioned", "authenticated", "query_entered", "radius_set"];
 
-export const PHASE_IDS = PHASES.map((p) => p.id);
-
-// What the operator is being asked for, in their words rather than the API's, and WHICH PHASE the
-// ask belongs to. The phase is the load-bearing half: a blocker is the truest statement available
-// about where a session is, so it outranks every other signal when the current phase is resolved.
+// What the operator is being asked for, in their words rather than the API's, and WHICH GROUP the
+// ask belongs to. `stage` is the load-bearing half: a blocker is the truest statement available
+// about where a session is, so it outranks every other signal when the current group is resolved.
+//   session — the preamble is not holding (sign-in, browser, query, radius)
+//   page    — the current page's cycle is what is stuck
+//   end     — the ladder cannot grow; closing out is the operator's call
 export const BLOCKERS = {
-  operator_login: { phase: "setup", text: "Couldn't sign in with a saved login. Pick a way in below, or sign in directly in the window." },
-  operator_2fa: { phase: "setup", text: "A verification code is being asked for. That one is yours — enter it in the window, then step again." },
-  operator_open_engine: { phase: "setup", text: "No tab for this site is open and one couldn't be opened. Open its home page in the window, then step again." },
-  operator_challenge: { phase: "setup", text: "A challenge is up. Clear it yourself in the window — we never auto-solve." },
-  operator_browser: { phase: "setup", text: "The session's Chrome isn't answering. Start it, then step again." },
-  operator_clean_start: { phase: "setup", text: "This window still holds tabs from a previous session. Clear them before we begin." },
-  operator_search_box: { phase: "discover", text: "Couldn't find the search box. Open the job search, then step again." },
-  operator_verify: { phase: "discover", text: "The search was submitted but not confirmed. Check the window before stepping." },
-  operator_filter: { phase: "discover", text: "The distance filter wouldn't set. We don't gather below the radius floor." },
-  operator_results: { phase: "discover", text: "Couldn't read this page's results. Check the window, then step again." },
-  recover: { phase: "discover", text: "Get back to the results we already have — do not search again." },
-  choose: { phase: "decide", text: "Pick what to act on from this page." },
-  operator_end: { phase: "verify", text: "This query is walked out. Closing the session is your call." },
+  operator_login: { stage: "session", text: "Couldn't sign in with a saved login. Pick a way in below, or sign in directly in the window." },
+  operator_2fa: { stage: "session", text: "A verification code is being asked for. That one is yours — enter it in the window, then step again." },
+  operator_open_engine: { stage: "session", text: "No tab for this site is open and one couldn't be opened. Open its home page in the window, then step again." },
+  operator_challenge: { stage: "session", text: "A challenge is up. Clear it yourself in the window — we never auto-solve." },
+  operator_browser: { stage: "session", text: "The session's Chrome isn't answering. Start it, then step again." },
+  operator_clean_start: { stage: "session", text: "This window still holds tabs from a previous session. Clear them before we begin." },
+  operator_search_box: { stage: "session", text: "Couldn't find the search box. Open the job search, then step again." },
+  operator_verify: { stage: "session", text: "The search was submitted but not confirmed. Check the window before stepping." },
+  operator_filter: { stage: "session", text: "The distance filter wouldn't set. We don't gather below the radius floor." },
+  operator_results: { stage: "page", text: "Couldn't read this page's results. Check the window, then step again." },
+  recover: { stage: "page", text: "Get back to the results we already have — do not search again." },
+  choose: { stage: "page", text: "Pick what to act on from this page." },
+  operator_end: { stage: "end", text: "This query is walked out. Closing the session is your call." },
 };
 
 // What the crank just did, in words. The raw action ids are dispatch keys, not labels.
@@ -84,34 +89,31 @@ export const TERMINAL_CHOICES = [
     why: "You looked and do not want it. Closed for good." },
 ];
 
-//: Checkpoint id -> lifecycle phase. The ids come from `session_checkpoints.py`; the page/select
-//: prefixes are the rolling rungs that make the cycle.
-export function phaseOfRung(id = "") {
-  if (id === "provisioned" || id === "authenticated") return "setup";
-  if (id.startsWith("select:")) return "decide";
-  return "discover"; // query_entered, radius_set, page:N
-}
-
 //: Server rung status -> rail status. `regressed` and `lapsed` become `attention` because both mean
 //: "this stopped being true", which the rail must show rather than average into pending.
 const RUNG_STATUS = {
   held: "done", next: "current", pending: "pending", regressed: "attention", lapsed: "attention",
 };
 
-function rungSteps(ladder, phase) {
-  return ladder
-    .filter((r) => phaseOfRung(r.id) === phase)
-    .map((r) => ({
-      key: `rung:${r.id}`,
-      label: r.label,
-      status: RUNG_STATUS[r.status] || "pending",
-      // "spent" means the cost was actually PAID — a consuming rung that is merely next has not
-      // been spent, and labelling it so would misreport what this session has already cost.
-      note: r.kind === "consuming" ? (r.reached ? "spent" : "once only") : "",
-      meta: r.reached ? `${r.reached.initiator}${r.reached.evidence ? ` · ${r.reached.evidence}` : ""}` : "",
-      at: r.reached?.at || null,
-      select: { kind: "rung", id: r.id },
-    }));
+//: The page number in a `page:N` / `select:N` rung id, or null.
+function pageOf(id, prefix) {
+  if (!id?.startsWith(prefix)) return null;
+  const n = parseInt(id.slice(prefix.length), 10);
+  return Number.isNaN(n) ? null : n;
+}
+
+function rungStep(r) {
+  return {
+    key: `rung:${r.id}`,
+    label: r.label,
+    status: RUNG_STATUS[r.status] || "pending",
+    // "spent" means the cost was actually PAID — a consuming rung that is merely next has not
+    // been spent, and labelling it so would misreport what this session has already cost.
+    note: r.kind === "consuming" ? (r.reached ? "spent" : "once only") : "",
+    meta: r.reached ? `${r.reached.initiator}${r.reached.evidence ? ` · ${r.reached.evidence}` : ""}` : "",
+    at: r.reached?.at || null,
+    select: { kind: "rung", id: r.id },
+  };
 }
 
 function applicationSteps(steps, currentJobId) {
@@ -199,7 +201,7 @@ function setupFocus(p, last) {
   };
 }
 
-function discoverFocus(p, results) {
+function readFocus(p) {
   if (p.next?.kind === "recover") {
     return {
       kind: "recover",
@@ -211,23 +213,28 @@ function discoverFocus(p, results) {
       alternates: [],
     };
   }
-  const read = results.length === 0;
   return {
-    kind: "climb",
-    title: read ? `Read page ${p.page ?? 1}` : `Page ${p.page ?? 1}`,
+    kind: "read",
+    title: `Read page ${p.page ?? 1}`,
     subtitle: p.next?.label || "",
     why: p.next?.reason || "",
-    primary: { label: read ? "Read this page" : `Step · ${p.next?.label || ""}`,
-      endpoint: "/step", body: {}, why: p.next?.reason || "Turn the crank once." },
+    primary: { label: "Read this page", endpoint: "/step", body: {},
+      why: p.next?.reason || "Read this page's results so there is something to decide." },
     alternates: [],
   };
 }
 
-function decideFocus(p, results, picks) {
+function decideFocus(p, results, picks, qs) {
+  // Choosing AGAIN after every queued application landed is the same moment as choosing the first
+  // time — the STANDING select rung allows adding picks — but the subtitle carries the record
+  // forward so "pick more or advance" doesn't read like nothing happened.
+  const allDone = qs.total > 0 && qs.done === qs.total;
   return {
     kind: "choose",
     title: `Page ${p.page ?? 1} · ${results.length} result${results.length === 1 ? "" : "s"}`,
-    subtitle: picks.length ? `${picks.length} picked, not saved yet` : "nothing picked yet",
+    subtitle: allDone
+      ? `${qs.submitted} submitted · all ${qs.total} accounted for — pick more, or advance`
+      : picks.length ? `${picks.length} picked, not saved yet` : "nothing picked yet",
     why: "Picking a job is approval to enter its application. Nothing is submitted without a "
       + "separate confirmation.",
     // Neither is disabled at 0 picks: "nothing on this page" is a real answer and the page still
@@ -310,63 +317,37 @@ function executeFocus(p, step, nextAction) {
       { demoted: nextAction.secondary.demoted_because })].filter(Boolean) : [] };
 }
 
-function verifyFocus(p, qs, blocker) {
-  if (blocker?.phase === "verify") {
-    return {
-      kind: "walked_out",
-      title: "This query is walked out",
-      subtitle: `${qs.submitted} submitted · ${qs.done}/${qs.total} accounted for`,
-      why: BLOCKERS.operator_end.text,
-      primary: null, alternates: [],
-    };
-  }
+function endFocus(qs) {
   return {
-    kind: "landed",
-    title: "What landed",
+    kind: "walked_out",
+    title: "This query is walked out",
     subtitle: `${qs.submitted} submitted · ${qs.done}/${qs.total} accounted for`,
-    why: "An application counts as done only when it reaches a terminal flag. Nothing is skipped.",
+    why: BLOCKERS.operator_end.text,
     primary: null, alternates: [],
   };
 }
 
 /**
- * The focus for ONE phase — normally the current one.
+ * The choose moment for the CURRENT page, on demand — the one legitimate detour.
  *
- * Exported because the operator may look back at a phase the session has moved past (re-open the
- * picker and add to a page's picks, which the STANDING select rung allows by design). That is a
- * DETOUR, and the work surface labels it as one; what it must never become is a second live
- * question, which is why there is still only ever one focus rendered at a time.
+ * The STANDING select rung allows re-opening the picker and adding to a page's picks after the
+ * queue has started, so clicking that rung in the rail brings this moment back. It is a detour and
+ * the work surface labels it as one; what it must never become is a second live question, which is
+ * why there is still only ever one focus rendered at a time.
  */
-export function focusFor(panel, phase, { picks = [] } = {}) {
+export function chooseFocus(panel, picks = []) {
   const p = panel || {};
-  const results = p.results || [];
-  const steps = p.queue?.steps || [];
   const qs = p.queue_summary || { total: 0, done: 0, submitted: 0 };
-  const currentStep = steps.find((s) => !s.done) || null;
-  const blocker = p.awaiting && BLOCKERS[p.awaiting]
-    ? { ...BLOCKERS[p.awaiting], awaiting: p.awaiting } : null;
-
-  switch (phase) {
-    case "setup": return { phase, ...setupFocus(p, p.last_step) };
-    case "discover": return { phase, ...discoverFocus(p, results) };
-    case "decide": return { phase, ...decideFocus(p, results, picks) };
-    case "execute": return currentStep
-      ? { phase, ...executeFocus(p, currentStep, p.next_action) }
-      : { phase, kind: "idle", title: "Nothing queued",
-          subtitle: qs.total ? `${qs.done}/${qs.total} accounted for` : "no applications yet",
-          why: "Applications appear here once a page's picks are taken.",
-          primary: null, alternates: [] };
-    case "verify": return { phase, ...verifyFocus(p, qs, blocker) };
-    default: return { phase, kind: "idle", title: "", primary: null, alternates: [] };
-  }
+  return { group: `page:${p.page ?? 1}`, groupLabel: `Page ${p.page ?? 1}`,
+    ...decideFocus(p, p.results || [], picks, qs) };
 }
 
 /**
  * Derive the whole cockpit from the panel read model.
  *
  * @param {object} panel  the `/api/session_control/{id}` read model
- * @param {object} opts   `picks` — the LOCAL, unsaved pick order (it changes what Decide is asking)
- * @returns {{current: string, phases: object[], focus: object, blocker: object|null, cycle: object}}
+ * @param {object} opts   `picks` — the LOCAL, unsaved pick order (it changes what choose is asking)
+ * @returns {{current: string, groups: object[], focus: object, blocker: object|null, cycle: object}}
  */
 export function deriveCockpit(panel, { picks = [] } = {}) {
   const p = panel || {};
@@ -376,104 +357,111 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   const qs = p.queue_summary || { total: 0, done: 0, submitted: 0, blocks_page: false };
   const currentStep = steps.find((s) => !s.done) || null;
   const atLine = !!p.progress?.at_start_line;
+  const page = p.page ?? 1;
 
   const blocker = p.awaiting && BLOCKERS[p.awaiting]
     ? { ...BLOCKERS[p.awaiting], awaiting: p.awaiting }
     : null;
 
-  // WHERE THE SESSION ACTUALLY IS. One resolution, in priority order, and every branch is a fact
-  // about the world rather than a preference about layout:
-  //   1. a blocker — the truest thing available: the session is stopped, and this is where.
+  // WHERE THE SESSION ACTUALLY IS — one resolution, in priority order, every branch a fact about
+  // the world rather than a preference about layout:
+  //   1. a session/end blocker — the truest thing available: the session is stopped, and where.
   //   2. an application in flight — it holds the page open, so it IS the work. This is the branch
-  //      that resolves the screenshot: the ladder said "page 1 reviewed, next" while an
+  //      that resolves the 2026-08-05 screenshot: the ladder said "page 1 reviewed, next" while an
   //      application was mid-flight, and both were true. Only one of them was the work.
-  //   3. results on screen with the decision still open.
-  //   4. at the start line with nothing read yet.
-  //   5. still climbing — wherever the next rung lives.
-  let current;
-  if (blocker) current = blocker.phase;
-  else if (currentStep) current = "execute";
-  else if (qs.total > 0 && qs.done === qs.total && results.length === 0) current = "verify";
-  else if (results.length > 0) current = "decide";
-  else if (atLine) current = "discover";
-  else current = phaseOfRung(p.next?.id || (ladder.find((r) => r.status === "next")?.id) || "provisioned");
+  //   3. results on screen — the page's decision (first time or choosing again).
+  //   4. at the start line with nothing read yet — read the page.
+  //   5. still climbing — the preamble.
+  let focus;
+  if (blocker?.stage === "session") focus = setupFocus(p, p.last_step);
+  else if (blocker?.stage === "end") focus = endFocus(qs);
+  else if (currentStep) focus = executeFocus(p, currentStep, p.next_action);
+  else if (results.length > 0) focus = decideFocus(p, results, picks, qs);
+  else if (atLine) focus = readFocus(p);
+  else focus = setupFocus(p, p.last_step);
 
-  const focus = focusFor(p, current, { picks });
+  const pageMoments = new Set(["read", "recover", "choose", "proposal", "account_handoff",
+    "account", "application"]);
+  const current = pageMoments.has(focus.kind) ? `page:${page}` : "session";
+  focus = { ...focus, group: current,
+    groupLabel: current === "session" ? "Session" : `Page ${page}` };
 
-  const doneSteps = steps.filter((s) => s.done);
-  const openSteps = steps.filter((s) => !s.done);
+  // --- the groups: the preamble once, then one per page ------------------------------------
+  const byId = new Map(ladder.map((r) => [r.id, r]));
+  const preamble = PREAMBLE_IDS.map((id) => byId.get(id)).filter(Boolean);
+  const pages = [...new Set(ladder.map((r) => pageOf(r.id, "page:") ?? pageOf(r.id, "select:"))
+    .filter((n) => n !== null))].sort((a, b) => a - b);
+  if (!pages.includes(page) && p.query) pages.push(page);
 
-  const phases = PHASES.map((ph) => {
-    const rungs = rungSteps(ladder, ph.id);
-    const stepRows = ph.id === "execute" ? applicationSteps(openSteps, currentStep?.job_id)
-      : ph.id === "verify" ? applicationSteps(doneSteps, null)
-        : rungs;
+  const groups = [];
 
-    const blocked = blocker?.phase === ph.id;
-    const isCurrent = ph.id === current;
-    // "done" has to MEAN done. A phase behind the current one whose own steps have not all landed
-    // is `open`, never ticked — this is the "4/4" defect the audit found, where the header counted
-    // only the four preamble rungs and read as complete beside a list of six with one unfinished.
-    // It is exactly the live case in the 2026-08-05 screenshot: an application holds the page open
-    // while Discover's `page:1` rung is still unreached. Both are true, and a tick would say
-    // otherwise.
-    const idx = PHASE_IDS.indexOf(ph.id);
-    const curIdx = PHASE_IDS.indexOf(current);
-    const settled = stepRows.length > 0 && stepRows.every((s) => s.status === "done");
+  {
+    const stepsRows = preamble.map(rungStep);
+    const allHeld = preamble.length > 0 && stepsRows.every((s) => s.status === "done");
+    const status = blocker?.stage === "session" ? "blocked"
+      : current === "session" ? "current"
+        : stepsRows.some((s) => s.status === "attention") ? "attention"
+          : allHeld ? "done" : "open";
+    groups.push({
+      id: "session", label: "Session", status, steps: stepsRows,
+      summary: allHeld
+        ? `ready · signed in to ${p.engine || "the board"} · query spent`
+        : `${stepsRows.filter((s) => s.status === "done").length}/${stepsRows.length || 4} ready`,
+      select: { kind: "group", id: "session" },
+    });
+  }
+
+  for (const n of pages) {
+    const pageRung = byId.get(`page:${n}`);
+    const selectRung = byId.get(`select:${n}`);
+    const isCurrentPage = n === page;
+    const stepsRows = [
+      ...(pageRung ? [rungStep(pageRung)] : []),
+      ...(selectRung ? [rungStep(selectRung)] : []),
+      // Applications live under THEIR page. Only the current page's queue exists in the read
+      // model — a past page's applications all reached a terminal flag before it could advance,
+      // and their record is the select rung's evidence.
+      ...(isCurrentPage ? applicationSteps(steps, currentStep?.job_id) : []),
+    ];
+    const blocked = isCurrentPage && blocker?.stage === "page";
+    // "done" has to MEAN done. A past page with unfinished steps renders `attention`, and the
+    // current page is `current` even when its rungs are held — this is the fix for the old `4/4`
+    // header that read as complete beside an unfinished list.
     const status = blocked ? "blocked"
-      : isCurrent ? "current"
-        : stepRows.some((s) => s.status === "attention") ? "attention"
-          : idx > curIdx ? "pending"
-            : settled ? "done"
-              : stepRows.length ? "open" : "pending";
-
-    return {
-      ...ph,
-      status,
-      steps: stepRows,
-      // The one-line summary a COLLAPSED phase shows. A completed phase should say what it
-      // achieved, not merely that it is shut.
-      summary: summaryFor(ph.id, { p, qs, results, picks, rungs, doneSteps, openSteps }),
-      select: { kind: "phase", id: ph.id },
-    };
-  });
+      : isCurrentPage && current !== "session" ? "current"
+        : stepsRows.some((s) => s.status === "attention") ? "attention"
+          : stepsRows.length && stepsRows.every((s) => s.status === "done") ? "done"
+            : isCurrentPage ? "open" : "pending";
+    // A past page's one line is its RECORD — what was decided there, from the select rung's own
+    // evidence — never just "done".
+    const picksEvidence = selectRung?.reached?.evidence?.split(" — ")[0];
+    groups.push({
+      id: `page:${n}`, label: `Page ${n}`, status, steps: stepsRows,
+      // SCOPES DON'T MIX. The current page's count is the LOCAL draft (unsaved picks) or its own
+      // select rung's evidence — never `p.picks`, which is the session-wide approved list and
+      // would claim page 1's decisions as page 2's.
+      summary: isCurrentPage
+        ? (qs.total ? `${qs.done}/${qs.total} done · ${qs.submitted} submitted`
+          : results.length ? (picks.length
+            ? `${picks.length} of ${results.length} picked, not saved`
+            : picksEvidence || `${results.length} to decide`)
+            : pageRung?.status === "held" ? "read" : "not read yet")
+        : (picksEvidence || (pageRung?.status === "held" ? "reviewed" : "not reached")),
+      select: { kind: "group", id: `page:${n}` },
+    });
+  }
 
   return {
     current,
-    phases,
+    groups,
     focus,
     blocker,
     cycle: {
-      page: p.page ?? 1,
+      page,
       pages_reviewed: p.progress?.pages_reviewed ?? 0,
       application: currentStep
-        ? { index: doneSteps.length + 1, total: qs.total, job_id: currentStep.job_id }
+        ? { index: steps.filter((s) => s.done).length + 1, total: qs.total, job_id: currentStep.job_id }
         : null,
     },
   };
-}
-
-function summaryFor(phaseId, { p, qs, results, picks, rungs, doneSteps, openSteps }) {
-  const held = rungs.filter((r) => r.status === "done").length;
-  switch (phaseId) {
-    case "setup":
-      return held === rungs.length && rungs.length
-        ? `browser ready · signed in to ${p.engine || "the board"}`
-        : `${held}/${rungs.length} ready`;
-    case "discover":
-      return p.query
-        ? `"${p.query}"${p.location ? ` · ${p.location}` : ""} · page ${p.page ?? 1}`
-        : "no query yet";
-    case "decide":
-      return results.length
-        ? `${picks.length || p.picks?.length || 0} of ${results.length} picked`
-        : "nothing to decide yet";
-    case "execute":
-      return qs.total ? `${openSteps.length} open of ${qs.total}` : "nothing queued";
-    case "verify":
-      return qs.total ? `${qs.submitted} submitted · ${doneSteps.length} accounted for`
-        : "nothing to verify yet";
-    default:
-      return "";
-  }
 }

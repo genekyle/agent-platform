@@ -216,6 +216,36 @@ export const blockedOnLogin = {
     unmeasured: [] },
 };
 
+/** Page 2 in progress, page 1 fully walked — the grouping case: a past page must collapse to its
+ *  RECORD ("1 of 21 picked by operator"), never to a bare "done", and page 2's decision must not
+ *  overwrite it. */
+export const secondPage = {
+  ...atStartLineWithApplication,
+  session_id: 24,
+  page: 2,
+  ladder: [
+    ...LADDER.map((r) => (r.id === "page:1" ? { ...r, status: "held",
+      reached: { at: "2026-08-04T16:13:40", initiator: "operator", evidence: "21 results recorded" } } : r)),
+    { id: "page:2", label: "Page 2 reviewed", kind: "consuming", status: "next",
+      why: "The page's cards are recorded and the operator has made their picks.",
+      recovery: "Read the recorded results for this page instead of navigating back to it." },
+  ],
+  observer: null,
+  next_action: null,
+  queue: { steps: [] },
+  queue_summary: { total: 0, done: 0, submitted: 0, blocks_page: false, remaining: 0 },
+  picks: ["j2"],
+  results: RESULTS.slice(10, 16).map((r) => ({ ...r, job_id: `p2-${r.job_id}` })),
+  awaiting: "choose",
+  tabs: [TABS[1]],
+  tab_drift: null,
+  open_pane: null,
+  progress: { preamble_held: 4, preamble_total: 4, at_start_line: true, pages_reviewed: 1,
+    page: 2, phase: "start_line" },
+  last_step: { action: "review_page", ok: true, detail: "6 results read from page 2" },
+  staleness: null,
+};
+
 export const FIXTURES = [
   { id: "screenshot", label: "The 2026-08-05 screenshot", panel: atStartLineWithApplication,
     note: "One application in flight on an unrecognised page, while a 21-row results table and a "
@@ -226,4 +256,7 @@ export const FIXTURES = [
     note: "A stop-state. The rail must show Setup blocked rather than reading as progress." },
   { id: "fresh", label: "Nothing declared yet", panel: freshSession,
     note: "A provisioned session with no query. The only question is what it is for." },
+  { id: "page2", label: "Page 2, page 1 walked", panel: secondPage,
+    note: "A past page collapses to its record — what was picked there — and never to a bare "
+      + "'done'. Page 2's decision is its own group, so nothing overwrites page 1's history." },
 ];

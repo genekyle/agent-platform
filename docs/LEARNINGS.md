@@ -5441,3 +5441,39 @@ measured` with the reason. An inspector that always has something to say cannot 
 occasions when it does.
 
 Design: `docs/ui/09-session-cockpit.md`. Code: `apps/controlplane-ui/src/components/controlplane/workspace/cockpit/`.
+
+---
+
+## 2026-08-05 (3) — The cockpit's second pass: the rail follows the ladder, and sessions stop sharing state
+
+Two operator corrections to the same-day rebuild, both structural.
+
+**1. The five-phase rail was a textbook pipeline the work does not walk.** Setup · Discover ·
+Decide · Execute · Verify forced every results page through one shared "Decide" box — so page 2's
+choice would have overwritten page 1's in the display, which is display-side contextual clobbering.
+The checkpoint ladder already had the right shape: **a preamble climbed once, then a cycle per
+page**. The rail now mirrors it — a **Session** group, then **Page N** groups, where a past page
+collapses to its RECORD ("1 of 21 picked by operator", from the select rung's own evidence), never
+to a bare "done". **When a domain module already encodes the true shape of the work
+(`session_checkpoints.py`), the UI should render that shape, not re-derive an idealised one.**
+
+**2. Session-awareness is a `key`, not a discipline.** The panel's per-session state (the read
+model, the `last_step` carry, the note draft, the pinned selection, the picker detour) lived in
+component state keyed to nothing, and the session lookup ran ONCE on mount. Real leaks: a session
+provisioned after mount never appeared; a swap would show session A's "ran the query" as session
+B's result; the one-shot form sync would keep A's query in B's setup form. Fix: an outer component
+resolves WHICH session (polls the list, offers a picker when a domain has several, shows `#id` and
+`not live` in the bar) and mounts the cockpit with **`key={sessionId}`** — a session change
+unmounts everything that described the old one. Remount-by-key beats remembering to reset each
+field, because the next field added is automatically covered. Picks were already safe
+(`useOrderedPicks` scopes to session+page in localStorage) — the pattern to copy, not the
+exception. Also: a page turn now clears the note draft — page 1's rationale must not ride into
+page 2's `/choose`.
+
+One scope bug caught on the new fixture before it shipped: the current page's rail summary fell
+back to `p.picks` — the SESSION-wide approved list — and claimed "1 of 6 picked" while the work
+surface honestly said "nothing picked yet". Scopes don't mix; the page summary now uses only the
+local draft or its own select rung's evidence.
+
+Verified on five fixtures (added "page 2, page 1 walked" for the grouping case) at
+`/cockpit-preview.html`. Still not driven live.

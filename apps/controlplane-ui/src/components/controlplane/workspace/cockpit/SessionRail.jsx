@@ -3,14 +3,17 @@ import { fmtTime } from "../api";
 
 // THE RAIL — where we are, and nothing else.
 //
-// Five lifecycle phases, status only, current step, blockers. Completed phases collapse to one line
-// that says what they ACHIEVED ("browser ready · signed in to Indeed"), not merely that they are
-// shut — a collapsed step whose summary is "done" has thrown away the only thing worth keeping.
+// The groups mirror the checkpoint ladder's real shape: the SESSION preamble (climbed once, held
+// always), then one group PER RESULTS PAGE — each page carrying its own read rung, its picks rung,
+// and its applications. A past page collapses to its record ("1 of 21 picked by operator"), never
+// to a bare "done" — a collapsed step whose summary is "done" has thrown away the only thing worth
+// keeping. The current page is the work.
 //
 // The rail carries NO actions. Not one. Every control on this screen lives in the work surface,
 // because the moment a second place can act, the operator has to decide which place means it — and
 // that is the ambiguity the whole redesign exists to remove. The rail's only interaction is
-// SELECTION: clicking a phase or a step points the inspector at it.
+// SELECTION: clicking a group or a step points the inspector at it (and clicking the current
+// page's picks rung re-opens the picker in the work surface — a detour, labelled as one there).
 
 const MARK = {
   done: "check",
@@ -18,7 +21,7 @@ const MARK = {
   blocked: "alert",
   attention: "refresh",
   // ENTERED BUT NOT FINISHED, and it must not look like either neighbour. A tick would claim a
-  // completion that has not happened; an empty circle would claim the phase was never reached.
+  // completion that has not happened; an empty circle would claim the group was never reached.
   open: "circleDot",
   pending: "circle",
 };
@@ -28,7 +31,7 @@ function isSameSelection(a, b) {
 }
 
 export function SessionRail({ cockpit, selection, onSelect }) {
-  const { phases, current, blocker, cycle } = cockpit;
+  const { groups, current, blocker, cycle } = cockpit;
 
   return (
     <div className="cockpit__pane cockpit__pane--rail">
@@ -37,32 +40,32 @@ export function SessionRail({ cockpit, selection, onSelect }) {
       </div>
 
       <div className="rail">
-        {phases.map((ph) => {
-          // A phase expands when it is the work, when it is stuck, or when the operator has
-          // selected it. Everything else stays one line.
-          const expanded = ph.status === "current" || ph.status === "blocked"
-            || ph.status === "attention"
-            || isSameSelection(selection, ph.select)
-            || ph.steps.some((s) => isSameSelection(selection, s.select));
+        {groups.map((g) => {
+          // A group expands when it is the work, when it is stuck or lapsing, or when the operator
+          // has selected it or something in it. Everything else stays one line — its record.
+          const expanded = g.status === "current" || g.status === "blocked"
+            || g.status === "attention"
+            || isSameSelection(selection, g.select)
+            || g.steps.some((s) => isSameSelection(selection, s.select));
 
           return (
-            <div key={ph.id} className="rail__phase" data-status={ph.status}>
+            <div key={g.id} className="rail__phase" data-status={g.status}>
               <button type="button" className="rail__head"
                       aria-expanded={expanded}
-                      aria-current={ph.id === current ? "step" : undefined}
-                      onClick={() => onSelect(ph.select)}>
+                      aria-current={g.id === current ? "step" : undefined}
+                      onClick={() => onSelect(g.select)}>
                 <span className="rail__mark">
-                  <AppIcon name={MARK[ph.status] || "circle"} size={11} />
+                  <AppIcon name={MARK[g.status] || "circle"} size={11} />
                 </span>
                 <span className="rail__body">
-                  <span className="rail__label">{ph.label}</span>
-                  <span className="rail__summary">{ph.summary}</span>
+                  <span className="rail__label">{g.label}</span>
+                  <span className="rail__summary">{g.summary}</span>
                 </span>
               </button>
 
-              {expanded && ph.steps.length > 0 && (
+              {expanded && g.steps.length > 0 && (
                 <ul className="rail__steps">
-                  {ph.steps.map((s) => (
+                  {g.steps.map((s) => (
                     <li key={s.key}>
                       <button type="button"
                               className={`rail__step${isSameSelection(selection, s.select) ? " is-selected" : ""}`}
@@ -81,16 +84,14 @@ export function SessionRail({ cockpit, selection, onSelect }) {
           );
         })}
 
-        {/* The lifecycle CYCLES; the rail says so rather than drawing a straight line the work does
-            not walk. Discover → Decide → Execute → Verify runs once per results page, and Execute
-            runs once per application inside it. */}
+        {/* The ladder is open-ended; the rail says so rather than implying a finish line. */}
         <p className="rail__cycle">
-          Page {cycle.page}
-          {cycle.pages_reviewed ? ` · ${cycle.pages_reviewed} reviewed` : ""}
-          {cycle.application ? ` · application ${cycle.application.index} of ${cycle.application.total}` : ""}
+          {cycle.application
+            ? `Application ${cycle.application.index} of ${cycle.application.total} on page ${cycle.page}`
+            : `Page ${cycle.page}${cycle.pages_reviewed ? ` · ${cycle.pages_reviewed} reviewed` : ""}`}
           <br />
-          Discover → Decide → Execute → Verify repeats per page. No end flag: it stops when there
-          is no next page.
+          A page is read, picked from, and its applications worked to a terminal flag — then the
+          next page. No end flag: it stops when there is no next page.
         </p>
 
         {blocker && (

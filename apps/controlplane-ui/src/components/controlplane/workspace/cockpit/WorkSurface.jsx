@@ -3,7 +3,7 @@ import { AppIcon } from "../../../../ui/Icon";
 import { PickOrb } from "../OrderedPicks";
 import FormSections from "../FormSections";
 import FillPlan from "../FillPlan";
-import { focusFor, PHASES, TERMINAL_CHOICES } from "./lifecycle";
+import { chooseFocus, TERMINAL_CHOICES } from "./lifecycle";
 
 // THE WORK SURFACE — the one thing the operator can act on now.
 //
@@ -357,14 +357,19 @@ function ProposalBody({ proposal, busy, decide }) {
   );
 }
 
+const SETUP_KINDS = new Set(["declare", "clean_start", "login"]);
+const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "application"]);
+
 export function WorkSurface({
-  panel, cockpit, viewPhase, onExitDetour, busy, error, call, decide, onFlag,
+  panel, cockpit, viewMoment, onExitDetour, busy, error, call, decide, onFlag,
   picks, armed, onPick, onClear, note, setNote, form, setForm,
 }) {
-  const detour = viewPhase && viewPhase !== cockpit.current;
-  const focus = detour ? focusFor(panel, viewPhase, { picks }) : cockpit.focus;
-  const phase = PHASES.find((p) => p.id === focus.phase);
-  const currentLabel = PHASES.find((p) => p.id === cockpit.current)?.label;
+  // THE ONE LEGITIMATE DETOUR: re-opening the current page's picker while its queue is being
+  // worked — the STANDING select rung allows adding picks. Anything else the operator clicks in
+  // the rail only changes what the inspector explains, never what this surface asks.
+  const detour = viewMoment === "choose" && cockpit.focus.kind !== "choose"
+    && (panel.results || []).length > 0;
+  const focus = detour ? chooseFocus(panel, picks) : cockpit.focus;
 
   return (
     <div className="cockpit__pane">
@@ -372,14 +377,15 @@ export function WorkSurface({
         {detour && (
           <div className="work__detour">
             <AppIcon name="eye" size={13} />
-            You are looking at <strong>{phase?.label}</strong>. The session is at
-            {" "}<strong>{currentLabel}</strong>.
+            You re-opened <strong>{focus.groupLabel}&apos;s picker</strong> — picks add to this
+            page&apos;s queue. The session&apos;s work is
+            {" "}<strong>{cockpit.focus.title}</strong>.
             <button className="btn btn-sm" onClick={onExitDetour}>Back to the work</button>
           </div>
         )}
 
         <div className="work__eyebrow">
-          <AppIcon name="play" size={12} /> {phase?.label}
+          <AppIcon name="play" size={12} /> {focus.groupLabel}
           {cockpit.blocker && !detour && <span className="badge badge--warn">needs you</span>}
         </div>
 
@@ -392,20 +398,20 @@ export function WorkSurface({
         <Say focus={focus} />
         {focus.kind !== "proposal" && <Actions focus={focus} busy={busy} call={call} />}
 
-        {focus.phase === "setup" && (
+        {SETUP_KINDS.has(focus.kind) && (
           <SetupBody focus={focus} panel={panel} form={form} setForm={setForm}
                      busy={busy} call={call} />
         )}
-        {focus.phase === "decide" && (
+        {focus.kind === "choose" && (
           <DecideBody panel={panel} picks={picks} armed={armed} onPick={onPick} onClear={onClear}
                       note={note} setNote={setNote} busy={busy} />
         )}
-        {focus.phase === "execute" && focus.kind !== "idle" && (
+        {EXECUTE_KINDS.has(focus.kind) && (
           <ExecuteBody focus={focus} panel={panel} busy={busy} call={call} decide={decide} />
         )}
-        {focus.phase === "verify" && <VerifyBody panel={panel} />}
+        {focus.kind === "walked_out" && <VerifyBody panel={panel} />}
 
-        {focus.phase === "execute" && <More focus={focus} busy={busy} onFlag={onFlag} />}
+        {EXECUTE_KINDS.has(focus.kind) && <More focus={focus} busy={busy} onFlag={onFlag} />}
       </div>
     </div>
   );

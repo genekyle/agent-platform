@@ -67,6 +67,25 @@
 .cockpit-bar__sub { color: var(--text-muted); font-size: 13px; }
 .cockpit-bar__spacer { margin-left: auto; }
 
+/* The session picker, shown only when a domain has more than one session. A select, not tabs:
+   switching sessions is deliberate and rare, and each switch remounts the whole cockpit. */
+.cockpit-bar__sessions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+.cockpit-bar__sessions select {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
 .cockpit-live {
   display: inline-flex;
   align-items: center;

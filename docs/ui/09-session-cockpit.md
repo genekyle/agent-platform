@@ -53,59 +53,65 @@ moving the primary rules after the base rules.
 > Right: decision inspector — persistent "Why?" for the selected event or task.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ session bar   "data engineer" · Nashua, NH · 50mi · Indeed · page 1  live │
-├──────────────┬──────────────────────────────────┬────────────────────────┤
-│ RAIL         │ WORK SURFACE                     │ INSPECTOR              │
-│ where we are │ what needs attention NOW         │ why this / why that    │
-│              │                                  │                        │
-│ ✓ Setup      │  EXECUTE                         │ Rule applied           │
-│ ◉ Discover   │  Senior Data Engineer            │ Observed               │
-│ ✓ Decide     │  MFS Investment · indeed         │ Window                 │
-│ ▶ Execute    │                                  │ Confidence + witnesses │
-│   • Senior…  │  [ Work this step ]  or: …       │ Alternatives           │
-│ ○ Verify     │                                  │ Evidence               │
-│              │  ▸ End this application another…  │ Intended action        │
-│ page/cycle   │                                  │ Result                 │
-└──────────────┴──────────────────────────────────┴────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ session bar  #21 "data engineer" · Nashua NH · 50mi · Indeed · page 2  live │
+├──────────────┬──────────────────────────────────┬──────────────────────────┤
+│ RAIL         │ WORK SURFACE                     │ INSPECTOR                │
+│ where we are │ what needs attention NOW         │ why this / why that      │
+│              │                                  │                          │
+│ ✓ Session    │  PAGE 2                          │ Rule applied             │
+│   ready ·    │  Senior Data Engineer            │ Observed                 │
+│   signed in  │  MFS Investment · indeed         │ Window                   │
+│ ✓ Page 1     │                                  │ Confidence + witnesses   │
+│   1 of 21    │  [ Work this step ]  or: …       │ Alternatives             │
+│   picked     │                                  │ Evidence                 │
+│ ▶ Page 2     │  ▸ End this application another…  │ Intended action          │
+│   • reviewed │                                  │ Result                   │
+│   • Senior…  │                                  │                          │
+└──────────────┴──────────────────────────────────┴──────────────────────────┘
 ```
 
-## 3. The lifecycle
+## 3. The grouping — the ladder's own shape (revised 2026-08-05, second pass)
 
-Five phases: **Setup · Discover · Decide · Execute · Verify.**
+The first cut imposed five fixed phases (Setup · Discover · Decide · Execute · Verify) — a textbook
+pipeline the work does not walk. The checkpoint ladder's real shape is **a preamble climbed once,
+then a cycle per results page**, and forcing every page through one shared "Decide" box meant page
+2's choice would overwrite page 1's in the display — exactly the contextual clobbering this surface
+exists to prevent. Operator-directed revision: the rail now mirrors the ladder itself.
 
-| Phase | Owns | Source |
+| Group | Owns | Source |
 |---|---|---|
-| Setup | `provisioned`, `authenticated`; clean-start, login legs | `session_checkpoints.PREAMBLE` |
-| Discover | `query_entered`, `radius_set`, `page:N` | ditto + the rolling page rung |
-| Decide | `select:N` — the results table and the ordered picks | `select_rung` |
-| Execute | the apply queue: `open_pane` → `verify_identity` → `enter_apply` → `classify` → `account` → … | `apply_steps.PREFIX` |
-| Verify | terminal flags; what landed and what it landed as | `apply_flag` / `SUBMIT_RUNG` |
+| **Session** | `provisioned`, `authenticated`, `query_entered`, `radius_set`; clean-start and login legs; `operator_end` | `session_checkpoints.PREAMBLE` |
+| **Page N** (one per page) | `page:N`, `select:N`, and — for the current page — every queued application with its mini-rungs and terminal flag | the rolling rungs + `apply_steps.PREFIX` |
 
-Setup happens once. **Discover → Decide → Execute → Verify then cycles, once per results page**, and
-Execute cycles again per application inside a page. The rail says so rather than drawing a straight
-line the work does not walk. There is still no end flag: the ladder stops when there is no next page.
+A **past page collapses to its record** — what was decided there, from the select rung's own
+evidence ("1 of 21 picked by operator") — never to a bare "done". The current page is the work.
+There is still no end flag: the ladder stops when there is no next page, and `operator_end` is a
+session-level stop.
 
-**Verify is honestly thin.** It is `current` only at `operator_end`; the rest of the time it is the
-record of what landed. There is no pending-verification state in the data today, and inventing a
-step for the symmetry of a five-box stepper would be a lie in the shape of a diagram.
+The work-surface *moments* inside a page (read → choose → work each application → accounted for)
+are focus kinds, not rail boxes — the rail records, the surface asks.
 
 ## 4. The one authoritative workflow state
 
 `cockpit/lifecycle.js` is a pure function from the read model to the whole cockpit. **Nothing
 downstream decides for itself whether a control belongs on screen.**
 
-`deriveCockpit(panel, {picks}) -> { current, phases, focus, blocker, cycle }`
+`deriveCockpit(panel, {picks}) -> { current, groups, focus, blocker, cycle }`
 
-The current phase resolves in priority order, and every branch is a fact about the world:
+The focus resolves in priority order, and every branch is a fact about the world:
 
-1. **a blocker** — the truest statement available: the session is stopped, and this is where;
+1. **a session/end blocker** — the truest statement available: the session is stopped, and where;
 2. **an application in flight** — it holds the page open, so it *is* the work. This is the branch
    that resolves the screenshot: the ladder said "page 1 reviewed, next" while an application was
    mid-flight, and both were true — only one was the work;
-3. results on screen with the decision still open;
+3. results on screen — the page's decision (first time, or choosing again after the queue landed);
 4. at the start line with nothing read yet;
-5. still climbing — wherever the next rung lives.
+5. still climbing — the preamble.
+
+The current group follows from the focus's kind: page moments belong to `page:N`, everything else
+to `session`. Scopes never mix: the current page's pick count is the local draft or its own select
+rung's evidence — never `p.picks`, the session-wide approved list.
 
 A **focus** carries at most one `primary`, its `alternates`, and a `more` tail. A step we cannot
 perform becomes `say`, never a button.
@@ -132,11 +138,30 @@ Everything on screen is exactly one of four things, and they must not read as pe
 | No inline styles | All of `cockpit.css`; the components carry none. |
 | Nothing fabricated | The inspector renders an explicit *not measured* rather than a plausible sentence. Screenshots are declared unwired rather than faked. |
 
+## 6b. Session awareness
+
+Operator-directed, same pass: *"different sessions may clobber each other in terms of contextual
+history."* The mechanism is structural, not defensive:
+
+- `SessionControlPanel` (outer) owns **which** session: it **polls** the session list (the old
+  panel looked once on mount, so a session provisioned later never appeared), offers a picker when
+  a domain has more than one, and marks a non-live session `not live` in the bar.
+- `SessionCockpit` (inner) owns everything **about** one session, and is mounted with
+  **`key={sessionId}`** — a session change unmounts it, so the panel read model, the `last_step`
+  carry, the note draft, the pinned selection, the picker detour and the settle clock all die with
+  the session they described. Without the key, `last_step` (deliberately carried across polls)
+  would show session A's "ran the query" as session B's result.
+- Picks were already safe: `useOrderedPicks` scopes its draft to `(session, page)` in localStorage.
+- The bar shows **`#id`** — the session the cockpit narrates is never something to infer.
+- A page turn (however initiated) resets the note draft, the detour and the selection: page 1's
+  rationale must not ride into page 2's `/choose`.
+
 ## 7. Fixtures
 
 `src/dev/cockpitFixtures.js` + `/cockpit-preview.html` render the three panes against captured
-payloads with no API, no browser and no live session. Four states ship: the 2026-08-05 screenshot,
-deciding a page, blocked on sign-in, and nothing declared yet. The harness counts the primaries on
+payloads with no API, no browser and no live session. Five states ship: the 2026-08-05 screenshot,
+deciding a page, blocked on sign-in, nothing declared yet, and page 2 with page 1 walked (the
+grouping case — a past page must collapse to its record, not a bare "done"). The harness counts the primaries on
 screen and shows the count.
 
 **The screenshot state is kept deliberately.** It is the state the old panel could not narrate, and
@@ -150,6 +175,8 @@ any future change to this surface should be looked at against it first.
 - **Deduplicating the domain's tabs.** Indeed carries 10 tabs, of which *Session control*, *Live
   drive* and *Activity* are three views of the same live session. `03-information-architecture.md`
   specifies six. Not touched here — it is an IA change, not a cockpit change.
-- **A verification step with something in it**, if and when the data supports one (§3).
+- **Per-page application history.** A past page's applications are summarised only by the select
+  rung's evidence — the read model keeps just the current page's queue. If the blackboard ever
+  exposes past queues, past page groups can carry their full application records.
 - The cockpit has not yet been driven against a **live** session — only fixtures. The read-model
   field shapes are taken from `_view()` in `routers/session_control.py`.

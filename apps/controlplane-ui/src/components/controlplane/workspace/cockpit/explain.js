@@ -15,7 +15,7 @@
 // as a plausible sentence — an inspector that always has something to say is an inspector that
 // cannot be trusted when it does.
 
-import { BLOCKERS, ACTION_COPY, PHASES } from "./lifecycle";
+import { BLOCKERS, ACTION_COPY } from "./lifecycle";
 
 const NOT_MEASURED = { missing: true };
 
@@ -169,7 +169,8 @@ function explainFocus(p, cockpit) {
       ? { text: na.reason, source: na.source === "observer" ? "the page (observer)" : "the recipe (ladder)" }
       : cockpit.blocker
         ? { text: cockpit.blocker.text, source: "stop-state — the session is waiting on you" }
-        : f.why ? { text: f.why, source: `the ${f.phase} phase` } : null,
+        : f.why ? { text: f.why, source: f.group === "session"
+        ? "the session preamble" : `${f.groupLabel}'s cycle` } : null,
     observed: observedRows(p),
     confidence: confidenceOf(p),
     alternatives,
@@ -244,20 +245,26 @@ function explainApplication(p, jobId) {
   };
 }
 
-function explainPhase(p, cockpit, phaseId) {
-  const ph = cockpit.phases.find((x) => x.id === phaseId);
-  const meta = PHASES.find((x) => x.id === phaseId);
-  if (!ph) return null;
+function explainGroup(p, cockpit, groupId) {
+  const g = cockpit.groups.find((x) => x.id === groupId);
+  if (!g) return null;
   return {
-    title: ph.label,
-    subtitle: ph.summary,
-    rule: { text: meta.blurb, source: "the lifecycle" },
+    title: g.label,
+    subtitle: g.summary,
+    rule: {
+      text: g.id === "session"
+        ? "The preamble: a reachable browser, a held sign-in, the query and the radius — climbed "
+          + "once, then held for the whole session. The consuming rungs are spent, never re-run."
+        : "One page of the open-ended ladder: read it, pick from it in order, work every pick to "
+          + "a terminal flag, then advance. A past page's record stays here.",
+      source: "session_checkpoints.py — the ladder's shape",
+    },
     observed: [
-      { label: "Status", value: ph.status },
-      { label: "Steps", value: `${ph.steps.filter((s) => s.status === "done").length}/${ph.steps.length} done` },
-      ...(ph.status === "blocked" ? [{ label: "Blocked on", value: cockpit.blocker.text }] : []),
+      { label: "Status", value: g.status },
+      { label: "Steps", value: `${g.steps.filter((s) => s.status === "done").length}/${g.steps.length} done` },
+      ...(g.status === "blocked" ? [{ label: "Blocked on", value: cockpit.blocker.text }] : []),
     ],
-    confidence: { level: null, detail: "A phase is a grouping, not a claim about the page.",
+    confidence: { level: null, detail: "A group is the ladder's shape, not a claim about the page.",
       witnesses: [] },
     alternatives: [],
     evidence: evidenceRows(p),
@@ -272,7 +279,7 @@ export function explain(panel, cockpit, selection) {
   const sel = selection || { kind: "focus" };
   const out = sel.kind === "rung" ? explainRung(p, sel.id)
     : sel.kind === "application" ? explainApplication(p, sel.id)
-      : sel.kind === "phase" ? explainPhase(p, cockpit, sel.id)
+      : sel.kind === "group" ? explainGroup(p, cockpit, sel.id)
         : null;
   const base = out || explainFocus(p, cockpit);
   // The window rides on EVERY explanation, whatever is selected: which tabs are open, and which one

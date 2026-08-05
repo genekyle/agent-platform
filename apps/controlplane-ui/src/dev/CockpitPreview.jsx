@@ -17,7 +17,7 @@ import "../components/controlplane/workspace/cockpit/cockpit.css";
 export default function CockpitPreview() {
   const [fixtureId, setFixtureId] = useState(FIXTURES[0].id);
   const [selection, setSelection] = useState(null);
-  const [viewPhase, setViewPhase] = useState(null);
+  const [viewMoment, setViewMoment] = useState(null);
   const [picks, setPicks] = useState([]);
   const [note, setNote] = useState("");
   const [form, setForm] = useState({ query: "", location: "", radius_miles: 50 });
@@ -59,7 +59,7 @@ export default function CockpitPreview() {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         {FIXTURES.map((f) => (
           <button key={f.id} className={`btn btn-sm${f.id === fixtureId ? " btn-primary" : ""}`}
-                  onClick={() => { setFixtureId(f.id); setSelection(null); setViewPhase(null); setPicks([]); }}>
+                  onClick={() => { setFixtureId(f.id); setSelection(null); setViewMoment(null); setPicks([]); }}>
             {f.label}
           </button>
         ))}
@@ -69,11 +69,14 @@ export default function CockpitPreview() {
         <SessionRail cockpit={cockpit} selection={selection}
                      onSelect={(sel) => {
                        setSelection(sel);
-                       setViewPhase(sel.kind === "phase" ? sel.id : null);
+                       // Same meaning as the real panel: only the current page's picks rung is a
+                       // work-surface detour; everything else just points the inspector.
+                       setViewMoment(sel.kind === "rung" && sel.id === `select:${panel.page ?? 1}`
+                         ? "choose" : null);
                      }} />
         <WorkSurface
-          panel={panel} cockpit={cockpit} viewPhase={viewPhase}
-          onExitDetour={() => { setViewPhase(null); setSelection(null); }}
+          panel={panel} cockpit={cockpit} viewMoment={viewMoment}
+          onExitDetour={() => { setViewMoment(null); setSelection(null); }}
           busy={false} error="" call={call} decide={(b) => call("/apply_decide", b)}
           onFlag={(flag, detail) => call("/apply_flag", { flag, detail })}
           picks={picks} armed={null}
