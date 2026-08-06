@@ -4460,6 +4460,15 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                          expect=_expect, before=_before, after=_after, changes=_changes,
                          verdict=_verdict, evidence=_evidence, claimed=_claimed)
 
+    # THE LADDER'S POSITION, FROM THE LOOK WE JUST TOOK. Free — `_after` already holds the url and
+    # the control names. Without it the panel rendered the screen we advanced AWAY from for a whole
+    # poll cycle after the act: "at most 5 screens from Submit" beside a detail line saying we had
+    # just left that screen. Measured live 2026-08-06 on the first advance.
+    if _after is not None and getattr(_after, "ok", False):
+        _moved_to = _state_from_observation(step, _after)
+        if _moved_to and _moved_to not in ("unknown", "unreadable"):
+            step.landing_state = _moved_to
+
     # SHADOW: what the controller WOULD have decided on the page we decided on. Taken from
     # `_before` — the look the decision was actually made against — because scoring the local
     # system against the page it would have seen AFTER the act would flatter it.
@@ -5046,6 +5055,18 @@ def _shadow_the_crank(rung: Any, step: Any, before: Any, acted: dict[str, Any],
         pass
 
 
+def _state_from_observation(step: Any, o: Any) -> str:
+    """Name the screen an observation was taken on, from the observation alone.
+
+    Free — no extra scan. `Observation` already carries the url and the AX control names, which is
+    exactly what `describe_for_ats` reads.
+    """
+    import apply_recipe as ar
+    names = " ".join(str(c.get("name") or "") for c in (getattr(o, "candidates", None) or []))
+    return ar.describe_for_ats(step.platform, getattr(o, "url", "") or "",
+                               names).get("state", "unknown")
+
+
 def _score_the_orienter(step: Any, rung: Any, before: Any, after: Any, *,
                         session_id: int) -> None:
     """Settle the orienter's prediction for this crank: did the page go where the recipe said?
@@ -5066,21 +5087,14 @@ def _score_the_orienter(step: Any, rung: Any, before: Any, after: Any, *,
         import apply_recipe as ar
         import orientation_log
 
-        def _state_of(o: Any) -> str:
-            """Name the screen an observation was taken on, from the observation alone."""
-            names = " ".join(str(c.get("name") or "")
-                             for c in (getattr(o, "candidates", None) or []))
-            return ar.describe_for_ats(step.platform, getattr(o, "url", "") or "",
-                                       names).get("state", "unknown")
-
         # FROM THE BEFORE-OBSERVATION, not from `step.landing_state` — the act has already run by
         # the time this is called and several rungs update the record on their way out, so reading
         # the record here would score the prediction against the state it predicted.
-        state_before = _state_of(before)
+        state_before = _state_from_observation(step, before)
         predicted = ar.expected_after(step.platform, state_before)
         if not predicted:
             return
-        state_after = _state_of(after)
+        state_after = _state_from_observation(step, after)
         orientation_log.record_prediction(
             session_id, platform=step.platform or "", state_before=state_before or "",
             predicted=predicted, state_after=state_after, rung=rung.id,

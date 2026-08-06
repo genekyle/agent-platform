@@ -310,8 +310,22 @@ def expectation_for(rung_id: str, *, external_id: str = "") -> Expectation:
         return Expectation(kind="new_tab_or_nav",
                            hosts_hint=("smartapply.indeed.com", "myworkdayjobs", "greenhouse.io",
                                        "icims.com", "successfactors", "sapsf.com"))
-    # verify_identity / classify / account read the world; they change nothing.
-    return Expectation(kind="read_only")
+    if rung_id in ("verify_identity", "classify", "account", "orient"):
+        # These read the world; they change nothing.
+        return Expectation(kind="read_only")
+    if rung_id == "submit":
+        # Sending an application always moves the screen — to a confirmation, a post-submit
+        # branch, or an error. What it must never do is nothing.
+        return Expectation(kind="content_changed")
+    # A TAIL RUNG, whose id is the state it advances FROM. It clicks the screen's own Continue, so
+    # a screen that did not change means the click did not take — which is the whole reason to
+    # check. Measured live 2026-08-06: `indeed_apply_resume_selection` + Continue moved the tab
+    # from `/resume-selection-module/resume-selection` to `/resume-module/structured-data-intro`.
+    #
+    # Before this, a state-named rung fell through to the `read_only` default and every advance was
+    # journaled "nothing to verify" — the verifier was switched off for the entire half of the
+    # ladder that actually drives.
+    return Expectation(kind="content_changed")
 
 
 def expectation_for_checkpoint(action: str, *, query: str = "") -> Expectation:

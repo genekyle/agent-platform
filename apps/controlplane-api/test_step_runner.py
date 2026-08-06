@@ -358,3 +358,19 @@ def test_run_step_collect_false_is_the_credential_posture(tmp_path, monkeypatch)
     assert report.before.artifact is None and report.before.screenshot is None
     row = sr.read_transitions(79)[-1]
     assert row["before"]["artifact"] is None and row["after"]["artifact"] is None
+
+
+def test_a_tail_advance_is_verified_not_waved_through_as_read_only():
+    """A state-named rung clicks the screen's own Continue. It fell through to the `read_only`
+    default, so the verifier was switched off for the whole half of the ladder that drives —
+    every advance journaled "nothing to verify"."""
+    import step_runner as sr
+    assert sr.expectation_for("indeed_apply_resume_selection").kind == "content_changed"
+    assert sr.expectation_for("indeed_apply_questions").kind == "content_changed"
+    assert sr.expectation_for("submit").kind == "content_changed"
+    # The rungs that genuinely read the world keep their read-only expectation.
+    for rung in ("verify_identity", "classify", "account", "orient"):
+        assert sr.expectation_for(rung).kind == "read_only"
+    # And the two measured prefix predictions are unchanged.
+    assert sr.expectation_for("open_pane", external_id="abc").kind == "url_param"
+    assert sr.expectation_for("enter_apply").kind == "new_tab_or_nav"

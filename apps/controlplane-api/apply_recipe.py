@@ -23,8 +23,13 @@ from typing import Any, Optional
 INDEED_APPLY_RECIPE = [
     {"step": 0, "state": "indeed_job_posting",            "action": "click Apply with Indeed",
      "expect": ["indeed_apply_resume_selection", "indeed_apply_questions", "indeed_apply_review"]},
+    # `indeed_apply_resume_review` added 2026-08-06 from a MEASURED miss, not a guess: the
+    # orienter's practice loop predicted this list, Continue was pressed on MFS Investment
+    # Management's application, and the tab went `/resume-selection-module/resume-selection` ->
+    # `/resume-module/structured-data-intro`, which the URL patterns below name `resume_review`.
+    # First live trial of the scorer, first correction it bought (orientation_log: miss, 0/1).
     {"step": 1, "state": "indeed_apply_resume_selection", "action": "Continue",
-     "expect": ["indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
+     "expect": ["indeed_apply_resume_review", "indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
     {"step": 2, "state": "indeed_apply_questions",        "action": "autofill + Continue",
      "expect": ["indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
     {"step": 3, "state": "indeed_apply_contact_info",     "action": "autofill (atomic) + Continue",
