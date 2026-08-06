@@ -59,6 +59,34 @@ def test_liveness_stopped_when_row_and_probe_agree():
     assert session_manager.classify_liveness(status="stopped", cdp_reachable=False) == "stopped"
 
 
+# --------------------------------------------------------------------------- operational_state
+def test_closed_browser_is_not_presented_as_an_active_session():
+    assert session_manager.operational_state(
+        status="active", cdp_reachable=False, process_alive=False,
+    ) == "closed"
+
+
+def test_live_browser_overrules_a_terminal_database_row_but_is_called_orphaned():
+    assert session_manager.operational_state(
+        status="stopped", cdp_reachable=True, process_alive=True,
+    ) == "orphaned"
+
+
+def test_running_process_with_dead_cdp_is_degraded_not_closed():
+    assert session_manager.operational_state(
+        status="active", cdp_reachable=False, process_alive=True,
+    ) == "degraded"
+
+
+def test_one_running_session_owns_a_port_reused_by_history():
+    rows = [
+        _session(id=7, status="active", chrome_debug_port=9323),
+        _session(id=6, status="active", chrome_debug_port=9323),
+        _session(id=5, status="stopped", chrome_debug_port=9323),
+    ]
+    assert session_manager.port_owners(rows) == {9323: 7}
+
+
 # --------------------------------------------------------------------------- view_row
 def test_view_row_shape_and_labels():
     row = session_manager.view_row(
@@ -67,6 +95,7 @@ def test_view_row_shape_and_labels():
     assert row["id"] == 1
     assert row["live"] is True
     assert row["liveness"] == "live"
+    assert row["operational_state"] == "live"
     assert row["profile_kind"] == "persistent"
     assert row["account_label"] == "Indeed — default"
     assert row["tab_count"] == 2

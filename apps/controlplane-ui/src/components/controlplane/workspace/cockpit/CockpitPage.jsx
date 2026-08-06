@@ -3,7 +3,9 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getJSON } from "../api";
 import { AppIcon } from "../../../../ui/Icon";
 import { SessionCockpit } from "./SessionCockpit";
-import { SessionJournal } from "./SessionJournal";
+import { CockpitSessionBar } from "./CockpitSessionBar";
+import { ObserverLens } from "./ObserverLens";
+import { SessionTrace } from "./SessionTrace";
 
 // THE COCKPIT PAGE — the session cockpit as a first-class destination.
 //
@@ -17,25 +19,30 @@ import { SessionJournal } from "./SessionJournal";
 // door even when it worked.
 //
 // So: /cockpit is session-first. It resolves the active session across EVERY domain, offers all of
-// them in one picker, and gives the three panes the full page. The URL is the choice:
+// them in one picker, and gives the session its own focused views. The URL is the choice:
 //
 //   /cockpit                → follow the live session, whoever's it is
 //   /cockpit?domain=x       → follow domain x's live session (the domain workspaces link here)
 //   /cockpit/:id            → pinned to one session
-//   /cockpit/:id/journal    → that session's window record
+//   /cockpit/:id/lens       → the local observer's view
+//   /cockpit/:id/trace      → that session's decision/action/window record
 //
-// The page carries the cockpit's OWN tabs — room the domain tab row never had:
-//   Live     — the three panes (rail · work surface · inspector)
-//   Journal  — the window census + timeline: what the session's browser actually did
+// The first useful cockpit is intentionally small:
+//   Now    — operate the current moment, with compact path/lens/reason previews
+//   Lens   — what local perception actually received and concluded
+//   Trace  — observation → decision → action, plus the browser/window record
 
 //: How often the page re-checks which sessions exist. Sessions are provisioned and retired on
 //: human timescales; this is not the live loop's fast eye.
 const SESSIONS_MS = 10000;
 
 const COCKPIT_TABS = [
-  { id: "live", label: "Live" },
-  { id: "journal", label: "Journal" },
+  { id: "now", label: "Now" },
+  { id: "lens", label: "Lens" },
+  { id: "trace", label: "Trace" },
 ];
+
+const TAB_ALIASES = { live: "now", journal: "trace" };
 
 export function CockpitPage({ routeSessionId, routeTab }) {
   const navigate = useNavigate();
@@ -52,9 +59,10 @@ export function CockpitPage({ routeSessionId, routeTab }) {
     return () => clearInterval(t);
   }, []);
 
-  const tab = COCKPIT_TABS.some((t) => t.id === routeTab) ? routeTab : "live";
+  const requestedTab = TAB_ALIASES[routeTab] || routeTab;
+  const tab = COCKPIT_TABS.some((t) => t.id === requestedTab) ? requestedTab : "now";
   const pathFor = (id, tabId = tab) =>
-    `/cockpit/${id}${tabId !== "live" ? `/${tabId}` : ""}`;
+    `/cockpit/${id}${tabId !== "now" ? `/${tabId}` : ""}`;
 
   if (sessions === null) {
     return <p className="empty-hint">Finding this machine's sessions…</p>;
@@ -107,17 +115,13 @@ export function CockpitPage({ routeSessionId, routeTab }) {
         ))}
       </div>
 
-      {tab === "journal" ? (
-        <>
-          {/* The journal still says WHOSE record it is; the full bar belongs to Live. */}
-          <div className="cockpit-bar">
-            <AppIcon name="sliders" size={16} />
-            <span className="badge badge--muted">#{active.id}</span>
-            <span className="cockpit-bar__sub">{active.account_label || active.domain_id}</span>
-            {active.status !== "active" && <span className="badge badge--warn">{active.status}</span>}
-          </div>
-          <SessionJournal key={active.id} sessionId={active.id} />
-        </>
+      <CockpitSessionBar session={active} siblings={sessions}
+                         onChooseSession={(id) => navigate(pathFor(id))} />
+
+      {tab === "trace" ? (
+        <SessionTrace key={active.id} sessionId={active.id} />
+      ) : tab === "lens" ? (
+        <ObserverLens key={active.id} sessionId={active.id} />
       ) : (
         <SessionCockpit
           // THE KEY IS THE ANTI-CLOBBER. A different session is a different cockpit: React
@@ -125,11 +129,8 @@ export function CockpitPage({ routeSessionId, routeTab }) {
           // leaking into the next session's story.
           key={active.id}
           sessionId={active.id}
-          sessionMeta={active}
-          siblings={sessions}
-          // Choosing PINS: the URL is the choice, so a picked session survives reload and can be
-          // linked. /cockpit with no id keeps meaning "follow the live one".
-          onChooseSession={(id) => navigate(pathFor(id))}
+          onOpenLens={() => navigate(pathFor(active.id, "lens"))}
+          onOpenTrace={() => navigate(pathFor(active.id, "trace"))}
         />
       )}
     </div>

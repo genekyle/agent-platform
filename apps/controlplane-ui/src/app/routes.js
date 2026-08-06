@@ -8,7 +8,7 @@ export function parseAppPath(pathname) {
     return {
       view: "cockpit",
       sessionId: Number.isNaN(sessionId) ? null : sessionId,
-      tabId: parts[2] || "live",
+      tabId: parts[2] || "now",
     };
   }
   if (parts[0] === "domains") {
@@ -28,7 +28,7 @@ export function pathForView(view, options = {}) {
   if (view === "activity") return "/activity";
   if (view === "cockpit") {
     const session = options.sessionId ? `/${options.sessionId}` : "";
-    const tab = options.sessionId && options.tabId && options.tabId !== "live" ? `/${options.tabId}` : "";
+    const tab = options.sessionId && options.tabId && options.tabId !== "now" ? `/${options.tabId}` : "";
     return `/cockpit${session}${tab}`;
   }
   if (view === "domains") {
@@ -40,4 +40,3 @@ export function pathForView(view, options = {}) {
   if (view === "system") return `/system/${options.sectionId || "status"}`;
   return "/overview";
 }
-

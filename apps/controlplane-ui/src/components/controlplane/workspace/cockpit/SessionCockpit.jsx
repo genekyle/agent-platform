@@ -1,24 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getJSON, postJSON } from "../api";
-import { AppIcon } from "../../../../ui/Icon";
 import { useOrderedPicks } from "../useOrderedPicks";
-import { DOMAINS_BY_ID } from "../domains";
 import { deriveCockpit } from "./lifecycle";
-import { SessionRail } from "./SessionRail";
 import { WorkSurface } from "./WorkSurface";
-import { DecisionInspector } from "./DecisionInspector";
+import { NowContext, NowPath } from "./NowContext";
 import "./cockpit.css";
 
 // ONE SESSION'S COCKPIT — the keyed composition root.
 //
-// Three panes, one authoritative workflow state:
+// One operating surface, one authoritative workflow state:
 //
-//   rail                work surface                     inspector
-//   where we are        what needs attention NOW         why this action, why this state
+//   compact path        work surface                     evidence previews
+//   where we are        what needs attention NOW         local lens + why + provenance
 //
 // This file owns DATA and SELECTION only. It does not decide what a group is, which control belongs
 // on screen, or which action is primary — all of that is derived once, in `lifecycle.js`, and read
-// by all three panes.
+// by the operating surface and its compact previews.
 //
 // SESSION-AWARE BY CONSTRUCTION: this component must be mounted with `key={sessionId}` (the
 // CockpitPage does). A session change UNMOUNTS it, so everything about one session — the panel read
@@ -29,9 +26,9 @@ import "./cockpit.css";
 //
 // The rules that keep this screen from growing back into card soup:
 //   1. ONE primary action on screen. Asserted at runtime in dev, not just intended.
-//   2. A capability becomes a FOCUS KIND or an INSPECTOR ROW. Never a new top-level card.
-//   3. The rail never acts. Selection only.
-//   4. Say a fact once. The session bar owns identity; the panes never restate it.
+//   2. A capability becomes a FOCUS KIND or moves into Lens/Trace. Never a new top-level card.
+//   3. The compact path selects context; the work surface remains the only place that acts.
+//   4. Say a fact once. The session bar owns identity; Now owns the current task.
 
 //: How often the panel re-reads the session. Every call is a local CDP socket (tabs + auth state),
 //: so this costs no bandwidth — the number is about how quickly the operator should see the world
@@ -42,19 +39,14 @@ const PING_MS = 5000;
 const SETTLE_MS = 1000;
 const SETTLE_WINDOW_MS = 12000;
 
-//: The session's domain, in a word — for the cross-domain picker.
-function domainShort(domainId) {
-  return DOMAINS_BY_ID[domainId]?.short || DOMAINS_BY_ID[domainId]?.label || domainId || "?";
-}
-
-export function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSession }) {
+export function SessionCockpit({ sessionId, onOpenLens, onOpenTrace }) {
   const [panel, setPanel] = useState(null);
   const [form, setForm] = useState({ query: "", location: "", radius_miles: 50 });
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // What the inspector is explaining. `null` follows the focus, which is what the operator sees
-  // first and returns to; a rail click pins it to a group, a rung or an application.
+  // What the Why preview is explaining. `null` follows the current focus; a compact-path click
+  // pins it to a group, a rung or an application.
   const [selection, setSelection] = useState(null);
   // The one work-surface detour: "choose" re-opens the current page's picker. See WorkSurface.
   const [viewMoment, setViewMoment] = useState(null);
@@ -191,64 +183,27 @@ export function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSessi
   };
 
   return (
-    <div ref={rootRef}>
-      {/* --- the session bar: identity and freshness, said ONCE ------------------------- */}
-      <div className="cockpit-bar">
-        <AppIcon name="sliders" size={16} />
-        {/* WHICH session, visibly. Contextual history belongs to a session id, and the id the
-            cockpit is narrating should never be something the operator has to infer. */}
-        <span className="badge badge--muted" title={`Session ${sessionId}`}>#{sessionId}</span>
-        <span className="cockpit-bar__id">{p.query ? `"${p.query}"` : "No query yet"}</span>
-        <span className="cockpit-bar__sub">
-          {[p.location, p.radius_miles ? `${p.radius_miles}mi` : null, p.engine,
-            `page ${p.page ?? 1}`].filter(Boolean).join(" · ")}
-        </span>
+    <div ref={rootRef} className="cockpit-now">
+      <div className="cockpit-now__heading">
+        <div>
+          <span className="cockpit-now__eyebrow">Now operating</span>
+          <strong>{p.query ? `“${p.query}”` : "No task declared yet"}</strong>
+          <span>{[p.location, p.radius_miles ? `${p.radius_miles}mi` : null, p.engine,
+            `page ${p.page ?? 1}`].filter(Boolean).join(" · ")}</span>
+        </div>
         {p.staleness && p.staleness.level !== "fresh" && (
           <span className={`badge badge--${p.staleness.level === "red" ? "danger" : "warn"}`}
-                title={p.staleness.why}>
-            {p.staleness.level} · stale
-          </span>
-        )}
-        <span className="cockpit-bar__spacer" />
-        {/* The cockpit is SESSION-first, so the picker spans every domain's sessions — a session
-            is one focused Chrome working one task, not a property of a domain, and a Gmail errand
-            inside a Career-Search session is exactly why domain can't be the boundary. Labelled by
-            STATUS, the control plane's own record, not the port probe: stopped sessions share the
-            active one's debug port, so `live` alone read as nine live sessions with eight of them
-            stopped. Active first; stopped history stays reachable because a left-open session is a
-            fixture worth looking at. */}
-        {siblings.length > 1 && (
-          <label className="cockpit-bar__sessions">
-            <span>session</span>
-            <select value={sessionId}
-                    onChange={(e) => onChooseSession(Number(e.target.value))}>
-              {[...siblings].sort((a, b) =>
-                (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1) || b.id - a.id)
-                .map((s) => (
-                  <option key={s.id} value={s.id}>
-                    #{s.id} · {domainShort(s.domain_id)} · {s.status}
-                  </option>
-                ))}
-            </select>
-          </label>
-        )}
-        {sessionMeta.status !== "active" && (
-          <span className="badge badge--warn" title="This session is not active — its record is readable, but drive its browser only if you know why.">
-            {sessionMeta.status}
-          </span>
+                title={p.staleness.why}>{p.staleness.level} · stale</span>
         )}
         <button type="button" className="cockpit-live" data-busy={busy} disabled={busy}
-                onClick={() => { settleUntilRef.current = 0; load(); }}
-                title={`Reads every ${PING_MS / 1000}s, and every ${SETTLE_MS / 1000}s for `
-                  + `${SETTLE_WINDOW_MS / 1000}s after anything is pressed. Click to read now.`}>
-          <span className="cockpit-live__dot" />
-          {busy ? "working" : "live"}
+                onClick={() => { settleUntilRef.current = 0; load(); }}>
+          <span className="cockpit-live__dot" />{busy ? "working" : "read now"}
         </button>
       </div>
 
-      <div className="cockpit">
-        <SessionRail cockpit={cockpit} selection={selection} onSelect={onSelect} />
+      <NowPath cockpit={cockpit} selection={selection} onSelect={onSelect} />
 
+      <div className="cockpit-now__layout">
         <WorkSurface
           panel={p}
           cockpit={cockpit}
@@ -265,8 +220,8 @@ export function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSessi
           note={note} setNote={setNote}
           form={form} setForm={setForm}
         />
-
-        <DecisionInspector panel={p} cockpit={cockpit} selection={selection} />
+        <NowContext panel={p} cockpit={cockpit} selection={selection}
+                    onOpenLens={onOpenLens} onOpenTrace={onOpenTrace} />
       </div>
     </div>
   );

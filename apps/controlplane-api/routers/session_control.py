@@ -30,6 +30,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -493,6 +494,7 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     # Indeed" on every ladder, which a LinkedIn session renders as an instruction to go and sign in
     # to the wrong site — found the first time a LinkedIn session was started, 2026-07-27.
     engine_label = engine_for(session, obs.get("search_tab"))["label"]
+    cached_perception = (bb.world or {}).get("last_belief") or None
     return {
         "session_id": session.id,
         "goal": bb.goal,
@@ -511,6 +513,10 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # The panel renders this INSTEAD of trusting the recipe position — where they disagree,
         # `observer.mismatch` says so and `observer.plan` says the way out.
         "observer": observer,
+        # The last visual the LOCAL perception stack actually received. This is intentionally a
+        # collected step snapshot rather than a screenshot on every poll: it keeps the heartbeat
+        # cheap and preserves the credential-flow rule (those turns collect no screenshots).
+        "perception_snapshot": cached_perception,
         # THE ONE NEXT ACTION, arbitrated between the two above — the world's plan and the recipe's
         # rung. Without it the panel showed both as primary buttons and the operator did the
         # resolving; with it there is one thing to press and the loser is beside it, demoted and
@@ -743,10 +749,20 @@ def _cache_belief(bb: Any, observation: Any) -> Optional[dict[str, Any]]:
     """
     belief = getattr(observation, "belief", None)
     url = getattr(observation, "url", "") or ""
-    if belief and url:
+    screenshot = getattr(observation, "screenshot", None) or ""
+    artifact = getattr(observation, "artifact", None) or ""
+    # Keep the safely collected visual even when no promoted local observer was loaded. A
+    # screenshot only exists here for collect=True turns; credential-flow observations use
+    # collect=False and therefore cannot leak into the Cockpit lens.
+    if url and (belief or screenshot or artifact):
         bb.world = dict(bb.world or {})
-        bb.world["last_belief"] = {"url": url, "ts": getattr(observation, "ts", ""),
-                                   "belief": belief}
+        bb.world["last_belief"] = {
+            "url": url,
+            "ts": getattr(observation, "ts", ""),
+            "belief": belief,
+            "artifact": Path(artifact).name if artifact else None,
+            "screenshot_filename": Path(screenshot).name if screenshot else None,
+        }
     return belief
 
 

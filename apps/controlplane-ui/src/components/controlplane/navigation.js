@@ -11,7 +11,7 @@ export const CONTROL_PLANE_NAV = {
   cockpit: {
     label: "Cockpit",
     title: "Cockpit",
-    subtitle: "One live session at a time — where it is, what it needs, and why.",
+    subtitle: "Operate the current moment, inspect local perception, and trace what happened.",
     sections: [],
   },
   domains: {

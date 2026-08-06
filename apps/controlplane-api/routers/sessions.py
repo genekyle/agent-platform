@@ -36,16 +36,40 @@ def list_sessions(db: Session = Depends(get_db)):
     """Every browser session, each folded with a LIVE CDP probe, its account label, and whether
     it's protected — the view that makes concurrent/training sessions safe to reason about."""
     import accounts as accounts_mod
+    import browser_provisioning
     import channel_browser
     import session_manager
     label_by_id = {a["account_id"]: a["label"] for a in accounts_mod.list_accounts()}
+    chrome_processes = browser_provisioning.find_chromes()
+    sessions = db.scalars(
+        select(TrainingSession).order_by(TrainingSession.created_at.desc())
+    ).all()
+    # A debug port can remain on many historical rows after a profile is reused. The port may be
+    # reachable, but it belongs to ONE current session — treating every row that remembers it as
+    # live is how the Cockpit reported nine sessions inside one browser. Newest running claimant
+    # owns the port; an old stopped row is history, not an orphan merely because its old port was
+    # recycled.
+    owner_by_port = session_manager.port_owners(sessions)
     rows = []
-    for s in db.scalars(select(TrainingSession).order_by(TrainingSession.created_at.desc())).all():
-        live = channel_browser.cdp_reachable(s.chrome_debug_port, timeout=0.5)
+    for s in sessions:
+        port_reachable = channel_browser.cdp_reachable(s.chrome_debug_port, timeout=0.5)
+        port_owner = owner_by_port.get(s.chrome_debug_port) if s.chrome_debug_port else None
+        live = bool(port_reachable and (port_owner is None or port_owner == s.id))
+        user_data_dir = (s.chrome_user_data_dir or "").rstrip("/")
+        has_process_identity = bool(user_data_dir or s.chrome_process_pid or s.chrome_debug_port)
+        process_alive = None if not has_process_identity else (
+            False if port_owner is not None and port_owner != s.id else any(
+                (user_data_dir and p.user_data_dir.rstrip("/") == user_data_dir)
+                or (s.chrome_process_pid and p.pid == s.chrome_process_pid)
+                or (s.chrome_debug_port and p.debug_port == s.chrome_debug_port)
+                for p in chrome_processes
+            )
+        )
         rows.append(session_manager.view_row(
             s, cdp_reachable=live,
             account_label=label_by_id.get(s.account_id),
             tab_count=_session_tab_count(s.chrome_debug_port) if live else None,
+            process_alive=process_alive,
         ))
     return {"sessions": rows}
 

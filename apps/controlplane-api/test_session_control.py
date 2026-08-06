@@ -16,6 +16,7 @@ What is being pinned, in order of how expensive it is to get wrong:
 """
 
 import json
+from types import SimpleNamespace
 
 import accounts
 import apply_state_store as store
@@ -4743,3 +4744,23 @@ def test_an_unreadable_page_is_never_narrated_as_agreement(monkeypatch):
     assert "not because the page agreed with it" in reason
     # The way out is still offered, and the human is still on the list.
     assert [s["id"] for s in r["observer"]["plan"]] == ["reorient", "escalate"]
+
+
+def test_cockpit_lens_keeps_a_safe_visual_even_without_a_promoted_belief():
+    bb = SimpleNamespace(world={})
+    observation = SimpleNamespace(
+        belief=None,
+        url="https://example.com/application",
+        ts="2026-08-05T12:00:00+00:00",
+        artifact="/tmp/trace.json",
+        screenshot="/tmp/safe-shot.png",
+    )
+
+    assert sc._cache_belief(bb, observation) is None
+    assert bb.world["last_belief"] == {
+        "url": "https://example.com/application",
+        "ts": "2026-08-05T12:00:00+00:00",
+        "belief": None,
+        "artifact": "trace.json",
+        "screenshot_filename": "safe-shot.png",
+    }
