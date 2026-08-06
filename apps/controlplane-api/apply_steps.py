@@ -152,6 +152,67 @@ SUBMIT_RUNG = MiniRung(
     "submit", "Submit",
     "The irreversible one. The operator confirms every submission, on every platform, always.")
 
+#: Rungs whose id is not a state name. Everything else in the tail is keyed BY the state it
+#: advances from, so `_settled_rungs` retires a screen the moment we leave it.
+RESERVED_RUNG_IDS = frozenset({r.id for r in PREFIX} | {SUBMIT_RUNG.id, "orient", "challenge"})
+
+
+def tail_rung_for(platform: Optional[str], state: Optional[str]) -> Optional[MiniRung]:
+    """The ONE tail rung the LIVE PAGE calls for — or None when we do not recognise the page.
+
+    THE TAIL WAS THE HOLE. The prefix is five rungs known before you start; past `classify` this
+    module said "the tail is discovered" and then nothing discovered it, so `next_rung` returned
+    None forever and `SUBMIT_RUNG` — defined right above — was referenced by nothing. The cockpit's
+    primary button therefore dead-ended at *"those are not built yet"* on every application, and the
+    only way through one was a human driving it by hand outside the system. Meanwhile
+    `apply_recipe.INDEED_APPLY_RECIPE` had held the entire Indeed spine, state by state, since the
+    module was written. Two halves of one idea, built apart, never introduced — the fifth time that
+    exact shape has been the bug (see LEARNINGS 2026-08-04).
+
+    So the tail is not invented here. It is the RECIPE's spine, walked one screen at a time, with
+    the LIVE ORIENT VERDICT saying which screen we are on. That distinction is load-bearing: Indeed
+    skips screens whose answers the profile already holds, so a fixed tuple would stall on a rung
+    the application never shows. Ask the page, every time.
+
+    **The rung id is the state it advances FROM** (`indeed_apply_questions`), not a coined name.
+    Those ids are already `page_state_registry` entries — the vocabulary the state models train on
+    — so the ladder, the corpus and the classifier all say the same word for the same screen.
+
+    **A tail rung is never suppressed by having been walked before**, unlike a prefix rung. Indeed
+    serves `questions` across several pages and the recipe's own `expect` says so, so "we already
+    did that one" would strand the drive on screen two. The live page decides what is due; the
+    record is there to be trained on, not to gate. Same rule `adopt_from_window` states outright —
+    the browser is truth, the record is memory, and memory yields.
+
+    Returns None for an unrecognised page, and that None is a real answer: the drive stops and asks
+    rather than pressing a hopeful Continue on a screen nobody has ever seen.
+    """
+    if not platform or not state:
+        return None
+    import apply_recipe as ar
+    progress = ar.flow_progress(state, platform=platform)
+    if not progress.get("recognised") or progress.get("done"):
+        return None
+    if progress.get("at_review_gate"):
+        return SUBMIT_RUNG
+    action = ar.advance_action(platform, state) or "Continue"
+    left = progress.get("steps_to_submit")
+    return MiniRung(
+        state, f"{screen_label(state)} · {action}",
+        f"The recipe advances this screen with {action!r}"
+        + (f", and it is at most {left} screen(s) from Submit" if left is not None else "")
+        + ". Reversible: it moves the application forward one screen and nothing is sent.")
+
+
+def screen_label(state: str) -> str:
+    """`indeed_apply_resume_selection` -> `Resume selection`. Presentation only — the state id
+    stays the identity, because that is what the models are trained on."""
+    for prefix in ("indeed_apply_", "workday_", "greenhouse_apply_", "indeed_"):
+        if state.startswith(prefix):
+            state = state[len(prefix):]
+            break
+    return state.replace("_", " ").capitalize() or state
+
 #: Platforms that take an application WITHOUT an identity of their own. Indeed's quick apply runs
 #: inside the session we are already signed into; Greenhouse asks for nothing.
 #:
@@ -238,8 +299,12 @@ class ApplyStep:
         """True when the step is stuck on something only a person may resolve."""
         return not self.done and self.last_flag in NEEDS_OPERATOR
 
-    def next_rung(self) -> Optional[MiniRung]:
-        """The next prefix rung, or None once the prefix is walked (the tail is discovered).
+    def next_rung(self, state: Optional[str] = None) -> Optional[MiniRung]:
+        """The next prefix rung — then the tail, discovered from the live page.
+
+        `state` is the orienter's verdict for the screen we are actually on. Omit it and this
+        answers the prefix only, exactly as it did before the tail existed: every pre-tail caller
+        keeps its old behaviour, and the ones that can see the page opt in by passing it.
 
         A rung is also considered walked when it was explicitly SKIPPED — `account` on a platform
         that needs no account is not an omission, and a ladder that kept asking for it would stall
@@ -261,7 +326,7 @@ class ApplyStep:
         for rung in PREFIX:
             if rung.id not in settled:
                 return rung
-        return None
+        return tail_rung_for(self.platform, state or self.landing_state)
 
     def _settled_rungs(self) -> set[str]:
         """The prefix rungs this step counts as walked — the LATEST verdict for each, never the
@@ -271,7 +336,8 @@ class ApplyStep:
             latest[m.rung] = m.outcome
         return {rung for rung, outcome in latest.items() if outcome in (OK, SKIPPED)}
 
-    def walk_to_next_rung(self) -> tuple[Optional[MiniRung], list[tuple[str, str]]]:
+    def walk_to_next_rung(self,
+                          state: Optional[str] = None) -> tuple[Optional[MiniRung], list[tuple[str, str]]]:
         """The rung to PRESENT next, and the ruled-out rungs passed on the way — each (id, why).
 
         `next_rung` says where the ladder stands; this says what the crank will actually hand the
@@ -290,7 +356,11 @@ class ApplyStep:
             if applies:
                 return rung, passed
             passed.append((rung.id, why_not))
-        return None, passed
+        # PAST THE PREFIX: the tail, read off the live page. `tail_rung_for` returns None when the
+        # screen is one we do not recognise, and that None still reaches the operator as "the rungs
+        # from here are not built yet" — which is now TRUE when it is said, instead of being said
+        # about every application including the ones the recipe knows end to end.
+        return tail_rung_for(self.platform, state or self.landing_state), passed
 
     def inapplicable_rungs(self) -> list[dict[str, str]]:
         """Prefix rungs the discovery ruled out, and why — so the panel can show them greyed

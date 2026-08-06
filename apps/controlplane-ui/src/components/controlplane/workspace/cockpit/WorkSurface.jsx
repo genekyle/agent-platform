@@ -24,7 +24,11 @@ function Actions({ focus, busy, call }) {
   return (
     <div className="work__actions">
       {focus.primary && (
-        <button className="btn btn-primary" disabled={busy} title={focus.primary.why}
+        // STILL EXACTLY ONE PRIMARY — the modifier changes how it reads, never how many there are.
+        // A consequential action that looked like the five reversible ones before it is how an
+        // application gets sent by muscle memory.
+        <button className={`btn btn-primary${focus.primary.consequential ? " btn-consequential" : ""}`}
+                disabled={busy} title={focus.primary.why}
                 onClick={() => call(focus.primary.endpoint, focus.primary.body)}>
           {busy ? "…" : focus.primary.label}
         </button>
@@ -40,6 +44,70 @@ function Actions({ focus, busy, call }) {
           {a.demoted && <span className="work__alt-why"> — {a.demoted}</span>}
         </span>
       ))}
+    </div>
+  );
+}
+
+// HOW FAR THIS APPLICATION IS FROM SUBMIT, drawn as the walk it is.
+//
+// The recipe has held an ordered spine for every Indeed application since it was written, and the
+// cockpit's only word for progress was "Work this step" — pressed an unknown number of times,
+// toward an end nobody could see. This is the object being worked, not a competing answer, so it
+// carries no controls of its own.
+//
+// The count is an UPPER BOUND and says so: platforms skip screens whose answers the profile
+// already holds, and skipping only ever shortens the path.
+function FlowStrip({ flow }) {
+  if (!flow) return null;
+  if (!flow.recognised) {
+    return (
+      <div className="flowstrip flowstrip--unknown">
+        <AppIcon name="eye" size={12} />
+        <span>New territory — {flow.why}.</span>
+      </div>
+    );
+  }
+  const left = flow.steps_to_submit;
+  return (
+    <div className="flowstrip">
+      <div className="flowstrip__head">
+        {flow.at_review_gate
+          ? <span className="flowstrip__gate-note">At the Submit gate</span>
+          : <span>{flow.bound} <strong>{left}</strong> screen{left === 1 ? "" : "s"} from Submit</span>}
+      </div>
+      <ol className="flowstrip__steps">
+        {(flow.screens || []).map((s) => (
+          <li key={s.state}
+              className={"flowstrip__step"
+                + (s.past ? " is-past" : "") + (s.current ? " is-current" : "")
+                + (s.is_gate ? " is-gate" : "")}
+              title={s.state}>
+            {s.label}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+// THE GATE. One press, and it is the only irreversible one on the ladder — so it states exactly
+// what is about to leave, in the operator's terms, before the button rather than in a tooltip.
+function GateBody({ focus }) {
+  const s = focus.sending || {};
+  return (
+    <div className="work__section gatecard">
+      <div className="work__section-head">
+        <AppIcon name="alert" size={13} /> About to send
+      </div>
+      <dl className="gatecard__what">
+        <div><dt>Role</dt><dd>{s.title || "—"}</dd></div>
+        <div><dt>Employer</dt><dd>{s.company || "—"}</dd></div>
+        <div><dt>Through</dt><dd>{s.platform || "—"}</dd></div>
+      </dl>
+      <p className="gatecard__note">
+        Pressing this submits the application as it currently stands in the window. Look at the
+        tab first if you have not — this is the last moment it can be changed.
+      </p>
     </div>
   );
 }
@@ -358,7 +426,7 @@ function ProposalBody({ proposal, busy, decide }) {
 }
 
 const SETUP_KINDS = new Set(["declare", "clean_start", "login"]);
-const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "application"]);
+const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "application", "gate"]);
 
 export function WorkSurface({
   panel, cockpit, viewMoment, onExitDetour, busy, error, call, decide, onFlag,
@@ -391,9 +459,15 @@ export function WorkSurface({
 
         <h2 className="work__title">{focus.title}</h2>
         {focus.subtitle && <p className="work__subtitle">{focus.subtitle}</p>}
+        {/* The walk BEFORE the reasoning: "where am I in this application" is the question the
+            operator asks first, and it was the one the surface could not answer at all. */}
+        <FlowStrip flow={focus.flow} />
         {focus.why && <p className="work__why">{focus.why}</p>}
 
         {error && <div className="coaching-error">{error}</div>}
+
+        {/* What is about to leave, stated before the button that sends it. */}
+        {focus.kind === "gate" && <GateBody focus={focus} />}
 
         <Say focus={focus} />
         {focus.kind !== "proposal" && <Actions focus={focus} busy={busy} call={call} />}

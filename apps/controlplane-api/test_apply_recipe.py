@@ -95,3 +95,36 @@ def test_the_password_rules_lesson_matches_the_policy_that_enforces_it():
     assert str(policy["min_length"]) in lesson
     assert str(policy["max_length"]) in lesson
     assert "apply_fields.PASSWORD_POLICIES" in lesson
+
+
+def test_flow_progress_counts_the_indeed_spine_under_either_platform_name():
+    """`classify_landing` answers `indeed` where the terminal table says `indeed_quick_apply`.
+    One canonicalisation, or a submitted application does not read as done under one of them."""
+    import apply_recipe as ar
+    for platform in ("indeed", "indeed_quick_apply"):
+        p = ar.flow_progress("indeed_apply_resume_selection", platform=platform)
+        assert p["recognised"] and p["steps_to_submit"] == 5 and not p["at_review_gate"]
+        assert ar.flow_progress("indeed_apply_review", platform=platform)["at_review_gate"] is True
+        assert ar.flow_progress("indeed_apply_submitted", platform=platform)["done"] is True
+    assert ar.flow_progress("not_a_state", platform="indeed")["recognised"] is False
+    assert ar.flow_progress("indeed_apply_review", platform="brand_new_ats")["recognised"] is False
+
+
+def test_the_two_control_lexicons_can_never_reach_each_other():
+    """The advance lexicon must not be able to press Submit, and the submit lexicon must not
+    settle for a Continue. Keeping them in one list is how a guess ends up sending an
+    application."""
+    import apply_recipe as ar
+    from controller.decide import advance_control
+    assert advance_control(["button|Submit your application"]) == ""
+    assert ar.submit_control(["button|Continue", "button|Save and Continue"]) == ""
+    # And each finds its own, as the page renders it, longest match winning.
+    assert advance_control(["button|Continue", "button|Save and Continue"]) == "Save and Continue"
+    assert ar.submit_control(["button|Submit your application"]) == "Submit your application"
+
+
+def test_the_recipe_names_the_action_and_the_states_it_expects():
+    import apply_recipe as ar
+    assert ar.advance_action("indeed", "indeed_apply_resume_selection") == "Continue"
+    assert "indeed_apply_review" in ar.expected_after("indeed", "indeed_apply_demographics")
+    assert ar.advance_action("workday", "workday_review") == ""      # not this recipe's spine

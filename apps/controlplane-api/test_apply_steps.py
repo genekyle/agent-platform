@@ -453,3 +453,54 @@ def test_a_ruled_out_rung_is_named_with_its_reason_rather_than_vanishing():
 def test_an_unclassified_step_rules_nothing_out():
     # Before classify has spoken there is no discovery to act on, so the full prefix stands.
     assert aps.ApplyStep(job_id="x:1", title="t", company="C").inapplicable_rungs() == []
+
+
+# --- the ladder's tail: the recipe's spine, reached one screen at a time ------------------------
+def test_the_tail_walks_the_recipe_spine_and_ends_at_the_operator_s_gate():
+    """The hole this closes: `next_rung` returned None past the prefix, so `SUBMIT_RUNG` was
+    defined and referenced by nothing and every application dead-ended at "not built yet"."""
+    assert aps.tail_rung_for("indeed", "indeed_apply_resume_selection").id == \
+        "indeed_apply_resume_selection"
+    assert aps.tail_rung_for("indeed", "indeed_apply_questions").id == "indeed_apply_questions"
+    # The gate, and it is the SUBMIT rung rather than another advance.
+    assert aps.tail_rung_for("indeed", "indeed_apply_review").id == aps.SUBMIT_RUNG.id
+    # Past the gate there is nothing left to walk.
+    assert aps.tail_rung_for("indeed", "indeed_apply_submitted") is None
+
+
+def test_an_unrecognised_screen_gets_no_rung_rather_than_a_hopeful_continue():
+    assert aps.tail_rung_for("indeed", "a_screen_nobody_has_driven") is None
+    assert aps.tail_rung_for("some_new_ats", "indeed_apply_review") is None
+    assert aps.tail_rung_for(None, None) is None
+
+
+def test_the_step_reaches_the_tail_once_the_prefix_is_walked():
+    step = aps.ApplyStep(job_id="indeed:1", title="T", company="C", platform="indeed")
+    for rung in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        step.record(rung, aps.OK)
+    # `account` is ruled out on Indeed, so walking must pass it and land on the tail.
+    step.landing_state = "indeed_apply_resume_selection"
+    rung, passed = step.walk_to_next_rung()
+    assert [p[0] for p in passed] == ["account"]
+    assert rung.id == "indeed_apply_resume_selection"
+    # The live page is the authority: the same call with a later screen moves the ladder on.
+    assert step.walk_to_next_rung("indeed_apply_review")[0].id == aps.SUBMIT_RUNG.id
+
+
+def test_a_tail_rung_is_not_suppressed_by_having_been_walked_before():
+    """Indeed serves `questions` across several pages — the recipe's own `expect` says so. A tail
+    rung gated on `_settled_rungs` would strand the drive on page two."""
+    step = aps.ApplyStep(job_id="indeed:1", platform="indeed")
+    for rung in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        step.record(rung, aps.OK)
+    step.record("indeed_apply_questions", aps.OK, "clicked 'Continue'")
+    assert step.walk_to_next_rung("indeed_apply_questions")[0].id == "indeed_apply_questions"
+
+
+def test_the_prefix_still_answers_alone_when_no_state_is_offered():
+    """Every pre-tail caller passes no state and must behave exactly as it did before."""
+    step = aps.ApplyStep(job_id="indeed:1", platform="indeed")
+    assert step.next_rung().id == "open_pane"
+    for rung in ("open_pane", "verify_identity", "enter_apply", "classify", "account"):
+        step.record(rung, aps.OK)
+    assert step.next_rung() is None       # no landing_state -> no tail, as before

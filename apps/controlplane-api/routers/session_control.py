@@ -379,10 +379,19 @@ def _rung_option(step: Optional[Any]) -> Optional[dict[str, Any]]:
         return None
     rung, _ruled_out = step.walk_to_next_rung()
     if rung is None:
-        return {"source": "rung", "id": "", "label": "Work this step",
-                "why": (f"Past the known prefix — the rungs from here depend on the platform "
-                        f"({step.platform or 'unclassified'}), and those are not built yet."),
+        return {"source": "rung", "id": "", "label": "Read this page",
+                "why": (f"We are on {step.landing_state or 'a page we have not read'} "
+                        f"({step.platform or 'unclassified'}) and the recipe has no rung for it. "
+                        f"Stepping will re-read the page; if it is still unrecognised, it is "
+                        f"genuinely new territory."),
                 "endpoint": "/apply_step", "body": {}, "driveable": True}
+    # THE GATE ANNOUNCES ITSELF. Every other rung is "work this"; this one is the irreversible act,
+    # and a button that reads the same as the five before it is how an application gets sent by
+    # muscle memory. `consequential` is what the cockpit renders the confirm affordance from.
+    if rung.id == aps.SUBMIT_RUNG.id:
+        return {"source": "rung", "id": rung.id, "label": "Submit this application",
+                "why": rung.why, "endpoint": "/apply_step", "body": {}, "driveable": True,
+                "consequential": True, "operator_only": True}
     return {"source": "rung", "id": rung.id, "label": f"Work this · {rung.label}",
             "why": rung.why, "endpoint": "/apply_step", "body": {}, "driveable": True}
 
@@ -573,12 +582,74 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # sent rather than duplicated as a hardcoded name in the UI, which is how the two would
         # drift the first time a second accordion ATS is added.
         "accordion_ats": sorted(apply_fields.SECTION_BARS),
+        # HOW FAR THIS APPLICATION IS FROM SUBMIT, and the screens between here and there. The
+        # ladder's tail, rendered — so "what is left" stops being something only the recipe knows.
+        "apply_flow": _apply_flow(queue.current()),
+        # WHAT THE INNER LAYERS ARE GETTING RIGHT. Both are measured on every crank and neither had
+        # a surface: the operator asked for the orienter to practise, and practice nobody can see
+        # is indistinguishable from no practice at all.
+        "learning": _learning_scoreboard(),
         "last_step": last,
         "events": [{"ts": e.ts, "kind": e.kind, "detail": e.detail} for e in bb.events[-12:]],
         # How old is what we are looking at (perception/staleness.py — PROTOTYPE). Advisory: the
         # panel shows it and the operator decides. Nothing here acts on it.
         "staleness": _staleness_for(bb, obs),
     }
+
+
+def _apply_flow(step: Optional[Any]) -> Optional[dict[str, Any]]:
+    """The application's remaining screens, and how far the gate is. None when nothing is open.
+
+    The recipe has always known this and only Workday ever said it out loud. Rendering it is what
+    turns "Work this step" pressed five times into a walk with a visible end — and the operator's
+    whole complaint was not knowing where in the application they were.
+    """
+    if step is None or step.done:
+        return None
+    import apply_recipe as ar
+    state = step.landing_state or ""
+    progress = ar.flow_progress(state, platform=step.platform or "")
+    if not progress.get("recognised"):
+        return {"recognised": False, "state": state, "platform": step.platform or "",
+                "why": "the recipe does not place this screen on a flow it can count along"}
+    order = ar.flow_order(step.platform)
+    gate = ar.gate_state(step.platform)
+    here = progress.get("position") or 0
+    return {
+        "recognised": True, "platform": progress.get("platform"), "state": state,
+        "steps_to_submit": progress.get("steps_to_submit"),
+        "at_review_gate": bool(progress.get("at_review_gate")),
+        # An UPPER BOUND, and labelled as one — platforms skip screens the profile already answers,
+        # and skipping only ever shortens the path (`flow_progress` explains).
+        "bound": "at most",
+        "screens": [{"state": s, "label": aps.screen_label(s),
+                     "position": i, "past": i < here, "current": i == here,
+                     "is_gate": s == gate}
+                    for i, s in enumerate(order)],
+    }
+
+
+def _learning_scoreboard() -> dict[str, Any]:
+    """What the inner layers are getting right — the orienter's practice, and shadow agreement.
+
+    Two numbers that were both being computed and neither being shown. `shadow_agreement` reads the
+    decision journal's paired rows; `prediction_stats` reads the orientation corpus's trials. Both
+    are cheap reads over files already on disk, and both must degrade to a stated absence rather
+    than a zero: "0% accurate" and "never asked" look identical on a dial and mean opposite things.
+    """
+    out: dict[str, Any] = {}
+    try:
+        import orientation_log
+        out["orienter"] = orientation_log.prediction_stats()
+    except Exception:  # noqa: BLE001
+        out["orienter"] = {"error": "the orientation corpus could not be read"}
+    try:
+        from controller import metrics as controller_metrics
+        from interaction import decision_journal
+        out["shadow"] = controller_metrics.shadow_agreement(decision_journal.read_rows())
+    except Exception:  # noqa: BLE001
+        out["shadow"] = {"error": "the decision journal could not be read"}
+    return out
 
 
 def _staleness_for(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
@@ -3465,18 +3536,11 @@ async def orient_step(session_id: int, body: OrientStepBody,
         raise HTTPException(status_code=409, detail="No open application to orient within.")
 
     obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
-    url = _apply_tab_url(bb, obs)
-    if not url:
+    read = await _read_apply_page(bb, obs, browser_url)
+    if read is None:
         raise HTTPException(status_code=409,
                             detail="No application tab is open to orient against.")
-    apply_tab = next((t for t in (obs.get("tabs") or []) if t.get("url") == url), {})
-
-    scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
-                                            "tab_id": apply_tab.get("tab_id", "")}, timeout=25.0)
-    # Build the recognition text from the page text AND the control names — the modal's buttons are
-    # where "Use My Last Application" lives, and that is the whole signal here.
-    names = " ".join((c.get("name") or "") for c in (scan.get("candidates") or []))
-    text = f"{scan.get('page_text') or ''} {names}"
+    url, apply_tab, scan, text = read["url"], read["tab"], read["scan"], read["text"]
 
     # THE LIVE TAB DECIDES WHICH PLATFORM WE ARE ON. `step.platform` is a memory of where classify
     # last looked, and an apply can move between platforms after that: BILH's careers page is a
@@ -3490,29 +3554,27 @@ async def orient_step(session_id: int, body: OrientStepBody,
     # `company_site`, which is exactly what Teradyne hit the hour after SuccessFactors detection
     # shipped: the registry said successfactors, orient kept saying company_site, and the recipe it
     # then consulted was the generic one (2026-07-27).
-    live = aps.classify_landing(url)
-    platform = step.platform or live.platform
-    named = live.platform not in ("", "unknown", "company_site")
-    if named and live.platform != step.platform:
+    seen = _name_the_screen(step, url, text)
+    platform, state, progress = seen["platform"], seen["state"], seen["progress"]
+    if seen["reclassified"]:
         step.record("classify", aps.OK,
-                    f"re-classified {step.platform or 'unclassified'} -> {live.platform}: the "
-                    f"apply moved to {url[:70]}", initiator=body.initiator)
-        step.platform = platform = live.platform
+                    f"re-classified {step.platform or 'unclassified'} -> {seen['live_platform']}: "
+                    f"the apply moved to {url[:70]}", initiator=body.initiator)
+        step.platform = platform
         _save_queue(bb, queue)
-    if platform == "workday":
-        state = ar.map_workday_state(url, text)
-        progress = ar.workday_progress(state)
-    else:
-        state = ar.describe_for_ats(platform, url, text).get("state", "unknown")
-        progress = {"state": state, "recognised": state not in ("unknown", None)}
 
     recognised = bool(progress.get("recognised"))
-    depth = ""
-    if progress.get("steps_to_submit") is not None:
-        depth = f" · {progress['steps_to_submit']} step(s) from Submit"
+    depth = _depth_phrase(progress)
     detail = (f"On {platform}: {state}{depth}." if recognised
               else f"On {platform} but this page ({state}) is not a state we recognise — new "
                    f"territory, worth a careful look before the next move.")
+
+    # THE ORIENTER'S VERDICT IS THE LADDER'S POSITION. Without this the tail reads a `landing_state`
+    # frozen at whatever `classify` said when the apply was entered — session #25 sat on
+    # `indeed_unknown` from 2026-08-04 while the live page was the resume-selection screen, so a
+    # read model asking "which rung is due" got the answer for a page we left long ago. The orient
+    # already knew; nothing wrote it down.
+    step.landing_state = state
 
     # Record only on a CHANGE — the last orient of the same state is not news.
     prior = next((m for m in reversed(step.minis) if m.rung == "orient"), None)
@@ -3999,11 +4061,27 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     rung, ruled_out = step.walk_to_next_rung()
     for rung_id, why_not in ruled_out:
         step.record(rung_id, aps.SKIPPED, why_not, initiator=body.initiator)
+
+    # PAST THE PREFIX, THE PAGE DECIDES. A tail rung IS "what the live screen calls for", so it can
+    # only be chosen from a fresh look — `landing_state` is a memory, and the crank is the moment
+    # it is most likely to be out of date (the previous crank moved the screen). Costs one AX scan
+    # on the tail only; the prefix rungs are unaffected.
+    tail_view: Optional[dict[str, Any]] = None
     if rung is None:
-        return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
-                                    detail="Past the known prefix. The rungs from here depend on "
-                                           f"the platform ({step.platform or 'unclassified'}), and "
-                                           "those are not built yet — drive it and flag the result.")
+        read = await _read_apply_page(bb, obs, browser_url)
+        if read is not None:
+            tail_view = _name_the_screen(step, read["url"], read["text"])
+            step.landing_state = tail_view["state"]
+            if tail_view["reclassified"]:
+                step.platform = tail_view["platform"]
+            rung = aps.tail_rung_for(step.platform, tail_view["state"])
+    if rung is None:
+        seen_state = (tail_view or {}).get("state") or step.landing_state or "unreadable"
+        return await _save_queue_and_view(
+            session, bb, ledger, queue, obs, ok=False,
+            detail=f"We are on {seen_state!r} ({step.platform or 'unclassified'}) and the recipe "
+                   f"has no rung for it — genuinely new territory. Read the page, drive it by "
+                   f"hand, and flag the result so the next application knows this screen.")
 
     tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
     _note_tab_drift(bb, obs, step)      # recorded on the view; never acts on its own
@@ -4046,6 +4124,11 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                            f"mismatch. Re-run the step or resolve it first.")
     style = xs.pick_style()
     await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
+    #: What this crank ACTUALLY did, filled in by whichever branch acts — the teacher half of the
+    #: shadow pair. Reported by the branch rather than parsed back out of its prose: a metric that
+    #: depends on a detail string's wording breaks silently the first time somebody rewords it.
+    _acted: dict[str, Any] = {}
 
     if rung.id == "open_pane":
         ext = step.job_id.split(":", 1)[-1]
@@ -4233,7 +4316,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                     initiator=body.initiator)
         detail = disc.detail
 
-    else:  # account — the wall most ATS put in front of an application
+    elif rung.id == "account":  # the wall most ATS put in front of an application
         import ats_accounts
 
         platform = step.platform or ""
@@ -4313,6 +4396,25 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                           f"application. Credentials are staged as {action['account_id']} — "
                           f"confirm to create it.")
 
+    elif rung.id == aps.SUBMIT_RUNG.id:
+        # THE GATE. Everything above this line is reversible; this line sends an application to a
+        # real employer under the operator's name, and it is the one rung that exists to be pressed
+        # BY THEM. `_check_initiator` admits several initiators; this admits exactly one.
+        if body.initiator != "operator":
+            step.record("submit", aps.HUMAN_REQUIRED,
+                        f"refused: {body.initiator!r} may not submit an application",
+                        initiator=body.initiator)
+            detail = ("Submitting is the operator's, on every platform, always. Nothing was sent.")
+        else:
+            _ok, detail = await _work_submit_rung(step, bb, obs, browser_url, style,
+                                                  initiator=body.initiator, acted=_acted)
+
+    else:
+        # A TAIL RUNG: advance this screen by one. Reversible by construction — `advance_control`
+        # cannot reach a submit control (the lexicons are deliberately separate), so the worst this
+        # can do is move the application forward a page it was always going to move forward.
+        detail = await _work_advance_rung(rung, step, bb, obs, browser_url, style,
+                                          initiator=body.initiator, acted=_acted)
 
     # --- STEPRUNNER, the after half: observe → diff → verify → settle. The rung's record above
     # is a claim; this is the world's answer. The verifier only DEMOTES a claimed ok — a rung
@@ -4337,6 +4439,14 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                  "initiator": body.initiator},
                          expect=_expect, before=_before, after=_after, changes=_changes,
                          verdict=_verdict, evidence=_evidence, claimed=_claimed)
+
+    # SHADOW: what the controller WOULD have decided on the page we decided on. Taken from
+    # `_before` — the look the decision was actually made against — because scoring the local
+    # system against the page it would have seen AFTER the act would flatter it.
+    _shadow_the_crank(rung, step, _before, _acted, step.last_flag or "none",
+                      session_id=session.id)
+    # And the orienter's own practice score, settled the same way: a prediction, then what happened.
+    _score_the_orienter(step, rung, _before, _after, session_id=session.id)
 
     return await _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style,
@@ -4618,6 +4728,360 @@ def _apply_tab(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
 def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
     """The live application tab's current URL (thin wrapper over `_apply_tab`)."""
     return _apply_tab(bb, obs).get("url", "")
+
+
+async def _read_apply_page(bb: Any, obs: dict[str, Any],
+                           browser_url: str) -> Optional[dict[str, Any]]:
+    """Scan the live application tab: url, tab, AX scan, and the recognition text. None if no tab.
+
+    The recognition text is the page text AND the control names together — the apply modal's
+    buttons are where "Use My Last Application" lives, and the body text never carries it.
+    """
+    url = _apply_tab_url(bb, obs)
+    if not url:
+        return None
+    tab = next((t for t in (obs.get("tabs") or []) if t.get("url") == url), {})
+    scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                            "tab_id": tab.get("tab_id", "")}, timeout=25.0)
+    names = " ".join((c.get("name") or "") for c in (scan.get("candidates") or []))
+    return {"url": url, "tab": tab, "scan": scan,
+            "text": f"{scan.get('page_text') or ''} {names}"}
+
+
+def _name_the_screen(step: Any, url: str, text: str) -> dict[str, Any]:
+    """Which platform, which screen, and how far from Submit — the orienter's verdict, in one place.
+
+    Extracted because the TAIL needs the same answer the orient endpoint produces: a tail rung is
+    "what the live page calls for", so the crank that walks it has to name the page first. Two
+    copies of this would be two orienters, and the codebase has already paid for that mistake at
+    the account wall (2026-07-30: "our ui is on the wrong step").
+
+    Depth now comes from `flow_progress` for EVERY platform rather than `workday_progress` for one.
+    The Indeed recipe has held a full ordered spine since it was written and nothing ever counted
+    along it, so an Indeed application could not say how far it was from Submit while a Workday one
+    could — the same asymmetry that left the tail unbuilt.
+    """
+    import apply_recipe as ar
+    live = aps.classify_landing(url)
+    platform = step.platform or live.platform
+    named = live.platform not in ("", "unknown", "company_site")
+    reclassified = named and live.platform != step.platform
+    if reclassified:
+        platform = live.platform
+    if platform == "workday":
+        state = ar.map_workday_state(url, text)
+    else:
+        state = ar.describe_for_ats(platform, url, text).get("state", "unknown")
+    progress = ar.flow_progress(state, platform=platform)
+    if not progress.get("recognised"):
+        # The flow does not place it, but the describer may still have named it. Those are two
+        # different questions — "is this a screen we know" vs "is it on the spine we can count
+        # along" — and collapsing them would report a recognised page as new territory.
+        progress = {**progress, "recognised": state not in ("unknown", "", None)}
+    return {"platform": platform, "state": state, "progress": progress,
+            "reclassified": reclassified, "live_platform": live.platform}
+
+
+def _ax_identities(scan: dict[str, Any]) -> list[str]:
+    """`role|name` for each addressable control — the form both lexicons match against."""
+    return [f"{c.get('role') or ''}|{c.get('name') or ''}"
+            for c in (scan.get("candidates") or []) if c.get("name")]
+
+
+def _control_by_name(scan: dict[str, Any], name: str) -> dict[str, Any]:
+    """The scanned candidate whose name is `name`, so the click is addressed by the role we
+    ACTUALLY found. Hard-coding "button" is what returned NOT_FOUND on a link (2026-07-26)."""
+    for c in (scan.get("candidates") or []):
+        if (c.get("name") or "") == name:
+            return c
+    return {}
+
+
+async def _unanswered_required(browser_url: str, tab_id: str) -> Optional[list[str]]:
+    """Required fields the page still wants, or None if we could not look.
+
+    None and `[]` are different answers and the caller must not merge them: "the form is complete"
+    licenses an advance, "we could not check" does not. Same distinction the challenge pre-gate
+    draws between found-nothing and could-not-look.
+    """
+    try:
+        scan = await _capture_post("/scan_required",
+                                   {"browser_url": browser_url, "tab_id": tab_id}, timeout=25.0)
+    except Exception:  # noqa: BLE001
+        return None
+    if not scan or scan.get("ok") is False:
+        return None
+    out: list[str] = []
+    for row in (scan.get("unanswered") or []):
+        label = str(row.get("field") or "").strip()
+        if label and len(label) <= 60:
+            out.append(label)
+    return out
+
+
+async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
+                             browser_url: str, style: Any, *, initiator: str,
+                             acted: Optional[dict[str, Any]] = None) -> str:
+    """Advance the application ONE SCREEN with the page's own control. Reversible, always.
+
+    Two refusals, both deliberate:
+
+    * **An unanswered required field stops the advance.** The recipe words several of these screens
+      "autofill + Continue", and clicking Continue over a half-filled form is how an application
+      arrives at Submit missing answers nobody chose to leave out. The fill is a separate,
+      already-built action (`/apply_fill`) with its own answer store and its own refusals — this
+      rung points at it rather than reaching past it.
+    * **No advance control means stop, not guess.** `advance_control` cannot reach a submit
+      control, so the failure mode here is a rung that does nothing, which is the safe one.
+    """
+    import apply_recipe as ar
+    from controller.decide import advance_control
+
+    read = await _read_apply_page(bb, obs, browser_url)
+    if read is None:
+        step.record(rung.id, aps.UNKNOWN, "no application tab to advance", initiator=initiator)
+        return "There is no application tab open to advance. Reopen the application first."
+
+    scan, tab = read["scan"], read["tab"]
+    tab_id = tab.get("tab_id", "")
+    action = ar.advance_action(step.platform, rung.id)
+
+    if "fill" in action.lower():
+        pending = await _unanswered_required(browser_url, tab_id)
+        if pending is None:
+            step.record(rung.id, aps.UNKNOWN,
+                        "could not scan the form for required fields", initiator=initiator)
+            return ("I could not read this form's required fields, and the recipe says this screen "
+                    "wants answers before it advances. Not clicking Continue blind — look at the "
+                    "page, or fill it and step again.")
+        if pending:
+            step.record(rung.id, aps.HUMAN_REQUIRED,
+                        f"{len(pending)} required field(s) unanswered: {', '.join(pending[:6])}",
+                        initiator=initiator)
+            return (f"This screen still wants {len(pending)} answer(s) — "
+                    f"{', '.join(pending[:6])}"
+                    + ("…" if len(pending) > 6 else "")
+                    + ". Fill them first; an application must not reach Submit with answers "
+                      "nobody chose to leave out.")
+
+    control = advance_control(_ax_identities(scan))
+    if not control:
+        step.record(rung.id, aps.UNKNOWN,
+                    f"no advance control among {len(scan.get('candidates') or [])} elements "
+                    f"(recipe expects {action or 'Continue'!r})", initiator=initiator)
+        return (f"I cannot see the control that advances this screen — the recipe expects "
+                f"{action or 'Continue'}. Scroll it into view, or drive it by hand and flag it.")
+
+    ctrl = _control_by_name(scan, control)
+    if acted is not None:
+        acted.update({"intent": "click", "params": {"control": control},
+                      "rationale": f"the recipe advances {rung.id} with {action or 'Continue'!r} "
+                                   f"and {control!r} is the control on the page",
+                      "evidence": ("recipe.action", "ax_identities")})
+    res = await _capture_post("/execute", {
+        "browser_url": browser_url, "tab_id": tab_id, "action_id": "click", "target_bbox": {},
+        "target_role": ctrl.get("role") or "button", "target_name": control,
+        "driver": "humanized"})
+    await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+    if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+        step.record(rung.id, aps.FAILED,
+                    f"click on {control!r} returned {res.get('outcome') or 'nothing'}",
+                    initiator=initiator)
+        return f"Could not click {control!r} — the screen has not moved."
+
+    step.record(rung.id, aps.OK, f"clicked {control!r} to advance {rung.id}", initiator=initiator)
+    return (f"Clicked {control!r}. Step again to see which screen that landed on — the recipe "
+            f"expects one of {', '.join(ar.expected_after(step.platform, rung.id)) or 'unknown'}.")
+
+
+async def _work_submit_rung(step: Any, bb: Any, obs: dict[str, Any], browser_url: str,
+                            style: Any, *, initiator: str,
+                            acted: Optional[dict[str, Any]] = None) -> tuple[bool, str]:
+    """Send the application. The operator has already pressed the button that got us here.
+
+    **The captcha race is why this is one function and not two.** `apply_recipe.APPLY_BRANCHES`
+    records it from a live loss (Purple Carrot, 2026-07-17): a solved reCAPTCHA token expires in
+    1–2 minutes and expires SILENTLY — Submit just goes disabled, no error text, no alert, page
+    looks identical. So the gate is checked and the submit fires in the SAME pass, with no human
+    round-trip and no re-probe in between. Anything that asks a question here loses the race.
+
+    An ACTIVE challenge escalates and never gets solved for the operator — that rule does not bend
+    at the gate, it matters more here.
+    """
+    import apply_recipe as ar
+
+    vis = await _capture_post("/challenge_visibility", {"browser_url": browser_url}, timeout=8.0)
+    if vis and vis.get("ok") is not False and vis.get("blocking"):
+        step.record("submit", aps.BLOCKED,
+                    f"challenge up at the gate: {vis}", initiator=initiator)
+        return False, ("A challenge is up on the submit screen. Clear it yourself — we never "
+                       "auto-solve — and press Submit again the moment it clears. The token "
+                       "expires in about a minute, so do not wait.")
+
+    read = await _read_apply_page(bb, obs, browser_url)
+    if read is None:
+        step.record("submit", aps.UNKNOWN, "no application tab at the gate", initiator=initiator)
+        return False, "There is no application tab open. Nothing was sent."
+
+    scan, tab = read["scan"], read["tab"]
+    control = ar.submit_control(_ax_identities(scan))
+    if not control:
+        step.record("submit", aps.UNKNOWN,
+                    f"no submit control among {len(scan.get('candidates') or [])} elements",
+                    initiator=initiator)
+        return False, ("I cannot see a submit control on this screen. Nothing was sent — scroll it "
+                       "into view and press again, or check we are really at the review step.")
+
+    ctrl = _control_by_name(scan, control)
+    if acted is not None:
+        acted.update({"intent": "click", "params": {"control": control},
+                      "rationale": f"the operator pressed the gate and {control!r} is this page's "
+                                   f"submit control",
+                      "evidence": ("operator", "ax_identities")})
+    res = await _capture_post("/execute", {
+        "browser_url": browser_url, "tab_id": tab.get("tab_id", ""), "action_id": "click",
+        "target_bbox": {}, "target_role": ctrl.get("role") or "button",
+        "target_name": control, "driver": "humanized"})
+    await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
+
+    if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+        # A DISABLED SUBMIT IS A CAPTCHA SUSPECT FIRST. The token expiring is silent and looks
+        # exactly like a field problem; diagnosing fields first is how the 2026-07-17 loss was
+        # misread for an hour.
+        step.record("submit", aps.FAILED,
+                    f"click on {control!r} returned {res.get('outcome') or 'nothing'}",
+                    initiator=initiator)
+        return False, (f"{control!r} did not take. If it looked enabled, suspect an expired "
+                       f"captcha token before the fields — re-check the challenge and press again "
+                       f"immediately. Nothing was sent.")
+
+    # CONFIRM FROM OUTSIDE. `/execute` returning ok means the click dispatched, and this codebase
+    # has twice recorded a dispatched click as an accomplished act. `submitted` is the one flag
+    # that means success, so it is the last one allowed to be claimed on a dispatch alone.
+    after = await _read_apply_page(bb, obs, browser_url)
+    landed = _name_the_screen(step, after["url"], after["text"]) if after else None
+    state = (landed or {}).get("state") or ""
+    step.landing_state = state or step.landing_state
+    if landed and (landed["progress"] or {}).get("done"):
+        step.record("submit", aps.OK, f"clicked {control!r}; the page reached {state}",
+                    initiator=initiator)
+        step.finish(aps.SUBMITTED, f"submitted via {control!r}; confirmed by {state}")
+        return True, (f"Sent. {control!r} was pressed and the page reached {state} — recorded as "
+                      f"submitted.")
+
+    step.record("submit", aps.UNKNOWN,
+                f"clicked {control!r} but the page reads {state or 'unreadable'}, not a "
+                f"submitted state", initiator=initiator)
+    return False, (f"{control!r} was pressed but the page reads {state or 'unreadable'} rather "
+                   f"than a confirmation, so this is NOT recorded as submitted. It may be a "
+                   f"post-submit branch (an AI-recruiter gate, a survey) or the click may not have "
+                   f"taken — look at the tab before pressing anything again.")
+
+
+#: What the local system is asked to have an opinion about, per rung. Shadow rows are only worth
+#: journaling where the controller COULD have a view — the mapping is the honest statement of which
+#: half of the ladder the inner layers are being scored on.
+_RUNG_INTENT: dict[str, str] = {
+    "open_pane": "click", "verify_identity": "observe", "enter_apply": "click",
+    "classify": "observe", "account": "observe", "submit": "click",
+}
+
+
+def _shadow_the_crank(rung: Any, step: Any, before: Any, acted: dict[str, Any],
+                      outcome: str, *, session_id: int) -> None:
+    """Journal what the CONTROLLER would have decided here, beside what we actually did.
+
+    Shadow mode has existed since the controller was built and had **never run outside a test** —
+    `shadow_step` was imported by `test_controller_evals` and by nothing else, so
+    `metrics.shadow_agreement` was scoring an empty set and the controller's read of a live page
+    was never once compared to a real one. The module is one call from being live; this is the call.
+
+    FREE by construction: `model=None`, so only the deterministic rungs run. `shadow.py`'s own rule
+    is that a shadow drive must not spend unless the caller opts in, and a crank the operator
+    presses is not a place to start spending on their behalf.
+
+    Never raises. A shadow row is an observation about ourselves; failing to take one must not cost
+    the operator the step they asked for.
+    """
+    try:
+        from controller.bundle import build_bundle
+        from controller.shadow import shadow_step
+        from interaction.decision import Decision
+
+        teacher = Decision(
+            intent=acted.get("intent") or _RUNG_INTENT.get(rung.id, "observe"),
+            params=acted.get("params") or {},
+            confidence=1.0, rung="teacher",
+            rationale=acted.get("rationale") or f"the operator worked the {rung.id} rung",
+            evidence=tuple(acted.get("evidence") or ("operator",)))
+        bundle = build_bundle(
+            task="apply", url=getattr(before, "url", "") or "",
+            goal_text=f"{step.title or step.job_id} at {step.company or 'unknown'}",
+            ats=step.platform or None,
+            ax_candidates=list(getattr(before, "candidates", None) or []),
+            belief=getattr(before, "belief", None),
+            window=getattr(before, "window", None))
+        shadow_step(teacher, bundle, session_id=str(session_id), outcome=outcome)
+    except Exception:  # noqa: BLE001 — measuring ourselves must never break the drive
+        pass
+
+
+def _score_the_orienter(step: Any, rung: Any, before: Any, after: Any, *,
+                        session_id: int) -> None:
+    """Settle the orienter's prediction for this crank: did the page go where the recipe said?
+
+    THE ORIENTER WAS BEING USED AND NEVER PRACTISED. It names a state on every look, the recipe
+    names the states that one may lead to, and one action later the answer is sitting in the
+    StepRunner's `after` observation. Nobody was closing that loop, so the orienter could not get
+    better at the one thing it does — and "practise" was a word about it rather than a mechanism.
+
+    Read off observations already taken: no extra scan, no extra cost. `after.url` is enough for
+    the Indeed spine (the recipe's URL patterns name every screen in it); a platform whose states
+    are only distinguishable by text scores `unscored` rather than guessing, which keeps the
+    accuracy number honest about what it covers.
+
+    Never raises — see `_shadow_the_crank`.
+    """
+    try:
+        import apply_recipe as ar
+        import orientation_log
+
+        def _state_of(o: Any) -> str:
+            """Name the screen an observation was taken on, from the observation alone."""
+            names = " ".join(str(c.get("name") or "")
+                             for c in (getattr(o, "candidates", None) or []))
+            return ar.describe_for_ats(step.platform, getattr(o, "url", "") or "",
+                                       names).get("state", "unknown")
+
+        # FROM THE BEFORE-OBSERVATION, not from `step.landing_state` — the act has already run by
+        # the time this is called and several rungs update the record on their way out, so reading
+        # the record here would score the prediction against the state it predicted.
+        state_before = _state_of(before)
+        predicted = ar.expected_after(step.platform, state_before)
+        if not predicted:
+            return
+        state_after = _state_of(after)
+        orientation_log.record_prediction(
+            session_id, platform=step.platform or "", state_before=state_before or "",
+            predicted=predicted, state_after=state_after, rung=rung.id,
+            step_job_id=step.job_id)
+    except Exception:  # noqa: BLE001 — a scorecard must not break the thing it scores
+        pass
+
+
+def _depth_phrase(progress: dict[str, Any]) -> str:
+    """" · at most 4 screens from Submit", or "" when the flow cannot place this page.
+
+    Worded as a CEILING because that is what it is: platforms skip screens whose answers the
+    profile already holds, and skipping only ever shortens the path. "4 screens from Submit" would
+    claim a precision about this particular application that the spine cannot give.
+    """
+    left = progress.get("steps_to_submit")
+    if left is None:
+        return ""
+    if left == 0:
+        return " · at the Submit gate"
+    return f" · at most {left} screen{'s' if left != 1 else ''} from Submit"
 
 
 async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool,

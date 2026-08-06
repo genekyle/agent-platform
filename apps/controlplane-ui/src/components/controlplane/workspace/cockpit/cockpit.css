@@ -663,3 +663,72 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .journal__event-ts { margin-left: auto; font-size: 11px; color: var(--text-subtle); }
 .journal__event-path { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
 .journal__event-from { color: var(--text-subtle); }
+
+/* --- the flow strip: how far this application is from Submit -------------------------------- */
+/* The recipe has always known the spine; the cockpit's only word for progress was "Work this
+   step". This is the object being worked, so it carries no controls of its own. */
+.flowstrip {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.flowstrip__head { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+.flowstrip__head strong { color: var(--text); }
+.flowstrip__gate-note { color: var(--danger); font-weight: 600; }
+.flowstrip__steps {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin: 0; padding: 0; list-style: none;
+  counter-reset: none;
+}
+.flowstrip__step {
+  font-size: 11px; line-height: 1.4;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.flowstrip__step.is-past { opacity: 0.45; text-decoration: line-through; }
+.flowstrip__step.is-current {
+  border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 600;
+}
+.flowstrip__step.is-gate { border-color: var(--danger); color: var(--danger); }
+.flowstrip__step.is-gate.is-current { background: var(--danger-soft); color: var(--danger); }
+.flowstrip--unknown {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--warning);
+  background: var(--warning-soft); border-color: var(--warning);
+}
+
+/* --- the gate: the one irreversible press ---------------------------------------------------- */
+.gatecard { border-color: var(--danger); background: var(--danger-soft); }
+.gatecard__what { display: grid; gap: 4px; margin: 8px 0 10px; }
+.gatecard__what > div { display: flex; gap: 8px; font-size: 13px; }
+.gatecard__what dt { min-width: 76px; color: var(--text-muted); margin: 0; }
+.gatecard__what dd { margin: 0; color: var(--text); font-weight: 500; }
+.gatecard__note { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+/* ONE primary button, styled so it cannot be pressed by muscle memory. `btn-consequential` must
+   sit AFTER `.btn-primary` here — the 2026-08-05 finding was that `.btn-primary` above `.btn` at
+   equal specificity meant every primary button in the product rendered as a plain one. */
+.cockpit .btn-primary.btn-consequential {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #16100f;
+}
+.cockpit .btn-primary.btn-consequential:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* --- the learning scoreboard: what the inner layers are getting right ------------------------ */
+.learning { display: grid; gap: 10px; }
+.learning__row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.learning__name { min-width: 92px; color: var(--text-muted); }
+.learning__score { font-size: 15px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.learning__none { color: var(--text-muted); font-style: italic; }
+.learning__meta { color: var(--text-muted); }
+.learning__trials { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.learning__trial { font-size: 11px; color: var(--text-muted); display: flex; gap: 6px; }
+.learning__trial .is-hit { color: var(--accent); }
+.learning__trial .is-miss { color: var(--danger); }
+.learning__trial .is-unscored { color: var(--text-muted); }

@@ -15,6 +15,7 @@ drop-in behind the `model` seam. The escalation TRIGGERS (outcome-driven) live i
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Optional, Protocol
 
 from interaction.contract import Intent
@@ -91,26 +92,43 @@ def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, 
         return (intent, {"field": field}, PREDICTION_CONFIDENCE_FIELD, why,
                 ("state", "unanswered[0].field", "unanswered[0].kind"))
 
-    # Propose the label AS THE PAGE RENDERS IT, not the lexicon entry that matched it. "Continue"
-    # is a substring of "Save and Continue", so matching on the lexicon and then proposing the
-    # lexicon would hand the teacher a control name the page does not actually have — a proposal
-    # nobody can approve as written, and a needless `not_found` if they did.
-    names = [ident.partition("|")[2].strip() for ident in bundle.ax_identities]
-    names = [n for n in names if n]
-    for control in _ADVANCE_CONTROLS:
-        matches = [n for n in names if control.lower() in n.lower()]
-        if matches:
-            # Longest match wins: on a page carrying both "Continue" and "Save and Continue"
-            # the specific one is the real advance control and the bare one is a substring of it.
-            actual = max(matches, key=len)
-            return (Intent.CLICK.value, {"control": actual}, PREDICTION_CONFIDENCE_ADVANCE,
-                    f"no required field is unanswered and {actual!r} is on the page — the step "
-                    f"looks complete and this is the control that advances it",
-                    ("state", "unanswered", "ax_identities"))
+    actual = advance_control(bundle.ax_identities)
+    if actual:
+        return (Intent.CLICK.value, {"control": actual}, PREDICTION_CONFIDENCE_ADVANCE,
+                f"no required field is unanswered and {actual!r} is on the page — the step "
+                f"looks complete and this is the control that advances it",
+                ("state", "unanswered", "ax_identities"))
 
     return (Intent.OBSERVE.value, {}, PREDICTION_CONFIDENCE_NONE,
             "nothing unanswered and no advance control found — no local guess is available",
             ("state", "unanswered"))
+
+
+def advance_control(ax_identities: Sequence[str]) -> str:
+    """The control on this page that advances the form, AS THE PAGE RENDERS IT — or "".
+
+    Public because the apply ladder's tail needs the same answer this module's prediction needs,
+    and a second lexicon in the router would be a second opinion about which button moves a form
+    on. `Submit` stays out of it by construction (see `_ADVANCE_CONTROLS`): the one irreversible
+    control is never something a lexicon match may reach for.
+
+    Accepts `role|name` identities or bare names, so both a Bundle and a raw AX scan can ask.
+
+    Two rules, both learned the hard way:
+      * **Return the label the page renders**, not the lexicon entry that matched it — "Continue"
+        is a substring of "Save and Continue", and proposing the lexicon hands back a control name
+        the page does not have.
+      * **Longest match wins.** On a page carrying both, the specific one is the real advance
+        control and the bare one is a substring of it.
+    """
+    names = [ident.partition("|")[2].strip() if "|" in ident else ident.strip()
+             for ident in (ax_identities or ())]
+    names = [n for n in names if n]
+    for control in _ADVANCE_CONTROLS:
+        matches = [n for n in names if control.lower() in n.lower()]
+        if matches:
+            return max(matches, key=len)
+    return ""
 
 
 class Orienter(Protocol):
