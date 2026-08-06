@@ -5635,3 +5635,66 @@ on every advance now.
 1475 controlplane-api green, 241 interaction green. Session #25 left AT the gate — `review-module`,
 `steps_to_submit: 0`, the cockpit rendering role/employer/platform above one red button. **Submit
 is the operator's, unpressed.**
+
+---
+
+## 2026-08-06 (2) — A session holds many searches: the once-only rule was being applied one level too high
+
+**Operator, on being told a new query meant a new session:** *"we aren't exiting Indeed and we
+shouldn't because that requires more steps… this system should learn to reuse sessions properly so
+we don't waste time and most importantly retracing our steps and going back and restarting sessions
+just because we want to abandon a query. Sessions are active until we end them, querying and
+re-querying shouldn't end a session."*
+
+They were right, and the wrong idea was written down in two places and enforced in a third.
+`session_checkpoints.query_entered` said it *"runs ONCE per session"*, and `initialize` 409-ed a
+second query with *"A session holds ONE query — start a new session for {query}."* That conflated:
+
+* **Do not re-run THIS query** — true, and the whole reason `consuming` exists. Indeed caches and
+  collapses a repeat, so results we already saw stop coming back.
+* **This session gets one query, ever** — never true, and expensive. Abandoning a query meant
+  abandoning the SESSION: closing a signed-in browser, provisioning another, signing in again,
+  re-establishing everything that had nothing to do with the query.
+
+**A SEARCH is a scope inside a SESSION.** `provisioned`/`authenticated` belong to the session and
+are never scoped; `query_entered`, `radius_set`, `page:N`, `select:N` belong to one search and are
+scoped (`s2/page:1`). Search 1 stays unscoped so every existing ledger reads back unchanged, and the
+scoping happens inside `Ledger.holds/mark` so no caller had to learn searches exist.
+
+**Nothing is deleted when a search ends.** The old rungs stay under their own scope, which is what
+keeps the promise real: the guard became *"have we spent THIS query"*, not *"have we spent any
+query"*. Re-running a spent query is still refused — including one adopted from a sweep the ledger
+never witnessed.
+
+**Two defects in my own first cut, both caught by the tests:**
+* `has_spent` parsed the query out of the rung's **evidence prose** — the exact fragility this same
+  session had criticised an hour earlier when journaling the shadow pair. Queries are recorded
+  structurally now, with an evidence fallback for old ledgers and a backfill that self-heals them.
+* The guard sat INSIDE `if holds("query_entered")`, which is scoped to the *current* search — so it
+  stopped running the moment a new search was declared but not yet run, which is precisely when
+  somebody would try to go back to the query they had just left. **A session-wide question must not
+  be asked from inside a per-search branch.**
+
+### The first re-query in this system's life immediately found a commit bug
+
+`run_query` typed both fields correctly — the screenshot shows "data analytics" / "Boston, MA" — and
+the page did not move. **Twice**, both times `clicked=True, moved=False`. The existing retry assumed
+the staged-widget case (2026-07-25: the first click dismisses the location popup, the second submits)
+and re-clicked the same way, which cannot help here.
+
+**The cause: the fill sets the value AUTHORITATIVELY** — it has to, per-char typing races React — so
+React's controlled input never saw an `onChange`, the form submitted the state it still believed in,
+and *navigating to the query already in the URL looks exactly like nothing happening.*
+
+**Enter goes to the ELEMENT, not the form.** A keydown on the focused input is handled by the input's
+own listener rather than by React's submit state. So the retry now **alternates**: the engine's
+declared commit method, then the other one, still gated on `not moved` so it can never double-spend
+a search that actually went through. The third attempt ran the query.
+
+*Worth keeping:* the ladder refused to mark the rung on both failures — *"Submitted 'data analytics'
+but could not confirm a results page for it. Left unmarked on purpose."* The honesty machinery
+worked perfectly while the action underneath it did not, which is the right way round.
+
+Cockpit renders the true shape now: **Session → Search N → Page N**, with "Search something else"
+offered as a detour from read/choose/walked-out. Driven live: session #25 search 2, "data analytics"
+/ Boston / 100mi, `provisioned` and `authenticated` still held, 22 results (14 new).
