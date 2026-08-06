@@ -115,11 +115,26 @@ def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, 
 #: report it as progress.
 _NEGATIONS = ("don't", "dont", "do not", "never", "cancel", "discard", "without saving")
 
+#: Words that mean the control LEAVES the flow rather than advancing it. Same lexicon, second way
+#: of matching the wrong button — and this one is not a negation, so the guard above cannot see it.
+#:
+#: Found live 2026-08-06, one screen after the negation: Indeed's highlights editor offers "Save and
+#: close", which matched the lexicon's bare "Save". Pressing it opened a modal headed *"Save
+#: application progress before you exit"* — an EXIT dialog. The drive pressed it twice, each time
+#: journaling a confirmed `content_changed` advance, because the modal opening really is a content
+#: change. A verified advance that walked toward the door.
+#:
+#: The root cause is that bare "Save" is too weak an entry to stand alone: it matches "Save and
+#: close", "Save draft", "Save and finish later". It stays in the lexicon because some forms really
+#: do advance on Save — it just may not carry an exit word with it.
+_EXITS = ("close", "exit", "quit", "later", "back to", "go back", "leave")
+
 
 def _is_negated(name: str, term: str) -> bool:
-    """Does `name` match `term` only by containing its negation? — "Don't save" vs "Save"."""
+    """Does `name` match `term` only by negating it ("Don't save") or by leaving the flow
+    ("Save and close")? Either way it is not the control that advances this screen."""
     low = name.lower()
-    if not any(neg in low for neg in _NEGATIONS):
+    if not any(w in low for w in _NEGATIONS + _EXITS):
         return False
     # A negation word anywhere in a control whose only claim to being the advance is a substring
     # match is enough to disqualify it. Deliberately blunt: the cost of skipping a real control is

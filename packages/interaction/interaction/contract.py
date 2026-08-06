@@ -130,9 +130,19 @@ INTENT_PARAMS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     Intent.CHECK_GROUP.value:    (frozenset({"field"}),   frozenset({"field", "values", "value"})),
     Intent.UPLOAD.value:         (frozenset({"field"}),   frozenset({"field", "path"})),
     # The one that bit us: a click addresses a CONTROL by its visible text. Never a field.
-    Intent.CLICK.value:          (frozenset({"control"}), frozenset({"control"})),
+    #
+    # `role` is OPTIONAL and defaults to `button` at the actuator. It is allowed because the
+    # interaction layer's actual addressing is role + accessible name (PRINCIPLES §6) and a click
+    # that cannot say the role is under-specified: everything that is not a button — a checkbox, a
+    # link, a menuitem — becomes unaddressable through this verb. Live 2026-08-06: ticking Indeed's
+    # "No work experience to add" through the teacher seam returned
+    # `not_found: target not found by name (role=button)` on a checkbox that was plainly on the
+    # page, and the only ways round it were a bespoke selector or a hand-driven click — both of
+    # them the thing §6 exists to prevent.
+    Intent.CLICK.value:          (frozenset({"control"}), frozenset({"control", "role"})),
     Intent.SCROLL.value:         (frozenset(),            frozenset({"direction", "amount"})),
-    Intent.SUBMIT.value:         (frozenset(),            frozenset({"form", "control"})),
+    # SUBMIT takes `role` for the same reason, and still refuses to guess the control name.
+    Intent.SUBMIT.value:         (frozenset(),            frozenset({"form", "control", "role"})),
     Intent.DESCRIBE.value:       (frozenset({"field"}),   frozenset({"field"})),
     Intent.RESOLVE_ANSWER.value: (frozenset({"field"}),   frozenset({"field", "value", "values"})),
     Intent.OBSERVE.value:        (frozenset(),            frozenset()),

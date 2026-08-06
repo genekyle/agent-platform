@@ -4764,3 +4764,20 @@ def test_cockpit_lens_keeps_a_safe_visual_even_without_a_promoted_belief():
         "artifact": "trace.json",
         "screenshot_filename": "safe-shot.png",
     }
+
+
+def test_a_refusing_form_is_diagnosed_as_refusal_not_as_a_wrong_recipe():
+    """Live 2026-08-06 on Indeed's resume-review screen: Continue no-opped beside a "Dismiss error"
+    control and the page said "We couldn't pull any work experience or education from your
+    resume". The ladder's mismatch wording blames the recipe ("if it keeps happening the recipe is
+    wrong about this page"), which is the wrong diagnosis — the recipe was right and the form was
+    saying no."""
+    from routers import session_control as sc
+
+    refusing = {"candidates": [{"role": "button", "name": "Continue"},
+                               {"role": "button", "name": "Dismiss error"}]}
+    assert sc._page_is_refusing(refusing) is True
+    assert sc._page_is_refusing({"candidates": [{"role": "alert", "name": ""}]}) is True
+    # A clean page is not refusing anything.
+    assert sc._page_is_refusing({"candidates": [{"role": "button", "name": "Continue"}]}) is False
+    assert sc._page_is_refusing({}) is False

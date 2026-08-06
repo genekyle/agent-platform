@@ -4826,6 +4826,40 @@ def _control_by_name(scan: dict[str, Any], name: str) -> dict[str, Any]:
     return {}
 
 
+#: AX signals that the page is SHOWING AN ERROR. A control offering to dismiss one is the most
+#: reliable tell there is: it only exists when there is an error to dismiss.
+_ERROR_CONTROLS = ("dismiss error", "close error", "dismiss alert")
+
+
+def _page_is_refusing(scan: dict[str, Any]) -> bool:
+    """Is the page displaying an error right now? Read off the AX, not the pixels."""
+    for c in (scan.get("candidates") or []):
+        name = str(c.get("name") or "").lower()
+        role = str(c.get("role") or "").lower()
+        if role in ("alert", "alertdialog") or any(e in name for e in _ERROR_CONTROLS):
+            return True
+    return False
+
+
+async def _refusal_text(browser_url: str, tab_url: str) -> str:
+    """What the page says it is refusing about, in its own words. "" when it will not say.
+
+    Deliberately the page's OWN sentence rather than a diagnosis of ours: the operator is being
+    asked to fix something, and a paraphrase of an error is a worse instruction than the error.
+    """
+    try:
+        res = await _capture_post("/page_content",
+                                  {"browser_url": browser_url, "tab_url": tab_url}, timeout=15.0)
+    except Exception:  # noqa: BLE001
+        return ""
+    text = " ".join((res.get("text") or "").split())
+    for marker in ("We couldn't", "We could not", "Please ", "Required", "This field"):
+        i = text.find(marker)
+        if i >= 0:
+            return text[i:i + 240].strip()
+    return ""
+
+
 async def _unanswered_required(browser_url: str, tab_id: str) -> Optional[list[str]]:
     """Required fields the page still wants, or None if we could not look.
 
@@ -4901,7 +4935,33 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
                 + ". Fill them first; an application must not reach Submit with answers "
                   "nobody chose to leave out.")
 
-    control = advance_control(_ax_identities(scan))
+    # THE FORM MAY BE REFUSING US, not failing us. A Continue that no-ops beside a visible error is
+    # a rejected form, and the ladder's own message for a mismatch — "if it keeps happening the
+    # recipe is wrong about this page" — is exactly the wrong diagnosis there: the recipe is right,
+    # the page is saying no. Live 2026-08-06, Indeed's resume-review screen: "We couldn't pull any
+    # work experience or education from your resume", Continue inert, and the drive would have
+    # retried it forever while blaming its own map.
+    #
+    # Gated on the PREVIOUS attempt having mismatched, so a stale banner from something else does
+    # not stop a first try. Two facts together — we pressed it and nothing moved, and the page is
+    # showing an error — are what mean refusal; either alone does not.
+    if step.last_flag == aps.MISMATCH and _page_is_refusing(scan):
+        says = await _refusal_text(browser_url, read["url"])
+        step.record(rung.id, aps.HUMAN_REQUIRED,
+                    f"the form is refusing: {says or 'an error is displayed we could not read'}",
+                    initiator=initiator)
+        return ("This screen is refusing to advance, and it is showing an error rather than "
+                "ignoring the click"
+                + (f' — it says: "{says}"' if says else " that we could not read")
+                + ". The recipe is right about the page; the page wants something. This one is "
+                  "yours — nothing here can be answered on your behalf.")
+
+    # THE RECIPE FIRST, the generic lexicon second. Where we have actually stood on a screen and
+    # read its buttons, that observation beats a substring guess — and on Indeed's highlights
+    # screen the lexicon cannot reach the real control ("Review details") while the only thing it
+    # CAN match is the exit.
+    identities = _ax_identities(scan)
+    control = ar.named_control(step.platform, rung.id, identities) or advance_control(identities)
     if not control:
         step.record(rung.id, aps.UNKNOWN,
                     f"no advance control among {len(scan.get('candidates') or [])} elements "

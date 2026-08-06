@@ -39,7 +39,8 @@ INDEED_APPLY_RECIPE = [
     # {Save, Don't save} modal, and the advance lexicon's longest-match tie-break picked the
     # negation (fixed in `decide._is_negated`). A screen whose controls include a discard is one
     # to be careful on.
-    {"step": 2, "state": "indeed_apply_resume_highlights", "action": "highlight resume details + Continue",
+    {"step": 2, "state": "indeed_apply_resume_highlights", "action": "highlight resume details",
+     "control": "Review details",
      "expect": ["indeed_apply_resume_review", "indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
     {"step": 3, "state": "indeed_apply_questions",        "action": "autofill + Continue",
      "expect": ["indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
@@ -1053,6 +1054,38 @@ def submit_control(ax_identities) -> str:
         if matches:
             return max(matches, key=len)
     return ""
+
+
+def named_control(platform: str, state: Optional[str], ax_identities) -> str:
+    """The control THIS RECIPE names for this screen, matched against the page — or "".
+
+    THE RECIPE OUTRANKS THE GENERIC LEXICON on a screen it knows by name. `advance_control`'s
+    lexicon is a fallback for pages nobody has driven; where we have actually stood on a screen and
+    read its buttons, that observation is better than a guess and should not have to be re-derived
+    by substring every time.
+
+    Measured live 2026-08-06 on Indeed's highlights screen: the advance is **"Review details"**,
+    which the generic lexicon cannot reach — its nearest entry is "Review your application", and
+    the only thing it *could* match was "Save and close", the exit. A recipe that has seen the
+    screen should simply say so.
+
+    Still matched AS RENDERED rather than returned verbatim, and still refuses when the named
+    control is absent: a recipe naming a button the page does not have is a stale recipe, and the
+    honest answer there is "" — not a click on whatever else happened to be lying around.
+    """
+    if _canon(platform) != "indeed_quick_apply":
+        return ""
+    wanted = ""
+    for entry in INDEED_APPLY_RECIPE:
+        if entry.get("state") == state:
+            wanted = str(entry.get("control") or "")
+            break
+    if not wanted:
+        return ""
+    names = [i.partition("|")[2].strip() if "|" in i else str(i).strip()
+             for i in (ax_identities or ())]
+    matches = [n for n in names if n and wanted.lower() in n.lower()]
+    return max(matches, key=len) if matches else ""
 
 
 def advance_action(platform: str, state: Optional[str]) -> str:

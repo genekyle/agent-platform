@@ -142,5 +142,28 @@ def test_the_advance_matcher_never_presses_a_negation():
     for negation in ("Do not continue", "Cancel and continue", "Discard and continue",
                      "Continue without saving", "Never continue"):
         assert advance_control([f"button|{negation}"]) == "", f"{negation!r} must not read as advance"
+    # AND the exit dressed as an advance, found one screen later on the same drive: "Save and
+    # close" matched the lexicon's bare "Save" and opened Indeed's "Save application progress
+    # before you exit" modal. Not a negation, so the negation guard alone could not see it.
+    assert advance_control(["button|Save and close", "button|Report an issue"]) == ""
+    for exit_ctrl in ("Save and finish later", "Continue later", "Save and exit", "Go back"):
+        assert advance_control([f"button|{exit_ctrl}"]) == "", f"{exit_ctrl!r} leaves the flow"
     # The tie-break it was built for still works.
     assert advance_control(["button|Continue", "button|Save and Continue"]) == "Save and Continue"
+
+
+def test_the_recipe_outranks_the_generic_lexicon_on_a_screen_it_knows():
+    """Live 2026-08-06: Indeed's highlights screen advances on "Review details", which the generic
+    lexicon cannot reach — and the only entry it CAN match there is "Save and close", the exit."""
+    import apply_recipe as ar
+    from controller.decide import advance_control
+    page = ["button|Save and close", "button|Go back", "button|Review details",
+            "button|Report an issue"]
+    assert advance_control(page) == "", "the lexicon has nothing safe to offer on this screen"
+    assert ar.named_control("indeed", "indeed_apply_resume_highlights", page) == "Review details"
+    # A recipe naming a button the page does not have is stale — the honest answer is "", never a
+    # click on whatever else was lying around.
+    assert ar.named_control("indeed", "indeed_apply_resume_highlights",
+                            ["button|Save and close"]) == ""
+    # Screens the recipe does not name a control for fall through to the lexicon.
+    assert ar.named_control("indeed", "indeed_apply_resume_selection", ["button|Continue"]) == ""
