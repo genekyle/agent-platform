@@ -4063,18 +4063,38 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         step.record(rung_id, aps.SKIPPED, why_not, initiator=body.initiator)
 
     # PAST THE PREFIX, THE PAGE DECIDES. A tail rung IS "what the live screen calls for", so it can
-    # only be chosen from a fresh look — `landing_state` is a memory, and the crank is the moment
-    # it is most likely to be out of date (the previous crank moved the screen). Costs one AX scan
-    # on the tail only; the prefix rungs are unaffected.
+    # only be chosen from a fresh look — `landing_state` is a memory, and the record can be a day
+    # stale (session #25 sat on `indeed_unknown` from the day it was classified while the live tab
+    # was the resume-selection screen).
+    #
+    # THIS LOOK ACTS ON NOTHING, and that is deliberate. The panel offers this press as "Read this
+    # page", and a press that re-read AND then clicked Continue would be the panel lying about what
+    # its control does — the same dishonesty as a button that cannot act, pointing the other way.
+    # It also matches the rule the account rung was corrected into: look at the screen before
+    # deciding what it needs, because "a rung that assumes the screen it needs will always be
+    # confident and will sometimes be nowhere near it".
+    #
+    # The cost is one extra press, once, at the only moment we genuinely did not know where we
+    # were. Every press after this one is a single legible advance.
     tail_view: Optional[dict[str, Any]] = None
     if rung is None:
         read = await _read_apply_page(bb, obs, browser_url)
         if read is not None:
+            was = step.landing_state or "nothing"
             tail_view = _name_the_screen(step, read["url"], read["text"])
             step.landing_state = tail_view["state"]
             if tail_view["reclassified"]:
                 step.platform = tail_view["platform"]
-            rung = aps.tail_rung_for(step.platform, tail_view["state"])
+            found = aps.tail_rung_for(step.platform, tail_view["state"])
+            if found is not None:
+                step.record("orient", aps.OK,
+                            f"{tail_view['state']} — the ladder remembered {was}",
+                            initiator=body.initiator)
+                return await _save_queue_and_view(
+                    session, bb, ledger, queue, obs, ok=True,
+                    detail=(f"We are on {aps.screen_label(tail_view['state'])} "
+                            f"({tail_view['state']}). The recipe advances it with "
+                            f"{found.label} — press again to work it."))
     if rung is None:
         seen_state = (tail_view or {}).get("state") or step.landing_state or "unreadable"
         return await _save_queue_and_view(
