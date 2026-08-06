@@ -154,6 +154,8 @@ def record(session_id: Any, verdict: Optional[dict[str, Any]], *, step_job_id: s
     with _lock:
         rows = _read()
         for prev in reversed(rows):
+            if prev.get("kind") == PREDICTION:
+                continue          # a different row kind; it is not "the last verdict" for anything
             if prev.get("session_id") == str(session_id):
                 # Only the LAST verdict for this session suppresses — a situation we return to
                 # after being elsewhere is a genuine new observation, and the transition is the
@@ -178,6 +180,11 @@ def resolve(session_id: Any, *, action_id: str, agreed: bool) -> Optional[dict[s
     with _lock:
         rows = _read()
         for row in reversed(rows):
+            # A prediction row has no `outcome` field at all, so an unguarded "not row['outcome']"
+            # matches it and stamps the operator's action onto a transition trial — labelling the
+            # wrong row kind with the wrong kind of label.
+            if row.get("kind") == PREDICTION:
+                continue
             if row.get("session_id") == str(session_id) and not row.get("outcome"):
                 row["outcome"] = CONFIRMED if agreed else CORRECTED
                 row["operator_action"] = action_id
@@ -186,13 +193,90 @@ def resolve(session_id: Any, *, action_id: str, agreed: bool) -> Optional[dict[s
     return None
 
 
+#: Row kinds. A plain orientation row has no `kind` (every row written before predictions existed),
+#: so absence means "a verdict" and readers filter predictions IN rather than out.
+PREDICTION = "prediction"
+
+HIT = "hit"            # the state we reached was one the recipe said to expect
+MISS = "miss"          # the recipe made a call and the page went somewhere else
+UNSCORED = "unscored"  # no prediction to score, or we could not read where we landed
+
+
+def record_prediction(session_id: Any, *, platform: str, state_before: str,
+                      predicted: tuple[str, ...] | list[str], state_after: str,
+                      rung: str = "", step_job_id: str = "") -> Optional[dict[str, Any]]:
+    """Score ONE orienter prediction against what actually happened. Returns the row, or None.
+
+    THE ORIENTER HAD NO PRACTICE LOOP. It reads a page, names a state, and the recipe says which
+    states that one may lead to — a falsifiable claim, made on every crank, with the answer
+    arriving free one action later. Nothing was checking. So the orienter could be right or wrong
+    for weeks and the only way to find out was to remember.
+
+    This is the cheapest learning signal in the system: no labelling chore, no teacher token, no
+    extra observation. The prediction comes from `apply_recipe.expected_after`, the ground truth
+    from the look the StepRunner already takes after every act.
+
+    A MISS IS THE VALUABLE ROW. It says the recipe's spine is wrong about this transition — either
+    the page really does go somewhere else (the recipe needs the edge) or we misread one of the two
+    states (the classifier needs the example). Both are corrections, and corrections are the dense
+    signal (§10).
+
+    Unlike `record`, this does NOT dedupe: every attempt is a separate trial, and collapsing repeats
+    would make an orienter that is reliably right look identical to one that was asked once.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and not ALLOW_TEST_WRITES:
+        return None
+    predicted = tuple(predicted or ())
+    if not predicted or not state_after or state_after in ("unknown", "unreadable"):
+        result = UNSCORED
+    else:
+        result = HIT if state_after in predicted else MISS
+    row = {
+        "at": _now(), "session_id": str(session_id), "kind": PREDICTION,
+        "platform": platform or "", "rung": rung, "job_id": step_job_id,
+        "state_before": state_before or "", "predicted": list(predicted),
+        "state_after": state_after or "", "result": result,
+        # A prediction row is its own fingerprint — every trial counts, see the docstring.
+        "fingerprint": f"{platform}|{state_before}->{state_after}",
+    }
+    with _lock:
+        rows = _read()
+        rows.append(row)
+        _write(rows)
+    return row
+
+
+def prediction_stats() -> dict[str, Any]:
+    """How well the orienter is calling transitions — the number that says it is practising.
+
+    `accuracy` is over SCORED trials only. Counting the unscored ones as failures would blame the
+    orienter for pages nobody could read, and counting them as successes would be worse.
+    """
+    rows = [r for r in _read() if r.get("kind") == PREDICTION]
+    hits = sum(1 for r in rows if r.get("result") == HIT)
+    misses = sum(1 for r in rows if r.get("result") == MISS)
+    scored = hits + misses
+    recent = [{"at": r.get("at"), "from": r.get("state_before"), "to": r.get("state_after"),
+               "predicted": r.get("predicted"), "result": r.get("result"), "rung": r.get("rung")}
+              for r in rows[-8:]]
+    return {
+        "trials": len(rows), "scored": scored, "hits": hits, "misses": misses,
+        "unscored": len(rows) - scored,
+        "accuracy": (hits / scored) if scored else None,
+        "recent": list(reversed(recent)),
+    }
+
+
 def stats() -> dict[str, Any]:
     """What the corpus holds — the numbers that say whether a student can be trained on it yet.
 
     `distinct_situations` is the one to watch, for the same reason the capture corpus watches
     distinct fingerprints: re-reading a page we already know adds nothing a model can learn from.
     """
-    rows = _read()
+    # VERDICT ROWS ONLY. Prediction rows share the file and carry no `state`, so counting them here
+    # would inflate `rows`, invent an `unknown` bucket, and dilute `distinct_situations` — the one
+    # number this corpus is watched by. Two row kinds, one file, separate readers.
+    rows = [r for r in _read() if r.get("kind") != PREDICTION]
     by_state: dict[str, int] = {}
     for r in rows:
         st = r.get("state") or "unknown"

@@ -91,3 +91,60 @@ def test_stats_counts_distinct_situations_not_volume():
     s = ol.stats()
     assert s["distinct_situations"] == 2
     assert s["mismatches"] == 1
+
+
+# --- the orienter's practice loop: a prediction, then what actually happened --------------------
+def test_a_prediction_is_scored_against_where_the_page_actually_went():
+    """The cheapest learning signal in the system: the recipe says which states a screen may lead
+    to, and the answer arrives free one action later."""
+    hit = ol.record_prediction(25, platform="indeed",
+                               state_before="indeed_apply_resume_selection",
+                               predicted=("indeed_apply_questions", "indeed_apply_review"),
+                               state_after="indeed_apply_questions", rung="advance")
+    assert hit["result"] == ol.HIT
+    miss = ol.record_prediction(25, platform="indeed",
+                                state_before="indeed_apply_questions",
+                                predicted=("indeed_apply_review",),
+                                state_after="indeed_apply_demographics", rung="advance")
+    assert miss["result"] == ol.MISS, "a page going somewhere the recipe did not expect is the row"
+    blind = ol.record_prediction(25, platform="indeed", state_before="x",
+                                 predicted=("y",), state_after="unknown")
+    assert blind["result"] == ol.UNSCORED, "could-not-read must not be counted as wrong"
+
+
+def test_accuracy_is_over_scored_trials_only_and_repeats_all_count():
+    for _ in range(3):
+        ol.record_prediction(25, platform="indeed", state_before="a", predicted=("b",),
+                             state_after="b")
+    ol.record_prediction(25, platform="indeed", state_before="a", predicted=("b",),
+                         state_after="c")
+    ol.record_prediction(25, platform="indeed", state_before="a", predicted=("b",),
+                         state_after="unknown")
+    st = ol.prediction_stats()
+    assert st["trials"] == 5 and st["scored"] == 4 and st["hits"] == 3
+    assert st["accuracy"] == 0.75, "the unreadable trial is excluded, not counted as a failure"
+
+
+def test_prediction_rows_do_not_pollute_the_verdict_corpus():
+    """Two row kinds, one file. Both of these were real bugs before the guards went in."""
+    ol.record(25, _verdict())
+    ol.record_prediction(25, platform="indeed", state_before="a", predicted=("b",),
+                         state_after="b")
+    assert ol.stats()["rows"] == 1, "prediction rows must not inflate the corpus count"
+    assert "unknown" not in ol.stats()["by_state"], "a prediction row has no state to bucket"
+
+    # `resolve` walks back for the last unlabelled VERDICT — a prediction row has no `outcome`
+    # field at all, so an unguarded check matches it and labels the wrong row kind.
+    resolved = ol.resolve(25, action_id="press_apply", agreed=True)
+    assert resolved is not None and resolved.get("kind") != ol.PREDICTION
+    assert resolved["outcome"] == ol.CONFIRMED
+
+
+def test_a_prediction_row_does_not_break_the_verdict_dedupe():
+    """`record` suppresses a repeat by comparing against the last row for the session. A
+    prediction row sitting in between would end the search early and let the repeat through."""
+    first = ol.record(25, _verdict())
+    ol.record_prediction(25, platform="indeed", state_before="a", predicted=("b",),
+                         state_after="b")
+    assert first is not None
+    assert ol.record(25, _verdict()) is None, "the same situation is still not new knowledge"

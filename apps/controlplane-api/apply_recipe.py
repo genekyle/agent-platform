@@ -923,20 +923,139 @@ WORKDAY_FLOW_ORDER: list[str] = [
 ]
 
 
-def workday_progress(state: Optional[str]) -> dict[str, Any]:
-    """Where `state` sits in the Workday flow, and how far from Submit — the depth awareness the
-    operator asked for. `steps_to_submit` counts to the review gate (the last thing before the
-    irreversible Submit); None-position means we do not recognise the state as part of the flow."""
-    order = WORKDAY_FLOW_ORDER
+# Indeed's flow order is DERIVED from the recipe rather than restated. `INDEED_APPLY_RECIPE` is
+# already an ordered spine — a second hand-written copy is a second thing to keep in sync, and the
+# one that drifts is always the copy nothing executes.
+INDEED_FLOW_ORDER: list[str] = [str(s["state"]) for s in INDEED_APPLY_RECIPE]
+
+#: One platform, several names. `classify_landing` answers `indeed` where `_TERMINAL_STATES` says
+#: `indeed_quick_apply`, and callers pass through whichever the live page resolved to. Resolved
+#: ONCE, here, rather than by adding the alias to each table — the table that gets forgotten is
+#: always the third one, and the symptom is a submitted application that does not read as done.
+_PLATFORM_ALIASES: dict[str, str] = {"indeed": "indeed_quick_apply"}
+
+
+def _canon(platform: Optional[str]) -> str:
+    p = platform or ""
+    return _PLATFORM_ALIASES.get(p, p)
+
+
+#: Flow order per platform — the "how far am I" spine, canonical names only.
+_FLOW_ORDERS: dict[str, list[str]] = {
+    "indeed_quick_apply": INDEED_FLOW_ORDER,
+    "workday": WORKDAY_FLOW_ORDER,
+}
+
+#: The state where the next action is the IRREVERSIBLE one. `steps_to_submit` counts TO here and
+#: never past it: the gate is the furthest the drive travels on its own, and the step beyond it
+#: belongs to the operator on every platform, always.
+_GATE_STATES: dict[str, str] = {
+    "indeed_quick_apply": "indeed_apply_review",
+    "workday": "workday_review",
+}
+
+
+def flow_progress(state: Optional[str], *, platform: str = "workday") -> dict[str, Any]:
+    """Where `state` sits in this platform's flow, and how far from Submit — the depth awareness
+    the operator asked for, for every platform rather than only Workday.
+
+    `steps_to_submit` counts to the review gate (the last thing before the irreversible Submit).
+    An unrecognised state is reported as such rather than defaulted to a position: "we do not know
+    where we are" is a real answer and the one the tail must not paper over.
+
+    **The count is an UPPER BOUND, not an estimate.** Indeed skips steps whose answers the profile
+    already holds (the recipe says so at the top of this module), and skipping can only SHORTEN the
+    path — never lengthen it. So "at most N screens from Submit" is a fact about the spine, where
+    "N screens from Submit" would be a guess about this particular application.
+    """
+    canon = _canon(platform)
+    order = _FLOW_ORDERS.get(canon)
+    gate = _GATE_STATES.get(canon)
+    if not order or not gate:
+        return {"state": state, "position": None, "total": 0, "steps_to_submit": None,
+                "recognised": False, "platform": canon}
     try:
         i = order.index(state or "")
     except ValueError:
         return {"state": state, "position": None, "total": len(order),
-                "steps_to_submit": None, "recognised": False}
-    review_i = order.index("workday_review")
-    return {"state": state, "position": i, "total": len(order),
-            "steps_to_submit": max(0, review_i - i), "recognised": True,
-            "at_review_gate": state == "workday_review", "done": state == "workday_submitted"}
+                "steps_to_submit": None, "recognised": False, "platform": canon}
+    gate_i = order.index(gate)
+    return {"state": state, "position": i, "total": len(order), "platform": canon,
+            "steps_to_submit": max(0, gate_i - i), "recognised": True,
+            "at_review_gate": state == gate,
+            "done": state in _TERMINAL_STATES.get(canon, frozenset())}
+
+
+def flow_order(platform: Optional[str]) -> list[str]:
+    """This platform's screens in order, or []. The spine, for anything that wants to RENDER it
+    rather than count along it."""
+    return list(_FLOW_ORDERS.get(_canon(platform), []))
+
+
+def gate_state(platform: Optional[str]) -> str:
+    """The screen whose next action is the irreversible one, or ""."""
+    return _GATE_STATES.get(_canon(platform), "")
+
+
+def workday_progress(state: Optional[str]) -> dict[str, Any]:
+    """Workday's flow depth — `flow_progress` with the platform already answered. Kept as its own
+    name because callers and tests read better for it, and because Workday is the flow whose depth
+    problem motivated the whole idea."""
+    return flow_progress(state, platform="workday")
+
+
+#: The controls that SEND an application, most specific first. Deliberately a separate lexicon from
+#: `controller.decide._ADVANCE_CONTROLS`, which excludes every one of these on purpose: a control
+#: that advances a form may be reached for by a lexicon match, and the one that sends an
+#: application may not. Keeping them in one list is how "Submit" ends up one substring match away
+#: from being pressed by a guess.
+SUBMIT_CONTROLS: tuple[str, ...] = (
+    "Submit your application",
+    "Submit application",
+    "Submit",
+)
+
+
+def submit_control(ax_identities) -> str:
+    """The control that SENDS this application, as the page renders it — or "".
+
+    Same match rules as `decide.advance_control` (render-label, longest wins) against a lexicon
+    that only the operator's own gate is ever allowed to consult.
+    """
+    names = [i.partition("|")[2].strip() if "|" in i else str(i).strip()
+             for i in (ax_identities or ())]
+    names = [n for n in names if n]
+    for control in SUBMIT_CONTROLS:
+        matches = [n for n in names if control.lower() in n.lower()]
+        if matches:
+            return max(matches, key=len)
+    return ""
+
+
+def advance_action(platform: str, state: Optional[str]) -> str:
+    """The action THIS RECIPE names for `state` — "Continue", "autofill + Continue", "Submit …".
+
+    Returned verbatim so the router never restates it. The recipe is the authority on what advances
+    a screen; a second description of the same move in the executor is how the two come to disagree.
+    """
+    if _canon(platform) != "indeed_quick_apply":
+        return ""
+    for entry in INDEED_APPLY_RECIPE:
+        if entry.get("state") == state:
+            return str(entry.get("action") or "")
+    return ""
+
+
+def expected_after(platform: str, state: Optional[str]) -> tuple[str, ...]:
+    """The states this recipe says `state` may lead to — the orienter's prediction, and the thing
+    a practice score is scored AGAINST. Empty when the recipe has nothing to say."""
+    if _canon(platform) != "indeed_quick_apply":
+        return ()
+    for entry in INDEED_APPLY_RECIPE:
+        if entry.get("state") == state:
+            return tuple(entry.get("expect") or ())
+    return ()
+
 
 _GREENHOUSE_STATE_MARKERS: list[tuple[str, str]] = [
     ("thank you for applying", "greenhouse_apply_submitted"),
