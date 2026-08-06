@@ -5525,3 +5525,113 @@ tabs: **Live** and **Journal** — the window census + timeline (`/windows`), wh
 multi-window story ("an apply opens a SECOND tab and navigates it three times") getting its first
 scrollable surface. `SessionControlPanel.jsx` deleted; `cockpit/CockpitPage.jsx` +
 `cockpit/SessionCockpit.jsx` replace it.
+
+---
+
+## 2026-08-06 — The apply ladder had no tail, and one live drive to the gate found five defects
+
+**The hole, and it is the same shape for the sixth time.** `apply_steps.next_rung()` returned
+`None` the moment the five-rung PREFIX was walked, so `SUBMIT_RUNG` — defined twenty lines above it
+— was referenced by nothing, and the cockpit's primary button dead-ended at *"the rungs from here
+depend on the platform (indeed), and those are not built yet"* on **every** application. The only
+way through one was a human driving it by hand, outside the system. Meanwhile
+`apply_recipe.INDEED_APPLY_RECIPE` had held the entire Indeed spine, state by state to Submit,
+since the module was written, and `orient` was correctly answering `indeed_apply_resume_selection ·
+recognised: true` on every poll. **Three parts that each knew, and nothing introduced them.**
+
+**The tail is the recipe's spine, walked one screen at a time, with the live orient verdict saying
+which screen we are on.** Not a fixed tuple: Indeed skips screens whose answers the profile already
+holds. Rung ids are `page_state_registry` state names, so ladder, corpus and classifier say the
+same word for the same screen — and a tail rung is **never suppressed by having been walked
+before**, because `questions` repeats across pages and the live page is the authority.
+
+`flow_progress(state, platform=)` generalises `workday_progress`: an Indeed application could not
+say how far it was from Submit while a Workday one could, which is the same asymmetry that left
+the tail unbuilt. Counts are **upper bounds and say so** — skipping only ever shortens the path,
+so "at most 4 screens from Submit" is a fact where "4 screens" would be a guess.
+
+### What the drive found, all five general
+
+1. **The panel lied about its own button.** Past the prefix the crank re-read the page *and then
+   acted*, while the panel offered that press as "Read this page". Same dishonesty as a button that
+   cannot act, pointing the other way. The look now records and returns; one extra press, once, at
+   the only moment we did not know where we were.
+
+2. **The verifier was switched off for the entire driving half of the ladder.**
+   `expectation_for` handled `open_pane` and `enter_apply` and defaulted everything else to
+   `read_only` — so a state-named tail rung, which clicks Continue and moves the screen, was
+   journaled *"read-only rung, nothing to verify"*.
+
+3. **The advance matcher pressed a negation.** `_ADVANCE_CONTROLS` matches by substring and breaks
+   ties by length — right for "Continue" vs "Save and Continue", where longer means *more specific,
+   same intent*; exactly wrong for "Save" vs **"Don't save"**, where longer means the *opposite*.
+   Indeed's resume editor offered {Save, Don't save, Report an issue, Close} and the tie-break
+   returned the discard.
+
+4. **And then it pressed an exit.** "Save and close" matched the same bare "Save" and opened a
+   modal headed *"Save application progress before you exit"* — **twice, each journaled as a
+   `confirmed` `content_changed` advance**, because a modal opening really is a content change.
+   *A verified advance can still be walking toward the door.* Verification answers "did the page
+   move", never "did it move the right way".
+
+5. **A refusing form was diagnosed as a wrong recipe.** Continue no-opped beside a `Dismiss error`
+   control while the page said *"We couldn't pull any work experience or education from your
+   resume"*. The mismatch wording blames the map ("if it keeps happening the recipe is wrong about
+   this page") — but the recipe was right and the page was saying no. **pressed + nothing moved +
+   an error on screen = refusal**, reported in the page's own words. Neither fact alone counts, so
+   a stale banner cannot stop a first try.
+
+### The orienter practises now, and paid for itself on trial one
+
+The recipe names the states a screen may lead to; the StepRunner's after-look says where it went;
+`orientation_log.record_prediction` scores it. Free — no extra observation, no teacher token. **On
+the first live trial it missed**, and the miss was the finding: `resume_selection` led to a screen
+the spine did not contain. **A miss is the valuable row** — either the page really goes somewhere
+else (the recipe needs the edge) or we misread a state (the classifier needs the example).
+
+**Shadow mode ran live for the first time.** `shadow_step` had been called only by
+`test_controller_evals`, so `shadow_agreement` was scoring an empty set. After the drive: orienter
+25% (2/8 called), shadow 47% (7/15 paired) — both now rendered in the cockpit, because *practice
+nobody can see is indistinguishable from no practice*.
+
+### Indeed has added a fork, and it changes the steps after it
+
+Operator, live: the screen after resume selection is Indeed's structured-data capture — *"we will
+be highlighting details of our resume and application to send to the employer so we have a better
+chance of not getting screened out"*. It is `indeed_apply_resume_highlights`, step 2, with its URL
+pattern **ahead of** the `resume-module` catch-all that would otherwise have swallowed it and told
+the ladder a form to fill in was a page to click past.
+
+Its advance is **"Review details"**, which the generic lexicon cannot reach — nearest entry "Review
+your application" — while the only thing it *could* match there was the exit. So a recipe may now
+**name the control for a screen it has actually stood on**, consulted before the lexicon, and still
+refusing when the named button is absent: a recipe naming a button the page lacks is a stale
+recipe, not a licence to click something else.
+
+**`CLICK` could not address a checkbox.** The interaction layer's addressing is role + accessible
+name (§6) and the CLICK contract allowed only `control`, so ticking "No work experience to add"
+through the teacher seam returned `not_found (role=button)` on a checkbox plainly on the page — and
+the only ways round were a bespoke selector or a hand-driven click, *both of them the thing §6
+exists to prevent*. `role` is now an allowed optional param.
+
+**Named limit, recorded as a stopgap rather than a policy:** clearing that screen by ticking both
+"nothing to add" boxes forfeits exactly what the screen is for. The intended behaviour is to read
+the job being applied to and choose which experience/education to highlight for it. Not built.
+Either way the agent never authors work history.
+
+### Two guards that only exist because the corpora share a file
+
+`orientation_log` now holds two row kinds. `resolve()` walks back for the last **unlabelled**
+verdict and a prediction row has no `outcome` field at all — so an unguarded check matched it and
+stamped an operator's action onto a transition trial. `record()`'s dedupe breaks on the first row
+for the session, so a prediction row sitting in between ended the search early and let a repeat
+through. Both real, both tested.
+
+**Also:** a safety check whose scope is a substring of a description is one nobody can reason about.
+The required-fields guard keyed on the word "fill" in the recipe's action text, and the very next
+screen added was worded "highlight resume details" and would have walked straight past it. It runs
+on every advance now.
+
+1475 controlplane-api green, 241 interaction green. Session #25 left AT the gate — `review-module`,
+`steps_to_submit: 0`, the cockpit rendering role/employer/platform above one red button. **Submit
+is the operator's, unpressed.**
