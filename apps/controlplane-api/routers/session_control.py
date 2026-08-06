@@ -4085,6 +4085,27 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             step.landing_state = tail_view["state"]
             if tail_view["reclassified"]:
                 step.platform = tail_view["platform"]
+            # ARRIVING AT THE PLATFORM'S TERMINAL STATE *IS* THE CONFIRMATION, and it is the only
+            # evidence for `submitted` this system accepts. `tail_rung_for` answers None for two
+            # opposite situations — a page we do not recognise, and a flow that is FINISHED — and
+            # reporting the second as "genuinely new territory" is how a sent application stays
+            # queued. Measured live 2026-08-06: the tab read `indeed_apply_submitted`
+            # ("Your application was submitted to MFS Investment Management") and the ladder called
+            # it new territory. An application recorded as unsent is one a later run applies to
+            # twice.
+            if (tail_view["progress"] or {}).get("done"):
+                step.record("submit", aps.OK,
+                            f"confirmed from outside: the page reached {tail_view['state']}",
+                            initiator=body.initiator)
+                step.finish(aps.SUBMITTED,
+                            f"confirmed by {tail_view['state']} at {read['url'][:90]}")
+                _save_queue(bb, queue)
+                return await _save_queue_and_view(
+                    session, bb, ledger, queue, obs, ok=True,
+                    detail=(f"Confirmed sent — the page reached {tail_view['state']}. Recorded as "
+                            f"submitted for {step.title or step.job_id}"
+                            + (f" at {step.company}." if step.company else ".")))
+
             found = aps.tail_rung_for(step.platform, tail_view["state"])
             if found is not None:
                 step.record("orient", aps.OK,
@@ -4991,6 +5012,14 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
             f"expects one of {', '.join(ar.expected_after(step.platform, rung.id)) or 'unknown'}.")
 
 
+#: How long to wait for a submit to LAND before concluding it did not. Bounded: an application
+#: that has not confirmed in ~6s gets reported honestly as unconfirmed rather than waited on
+#: forever, and the operator looks at the tab. Erring long is safe here — the click has already
+#: happened and nothing else is racing us.
+_SUBMIT_SETTLE_TRIES = 6
+_SUBMIT_SETTLE_WAIT = 1.0
+
+
 async def _work_submit_rung(step: Any, bb: Any, obs: dict[str, Any], browser_url: str,
                             style: Any, *, initiator: str,
                             acted: Optional[dict[str, Any]] = None) -> tuple[bool, str]:
@@ -5052,12 +5081,29 @@ async def _work_submit_rung(step: Any, bb: Any, obs: dict[str, Any], browser_url
                        f"captcha token before the fields — re-check the challenge and press again "
                        f"immediately. Nothing was sent.")
 
-    # CONFIRM FROM OUTSIDE. `/execute` returning ok means the click dispatched, and this codebase
-    # has twice recorded a dispatched click as an accomplished act. `submitted` is the one flag
-    # that means success, so it is the last one allowed to be claimed on a dispatch alone.
-    after = await _read_apply_page(bb, obs, browser_url)
-    landed = _name_the_screen(step, after["url"], after["text"]) if after else None
-    state = (landed or {}).get("state") or ""
+    # CONFIRM FROM OUTSIDE — AND WAIT FOR THE NAVIGATION. `/execute` returning ok means the click
+    # dispatched, and this codebase has twice recorded a dispatched click as an accomplished act.
+    # `submitted` is the one flag that means success, so it is the last one allowed to be claimed
+    # on a dispatch alone.
+    #
+    # But a single look after the click RACES the navigation, and losing that race is expensive in
+    # the one direction that matters: the application really was sent, the page had not moved yet,
+    # and the step is filed `unknown`. Measured live 2026-08-06 on MFS Investment Management —
+    # Submit worked, the tab reached `/form/post-apply` ("Your application was submitted to…"),
+    # and the record said it had not. An application recorded as unsent is one a later run will
+    # apply to a second time.
+    #
+    # Same shape as `run_query`'s confirm, which already re-checks for exactly this reason. Poll a
+    # few short beats rather than sleeping once: a fast navigation is confirmed immediately and a
+    # slow one is still caught.
+    state, landed, after = "", None, None
+    for _ in range(_SUBMIT_SETTLE_TRIES):
+        after = await _read_apply_page(bb, obs, browser_url)
+        landed = _name_the_screen(step, after["url"], after["text"]) if after else None
+        state = (landed or {}).get("state") or ""
+        if landed and (landed["progress"] or {}).get("done"):
+            break
+        await asyncio.sleep(_SUBMIT_SETTLE_WAIT)
     step.landing_state = state or step.landing_state
     if landed and (landed["progress"] or {}).get("done"):
         step.record("submit", aps.OK, f"clicked {control!r}; the page reached {state}",
