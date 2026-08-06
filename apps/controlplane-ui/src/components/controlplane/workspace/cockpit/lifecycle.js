@@ -24,12 +24,23 @@
 // in the display, exactly the contextual clobbering the operator asked to prevent. So the rail now
 // mirrors the ladder itself:
 //
-//   Session          — the preamble: browser, sign-in, query, radius. Climbed once, held always.
+//   Session          — the browser and the sign-in. Held for the session's whole life.
+//   Search N         — this query and its radius. A session holds SEVERAL, one after another:
+//                      abandoning a query costs the query, never the signed-in browser.
 //   Page 1, Page 2…  — one group per page rung, each carrying its own read + picks + applications.
 //                      Past pages collapse to their record; the current page is the work.
 
 //: The preamble rung ids, in ladder order — mirrors session_checkpoints.PREAMBLE.
 export const PREAMBLE_IDS = ["provisioned", "authenticated", "query_entered", "radius_set"];
+
+// THE PREAMBLE IS TWO SCOPES, NOT ONE (operator-corrected 2026-08-06). The browser and the
+// sign-in belong to the SESSION and outlive every search in it; the query and the radius belong
+// to ONE SEARCH. Rendering all four as a single "Session" group taught the operator the same
+// wrong thing the backend used to enforce — that changing the query means starting over.
+//
+// Mirrors session_checkpoints.SESSION_RUNGS / SEARCH_SCOPED.
+export const SESSION_IDS = ["provisioned", "authenticated"];
+export const SEARCH_IDS = ["query_entered", "radius_set"];
 
 // What the operator is being asked for, in their words rather than the API's, and WHICH GROUP the
 // ask belongs to. `stage` is the load-bearing half: a blocker is the truest statement available
@@ -50,7 +61,7 @@ export const BLOCKERS = {
   operator_results: { stage: "page", text: "Couldn't read this page's results. Check the window, then step again." },
   recover: { stage: "page", text: "Get back to the results we already have — do not search again." },
   choose: { stage: "page", text: "Pick what to act on from this page." },
-  operator_end: { stage: "end", text: "This query is walked out. Closing the session is your call." },
+  operator_end: { stage: "end", text: "Nothing left to page into for this query. Searching for something else keeps this session and its sign-in — closing the session is a separate call." },
 };
 
 // What the crank just did, in words. The raw action ids are dispatch keys, not labels.
@@ -224,6 +235,9 @@ function readFocus(p) {
     why: p.next?.reason || "",
     primary: { label: "Read this page", endpoint: "/step", body: {},
       why: p.next?.reason || "Read this page's results so there is something to decide." },
+    // Abandoning a query mid-way costs the query and nothing else — offered here as an alternate
+    // rather than a primary, because reading the page is still the expected move.
+    searchAgain: true,
     alternates: [],
   };
 }
@@ -241,6 +255,9 @@ function decideFocus(p, results, picks, qs) {
       : picks.length ? `${picks.length} picked, not saved yet` : "nothing picked yet",
     why: "Picking a job is approval to enter its application. Nothing is submitted without a "
       + "separate confirmation.",
+    // Same move as on the read focus: a query that is not yielding is abandoned here, and it
+    // costs the query rather than the signed-in session.
+    searchAgain: true,
     // Neither is disabled at 0 picks: "nothing on this page" is a real answer and the page still
     // counts as reviewed. Taking that away strands a page of nothing-for-me behind a refusal.
     primary: { label: picks.length ? `Take ${picks.length} · apply here` : "Take none · stay",
@@ -342,9 +359,39 @@ function executeFocus(p, step, nextAction) {
 function endFocus(qs) {
   return {
     kind: "walked_out",
-    title: "This query is walked out",
+    title: "This search is walked out",
     subtitle: `${qs.submitted} submitted · ${qs.done}/${qs.total} accounted for`,
     why: BLOCKERS.operator_end.text,
+    // A WALKED-OUT SEARCH IS NOT A WALKED-OUT SESSION. The browser is open and still signed in,
+    // so the natural next move is another search in it — not closing anything down.
+    primary: { label: "Search for something else", detour: "declare",
+      why: "Same session, same sign-in — only the query changes." },
+    alternates: [],
+  };
+}
+
+/**
+ * Declaring the NEXT search in this session — the second legitimate detour.
+ *
+ * Reuses the `declare` focus so there is one setup form, not two. What changes is the framing:
+ * this is not provisioning a session, it is pointing an open, signed-in one at different work.
+ * `/initialize` decides whether that is a new search or a refused repeat; the surface does not
+ * pre-judge it.
+ */
+export function newSearchFocus(panel) {
+  const p = panel || {};
+  const spent = Object.values(p.search?.spent || {});
+  return {
+    kind: "declare",
+    group: "search", groupLabel: p.search?.n > 1 ? `Search ${p.search.n}` : "Search",
+    title: "Search for something else",
+    subtitle: `Session #${p.session_id} stays open and signed in to ${p.engine || "the board"}`,
+    why: "Only the query changes. The browser, the sign-in and everything already applied to are "
+      + "untouched"
+      + (spent.length
+        ? ` — this session has already run ${spent.map((q) => `“${q}”`).join(", ")}, and running `
+          + "one of those again is the repeat that gets results collapsed."
+        : "."),
     primary: null, alternates: [],
   };
 }
@@ -408,9 +455,8 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   focus = { ...focus, group: current,
     groupLabel: current === "session" ? "Session" : `Page ${page}` };
 
-  // --- the groups: the preamble once, then one per page ------------------------------------
+  // --- the groups: session, then this search, then one per page ----------------------------
   const byId = new Map(ladder.map((r) => [r.id, r]));
-  const preamble = PREAMBLE_IDS.map((id) => byId.get(id)).filter(Boolean);
   const pages = [...new Set(ladder.map((r) => pageOf(r.id, "page:") ?? pageOf(r.id, "select:"))
     .filter((n) => n !== null))].sort((a, b) => a - b);
   if (!pages.includes(page) && p.query) pages.push(page);
@@ -418,8 +464,11 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   const groups = [];
 
   {
-    const stepsRows = preamble.map(rungStep);
-    const allHeld = preamble.length > 0 && stepsRows.every((s) => s.status === "done");
+    // THE SESSION: the browser and the sign-in. These survive every search inside it, which is
+    // the whole point of the 2026-08-06 correction — abandoning a query must not cost them.
+    const sessionRungs = SESSION_IDS.map((id) => byId.get(id)).filter(Boolean);
+    const stepsRows = sessionRungs.map(rungStep);
+    const allHeld = stepsRows.length > 0 && stepsRows.every((s) => s.status === "done");
     const status = blocker?.stage === "session" ? "blocked"
       : current === "session" ? "current"
         : stepsRows.some((s) => s.status === "attention") ? "attention"
@@ -427,9 +476,30 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
     groups.push({
       id: "session", label: "Session", status, steps: stepsRows,
       summary: allHeld
-        ? `ready · signed in to ${p.engine || "the board"} · query spent`
-        : `${stepsRows.filter((s) => s.status === "done").length}/${stepsRows.length || 4} ready`,
+        ? `open · signed in to ${p.engine || "the board"}`
+        : `${stepsRows.filter((s) => s.status === "done").length}/${stepsRows.length || 2} ready`,
       select: { kind: "group", id: "session" },
+    });
+  }
+
+  {
+    // THE SEARCH: this query and what it means. One session can hold several, one after another.
+    const searchRungs = SEARCH_IDS.map((id) => byId.get(id)).filter(Boolean);
+    const stepsRows = searchRungs.map(rungStep);
+    const allHeld = stepsRows.length > 0 && stepsRows.every((s) => s.status === "done");
+    const n = p.search?.n || 1;
+    const spentCount = Object.keys(p.search?.spent || {}).length;
+    groups.push({
+      id: "search", label: n > 1 ? `Search ${n}` : "Search", status: allHeld ? "done" : "open",
+      steps: stepsRows,
+      summary: [
+        p.query ? `“${p.query}”` : "not declared yet",
+        allHeld ? "run" : "not run yet",
+        // Says out loud that earlier searches are on the record — which is what makes re-running
+        // one refusable and starting a different one free.
+        spentCount > 1 ? `${spentCount} run this session` : null,
+      ].filter(Boolean).join(" · "),
+      select: { kind: "group", id: "search" },
     });
   }
 

@@ -582,6 +582,16 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # sent rather than duplicated as a hardcoded name in the UI, which is how the two would
         # drift the first time a second accordion ATS is added.
         "accordion_ats": sorted(apply_fields.SECTION_BARS),
+        # WHICH SEARCH INSIDE THIS SESSION. A session holds several, one after another — the
+        # browser and the sign-in outlive every one of them. Without this the panel could not tell
+        # "page 1" of the third search from "page 1" of the first, and the operator had no way to
+        # see that abandoning a query costs nothing but the query.
+        "search": {
+            "n": ledger.search,
+            "query": ss.query,
+            "spent": {str(k): v for k, v in ledger.spent_queries().items()},
+            "all": ledger.searches(),
+        },
         # HOW FAR THIS APPLICATION IS FROM SUBMIT, and the screens between here and there. The
         # ladder's tail, rendered — so "what is left" stops being something only the recipe knows.
         "apply_flow": _apply_flow(queue.current()),
@@ -755,6 +765,26 @@ def _queue_in_progress(bb: Any) -> bool:
 
 
 # --- initialize ---------------------------------------------------------------------------------
+#: World keys that describe ONE SEARCH's results and must not survive into the next one. Named
+#: explicitly rather than by clearing `world` wholesale: the blackboard also holds session-level
+#: facts (auth state, window census) that a new search has no business resetting.
+_SEARCH_SCOPED_WORLD: tuple[str, ...] = (
+    "page_results", "apply_queue", "open_pane", "applied_check", "tab_drift", "orient",
+    "apply_tab", "account_handoff", "apply_proposal", "radius_miles", "last_belief",
+)
+
+
+def _reset_for_new_search(bb: Any) -> None:
+    """Clear what belonged to the search we are leaving, and nothing else.
+
+    The picks go too: `approved` is a list of job ids chosen off the OLD result set, and carrying
+    them into a new search would offer the operator a queue built from results that are no longer
+    on screen — the display-side contextual clobbering the cockpit rebuild exists to prevent.
+    """
+    bb.world = {k: v for k, v in (bb.world or {}).items() if k not in _SEARCH_SCOPED_WORLD}
+    bb.search_state.approved = []
+
+
 class InitializeBody(BaseModel):
     query: str
     location: str = ""
@@ -765,12 +795,20 @@ class InitializeBody(BaseModel):
 @router.post("/api/session_control/{session_id}/initialize")
 async def initialize(session_id: int, body: InitializeBody,
                      db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Declare what this session is FOR. Provisioning, not driving — nothing is typed here.
+    """Declare what this session is searching for — the first search, or the next one.
 
-    The query is a session-setup INPUT: one focused Chrome instance, one query, held for the
-    session's life. That is enforced, not documented: if this session already spent its
-    `query_entered` rung, re-pointing it at a different query is refused. Re-running searches is
-    the thing that makes Indeed collapse results, so a second query means a second session.
+    THIS USED TO REFUSE A SECOND QUERY and tell the operator to start a new session. That was the
+    once-only rule applied one level too high: re-running THE SAME query is what makes Indeed
+    collapse results, and a *different* query is simply new work. Refusing it meant abandoning a
+    query cost an authenticated browser — close Chrome, provision another, sign in again, all to
+    change a word in a search box. Operator, 2026-08-06: *"we aren't exiting Indeed and we
+    shouldn't… sessions are active until we end them, querying and re-querying shouldn't end a
+    session."*
+
+    So: a different query STARTS A NEW SEARCH inside this session. The session rungs
+    (`provisioned`, `authenticated`) stay held — that is the whole saving — while the search-scoped
+    rungs begin again under a new scope. The previous search's rungs stay in the ledger, which is
+    what keeps the promise real: **a query this session has already spent is still refused.**
     """
     _check_initiator(body.initiator)
     query = " ".join((body.query or "").split())
@@ -784,16 +822,51 @@ async def initialize(session_id: int, body: InitializeBody,
     # the session.
     engine = engine_for(session)
 
-    if ledger.holds("query_entered"):
-        spent = " ".join((bb.search_state.query or "").split())
-        if spent.lower() != query.lower():
+    started_search = 0
+    spent = " ".join((bb.search_state.query or "").split())
+    # BACKFILL, so the guard works on ledgers written before `queries` existed. The blackboard has
+    # always known the current search's query; the ledger just never wrote it down. Doing it here
+    # self-heals every pre-existing session on first touch, and costs nothing when it already knows.
+    # Checked against the STRUCTURED record, not `spent_queries()` — that falls back to the rung's
+    # evidence prose, which is never empty, so the backfill would never fire and the guard would
+    # keep comparing against a sentence.
+    if spent and ledger.holds("query_entered") and not ledger.queries.get(ledger.search):
+        ledger.note_query(spent)
+
+    if spent.lower() == query.lower():
+        pass                                        # same query, same search — idempotent
+    elif ledger.has_spent(query):
+        # THE RULE THAT SURVIVES, and it is a SESSION-WIDE question — deliberately checked before
+        # anything about the current search. Nested under `holds("query_entered")` it stopped
+        # running the moment a new search was declared but not yet run, which is precisely when
+        # somebody would try to go back to the query they just left.
+        ran_in = [n for n, q in ledger.spent_queries().items()
+                  if q and (q.lower() == query.lower() or query.lower() in q.lower())]
+        raise HTTPException(
+            status_code=409,
+            detail=(f"This session already ran {query!r} (search {', '.join(map(str, ran_in))}). "
+                    f"Re-running the same query is what makes {engine['label']} collapse results "
+                    f"— go back to those results instead."))
+    elif ledger.holds("query_entered"):
+        # A DIFFERENT QUERY, and this search has already spent its own. New search, same session,
+        # same sign-in. (A search that has been DECLARED but not yet run is simply re-pointed —
+        # nothing was spent, so there is nothing to preserve and no ordinal to burn.)
+        in_flight = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
+        if in_flight is not None:
             raise HTTPException(
                 status_code=409,
-                detail=(f"This session already ran {spent!r}. A session holds ONE query — "
-                        f"re-searching is what makes {engine['label']} collapse results. Start a "
-                        f"new session for {query!r}."))
+                detail=(f"{in_flight.title or in_flight.job_id} is still open in this search — "
+                        f"starting a new one would drop it silently. Finish it or flag it, then "
+                        f"search again."))
+        started_search = ledger.start_new_search()
+        _reset_for_new_search(bb)
+        bb.log("new_search",
+               f"search {started_search}: {spent!r} -> {query!r} (same session, still signed in)")
 
     bb.search_state.query = query
+    # WHICH QUERY THIS SEARCH IS SPENDING, on the ledger and as a fact rather than as prose. This
+    # is what `has_spent` checks, so the once-only guard survives any rewording of the evidence.
+    ledger.note_query(query)
     bb.search_state.location = " ".join((body.location or "").split())
     bb.goal = (f"Search {engine['label']} for {query!r}"
                + (f" in {bb.search_state.location}" if bb.search_state.location else "")
@@ -1494,19 +1567,21 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
         res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
         return [t.get("url", "") for t in (res.get("tabs") or [])]
 
-    async def _submit_and_confirm() -> tuple[bool, Optional[dict], bool, str]:
-        """Click Search, then ask the PAGE whether it took.
+    async def _submit_and_confirm(how: str = "") -> tuple[bool, Optional[dict], bool, str]:
+        """Commit the search, then ask the PAGE whether it took.
 
         Returns (clicked, results_tab, page_moved, why). `page_moved` is the half that matters for
         deciding whether a retry is even allowed: `/execute` is a tier-1 primitive and says so in
         its own docstring — its `ok` means the node resolved and CDP dispatched without throwing,
         NOT that the page accepted the action. Confirming is this tier-2 caller's job.
+
+        `how` overrides the engine's declared commit method — see the alternating retry below.
         """
         before = await _tab_urls()
         # COMMIT THE WAY THIS ENGINE COMMITS. `submit` on the query box dispatches Enter to the
         # focused element (the fill just focused it) — which is the only way in on an engine with
         # no submit control, and is what the operator's recording measured LinkedIn doing.
-        if commit_by == "enter":
+        if (how or commit_by) == "enter":
             ok, detail = await _act("submit", controls["query"])
         else:
             ok, detail = await _act("click", controls["submit"])
@@ -1544,6 +1619,28 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
                             "location widget; clicking Search once more")
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         clicked, tab, moved, why = await _submit_and_confirm()
+
+    if tab is None and not moved:
+        # STILL NOTHING. Two identical clicks that both dispatch and both move nothing are not a
+        # staged widget — they are a form whose own state disagrees with what is on screen.
+        #
+        # Measured live 2026-08-06, the first time a session ever ran a SECOND search: both fields
+        # visibly held "data analytics" / "Boston, MA", the Search button dispatched trusted, and
+        # the page did not move — because the fill sets the value authoritatively (it has to; per-
+        # char typing races React) and React's controlled input never saw an onChange. So the form
+        # submitted the state it still believed in, which was the query already in the URL, and
+        # navigating to where you already are looks exactly like nothing happening.
+        #
+        # ENTER GOES TO THE ELEMENT, NOT THE FORM. A keydown on the focused input is what a person
+        # does, and it is handled by the input's own listener rather than by React's submit state.
+        # Alternating is honest about not knowing which engine needs which: try the engine's
+        # declared method, then the other one, and stop. Still gated on `not moved`, so this can
+        # never double-spend a search that actually went through.
+        other = "enter" if commit_by != "enter" else "button"
+        bb.log("run_query", f"still nothing after two {commit_by} commits — committing by "
+                            f"{other} instead")
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        clicked, tab, moved, why = await _submit_and_confirm(other)
 
     if tab is None and moved:
         # ROUTE B: THE COMMIT LANDED ON THE BLENDED SEARCH, WHICH IS ONE CLICK SHORT OF RESULTS.
@@ -1591,7 +1688,8 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
     bb.log("checkpoint", f"query_entered — {query!r} spent once for this session")
     return {"ok": True, "action": "run_query", "page": bb.search_state.page,
             "pace": xs.describe(style),
-            "detail": f"Ran {query!r}. This session will not search again — page forward instead."}
+            "detail": f"Ran {query!r}. This search will not run again — page forward through its "
+                      f"results, or start a new search for something else."}
 
 
 async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,

@@ -251,15 +251,43 @@ def test_initialize_requires_a_query(monkeypatch):
     assert r.status_code == 422
 
 
-def test_initialize_refuses_a_second_query_once_the_first_was_spent(monkeypatch):
-    """THE rule. The session already hit Indeed's backend for 'reporting analyst'; re-pointing it
-    is how you get results collapsed. A different query means a different session."""
-    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
-                           "/auth_state": {"ok": True, "logged_in": True}},
-             blackboard=_at_start_line())
+def test_a_different_query_starts_a_NEW_SEARCH_in_the_same_session(monkeypatch):
+    """THE 2026-08-06 correction. This used to 409 with "start a new session", which applied the
+    once-only rule one level too high: re-running THE SAME query is what collapses results, and a
+    different query is simply new work. Refusing it meant abandoning a query cost an authenticated
+    browser — close Chrome, provision another, sign in again, to change a word in a search box."""
+    _, saved = _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                                      "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_at_start_line())
     try:
         r = client.post("/api/session_control/1/initialize",
                         json={"query": "data engineer"})
+        after = saved["bb"]
+    finally:
+        _teardown()
+    assert r.status_code == 200, r.text
+    led = cps.Ledger.from_dict(after.checkpoints)
+    assert led.search == 2, "a different query advances the search scope"
+    # THE SAVING: the session rungs are untouched, so the new search starts already signed in.
+    assert led.holds("provisioned") and led.holds("authenticated")
+    # ...and the search-scoped rungs begin again under the new scope.
+    assert not led.holds("query_entered") and not led.holds("radius_set")
+    # The PREVIOUS search's record survives — that is what keeps the once-only promise real.
+    assert "query_entered" in after.checkpoints
+    assert after.search_state.query == "data engineer"
+
+
+def test_the_same_query_twice_is_still_refused(monkeypatch):
+    """The rule that survives the correction, and the reason `consuming` exists at all: a new
+    search must not launder a repeat of a query this session already spent."""
+    bb = _at_start_line()
+    spent = " ".join((bb.search_state.query or "").split())
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        client.post("/api/session_control/1/initialize", json={"query": "data engineer"})
+        r = client.post("/api/session_control/1/initialize", json={"query": spent})
     finally:
         _teardown()
     assert r.status_code == 409
@@ -282,11 +310,18 @@ def test_a_session_that_already_swept_refuses_a_new_query(monkeypatch):
              {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
              blackboard=bb)
     try:
-        r = client.post("/api/session_control/1/initialize", json={"query": "reporting analyst"})
+        # Moving ON is free: a query this session has not spent is new work, and it runs HERE
+        # rather than costing a second signed-in browser.
+        moved_on = client.post("/api/session_control/1/initialize",
+                               json={"query": "reporting analyst"})
+        # Coming BACK to the swept query is the repeat the rule exists to stop — and the ledger
+        # only knows about it because `adopt_prior_run` taught it history it did not witness.
+        went_back = client.post("/api/session_control/1/initialize", json={"query": "data analyst"})
     finally:
         _teardown()
-    assert r.status_code == 409
-    assert "already ran 'data analyst'" in r.json()["detail"]
+    assert moved_on.status_code == 200, moved_on.text
+    assert went_back.status_code == 409
+    assert "already ran 'data analyst'" in went_back.json()["detail"]
 
 
 def test_the_sweep_path_now_records_the_query_it_spends(monkeypatch):

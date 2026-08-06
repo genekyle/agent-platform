@@ -209,6 +209,10 @@ export function SessionCockpit({ sessionId, onOpenLens, onOpenTrace }) {
           cockpit={cockpit}
           viewMoment={viewMoment}
           onExitDetour={() => { setViewMoment(null); setSelection(null); }}
+          // ABANDONING A SEARCH IS A DETOUR, NOT AN EXIT. It swaps the work surface for the
+          // declare form; the session, its browser and its sign-in are untouched, and
+          // `/initialize` starts the next search inside it.
+          onNewSearch={() => { setViewMoment("declare"); setSelection(null); }}
           busy={busy}
           error={error}
           call={(path, body) => (path === "/choose" ? callChoose(path, body) : call(path, body))}

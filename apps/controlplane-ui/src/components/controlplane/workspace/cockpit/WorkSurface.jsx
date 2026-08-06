@@ -3,7 +3,7 @@ import { AppIcon } from "../../../../ui/Icon";
 import { PickOrb } from "../OrderedPicks";
 import FormSections from "../FormSections";
 import FillPlan from "../FillPlan";
-import { chooseFocus, TERMINAL_CHOICES } from "./lifecycle";
+import { chooseFocus, newSearchFocus, TERMINAL_CHOICES } from "./lifecycle";
 
 // THE WORK SURFACE — the one thing the operator can act on now.
 //
@@ -19,11 +19,11 @@ import { chooseFocus, TERMINAL_CHOICES } from "./lifecycle";
 // the fill plan, the accordion, the results table — are the OBJECT being worked, not competing
 // answers, and their own buttons are demoted accordingly.
 
-function Actions({ focus, busy, call }) {
+function Actions({ focus, busy, call, onNewSearch }) {
   if (!focus.primary && !focus.say && !(focus.alternates || []).length) return null;
   return (
     <div className="work__actions">
-      {focus.primary && (
+      {focus.primary && !focus.primary.detour && (
         // STILL EXACTLY ONE PRIMARY — the modifier changes how it reads, never how many there are.
         // A consequential action that looked like the five reversible ones before it is how an
         // application gets sent by muscle memory.
@@ -32,6 +32,22 @@ function Actions({ focus, busy, call }) {
                 onClick={() => call(focus.primary.endpoint, focus.primary.body)}>
           {busy ? "…" : focus.primary.label}
         </button>
+      )}
+      {/* A primary that is a DETOUR changes what this surface asks rather than driving anything —
+          it has no endpoint, so it must not be routed through `call`. */}
+      {focus.primary?.detour === "declare" && (
+        <button className="btn btn-primary" disabled={busy} title={focus.primary.why}
+                onClick={onNewSearch}>{focus.primary.label}</button>
+      )}
+      {/* Abandoning a search mid-way: same session, same sign-in, only the query changes. An
+          alternate rather than a primary, because the expected move here is still the page. */}
+      {focus.searchAgain && (
+        <span className="work__alt">
+          <button className="btn btn-sm" disabled={busy} onClick={onNewSearch}
+                  title="Same session and the same sign-in — only the query changes.">
+            Search something else
+          </button>
+        </span>
       )}
       {/* With no primary the alternates ARE the choice, so they are full size — shrinking them
           would imply a preselected answer that does not exist. */}
@@ -429,7 +445,7 @@ const SETUP_KINDS = new Set(["declare", "clean_start", "login"]);
 const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "application", "gate"]);
 
 export function WorkSurface({
-  panel, cockpit, viewMoment, onExitDetour, busy, error, call, decide, onFlag,
+  panel, cockpit, viewMoment, onExitDetour, onNewSearch, busy, error, call, decide, onFlag,
   picks, armed, onPick, onClear, note, setNote, form, setForm,
 }) {
   // THE ONE LEGITIMATE DETOUR: re-opening the current page's picker while its queue is being
@@ -437,11 +453,23 @@ export function WorkSurface({
   // the rail only changes what the inspector explains, never what this surface asks.
   const detour = viewMoment === "choose" && cockpit.focus.kind !== "choose"
     && (panel.results || []).length > 0;
-  const focus = detour ? chooseFocus(panel, picks) : cockpit.focus;
+  // THE SECOND DETOUR: declaring the next search. Unlike the picker it is available whatever the
+  // moment — abandoning a query is exactly the thing you do when the current one is not working.
+  const declaring = viewMoment === "declare";
+  const focus = declaring ? newSearchFocus(panel)
+    : detour ? chooseFocus(panel, picks) : cockpit.focus;
 
   return (
     <div className="cockpit__pane">
       <div className="work">
+        {declaring && (
+          <div className="work__detour">
+            <AppIcon name="eye" size={13} />
+            Declaring the <strong>next search</strong> in this session — the browser stays open and
+            you stay signed in. Only the query changes.
+            <button className="btn btn-sm" onClick={onExitDetour}>Keep the current search</button>
+          </div>
+        )}
         {detour && (
           <div className="work__detour">
             <AppIcon name="eye" size={13} />
@@ -470,7 +498,9 @@ export function WorkSurface({
         {focus.kind === "gate" && <GateBody focus={focus} />}
 
         <Say focus={focus} />
-        {focus.kind !== "proposal" && <Actions focus={focus} busy={busy} call={call} />}
+        {focus.kind !== "proposal" && (
+          <Actions focus={focus} busy={busy} call={call} onNewSearch={onNewSearch} />
+        )}
 
         {SETUP_KINDS.has(focus.kind) && (
           <SetupBody focus={focus} panel={panel} form={form} setForm={setForm}
