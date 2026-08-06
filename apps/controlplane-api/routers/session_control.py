@@ -5147,6 +5147,22 @@ async def _work_submit_rung(step: Any, bb: Any, obs: dict[str, Any], browser_url
         step.record("submit", aps.UNKNOWN, "no application tab at the gate", initiator=initiator)
         return False, "There is no application tab open. Nothing was sent."
 
+    # ARE WE STILL AT THE GATE? The rung comes from `landing_state`, which is a memory, and the one
+    # way it can be wrong here is the expensive way: a submit that LANDED but was not recorded
+    # leaves the rung saying `submit`, and pressing it again would send a second application.
+    #
+    # So the live page is consulted before the click, not only after it. A page that has already
+    # reached the platform's terminal state is not a gate to press — it is a confirmation to
+    # record, and recording it is what stops the retry becoming a duplicate.
+    here = _name_the_screen(step, read["url"], read["text"])
+    if (here["progress"] or {}).get("done"):
+        step.record("submit", aps.OK,
+                    f"already sent — the page is on {here['state']}", initiator=initiator)
+        step.finish(aps.SUBMITTED, f"confirmed by {here['state']} at {read['url'][:90]}")
+        step.landing_state = here["state"]
+        return True, (f"This application was already sent — the page is on {here['state']}. "
+                      f"Recorded as submitted; nothing was pressed again.")
+
     scan, tab = read["scan"], read["tab"]
     control = ar.submit_control(_ax_identities(scan))
     if not control:
@@ -5196,7 +5212,16 @@ async def _work_submit_rung(step: Any, bb: Any, obs: dict[str, Any], browser_url
     # slow one is still caught.
     state, landed, after = "", None, None
     for _ in range(_SUBMIT_SETTLE_TRIES):
-        after = await _read_apply_page(bb, obs, browser_url)
+        # RE-LIST THE TABS EVERY PASS. `obs` was taken BEFORE the click, so resolving the apply tab
+        # from it returns the url we submitted FROM — and a settle that re-reads a cached address
+        # is six looks at the same stale page wearing the costume of patience. Measured live
+        # 2026-08-06 on Bristol County Savings Bank: the tab was on `/form/post-apply` the whole
+        # time and the loop reported `indeed_apply_review` for its full six seconds.
+        #
+        # Same rule the crank's `_observe_tab_now` already states: the tab the work is on NOW,
+        # re-resolved at each look.
+        fresh = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+        after = await _read_apply_page(bb, {"tabs": fresh.get("tabs") or []}, browser_url)
         landed = _name_the_screen(step, after["url"], after["text"]) if after else None
         state = (landed or {}).get("state") or ""
         if landed and (landed["progress"] or {}).get("done"):
