@@ -4567,6 +4567,20 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     _changes = sr.diff(_before, _after, expect_new_tab=(_expect.kind == "new_tab_or_nav"))
     _verdict, _evidence = sr.verify(_expect, _changes, _after)
     _claimed = step.last_flag or "none"
+    # A RUNG THAT REFUSED TO ACT MUST NOT BE SCORED AS ONE THAT ACTED AND FAILED.
+    #
+    # `content_changed` is the right expectation for an advance that CLICKS. When the rung declined
+    # — an unanswered required field, a challenge, a screen it did not recognise — nothing was
+    # supposed to move, and grading that "mismatch" writes a disagreement into the transition
+    # corpus that never happened. Measured live 2026-08-06 on NH Ball Bearings: the required-fields
+    # guard correctly refused Continue over two unanswered screener questions, and the row it left
+    # said the world disagreed with us.
+    #
+    # The step itself was never at risk (the demotion below only fires on a claimed OK). This is
+    # about the CORPUS, which is the thing being trained.
+    if _claimed in aps.NEEDS_OPERATOR:
+        _verdict, _evidence = sr.READ_ONLY, (
+            f"the {rung.id} rung declined to act ({_claimed}) — nothing was expected to change")
     if _verdict == sr.MISMATCH and _claimed == aps.OK:
         step.record(rung.id, aps.MISMATCH, f"world disagrees: {_evidence}",
                     initiator="step_runner")

@@ -4816,3 +4816,17 @@ def test_a_refusing_form_is_diagnosed_as_refusal_not_as_a_wrong_recipe():
     # A clean page is not refusing anything.
     assert sc._page_is_refusing({"candidates": [{"role": "button", "name": "Continue"}]}) is False
     assert sc._page_is_refusing({}) is False
+
+
+def test_a_rung_that_declined_to_act_is_not_graded_as_a_failed_action():
+    """Live 2026-08-06, NH Ball Bearings: the required-fields guard correctly refused Continue over
+    two unanswered screener questions, and the transition row it left said the world disagreed with
+    us. `content_changed` is right for an advance that CLICKS; a rung that declined was never going
+    to move anything, and grading it `mismatch` writes a disagreement that never happened into the
+    corpus being trained on."""
+    import apply_steps as aps
+    # The three flags that mean "I did not act" — all of them must be excluded from the grading.
+    assert aps.NEEDS_OPERATOR == frozenset({aps.BLOCKED, aps.HUMAN_REQUIRED, aps.UNKNOWN})
+    # ...and MISMATCH is deliberately NOT among them: that one DID act and the world disagreed,
+    # which is a real finding the corpus must keep.
+    assert aps.MISMATCH not in aps.NEEDS_OPERATOR
