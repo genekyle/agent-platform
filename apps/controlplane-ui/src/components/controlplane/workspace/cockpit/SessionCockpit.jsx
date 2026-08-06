@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getJSON, postJSON } from "./api";
-import { AppIcon } from "../../../ui/Icon";
-import { useOrderedPicks } from "./useOrderedPicks";
-import { deriveCockpit } from "./cockpit/lifecycle";
-import { SessionRail } from "./cockpit/SessionRail";
-import { WorkSurface } from "./cockpit/WorkSurface";
-import { DecisionInspector } from "./cockpit/DecisionInspector";
-import "./cockpit/cockpit.css";
+import { getJSON, postJSON } from "../api";
+import { AppIcon } from "../../../../ui/Icon";
+import { useOrderedPicks } from "../useOrderedPicks";
+import { DOMAINS_BY_ID } from "../domains";
+import { deriveCockpit } from "./lifecycle";
+import { SessionRail } from "./SessionRail";
+import { WorkSurface } from "./WorkSurface";
+import { DecisionInspector } from "./DecisionInspector";
+import "./cockpit.css";
 
-// THE SESSION COCKPIT — the composition root, and nothing else.
+// ONE SESSION'S COCKPIT — the keyed composition root.
 //
 // Three panes, one authoritative workflow state:
 //
@@ -16,25 +17,15 @@ import "./cockpit/cockpit.css";
 //   where we are        what needs attention NOW         why this action, why this state
 //
 // This file owns DATA and SELECTION only. It does not decide what a group is, which control belongs
-// on screen, or which action is primary — all of that is derived once, in `cockpit/lifecycle.js`,
-// and read by all three panes.
+// on screen, or which action is primary — all of that is derived once, in `lifecycle.js`, and read
+// by all three panes.
 //
-// SESSION-AWARE BY CONSTRUCTION (operator-directed, 2026-08-05 second pass: "different sessions may
-// clobber each other in terms of contextual history"). The split below is the mechanism:
-//
-//   * `SessionControlPanel` (outer) owns WHICH session — it polls the session list, offers a picker
-//     when a domain has more than one, and renders the cockpit with `key={sessionId}`.
-//   * `SessionCockpit` (inner) owns everything ABOUT one session — the panel read model, the note
-//     draft, the inspector selection, the picker detour, the settle clock. The `key` means a
-//     session change UNMOUNTS it: every piece of that state dies with the session it described,
-//     rather than surviving into the next one.
-//
-// Without the key, real leaks: `last_step` is deliberately carried across polls (so an action's
-// result isn't blanked), which across a session swap would show session A's "ran the query" as
-// session B's result; the note draft would ride into the wrong page's record; a pinned selection
-// would point at a rung the new session doesn't have; and the form's one-shot query sync would keep
-// session A's query in session B's setup form. Picks were already safe — `useOrderedPicks` scopes
-// its draft to (session, page) in localStorage — the rest was not.
+// SESSION-AWARE BY CONSTRUCTION: this component must be mounted with `key={sessionId}` (the
+// CockpitPage does). A session change UNMOUNTS it, so everything about one session — the panel read
+// model, the `last_step` carry, the note draft, the pinned selection, the picker detour, the settle
+// clock — dies with the session it described rather than surviving into the next one's story.
+// Picks were already safe (`useOrderedPicks` scopes to session+page in localStorage); the rest is
+// safe because of the key.
 //
 // The rules that keep this screen from growing back into card soup:
 //   1. ONE primary action on screen. Asserted at runtime in dev, not just intended.
@@ -50,69 +41,13 @@ const PING_MS = 5000;
 //: reads at PING_MS at rest and at SETTLE_MS while the page is settling from something we did.
 const SETTLE_MS = 1000;
 const SETTLE_WINDOW_MS = 12000;
-//: How often the OUTER shell re-checks which sessions exist. Slower than the panel ping: sessions
-//: are provisioned and retired on human timescales.
-const SESSIONS_MS = 10000;
 
-export function SessionControlPanel({ domain }) {
-  const [sessions, setSessions] = useState([]);
-  // The operator's explicit choice, when they made one. null = follow the live session. Sticky
-  // only while that session still exists — a vanished session must not leave the cockpit pinned
-  // to nothing.
-  const [chosenId, setChosenId] = useState(null);
-
-  // Poll the session list, don't read it once. The old panel looked once on mount, so a session
-  // provisioned after the tab was opened never appeared, and a session swap went unnoticed —
-  // the cockpit kept narrating a session that was no longer the domain's live one.
-  useEffect(() => {
-    const poll = () => getJSON("/api/sessions")
-      .then((d) => setSessions((d.sessions || []).filter((x) => x.domain_id === domain.id)))
-      .catch(() => {});
-    poll();
-    const t = setInterval(poll, SESSIONS_MS);
-    return () => clearInterval(t);
-  }, [domain.id]);
-
-  // Prefer a session that is ACTIVE and answering, not merely answering. Found live 2026-08-05:
-  // stopped sessions share the live one's debug port, so the port answers for all of them and
-  // `live` alone claimed nine live Indeed sessions — eight of them stopped. `status` is the
-  // control plane's own record and outranks a port probe.
-  const live = sessions.find((x) => x.status === "active" && x.live)
-    || sessions.find((x) => x.live) || sessions[0] || null;
-  const chosen = sessions.find((x) => x.id === chosenId) || null;
-  const active = chosen || live;
-
-  if (!active) {
-    return (
-      <div className="layer">
-        <div className="layer__head">
-          <div className="layer__title layer__title--with-icon">
-            <AppIcon name="sliders" size={17} /> Session cockpit
-          </div>
-        </div>
-        <p className="empty-hint">
-          No {domain.label} session yet. Start one from Sessions, then come back — a session is one
-          focused browser working one query.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <SessionCockpit
-      // THE KEY IS THE ANTI-CLOBBER. A different session is a different cockpit: React unmounts
-      // the old one and every piece of per-session state — panel, note, selection, detour, settle
-      // clock — dies with it instead of leaking into the next session's story.
-      key={active.id}
-      sessionId={active.id}
-      sessionMeta={active}
-      siblings={sessions}
-      onChooseSession={setChosenId}
-    />
-  );
+//: The session's domain, in a word — for the cross-domain picker.
+function domainShort(domainId) {
+  return DOMAINS_BY_ID[domainId]?.short || DOMAINS_BY_ID[domainId]?.label || domainId || "?";
 }
 
-function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSession }) {
+export function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSession }) {
   const [panel, setPanel] = useState(null);
   const [form, setForm] = useState({ query: "", location: "", radius_miles: 50 });
   const [note, setNote] = useState("");
@@ -211,7 +146,7 @@ function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSession }) {
     if (n > allowed) {
       console.warn(`[cockpit] ${n} primary actions on screen (max ${allowed} for focus `
         + `"${cockpit.focus?.kind}"). A capability became a card again — see the rules in `
-        + "SessionControlPanel.jsx.");
+        + "SessionCockpit.jsx.");
     }
   });
 
@@ -275,22 +210,23 @@ function SessionCockpit({ sessionId, sessionMeta, siblings, onChooseSession }) {
           </span>
         )}
         <span className="cockpit-bar__spacer" />
-        {/* More than one session for this domain: say so, and let the operator pick which one the
-            cockpit narrates. Each is its own keyed mount — nothing carries across. */}
+        {/* The cockpit is SESSION-first, so the picker spans every domain's sessions — a session
+            is one focused Chrome working one task, not a property of a domain, and a Gmail errand
+            inside a Career-Search session is exactly why domain can't be the boundary. Labelled by
+            STATUS, the control plane's own record, not the port probe: stopped sessions share the
+            active one's debug port, so `live` alone read as nine live sessions with eight of them
+            stopped. Active first; stopped history stays reachable because a left-open session is a
+            fixture worth looking at. */}
         {siblings.length > 1 && (
           <label className="cockpit-bar__sessions">
             <span>session</span>
-            {/* Labelled by STATUS, the control plane's own record — not by the port probe.
-                Stopped sessions share the active one's debug port, so `live` alone read as nine
-                live sessions with eight of them stopped. Active first; stopped history stays
-                reachable because a left-open session is a fixture worth looking at. */}
             <select value={sessionId}
                     onChange={(e) => onChooseSession(Number(e.target.value))}>
               {[...siblings].sort((a, b) =>
                 (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1) || b.id - a.id)
                 .map((s) => (
                   <option key={s.id} value={s.id}>
-                    #{s.id} · {s.status}
+                    #{s.id} · {domainShort(s.domain_id)} · {s.status}
                   </option>
                 ))}
             </select>

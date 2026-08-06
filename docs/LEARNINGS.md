@@ -5499,3 +5499,29 @@ Console-error triage note: vite's error log in a long-lived tab is HISTORY — s
 `does not provide an export named 'PHASES'` entries survived a server restart and two reloads. The
 page mounting with no error overlay is the truth; the log is an archive.
 
+
+---
+
+## 2026-08-05 (5) — The cockpit is a page, not a tab: the session stops being a property of a domain
+
+Operator, on first real use: *"it looks like the way I accessed it is essentially a lite version…
+am I getting the full picture?"* They were — the full cockpit, squeezed under a domain workspace's
+breadcrumb + hero + sign-in card + automation card + ten-tab row, starting a full screen down.
+**When a full surface reads as a lite version of itself, the container is the bug.**
+
+And the container was conceptually wrong, not just visually: `PLAN_session_control_panel` §1 had
+already established that a session is one focused Chrome working ONE TASK, not one-per-domain,
+with cross-domain errands inside it. Reaching a session THROUGH a domain was the wrong door from
+the start; the design doc knew it before the navigation did.
+
+Now: **Cockpit is a top-level destination** (sidebar, second position), session-first. `/cockpit`
+follows the live session whoever's it is — on first live load it correctly resolved to the
+LinkedIn session (#26) rather than Indeed's, which is the session-first point proving itself —
+`?domain=` is the doorway the domain workspaces link through (a right-aligned `Cockpit →` LINK in
+their tab row, arrow because it navigates), `/cockpit/:id` pins via URL so a choice survives
+reload, and the picker spans every domain: `#26 · LinkedIn · active`, `#25 · Indeed · active`,
+`#17 · Gmail · active`, stopped history below. The room a full page buys became the cockpit's own
+tabs: **Live** and **Journal** — the window census + timeline (`/windows`), which is the
+multi-window story ("an apply opens a SECOND tab and navigates it three times") getting its first
+scrollable surface. `SessionControlPanel.jsx` deleted; `cockpit/CockpitPage.jsx` +
+`cockpit/SessionCockpit.jsx` replace it.

@@ -138,14 +138,43 @@ Everything on screen is exactly one of four things, and they must not read as pe
 | No inline styles | All of `cockpit.css`; the components carry none. |
 | Nothing fabricated | The inspector renders an explicit *not measured* rather than a plausible sentence. Screenshots are declared unwired rather than faked. |
 
+## 6a. Getting there — the cockpit is a page, not a tab (2026-08-05, third pass)
+
+The cockpit began as one tab inside the domain workspace, which was wrong twice over. Practically:
+it rendered under a breadcrumb, a hero, a sign-in card, an automation card and a ten-tab row, so
+the operating surface for a live drive started a full screen down and read as a "lite" embed of
+itself (operator: *"it looks like the way I accessed it is essentially a lite version"* — it was
+the full thing, squeezed). Conceptually: **a session is not a property of a domain** — it is one
+focused Chrome working one task, with cross-domain errands inside it (`PLAN_session_control_panel`
+§1) — so reaching a session THROUGH a domain was the wrong door even when it worked.
+
+Now: **Cockpit is a top-level destination** (global sidebar, second position) with the session as
+its unit and its own tabs:
+
+| Route | Meaning |
+|---|---|
+| `/cockpit` | follow the live session, whoever's it is |
+| `/cockpit?domain=x` | follow domain x's active session (domain workspaces link here) |
+| `/cockpit/:id` | pinned to one session — the URL is the choice, so it survives reload |
+| `/cockpit/:id/journal` | that session's window record |
+
+Cockpit-local tabs: **Live** (the three panes) and **Journal** (the window census + timeline from
+`/api/session_control/{id}/windows` — the multi-window story that previously had no surface). The
+picker spans EVERY domain's sessions, labelled `#id · domain · status`.
+
+The domain workspaces keep a doorway — a right-aligned `Cockpit →` LINK in the tab row (an arrow,
+because it navigates; it is not a content tab) — so the natural domain-first path still works while
+the destination stops being an embed. The old `SessionControlPanel.jsx` is deleted; the keyed inner
+lives at `cockpit/SessionCockpit.jsx` and the page at `cockpit/CockpitPage.jsx`.
+
 ## 6b. Session awareness
 
 Operator-directed, same pass: *"different sessions may clobber each other in terms of contextual
 history."* The mechanism is structural, not defensive:
 
-- `SessionControlPanel` (outer) owns **which** session: it **polls** the session list (the old
-  panel looked once on mount, so a session provisioned later never appeared), offers a picker when
-  a domain has more than one, and marks a non-live session `not live` in the bar.
+- `CockpitPage` (outer) owns **which** session: it **polls** the session list (the old
+  panel looked once on mount, so a session provisioned later never appeared), offers a picker
+  across every domain's sessions, and marks a non-active session in the bar.
 - `SessionCockpit` (inner) owns everything **about** one session, and is mounted with
   **`key={sessionId}`** — a session change unmounts it, so the panel read model, the `last_step`
   carry, the note draft, the pinned selection, the picker detour and the settle clock all die with

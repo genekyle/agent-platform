@@ -26,6 +26,7 @@ import { StateGraphSection } from "./components/controlplane/StateGraphSection";
 import { CommandCenter } from "./components/controlplane/workspace/CommandCenter";
 import { DomainsHub } from "./components/controlplane/workspace/DomainsHub";
 import { DomainWorkspace } from "./components/controlplane/workspace/DomainWorkspace";
+import { CockpitPage } from "./components/controlplane/workspace/cockpit/CockpitPage";
 import { DOMAINS_BY_ID } from "./components/controlplane/workspace/domains";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
 import { WorkersSection } from "./components/controlplane/WorkersSection";
@@ -1006,6 +1007,8 @@ export default function App() {
   let sectionContent = null;
   if (activePrimaryView === "command") {
     sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} onOpenLabeler={openLabeler} />;
+  } else if (activePrimaryView === "cockpit") {
+    sectionContent = <CockpitPage routeSessionId={routeState.sessionId} routeTab={routeState.tabId} />;
   } else if (activePrimaryView === "activity") {
     sectionContent = <SessionActivitySection />;
   } else if (activePrimaryView === "domains") {

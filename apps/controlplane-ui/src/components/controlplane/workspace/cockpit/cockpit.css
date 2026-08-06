@@ -431,3 +431,56 @@
   .cockpit { grid-template-columns: minmax(0, 1fr); }
   .cockpit__pane--rail { position: static; max-height: none; }
 }
+
+/* --- the cockpit as a page --------------------------------------------------------------- */
+
+.cockpit-page__tabs { margin-bottom: var(--space-3); }
+
+/* A tab-shaped LINK that leaves the page. The arrow is the honesty: it navigates, it does not
+   switch content in place. Used by domain workspaces to reach /cockpit. */
+.workspace-tab--away {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  text-decoration: none;
+  color: var(--text-muted);
+}
+.workspace-tab--away:hover { color: var(--text); }
+
+/* --- the journal ------------------------------------------------------------------------- */
+
+.journal { display: grid; gap: var(--space-3); }
+.journal__chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px; }
+
+.journal__timeline { list-style: none; margin: 0; padding: 6px 14px 12px; }
+.journal__event {
+  display: flex;
+  gap: var(--space-2);
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.journal__event:first-child { border-top: 0; }
+.journal__event-mark {
+  flex: none;
+  width: 20px; height: 20px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  color: var(--text-subtle);
+  margin-top: 1px;
+}
+.journal__event[data-kind="opened"] .journal__event-mark { color: var(--success); border-color: var(--success); }
+.journal__event[data-kind="closed"] .journal__event-mark { color: var(--text-subtle); }
+.journal__event-body { min-width: 0; flex: 1; }
+.journal__event-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.journal__event-host { font-weight: 600; }
+.journal__event-ts { margin-left: auto; font-size: 11px; color: var(--text-subtle); }
+.journal__event-path { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.journal__event-from { color: var(--text-subtle); }

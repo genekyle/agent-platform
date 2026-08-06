@@ -8,6 +8,12 @@ export const CONTROL_PLANE_NAV = {
     subtitle: "What needs you, what is working, and what your agents finished.",
     sections: [],
   },
+  cockpit: {
+    label: "Cockpit",
+    title: "Cockpit",
+    subtitle: "One live session at a time — where it is, what it needs, and why.",
+    sections: [],
+  },
   domains: {
     label: "Domains",
     title: "Domains",

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { getJSON, putJSON } from "./api";
 import { StatusCard } from "./StatusCard";
 import { AutomationMode } from "./AutomationMode";
 import { GoalsPanel } from "./GoalsPanel";
 import { TasksPanel } from "./TasksPanel";
 import { AttentionInbox } from "./AttentionInbox";
-import { SessionControlPanel } from "./SessionControlPanel";
 import { ActivityFeed } from "./ActivityFeed";
 import { DomainTerminal } from "./DomainTerminal";
 import { ObserveRecorder } from "./ObserveRecorder";
@@ -34,10 +34,6 @@ const TAB_TO_SECTION = {
 };
 
 function DataTab({ domain, tab, onOpenTraining, sessionId }) {
-  // The cockpit. It absorbed both prior session surfaces — the Session control panel and the
-  // Live drive coaching pane (superseded per PLAN_session_control_panel.md: a keyhole into a loop
-  // only the teacher could turn). One live session, one surface.
-  if (tab === "control") return <SessionControlPanel domain={domain} />;
   if (tab === "training") return <TrainingReadiness domain={domain} onOpenTraining={onOpenTraining} />;
   if (tab === "errands") return <ErrandsPanel domain={domain} />;
   // The cross-platform job database. Available on the Career Search parent (all boards) and
@@ -241,6 +237,15 @@ export function DomainWorkspace({ domain, activeTab, onChangeTab, onOpenTraining
               {t.label}
             </button>
           ))}
+          {/* THE DOORWAY, not a tab. The cockpit is a full page of its own (/cockpit) because a
+              session is not a property of a domain — this link keeps the natural path (domain
+              first) working while the destination stops being an embed. ?domain= picks this
+              domain's active session on arrival. */}
+          {domain.kind === "jobs" && (
+            <Link className="workspace-tab workspace-tab--away" to={`/cockpit?domain=${domain.id}`}>
+              Cockpit <AppIcon name="arrowRight" size={12} />
+            </Link>
+          )}
         </div>
       )}
 

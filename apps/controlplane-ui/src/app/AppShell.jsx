@@ -4,6 +4,9 @@ import { AppIcon, DomainIcon } from "../ui/Icon";
 
 const GLOBAL_NAV = [
   { to: "/overview", label: "Overview", icon: "overview", match: (p) => p === "/" || p.startsWith("/overview") },
+  // The live operating surface, session-first. Second on purpose: when a session is running, this
+  // is the page the operator lives on — reaching it should never mean walking through Domains.
+  { to: "/cockpit", label: "Cockpit", icon: "sliders", match: (p) => p.startsWith("/cockpit") },
   { to: "/domains", label: "Domains", icon: "domains", match: (p) => p.startsWith("/domains") },
   { to: "/activity", label: "Activity", icon: "activity", match: (p) => p.startsWith("/activity") },
   { to: "/learning/overview", label: "Learning", icon: "learning", match: (p) => p.startsWith("/learning") },
