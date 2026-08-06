@@ -23,24 +23,35 @@ from typing import Any, Optional
 INDEED_APPLY_RECIPE = [
     {"step": 0, "state": "indeed_job_posting",            "action": "click Apply with Indeed",
      "expect": ["indeed_apply_resume_selection", "indeed_apply_questions", "indeed_apply_review"]},
-    # `indeed_apply_resume_review` added 2026-08-06 from a MEASURED miss, not a guess: the
+    # `indeed_apply_resume_highlights` added 2026-08-06 from a MEASURED miss, not a guess: the
     # orienter's practice loop predicted this list, Continue was pressed on MFS Investment
     # Management's application, and the tab went `/resume-selection-module/resume-selection` ->
-    # `/resume-module/structured-data-intro`, which the URL patterns below name `resume_review`.
-    # First live trial of the scorer, first correction it bought (orientation_log: miss, 0/1).
+    # `/resume-module/structured-data-intro`. First live trial of the scorer, first correction it
+    # bought (orientation_log: miss, 0/1).
     {"step": 1, "state": "indeed_apply_resume_selection", "action": "Continue",
+     "expect": ["indeed_apply_resume_highlights", "indeed_apply_resume_review", "indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
+    # THE HIGHLIGHTS SCREEN — Indeed's structured-data capture, operator-identified live
+    # 2026-08-06. Not a page to click past: the applicant marks up the parts of their resume the
+    # employer's screen reads, and skipping it forfeits the thing it exists for. Every advance is
+    # gated on the unanswered-required-fields scan, so a bare Continue cannot walk over it.
+    #
+    # Its own hazard, met on the first encounter: the editor's "Save and close" opens a
+    # {Save, Don't save} modal, and the advance lexicon's longest-match tie-break picked the
+    # negation (fixed in `decide._is_negated`). A screen whose controls include a discard is one
+    # to be careful on.
+    {"step": 2, "state": "indeed_apply_resume_highlights", "action": "highlight resume details + Continue",
      "expect": ["indeed_apply_resume_review", "indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
-    {"step": 2, "state": "indeed_apply_questions",        "action": "autofill + Continue",
+    {"step": 3, "state": "indeed_apply_questions",        "action": "autofill + Continue",
      "expect": ["indeed_apply_questions", "indeed_apply_contact_info", "indeed_apply_demographics", "indeed_apply_review"]},
-    {"step": 3, "state": "indeed_apply_contact_info",     "action": "autofill (atomic) + Continue",
+    {"step": 4, "state": "indeed_apply_contact_info",     "action": "autofill (atomic) + Continue",
      "expect": ["indeed_apply_questions", "indeed_apply_demographics", "indeed_apply_review"]},
-    {"step": 4, "state": "indeed_apply_resume_review",    "action": "Continue",
+    {"step": 5, "state": "indeed_apply_resume_review",    "action": "Continue",
      "expect": ["indeed_apply_demographics", "indeed_apply_review"]},
-    {"step": 5, "state": "indeed_apply_demographics",     "action": "fill gender/ethnicity/etc + Review",
+    {"step": 6, "state": "indeed_apply_demographics",     "action": "fill gender/ethnicity/etc + Review",
      "expect": ["indeed_apply_review", "indeed_apply_demographics"]},
-    {"step": 6, "state": "indeed_apply_review",           "action": "Submit (human at captcha)",
+    {"step": 7, "state": "indeed_apply_review",           "action": "Submit (human at captcha)",
      "expect": ["indeed_apply_submitted", "indeed_apply_ai_recruiter_gate", "captcha"]},
-    {"step": 7, "state": "indeed_apply_submitted",        "action": "record applied + provenance, "
+    {"step": 8, "state": "indeed_apply_submitted",        "action": "record applied + provenance, "
      "then EPILOGUE: close this apply tab and refocus the search tab (mcp /close_tab, "
      "focus_tab_url=the search) so the next prospect starts where triage left off", "expect": []},
 ]
@@ -147,6 +158,13 @@ _URL_STATES = [
     (r"/dashboard/verify-interview",              "interview_review"),
     (r"/dashboard.*workflowExecutionId",          "indeed_apply_ai_recruiter_gate"),
     (r"resume-selection",                          "indeed_apply_resume_selection"),
+    # BEFORE the `resume-module` catch-all, which would otherwise swallow it. Indeed's structured-
+    # data capture: the applicant marks up the details of their resume that the employer's screen
+    # reads, so the application is less likely to be filtered out. Operator, live 2026-08-06:
+    # "we will be highlighting details of our resume and application to send to the employer so we
+    # have a better chance of not getting screened out." Its own screen, its own state — folding it
+    # into `resume_review` would tell the ladder a form to fill in is a page to click past.
+    (r"structured-data-intro|structured-data/",    "indeed_apply_resume_highlights"),
     (r"structured-data-review|resume-module",      "indeed_apply_resume_review"),
     (r"demographic-questions",                     "indeed_apply_demographics"),
     (r"questions-module|/questions/",              "indeed_apply_questions"),

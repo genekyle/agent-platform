@@ -104,6 +104,30 @@ def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, 
             ("state", "unanswered"))
 
 
+#: Words that INVERT a control's meaning. `_ADVANCE_CONTROLS` matches by substring and resolves
+#: ties by length, which is right for "Continue" vs "Save and Continue" — longer means more
+#: specific, same intent. It is exactly wrong for "Save" vs "Don't save", where longer means the
+#: OPPOSITE intent, and the tie-break hands back the negation.
+#:
+#: Found live 2026-08-06 on Indeed's resume editor: the page offered {Save, Don't save, Report an
+#: issue, Close} and `advance_control` returned "Don't save". The click was journaled as an advance.
+#: A matcher that cannot see a negation will eventually press Cancel, Discard or Do not submit and
+#: report it as progress.
+_NEGATIONS = ("don't", "dont", "do not", "never", "cancel", "discard", "without saving")
+
+
+def _is_negated(name: str, term: str) -> bool:
+    """Does `name` match `term` only by containing its negation? — "Don't save" vs "Save"."""
+    low = name.lower()
+    if not any(neg in low for neg in _NEGATIONS):
+        return False
+    # A negation word anywhere in a control whose only claim to being the advance is a substring
+    # match is enough to disqualify it. Deliberately blunt: the cost of skipping a real control is
+    # one honest "no advance control found", and the cost of pressing the wrong one is an action
+    # taken on the operator's behalf that means the reverse of what was intended.
+    return term.lower() in low
+
+
 def advance_control(ax_identities: Sequence[str]) -> str:
     """The control on this page that advances the form, AS THE PAGE RENDERS IT — or "".
 
@@ -125,7 +149,8 @@ def advance_control(ax_identities: Sequence[str]) -> str:
              for ident in (ax_identities or ())]
     names = [n for n in names if n]
     for control in _ADVANCE_CONTROLS:
-        matches = [n for n in names if control.lower() in n.lower()]
+        matches = [n for n in names if control.lower() in n.lower()
+                   and not _is_negated(n, control)]
         if matches:
             return max(matches, key=len)
     return ""

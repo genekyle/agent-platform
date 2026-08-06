@@ -4875,23 +4875,31 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
     tab_id = tab.get("tab_id", "")
     action = ar.advance_action(step.platform, rung.id)
 
-    if "fill" in action.lower():
-        pending = await _unanswered_required(browser_url, tab_id)
-        if pending is None:
-            step.record(rung.id, aps.UNKNOWN,
-                        "could not scan the form for required fields", initiator=initiator)
-            return ("I could not read this form's required fields, and the recipe says this screen "
-                    "wants answers before it advances. Not clicking Continue blind — look at the "
-                    "page, or fill it and step again.")
-        if pending:
-            step.record(rung.id, aps.HUMAN_REQUIRED,
-                        f"{len(pending)} required field(s) unanswered: {', '.join(pending[:6])}",
-                        initiator=initiator)
-            return (f"This screen still wants {len(pending)} answer(s) — "
-                    f"{', '.join(pending[:6])}"
-                    + ("…" if len(pending) > 6 else "")
-                    + ". Fill them first; an application must not reach Submit with answers "
-                      "nobody chose to leave out.")
+    # EVERY ADVANCE IS CHECKED, not just the ones the recipe words with "fill".
+    #
+    # The first version keyed on the verb in the recipe's action text, which meant the guard's
+    # coverage depended on prose — and the very next screen added was worded "highlight resume
+    # details + Continue" and would have walked straight past it (2026-08-06). A safety check whose
+    # scope is a substring of a description is one nobody can reason about.
+    #
+    # The cost is one scan per advance; the benefit is that no screen on any platform gets a
+    # Continue clicked over an answer nobody chose to leave out. And a screen with nothing required
+    # returns `[]` immediately, which is the common case and cheap.
+    pending = await _unanswered_required(browser_url, tab_id)
+    if pending is None:
+        step.record(rung.id, aps.UNKNOWN,
+                    "could not scan the form for required fields", initiator=initiator)
+        return ("I could not read this form's required fields. Not clicking Continue blind — "
+                "look at the page, or fill it and step again.")
+    if pending:
+        step.record(rung.id, aps.HUMAN_REQUIRED,
+                    f"{len(pending)} required field(s) unanswered: {', '.join(pending[:6])}",
+                    initiator=initiator)
+        return (f"This screen still wants {len(pending)} answer(s) — "
+                f"{', '.join(pending[:6])}"
+                + ("…" if len(pending) > 6 else "")
+                + ". Fill them first; an application must not reach Submit with answers "
+                  "nobody chose to leave out.")
 
     control = advance_control(_ax_identities(scan))
     if not control:

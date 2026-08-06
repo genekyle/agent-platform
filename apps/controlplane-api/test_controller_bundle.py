@@ -22,7 +22,9 @@ def test_indeed_questions_bundle():
     assert b.state == "indeed_apply_questions"
     assert b.done is False
     assert b.human_required is False
-    assert b.recipe_step == 2
+    # 3, not 2: `indeed_apply_resume_highlights` was inserted at step 2 on 2026-08-06 after
+    # the live drive found it (Indeed's structured-data capture). The spine got one longer.
+    assert b.recipe_step == 3
     assert b.route == "smartapply.indeed.com/questions/{id}"   # dynamic id templated
     # form half sanitised: field kept, selector/preview/value_read_at dropped
     assert b.unanswered == ({"field": "Work authorization", "kind": "radio_group",

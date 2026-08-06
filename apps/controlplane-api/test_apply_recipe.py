@@ -103,7 +103,7 @@ def test_flow_progress_counts_the_indeed_spine_under_either_platform_name():
     import apply_recipe as ar
     for platform in ("indeed", "indeed_quick_apply"):
         p = ar.flow_progress("indeed_apply_resume_selection", platform=platform)
-        assert p["recognised"] and p["steps_to_submit"] == 5 and not p["at_review_gate"]
+        assert p["recognised"] and p["steps_to_submit"] == 6 and not p["at_review_gate"]
         assert ar.flow_progress("indeed_apply_review", platform=platform)["at_review_gate"] is True
         assert ar.flow_progress("indeed_apply_submitted", platform=platform)["done"] is True
     assert ar.flow_progress("not_a_state", platform="indeed")["recognised"] is False
@@ -128,3 +128,19 @@ def test_the_recipe_names_the_action_and_the_states_it_expects():
     assert ar.advance_action("indeed", "indeed_apply_resume_selection") == "Continue"
     assert "indeed_apply_review" in ar.expected_after("indeed", "indeed_apply_demographics")
     assert ar.advance_action("workday", "workday_review") == ""      # not this recipe's spine
+
+
+def test_the_advance_matcher_never_presses_a_negation():
+    """Found live 2026-08-06 on Indeed's resume editor. The page offered {Save, Don't save, Report
+    an issue, Close}; `_ADVANCE_CONTROLS` matched "Save" by substring and the longest-match
+    tie-break — right for "Continue" vs "Save and Continue", where longer means more specific —
+    handed back "Don't save", where longer means the opposite. The click was journaled as an
+    advance."""
+    from controller.decide import advance_control
+    assert advance_control(["button|Save", "button|Don't save", "button|Close"]) == "Save"
+    assert advance_control(["button|Don't save"]) == "", "a page with ONLY the negation advances nothing"
+    for negation in ("Do not continue", "Cancel and continue", "Discard and continue",
+                     "Continue without saving", "Never continue"):
+        assert advance_control([f"button|{negation}"]) == "", f"{negation!r} must not read as advance"
+    # The tie-break it was built for still works.
+    assert advance_control(["button|Continue", "button|Save and Continue"]) == "Save and Continue"
