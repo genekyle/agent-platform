@@ -92,6 +92,72 @@ export function NowContext({ panel, cockpit, selection, onOpenLens, onOpenTrace 
           <small>Last result: {panel.last_step.ok === false ? "did not verify" : "recorded"} · {panel.last_step.detail || panel.last_step.action}</small>
         )}
       </section>
+
+      <Learning learning={panel.learning} />
     </aside>
+  );
+}
+
+// WHAT THE INNER LAYERS ARE GETTING RIGHT — the practice, made visible. Ported from the retired
+// DecisionInspector: ORIENTER (the recipe's predicted next screen vs. the StepRunner's after-look)
+// and SHADOW (what the controller would have decided, journaled beside what we did) are both
+// scored on every crank, and a scorecard nobody can see is the same as not practising.
+//
+// A missing measurement renders as an explicit absence, never a zero: "0% accurate" and "never
+// asked" look identical on a dial and mean opposite things.
+function Learning({ learning }) {
+  if (!learning) return null;
+  const o = learning.orienter || {};
+  const s = learning.shadow || {};
+  const pct = (v) => (typeof v === "number" ? `${Math.round(v * 100)}%` : null);
+  const oScore = pct(o.accuracy);
+  // GATED ON THE SAMPLE, NOT ON THE NUMBER. `shadow_agreement` returns a deliberate `0.0` when it
+  // has no pairs — honest in the report and misleading on a dial, where it reads as "the
+  // controller agrees with nothing" rather than "never asked".
+  const sScore = (s.n || 0) > 0 ? pct(s.agreement) : null;
+
+  return (
+    <section className="now-context__card now-context__card--learning">
+      <div className="now-context__head">
+        <span><AppIcon name="learning" size={13} /> Learning</span>
+      </div>
+      <div className="learning">
+        <div className="learning__row">
+          <span className="learning__name">Orienter</span>
+          {oScore
+            ? <>
+                <span className="learning__score">{oScore}</span>
+                <span className="learning__meta">
+                  {o.hits}/{o.scored} transitions called
+                  {o.unscored > 0 && <> · {o.unscored} unreadable</>}
+                </span>
+              </>
+            : <span className="learning__none">
+                {o.trials ? "no scoreable trial yet" : "not practised yet"}
+              </span>}
+        </div>
+        {(o.recent || []).length > 0 && (
+          <ul className="learning__trials">
+            {o.recent.slice(0, 4).map((t, i) => (
+              <li key={i} className="learning__trial">
+                <span className={`is-${t.result}`}>{t.result}</span>
+                <span>{(t.from || "?").replace(/_/g, " ")} → {(t.to || "?").replace(/_/g, " ")}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="learning__row">
+          <span className="learning__name">Shadow</span>
+          {sScore
+            ? <>
+                <span className="learning__score">{sScore}</span>
+                <span className="learning__meta">
+                  {s.agree}/{s.n} paired steps matched
+                </span>
+              </>
+            : <span className="learning__none">no paired step yet</span>}
+        </div>
+      </div>
+    </section>
   );
 }
