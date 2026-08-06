@@ -138,7 +138,11 @@ function applicationSteps(steps, currentJobId) {
 function actionFrom(opt, extra = {}) {
   if (!opt) return null;
   if (!opt.driveable) return null;
-  return { label: opt.label, endpoint: opt.endpoint, body: opt.body || {}, why: opt.why, ...extra };
+  return { label: opt.label, endpoint: opt.endpoint, body: opt.body || {}, why: opt.why,
+    // CARRIED, NOT RE-DERIVED. The API says which action is the irreversible one; a UI that
+    // decided that for itself by matching on a label would send an application the day somebody
+    // reworded a button.
+    consequential: !!opt.consequential, operatorOnly: !!opt.operator_only, ...extra };
 }
 
 function setupFocus(p, last) {
@@ -309,10 +313,28 @@ function executeFocus(p, step, nextAction) {
   // THE ARBITRATED ACTION, and it is the ONLY place it renders. The old panel drew `next_action`
   // in a band AND the same rung again as the queue step's own button — same label, same
   // `/apply_step` endpoint, both styled primary, ~700px apart. One authority, one button.
-  return { ...base, kind: "application",
+  const primary = actionFrom(nextAction);
+
+  // THE GATE IS ITS OWN MOMENT. Every rung before it is reversible and reads "work this step";
+  // this one sends an application to a real employer under the operator's name. A button that
+  // looks like the five before it gets pressed by muscle memory, so the gate gets its own focus
+  // kind, its own copy, and a surface that states exactly what is about to leave.
+  //
+  // It is still ONE primary action — the rule the whole pane exists to enforce — just an
+  // unmistakable one.
+  if (primary?.consequential) {
+    return { ...base, kind: "gate", flow: p.apply_flow || null,
+      why: "This is the irreversible one. Everything before it on this ladder can be walked back; "
+        + "this cannot. Nothing is sent until you press it.",
+      sending: { title: step.title || step.job_id, company: step.company || "",
+        platform: step.platform || "", state: step.landing_state || "" },
+      primary, alternates: [] };
+  }
+
+  return { ...base, kind: "application", flow: p.apply_flow || null,
     why: nextAction?.why || "",
     say: nextAction && !nextAction.driveable ? nextAction.label : "",
-    primary: actionFrom(nextAction),
+    primary,
     alternates: nextAction?.secondary ? [actionFrom(nextAction.secondary,
       { demoted: nextAction.secondary.demoted_because })].filter(Boolean) : [] };
 }
@@ -381,7 +403,7 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   else focus = setupFocus(p, p.last_step);
 
   const pageMoments = new Set(["read", "recover", "choose", "proposal", "account_handoff",
-    "account", "application"]);
+    "account", "application", "gate"]);
   const current = pageMoments.has(focus.kind) ? `page:${page}` : "session";
   focus = { ...focus, group: current,
     groupLabel: current === "session" ? "Session" : `Page ${page}` };
