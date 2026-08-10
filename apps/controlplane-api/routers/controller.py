@@ -154,6 +154,14 @@ class RunBody(BaseModel):
     #: Off by default because the window is shared with the operator and closing is irreversible;
     #: surveying happens every turn regardless.
     tidy: bool = False
+    #: Teacher-first (operator-directed 2026-08-09): a teacher is present, so escalation goes
+    #: recipe → session-Claude — the tokens already paid for — and the Haiku API rung is NOT
+    #: wired regardless of `mode` (unless `settings.haiku_attended_allowed` deliberately
+    #: re-admits it). Attended also routes YELLOW propose-approve turns to the teacher inbox
+    #: instead of a confidence floor, so "not confident enough" reaches the teacher rather than
+    #: being auto-approved at 0.85. Set false for an unattended run: `mode` then governs the
+    #: Haiku rung exactly as before, under the $5/week budget guard.
+    attended: bool = True
 
 
 @router.post("/api/controller/run")
@@ -170,12 +178,21 @@ async def run_live(body: RunBody) -> dict[str, Any]:
       * `assisted` — the Haiku rung may also propose, auto-approved only above `min_confidence`
         (see `teach.auto_reviewer`); below it, a human gets it.
 
+    Attended (default, operator-directed 2026-08-09) sits ABOVE mode: a teacher is present, so
+    the cascade is recipe → session-Claude (via the teacher inbox) → human — Haiku is not wired
+    even in `assisted`, unless `settings.haiku_attended_allowed` deliberately re-admits it, and
+    YELLOW propose-approve turns park on the same inbox instead of an 0.85 auto-approve. The
+    teacher services parks via `GET /api/controller/teacher/pending` +
+    `POST /api/controller/teacher/{id}/respond` while the drive waits (`park_seconds`).
+    Set `attended=false` for an unattended run: mode then governs Haiku exactly as documented
+    above, under the weekly budget guard.
+
     Gates that stay loud in BOTH modes, because "less push-button" must never mean "fewer
     safeguards": SUBMIT is held for the operator (CONSEQUENTIAL_INTENTS), human-required states
     (sign-in / create-account) are structurally undriveable, BLOCKED hands straight over, and two
     escalations in a row stop the drive. Every escalation raises a real handoff alert.
     """
-    from controller.live_actuator import LiveActuator
+    from controller.live_actuator import LiveActuator, transition_recorder
     from controller.loop import CONSEQUENTIAL_INTENTS, run_controller
     from controller.teach import auto_reviewer
     from runtime import handoff as handoff_mod
@@ -183,11 +200,24 @@ async def run_live(body: RunBody) -> dict[str, Any]:
     if body.mode not in ("rung0_only", "assisted"):
         return {"ok": False, "detail": f"unknown mode {body.mode!r} (rung0_only | assisted)"}
 
+    # ONE key for everything this run writes — the seat, the reviewer, the decision journal AND
+    # the transition corpus — so the cockpit Trace can join them. Pass the cockpit session id as
+    # `session_id` when launching an attended drive; the `run-{task}` fallback keeps un-scoped
+    # runs journaled, but their rows render in the Trace only under their run key.
+    run_key = body.session_id or f"run-{body.task}"
+
     actuator = LiveActuator(base_url=settings.capture_server_url, browser_url=body.browser_url,
                             tab_id=body.tab_id, task=body.task, goal_text=body.goal_text,
                             driver="humanized", allow_submit=body.allow_submit,
                             tidy=body.tidy)
-    model = HaikuReasoner() if body.mode == "assisted" else None
+    # THE model-wiring line — the one place that decides the cascade's membership, and therefore
+    # the enforcement point for teacher-first economics (2026-08-09): on an attended drive the
+    # session-Claude teacher IS the rung above recipe, so Haiku is not wired no matter what
+    # `mode` says. It has to be enforced here and not in authority: the loop grades authority
+    # AFTER decide() runs, by which point an injected model has already spent the API call.
+    model = None
+    if body.mode == "assisted" and (not body.attended or settings.haiku_attended_allowed):
+        model = HaikuReasoner()
 
     # Progressive autonomy, wired at THE production call site. `run_controller` defaults both to
     # None so the offline suite can exercise pure control-flow; a live drive always gates.
@@ -197,7 +227,7 @@ async def run_live(body: RunBody) -> dict[str, Any]:
     if body.progressive:
         from controller.authority_seam import InboxSeat, default_authority
         authority_fn = default_authority()
-        seat = InboxSeat(session_id=body.session_id, timeout=body.park_seconds,
+        seat = InboxSeat(session_id=run_key, timeout=body.park_seconds,
                          on_park=lambda r: parks.append(
                              {"id": r.id, "kind": r.kind, "state": r.state, "mode": r.mode,
                               "why": r.authority_reason, "gaps": r.reach_gaps}))
@@ -242,14 +272,38 @@ async def run_live(body: RunBody) -> dict[str, Any]:
         held.append({"state": bundle.state, "intent": decision.intent,
                      "detail": "held for the operator — Submit is always yours"})
 
+    # Attended: proposals below certainty go to the SAME teacher seat as escalations, not to a
+    # confidence floor — "not confident enough" is precisely the turn the operator wants the
+    # teacher to see. Timeout escalates (never approves), per inbox_reviewer's own contract.
+    if body.attended:
+        reviewer = inbox_mod.inbox_reviewer(
+            session_id=run_key, timeout=body.park_seconds,
+            on_timeout=lambda req, b, d: reviews.append(
+                {"state": b.state, "intent": d.intent, "confidence": d.confidence,
+                 "verdict": "timeout->escalate", "request_id": req.id}))
+    else:
+        reviewer = auto_reviewer(min_confidence=body.min_confidence, on_review=_on_review)
+
+    # Every acting turn lands in the StepRunner's transition corpus — the controller drive and
+    # the cockpit-ladder drive write the SAME training row. This wiring lived only in a dead
+    # module-level entrypoint until 2026-08-10, so the production route journaled decisions and
+    # wrote ZERO transition rows: the exact built-never-wired hole, at the exact seam the
+    # refocus is about. The recorder rides the same `run_key` so the Trace joins it.
+    rec_supervise, rec_step = transition_recorder(run_key)
+
+    def _step_and_record(bundle: Bundle, decision: Decision, result: Any) -> None:
+        _on_step(bundle, decision, result)
+        rec_step(bundle, decision, result)
+
     result = await run_in_threadpool(
         run_controller, actuator,
         programs=programs_mod.ProgramStore(), model=model,
-        session_id=body.session_id or f"run-{body.task}", max_steps=body.max_steps,
-        reviewer=auto_reviewer(min_confidence=body.min_confidence, on_review=_on_review),
+        session_id=run_key, max_steps=body.max_steps,
+        reviewer=reviewer,
         on_escalate=handoff_mod.escalation_callback(
             task_goal=body.goal_text or body.task, reason="unexpected_state"),
-        on_consequential=_on_consequential, on_step=_on_step,
+        on_consequential=_on_consequential, on_step=_step_and_record,
+        on_supervise=rec_supervise,
         authority=authority_fn, seat=seat, orient=orientation.predict,
         on_authority=lambda b, d, v: modes.append(v.mode),
         held_intents=frozenset() if body.allow_submit else CONSEQUENTIAL_INTENTS)

@@ -294,3 +294,20 @@ def test_an_operator_note_rides_into_the_decision_that_gets_journaled(tmp_path, 
     got = inbox_mod.decision_from_response(row.get("response"))
     assert "Indeed usually prefills this" in got.rationale
     assert "operator_note" in got.evidence
+
+
+# --- §4 at the SECOND durable store (2026-08-10) -----------------------------------------------
+def test_a_park_redacts_secret_valued_params_like_the_journal_does():
+    """Attended mode routes every YELLOW review through teacher_inbox.jsonl, which is served
+    whole by /teacher/pending — so the prediction's params get the journal's own field-aware
+    redaction: normal answers stay readable for the teacher, secrets by name are masked."""
+    from controller import inbox as inbox_mod
+
+    inbox_mod.ask(kind="review", session_id="t-redact", task="apply",
+                  prediction={"intent": "type",
+                              "params": {"field": "current_password", "value": "hunter22",
+                                         "control": "input"}})
+    row = [r for r in inbox_mod.pending(limit=50) if r.get("session_id") == "t-redact"][0]
+    assert row["prediction"]["params"]["value"].startswith("[redacted:")
+    assert row["prediction"]["params"]["field"] == "current_password"
+    assert row["prediction"]["params"]["control"] == "input"

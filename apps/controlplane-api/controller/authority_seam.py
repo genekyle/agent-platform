@@ -106,11 +106,14 @@ class InboxSeat:
                  verdict: Optional[AuthorityVerdict]) -> Optional[Decision]:
         package = self._package(bundle, decision, verdict)
         package["session_id"] = self.session_id
-        request, response = inbox_mod.ask_and_wait(
-            kind=inbox_mod.RequestKind.INSTRUCT.value, timeout=self.timeout, poll=self.poll,
-            **package)
+        # ask → announce → wait, in that order. `on_park` used to fire after `ask_and_wait`
+        # returned — i.e. after the park had already been answered or expired — which made it a
+        # post-mortem, not a notification: nothing could learn a teacher was needed WHILE the
+        # teacher was needed (2026-08-09; the seat sat unused since 07-23 partly for this).
+        request = inbox_mod.ask(kind=inbox_mod.RequestKind.INSTRUCT.value, **package)
         if self.on_park:
             self.on_park(request)
+        response = inbox_mod.wait_for(request.id, timeout=self.timeout, poll=self.poll)
         if self.on_answer:
             self.on_answer(request, response)
         if not response:
@@ -143,11 +146,11 @@ class InboxSeat:
                  verdict: Optional[AuthorityVerdict]) -> TakeoverResult:
         package = self._package(bundle, decision, verdict)
         package["session_id"] = self.session_id
-        request, response = inbox_mod.ask_and_wait(
-            kind=inbox_mod.RequestKind.TAKEOVER.value, timeout=self.timeout, poll=self.poll,
-            **package)
+        # Same ask → announce → wait ordering as `instruct`, for the same reason.
+        request = inbox_mod.ask(kind=inbox_mod.RequestKind.TAKEOVER.value, **package)
         if self.on_park:
             self.on_park(request)
+        response = inbox_mod.wait_for(request.id, timeout=self.timeout, poll=self.poll)
         if self.on_answer:
             self.on_answer(request, response)
         if not response:

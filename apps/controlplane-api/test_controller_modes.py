@@ -395,3 +395,69 @@ def test_a_takeover_without_a_new_tab_leaves_the_target_alone():
                        Maturity.CERTIFIED.value,
                        reach=ActuationReach(can_operate=False, gaps=("widget:signature_pad",))))
     assert act.retargeted == []
+
+
+# --- attended mode: teacher-first economics (operator-directed 2026-08-09) -------------
+def test_attended_demotes_haiku_at_the_model_wiring_line():
+    """On an attended drive the rung above recipe is the session-Claude teacher — already paid
+    for — so `assisted` must NOT wire the API rung unless the settings flag deliberately
+    re-admits it. Enforced at model-wiring because authority grades AFTER decide() runs, by
+    which point an injected model has already spent the call."""
+    import inspect
+    from routers import controller as router
+
+    src = inspect.getsource(router.run_live)
+    assert "body.attended" in src and "haiku_attended_allowed" in src
+    # the gate must sit on the ONE line that constructs the reasoner
+    wiring = src[src.index("model = None"):src.index("HaikuReasoner()") + 20]
+    assert "not body.attended or settings.haiku_attended_allowed" in wiring
+    assert "attended: bool = True" in inspect.getsource(router.RunBody)
+
+
+def test_attended_routes_yellow_reviews_to_the_teacher_inbox():
+    """"Not confident enough" is precisely the turn the operator wants the teacher to see —
+    attended swaps the 0.85 auto-approve floor for the inbox, whose timeout ESCALATES rather
+    than approving (nobody listening must never mean act unsupervised)."""
+    import inspect
+    from routers import controller as router
+
+    src = inspect.getsource(router.run_live)
+    assert "if body.attended:" in src
+    assert "inbox_mod.inbox_reviewer(" in src
+
+
+def test_a_park_announces_itself_when_it_opens_not_after_it_resolves():
+    """`on_park` used to fire after `ask_and_wait` returned — a post-mortem, not a notification:
+    nothing could learn a teacher was needed WHILE the teacher was needed. The seat now asks,
+    announces, then waits; the callback must observe the request still OPEN."""
+    from controller import inbox as inbox_mod
+    from controller.authority_seam import InboxSeat
+
+    seen_open: list[bool] = []
+
+    def on_park(request):
+        ids_open = {r.get("id") for r in inbox_mod.pending()}
+        seen_open.append(request.id in ids_open)
+
+    seat = InboxSeat(session_id="t-announce", timeout=0.0, on_park=on_park)
+    answer = seat.instruct(a_bundle(), Decision("click", {}, 0.4, "recipe", WHY,
+                                                escalate=True), None)
+    assert answer is None, "timeout=0 must expire, exactly as before"
+    assert seen_open == [True], "the park was already resolved by the time it was announced"
+
+
+def test_the_live_route_writes_the_transition_corpus_it_reads():
+    """The recorder wiring lived only in a dead module-level entrypoint, so the production
+    route journaled decisions and wrote ZERO transition rows — the built-never-wired shape,
+    caught in review before it shipped this time. One run key joins seat, reviewer, journal
+    and corpus, so the cockpit Trace can follow a drive it launched."""
+    import inspect
+    from routers import controller as router
+
+    src = inspect.getsource(router.run_live)
+    assert "transition_recorder(run_key)" in src
+    assert "on_supervise=rec_supervise" in src
+    assert "on_step=_step_and_record" in src
+    assert 'run_key = body.session_id or f"run-{body.task}"' in src
+    assert "InboxSeat(session_id=run_key" in src
+    assert "session_id=run_key" in src

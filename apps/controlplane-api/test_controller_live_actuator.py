@@ -601,3 +601,57 @@ def test_a_read_intent_does_not_count_as_unsaved_work():
     act.observe()
     act.act(Decision(intent="scan_required", params={}, confidence=0.9, rung="recipe", rationale="staleness wiring test"))
     assert act._unsaved_work is False
+
+
+# --- capture posture + refs (2026-08-09/10: the teacher's eyes, and where they must close) -----
+def test_a_signed_in_turn_captures_and_the_bundle_carries_the_refs():
+    """The 0/117 fix end-to-end at this seam: /capture fires, and its durable name rides
+    Bundle.capture so record_for can journal what the decision saw."""
+    fake = FakeTransport(url=_INDEED)
+    fake._responses["/capture"] = {"ok": True, "filename": "a__live_mcp__controller_turn.json"}
+    bundle = _actuator(fake).observe()
+    assert "/capture" in fake.paths()
+    assert bundle.capture is not None
+    assert bundle.capture["artifact"] == "a__live_mcp__controller_turn.json"
+
+
+def test_a_logged_out_turn_captures_nothing_at_all():
+    """§4 posture, tightened after review (2026-08-10): an auth surface never enters the corpus.
+    The wall right after a takeover can hold a typed e-mail or a password-manager dropdown —
+    not visibly signed in means no capture, no screenshot, no refs, structurally."""
+    fake = FakeTransport(url=_INDEED, logged_in=False)
+    bundle = _actuator(fake).observe()
+    assert "/capture" not in fake.paths()
+    assert bundle.capture is None
+
+
+def test_transition_rows_keep_param_names_never_answer_content(monkeypatch):
+    """The closed vocabulary carries answers under `value`, `values`, `month` AND `year` — the
+    old one-key strip leaked multi-select and date answers into the corpus. Allowlist now."""
+    import step_runner as sr_mod
+    from controller.live_actuator import transition_recorder
+    from interaction.decision import Decision
+
+    recorded = {}
+    monkeypatch.setattr(sr_mod, "record_transition",
+                        lambda **kw: recorded.update(kw) or "path")
+    on_supervise, on_step = transition_recorder("t-allowlist")
+
+    class R:
+        outcome = "ok"
+        landed_state = "indeed_apply_review"
+        unanswered_after = []
+        ax_identities = ()
+
+    from test_controller_modes import a_bundle
+    decision = Decision("select_option", {"field": "veteran_status", "control": "combo",
+                                          "value": "Prefer not to say",
+                                          "values": ["Asian", "Veteran"],
+                                          "month": 5, "year": 2020},
+                        0.9, "recipe", "why not")
+    on_step(a_bundle(capture={"artifact": "a.json", "screenshot": "/shots/s.png",
+                              "screenshot_filename": "s.png"}), decision, R())
+    assert recorded["action"]["params"] == {"field": "veteran_status", "control": "combo"}
+    # and the row's before-half carries the capture, field-for-field like step_runner rows
+    assert recorded["before"].artifact == "a.json"
+    assert recorded["before"].screenshot == "/shots/s.png"

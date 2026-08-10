@@ -26,6 +26,22 @@ class Settings(BaseSettings):
     # When exceeded, the budget guard blocks further LLM calls and the loop must
     # escalate to a human. Keeps testing/runtime cost bounded. Override in .env.
     anthropic_weekly_budget_usd: float = 5.0
+    # Teacher-first economics (operator-directed 2026-08-09): on an ATTENDED drive the
+    # escalation rung is the session-Claude teacher — already paid for — so the Haiku API rung
+    # is demoted to unattended runs. OFF means an attended `/api/controller/run` never wires
+    # Haiku regardless of `mode`; flip in .env only to deliberately re-admit the API rung while
+    # a teacher is present. Enforced at the model-wiring line (the one place that decides the
+    # cascade's membership), because authority is graded AFTER decide() has already spent a call.
+    # NAMED exemptions this flag does NOT govern, each an explicit per-call opt-in and all under
+    # the weekly cap: `teach_session`'s SHADOW scorer (never acts; it is the only source of the
+    # shadow-agreement promotion metric, so gating it would blind graduation), and the direct
+    # endpoints /decide_model, /observe?allow_model, /decide_cascade with a posted budget.
+    haiku_attended_allowed: bool = False
+    # Train-as-we-go, actually as-we-go (2026-08-09): a teacher label lands → the transition
+    # table and the perception witnesses refit in the background, so "we are training and
+    # labeling along the way" is a property of the label write, not of remembering a button.
+    # OFF only for A/B comparisons or when a batch of labels is being written in one sitting.
+    train_on_label: bool = True
     # Test-account credentials for capturing logged-in states, read from the
     # GITIGNORED .env only. NEVER hardcode a real value here and NEVER log these —
     # see _login_secrets(). Use a throwaway/test account, not a primary one.

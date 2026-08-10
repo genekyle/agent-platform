@@ -169,6 +169,16 @@ def ask(*, kind: str, session_id: str = "", task: str = "", state: Optional[str]
         stop_conditions: Optional[list[str]] = None) -> TeacherRequest:
     """Post a question and return it. Does NOT wait — `wait_for` does that, so a caller can post
     and keep working if it ever wants to."""
+    # The inbox is a SECOND durable store (cache/teacher_inbox.jsonl, served whole by
+    # /teacher/pending), and attended mode routes every YELLOW review through it — so the local
+    # prediction's params get the SAME redaction the decision journal applies at log time. The
+    # bundle/belief prompts are already value-free by construction (field names only); params
+    # were the one place a typed answer rode in verbatim (caught in review, 2026-08-10).
+    from interaction.decision_journal import _redact_params
+
+    prediction = dict(prediction or {})
+    if prediction.get("params"):
+        prediction["params"] = _redact_params(prediction["params"])
     request = TeacherRequest(
         id=f"tr_{uuid.uuid4().hex[:12]}",
         ts=datetime.now(timezone.utc).isoformat(),
@@ -176,7 +186,7 @@ def ask(*, kind: str, session_id: str = "", task: str = "", state: Optional[str]
         maturity=maturity, authority_reason=authority_reason,
         bundle_prompt=bundle_prompt, belief_prompt=belief_prompt,
         verdict_prompt=verdict_prompt, authority_prompt=authority_prompt,
-        prediction=dict(prediction or {}), reach_gaps=list(reach_gaps or []),
+        prediction=prediction, reach_gaps=list(reach_gaps or []),
         stop_conditions=list(stop_conditions
                              or (DEFAULT_STOP_CONDITIONS if kind == RequestKind.TAKEOVER.value
                                  else ())),

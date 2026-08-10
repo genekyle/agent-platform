@@ -252,7 +252,13 @@ class LiveActuator:
         # perceiving are one round trip rather than two. Both are best-effort: perception is an
         # aid, never a dependency, and a drive must run exactly as before without it.
         captured = perception_live.CapturedTurn()
-        if self._collect:
+        # §4 posture, tightened 2026-08-10: an auth surface never enters the corpus. The controller
+        # only ever DRIVES logged-in ground (human_required gates the rest), but observe() runs on
+        # whatever the tab shows — including the sign-in wall right after a RED takeover, with a
+        # typed e-mail or a password-manager dropdown on screen. Auth is probed above, so the
+        # cheap honest gate is: not visibly signed in → no capture, no screenshot, no refs. The
+        # login corpora grow through the step_runner paths that own that posture (collect=False).
+        if self._collect and auth.get("logged_in", False):
             captured = perception_live.capture_now(
                 self._post, self._addr(), task=self._task,
                 state=None, domain_id=ats_registry.classify_ats(url),
@@ -288,11 +294,23 @@ class LiveActuator:
             holds_unsaved_work=self._unsaved_work,
         ))
 
+        # The capture's durable names ride the Bundle so the journal can keep them. An empty
+        # CapturedTurn (collect=False, or the capture failed) yields None — a credential flow
+        # journals capture=None by construction, never by remembering to.
+        capture_refs = None
+        if captured.artifact_filename or captured.screenshot:
+            capture_refs = {
+                "artifact": captured.artifact_filename,
+                "screenshot": str(captured.screenshot) if captured.screenshot else None,
+                "screenshot_filename": captured.screenshot.name if captured.screenshot else None,
+            }
+
         bundle = build_bundle(self._task, url, page_text, goal_text=self._goal,
                               scan=raw, journal_tail=tail,
                               ax_candidates=candidates, belief=belief,
                               window=window.as_dict() if window else None,
-                              staleness=stale.as_dict())
+                              staleness=stale.as_dict(),
+                              capture=capture_refs)
         self._ats = bundle.ats or ats_registry.classify_ats(url)
         self._last_state = bundle.state
 
@@ -735,6 +753,11 @@ class LiveActuator:
         return _outcome_of(res) == Outcome.OK.value
 
 
+#: The only decision-param keys a transition row may keep: element/control NAMES, never the
+#: answer that went into them (`value`, `values`, `month`, `year` all carry answer content).
+_SAFE_PARAM_KEYS = frozenset({"field", "control"})
+
+
 def transition_recorder(session_key: str):
     """(on_supervise, on_step) hooks that append every acting turn to the StepRunner's transition
     corpus (PLAN_step_runner.md).
@@ -765,11 +788,21 @@ def transition_recorder(session_key: str):
             before = sr.Observation(ts=now, ok=True, url=bundle.url or "")
             before.belief = {"state": bundle.state, "ats": bundle.ats,
                             "fingerprint": bundle.fingerprint}
+            # Same field-for-field shape as the step_runner rows (artifact = basename,
+            # screenshot = absolute path): the controller's turn capture, when one landed.
+            # The `after` half stays None honestly — this hook re-observes nothing.
+            if bundle.capture:
+                before.artifact = bundle.capture.get("artifact")
+                before.screenshot = bundle.capture.get("screenshot")
             after = sr.Observation(ts=now, ok=result is not None, url=bundle.url or "")
             if result is not None:
                 after.belief = {"state": result.landed_state}
                 after.ax_count = len(result.ax_identities or ())
-            params = {k: val for k, val in (decision.params or {}).items() if k != "value"}
+            # ALLOWLIST, not a denylist: the closed param vocabulary carries answer content under
+            # `value`, `values`, `month` AND `year` — a one-key strip leaked multi-select and date
+            # answers into the corpus (caught in review, 2026-08-10). Rows keep names only (§4).
+            params = {k: val for k, val in (decision.params or {}).items()
+                      if k in _SAFE_PARAM_KEYS}
             expect = sr.Expectation(kind="expected_next",
                                     value="|".join(decision.expected_next or ()))
             if result is None:
@@ -799,32 +832,10 @@ def transition_recorder(session_key: str):
 
     return on_supervise, on_step
 
-
-def run_live_apply(*, browser_url: str, tab_id: str, task: str = "indeed_apply",
-                   capture_server_url: Optional[str] = None, use_model: bool = False,
-                   budget_limit: Optional[float] = None, reviewer=None, record_only: bool = False,
-                   session_id: str = "", max_steps: int = 40, transport: Optional[Transport] = None):
-    """Wire a run_controller drive over the live tab (LiveActuator + program store), then run it.
-
-    NOTE (PRINCIPLES §9): for a live *teaching* drive, prefer `teach_session.open_live_teach_session`
-    — the teacher demonstrates each step and Haiku SHADOWS. This entrypoint runs the autonomous loop,
-    and `use_model=True` puts Haiku in the ACTING seat as the DAgger stand-in (proposes under the
-    `reviewer`) — that is off by default, because Haiku is the cheap backstop, not the acting brain.
-    Use it only when a reviewer (or, later, a trained L4) is in the seat. SUBMIT is held by the loop."""
-    from settings import settings
-    from controller import programs as programs_mod
-    from controller.loop import run_controller
-
-    base = capture_server_url or settings.capture_server_url
-    actuator = LiveActuator(base_url=base, browser_url=browser_url, tab_id=tab_id, task=task,
-                            driver=("record_only" if record_only else "direct"), transport=transport)
-    model = None
-    if use_model:
-        from controller.reason import HaikuReasoner
-        model = HaikuReasoner(budget_limit=budget_limit)
-    # Every live acting turn lands in the StepRunner's transition corpus — the controller path
-    # and the cockpit-ladder path write the SAME training row (PLAN_step_runner.md).
-    on_supervise, on_step = transition_recorder(f"controller-{session_id or tab_id or 'live'}")
-    return run_controller(actuator, programs=programs_mod.ProgramStore(), model=model,
-                          reviewer=reviewer, session_id=session_id, max_steps=max_steps,
-                          on_step=on_step, on_supervise=on_supervise)
+# `run_live_apply` was DELETED 2026-08-10. It had zero callers, and it was an attended-mode side
+# door by construction: `use_model=True` wired Haiku into the ACTING seat with `reviewer=None`
+# (so model decisions acted unreviewed), bypassing the teacher-first gate that `/api/controller/
+# run` enforces at its model-wiring line — plus no authority, no seat. Its one unique job —
+# wiring `transition_recorder` into a live drive — now lives at the production route itself
+# (routers/controller.py run_live), where the attended posture, the reviewer, and the seat are
+# all wired together and cannot drift apart. History in git.
