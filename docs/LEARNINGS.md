@@ -5750,3 +5750,64 @@ pane that renders what the journal carries (the journal is the display's source 
 can't show it, the corpus didn't keep it); and a truthful `PROJECT_STATUS.md` so the map matches
 the territory. The unit of success changes with it: **a session is measured by rows banked, not
 code written.**
+
+## 2026-08-10 — The refocus built: the teacher's eyes journal, the seat is attended-first, and the review caught the same hole a seventh time — before it shipped
+
+The 2026-08-09 refocus landed as four connected changes, reviewed adversarially before merging.
+
+**1. What the decision saw is now part of the decision.** `Bundle.capture` (appended, defaulted,
+prompt- and digest-invisible — the belief pattern) carries the turn's artifact + screenshot
+names from `capture_now` into `record_for`, which flattens them to
+`DecisionRecord.capture_artifact/-_screenshot` — basenames, the durable refs. The controller's
+transition rows carry `before.artifact`/`before.screenshot` field-for-field like StepRunner's.
+The replay evals stayed green, which is the whole point of the additive pattern.
+
+**2. Attended is the default posture, and it is enforced at the only line that runs early
+enough.** `RunBody.attended=True` demotes Haiku AT MODEL-WIRING — authority is graded after
+`decide()` has already spent the call, so a flag routed through authority would gate too late.
+YELLOW reviews go to the teacher inbox (timeout escalates, never approves); parks announce when
+they OPEN (`ask → on_park → wait` — `on_park` used to fire after the answer, a post-mortem
+pretending to be a notification). The one run key now joins seat, reviewer, journal and corpus.
+
+**3. The transition corpus is the spine in fact, not in name.** A teacher label becomes TWO
+witness training rows (`transition_label_rows`), folded into `load_rows` beside the DB corpus —
+and a label-write queues the refit in the background (`train_on_label`). The cold-start circle
+(labels can't accrue because witnesses are uncertain because labels never reach them) is closed
+in code. A teacher label **supersedes** a conflicting DB label for the same capture — training
+both would poison exactly the states someone bothered to correct.
+
+**4. The Trace is the visualizer.** Per step: both screenshots, the witnesses' own words, the
+declared expectation, the act, the delta, the verdict, the teacher's label, and a correction
+form whose save queues the refit. Driven live against session 25 during the build.
+
+### What the adversarial review caught (worth the tokens)
+
+* **The recorder was wired only into a dead entrypoint — the production route wrote ZERO
+  transition rows.** The built-never-wired shape, instance seven, but caught IN REVIEW, not
+  three weeks later by an audit. `run_live_apply` (also an attended-mode side door: Haiku acting
+  with `reviewer=None`) is deleted; the wiring lives at the route, where posture, reviewer and
+  seat cannot drift apart.
+* **Answer content was leaking into two §4 stores.** `transition_recorder` stripped only
+  `value` — but the vocabulary carries answers under `values`, `month`, `year` too (allowlist
+  now: `field`, `control`). And the teacher inbox persisted `prediction.params` verbatim; it now
+  gets the journal's own field-aware redaction — secrets by name masked, normal answers still
+  readable for the teacher judging them.
+* **The controller captured auth surfaces.** `observe()` collected on every turn, including the
+  sign-in wall right after a RED takeover (typed e-mail, password-manager dropdown). Not
+  visibly signed in → no capture, no refs, structurally.
+* **The UI would have eaten the teacher's work.** Index-suffixed React keys remounted every
+  entry on each new row — collapsing the open evidence pane and wiping a half-typed correction
+  on the 10s poll. Stable keys per source now. A stale in-flight poll could clobber a
+  just-saved label (monotonic load guard), and parks/decisions filtered by cockpit session id
+  were invisible for `run-{task}`-keyed runs — parks are global now, foreign keys badged, and
+  the standing practice is: **launch attended drives with the cockpit session id.**
+
+Tests 1476 → **1491** (controlplane-api), interaction 241 → 244, mcp 84, evals 7 — all from the
+worktree with `module.__file__` provenance checked. One caveat kept honest: the review's
+correctness lens and ten verifier agents died on a session limit; the three UI findings above
+are adversarially verified, the posture/contract ones I verified by hand against the code.
+
+*The operating loop this leaves behind:* drive attended → parks reach the teacher with full
+context → answers journal golden with screenshots → labels via the Trace → refit fires on its
+own → shadow agreement climbs toward the 90/25 gate. The next session starts at "launch a
+drive", not at "build a thing".
