@@ -210,6 +210,7 @@
   "POST /api/session_control/{session_id}/observe/stop",
   "POST /api/session_control/{session_id}/orient",
   "POST /api/session_control/{session_id}/orient_action",
+  "POST /api/session_control/{session_id}/orient_now",
   "POST /api/session_control/{session_id}/rebuild_queue",
   "POST /api/session_control/{session_id}/reconcile_step",
   "POST /api/session_control/{session_id}/sso_step",
