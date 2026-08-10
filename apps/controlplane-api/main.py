@@ -2880,8 +2880,15 @@ async def runtime_execute(body: ExecuteActionRequest, db: Session = Depends(get_
 
 @router.get("/api/observations/screenshots/{filename}")
 def get_observation_screenshot(filename: str):
-    path = _artifacts_dir() / "observer-screenshots" / filename
-    if not path.exists():
+    # Basename only, resolved and containment-checked: this route existed for years taking the
+    # raw path segment, which depending on server-side percent-decoding could walk out of the
+    # screenshots dir. A screenshot is served by NAME or not at all.
+    root = (_artifacts_dir() / "observer-screenshots").resolve()
+    try:
+        path = (root / Path(filename).name).resolve()
+    except ValueError:  # e.g. an embedded NUL byte — a 404, not a 500
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    if not path.is_relative_to(root) or not path.is_file():
         raise HTTPException(status_code=404, detail="Screenshot not found")
     return FileResponse(str(path))
 

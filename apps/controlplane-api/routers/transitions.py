@@ -15,15 +15,18 @@ the English is presentation, derived on read so it can improve without touching 
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 import step_runner as sr
+from settings import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------------------------
@@ -245,6 +248,16 @@ def list_transitions() -> dict[str, Any]:
     return {"corpora": corpora, "health": _health(all_rows)}
 
 
+def _shot_names(row: dict[str, Any]) -> dict[str, Optional[str]]:
+    """The row stores a filesystem PATH per half; the serving endpoint takes a bare basename.
+    Derived on read so the client never handles paths (and the stored row stays untouched)."""
+    out: dict[str, Optional[str]] = {}
+    for half in ("before", "after"):
+        raw = (row.get(half) or {}).get("screenshot") or ""
+        out[half] = raw.replace("\\", "/").rsplit("/", 1)[-1] if raw else None
+    return out
+
+
 @router.get("/api/transitions/{key}")
 def read_corpus(key: str, limit: int = 200) -> dict[str, Any]:
     """One corpus, oldest first, each row narrated. The raw row rides along untouched —
@@ -255,7 +268,8 @@ def read_corpus(key: str, limit: int = 200) -> dict[str, Any]:
                             detail=f"No transition corpus named {key!r}. The corpus appears "
                                    f"after the first wrapped step runs in a live drive.")
     return {"key": key, "health": _health(rows),
-            "rows": [{**row, "narration": narrate(row)} for row in rows]}
+            "rows": [{**row, "narration": narrate(row), "screenshots": _shot_names(row)}
+                     for row in rows]}
 
 
 #: Belief-uncertainty ceiling for a row to feed the transition table. The observer clamps a
@@ -358,10 +372,37 @@ class CorrectionBody(BaseModel):
     after_state: str = ""
 
 
+def train_after_label() -> None:
+    """The background crank behind train-on-label (2026-08-09): a state label just landed, so
+    everything that label feeds refits — the planner's transition table AND the perception
+    witnesses (a labeled transition is two witness examples via
+    `perception.dataset.transition_label_rows`; until then labels reached only the edge table
+    and the witnesses stayed frozen, which is the cold-start circle wearing a new coat).
+
+    Best-effort by design: training must never fail a label write — the label is the valuable
+    thing, the refit can always be re-run.
+    """
+    try:
+        train_from_corpus()
+    except Exception:  # noqa: BLE001 — the label is already safe; the refit is re-runnable
+        logger.exception("train_after_label: transition-table refit failed")
+    try:
+        from perception import train as perception_train
+
+        fitted = perception_train.fit()
+        perception_train.save(fitted, promote=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("train_after_label: witness refit failed")
+
+
 @router.post("/api/transitions/{key}/correct")
-def correct_row(key: str, body: CorrectionBody) -> dict[str, Any]:
+def correct_row(key: str, body: CorrectionBody,
+                background: BackgroundTasks = None) -> dict[str, Any]:
     """Write one teacher correction. The note is REQUIRED: a correction should cite what the
-    row's own evidence shows — it is a training signal, not a second opinion."""
+    row's own evidence shows — it is a training signal, not a second opinion.
+
+    When the correction carries state labels and `settings.train_on_label` is on, the refit
+    runs in the background after the response — label, then learn, every time."""
     if not body.note.strip():
         raise HTTPException(status_code=422,
                             detail="A correction needs a note citing the row's own evidence — "
@@ -379,4 +420,9 @@ def correct_row(key: str, body: CorrectionBody) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"ok": True, "row": {**row, "narration": narrate(row)}}
+
+    trained = False
+    if body.before_state and settings.train_on_label and background is not None:
+        background.add_task(train_after_label)
+        trained = True
+    return {"ok": True, "row": {**row, "narration": narrate(row)}, "training_queued": trained}

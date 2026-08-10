@@ -222,3 +222,45 @@ def test_training_fits_the_edge_table_from_confident_rows(corpus, tmp_path, monk
     assert out["metrics"]["distinct_transitions"] == 1
     # The model landed on disk where every other trainer writes.
     assert list(tmp_path.glob("models/*state_transition*/model.json"))
+
+
+# --- train-on-label: label, then learn, every time (2026-08-09) --------------------------------
+
+def test_a_state_label_queues_the_refit_and_a_bare_note_does_not(corpus, monkeypatch):
+    """"Train-as-we-go" was a button somebody had to remember; now it is a property of the
+    label write. Only a STATE label queues it — a note changes no training input."""
+    calls = []
+    monkeypatch.setattr(tr, "train_after_label", lambda: calls.append(True))
+    _seed_row(46)
+    row = client.get("/api/transitions/46").json()["rows"][0]
+
+    noted = client.post("/api/transitions/46/correct", json={
+        "index": row["index"], "ts": row["ts"],
+        "note": "agreeing with the verdict — the evidence names the right window"})
+    assert noted.status_code == 200
+    assert noted.json()["training_queued"] is False
+    assert calls == []
+
+    labeled = client.post("/api/transitions/46/correct", json={
+        "index": row["index"], "ts": row["ts"],
+        "note": "both pages plainly visible in the screenshots",
+        "before_state": "job_posting", "after_state": "indeed_apply_contact"})
+    assert labeled.status_code == 200
+    assert labeled.json()["training_queued"] is True
+    assert calls == [True], "the refit ran after the response, exactly once"
+
+
+def test_the_train_on_label_flag_really_gates(corpus, monkeypatch):
+    from settings import settings as live_settings
+
+    calls = []
+    monkeypatch.setattr(tr, "train_after_label", lambda: calls.append(True))
+    monkeypatch.setattr(live_settings, "train_on_label", False)
+    _seed_row(47)
+    row = client.get("/api/transitions/47").json()["rows"][0]
+    out = client.post("/api/transitions/47/correct", json={
+        "index": row["index"], "ts": row["ts"], "note": "label without the crank",
+        "before_state": "a", "after_state": "b"})
+    assert out.status_code == 200
+    assert out.json()["training_queued"] is False
+    assert calls == []

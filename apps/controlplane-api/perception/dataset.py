@@ -43,6 +43,11 @@ class Row:
     screenshot_path: Optional[Path]
     facets: StateFacets
 
+    #: How the screenshot resolved: "path" | "filename" (the stale-path fallback) | "".
+    #: Kept per-row so the census can report drift in EVERY source — a path that resolves only
+    #: by fallback is provenance rot worth seeing, wherever the row came from (module header).
+    screenshot_how: str = ""
+
     _artifact: Optional[dict[str, Any]] = None
 
     @property
@@ -71,8 +76,84 @@ def _screenshot_path(refs: Any) -> tuple[Optional[Path], str]:
     return None, ""
 
 
-def load_rows(*, require_screenshot: bool = False) -> tuple[list[Row], dict[str, int]]:
-    """Every labeled capture, with whatever surfaces survive. Returns (rows, census)."""
+def _resolve_screenshot(raw: Optional[str]) -> tuple[Optional[Path], str]:
+    """Path first, then filename under the current root — the stale-path rule, for a bare path
+    string (the transition-corpus convention) rather than a refs list."""
+    if not raw:
+        return None, ""
+    if Path(raw).exists():
+        return Path(raw), "path"
+    name = Path(raw).name
+    if name:
+        candidate = artifacts_root() / "observer-screenshots" / name
+        if candidate.exists():
+            return candidate, "filename"
+    return None, ""
+
+
+def transition_label_rows() -> list[Row]:
+    """Teacher-labeled transition halves as witness training rows.
+
+    The transition corpus is the spine (2026-08-09 refocus): it is the only corpus that grows
+    during drives, every row carries its screenshots, and a teacher correction stamps BOTH
+    sides with a state — which is exactly the (state, artifact, screenshot) triple a witness
+    trains on. Until this reader existed, those labels reached only the planner's edge table
+    and the witnesses stayed frozen on the pre-2026-07-30 DB corpus — the cold-start circle
+    (labels can't accrue because witnesses are uncertain because labels don't accrue) closed
+    only on paper. One labeled transition is two witness examples; this is where they enter.
+    """
+    root = artifacts_root() / "transitions"
+    if not root.exists():
+        return []
+    seen: set[tuple[str, str]] = set()
+    rows: list[Row] = []
+    for path in sorted(root.glob("session_*.jsonl")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            correction = row.get("teacher_correction") or {}
+            for half, label_key in (("before", "before_state"), ("after", "after_state")):
+                state = (correction.get(label_key) or "").strip()
+                obs = row.get(half) or {}
+                artifact_name = obs.get("artifact") or ""
+                if not state or not artifact_name:
+                    continue
+                key = (artifact_name, state)
+                if key in seen:      # an after-half is often the next row's before-half
+                    continue
+                seen.add(key)
+                artifact_path = artifacts_root() / "observer-traces" / artifact_name
+                shot, how = _resolve_screenshot(obs.get("screenshot"))
+                rows.append(Row(
+                    filename=artifact_name,
+                    state=state,
+                    url=obs.get("url") or "",
+                    domain_id="",
+                    artifact_path=artifact_path if artifact_path.exists() else None,
+                    screenshot_path=shot,
+                    facets=facets_for(state, url=obs.get("url") or "", domain_id=""),
+                    screenshot_how=how,
+                ))
+    return rows
+
+
+def load_rows(*, require_screenshot: bool = False,
+              include_transitions: bool = True) -> tuple[list[Row], dict[str, int]]:
+    """Every labeled capture, with whatever surfaces survive. Returns (rows, census).
+
+    `include_transitions` folds in `transition_label_rows()` — teacher-labeled drive
+    transitions, the growing half of the corpus. On by default because a label the witnesses
+    never train on is a label paid for and shelved; the flag exists for A/B comparisons.
+    """
     from db import SessionLocal
     from models import TrainingCapture
 
@@ -80,7 +161,7 @@ def load_rows(*, require_screenshot: bool = False) -> tuple[list[Row], dict[str,
     traces = root / "observer-traces"
     rows: list[Row] = []
     census = {"labeled": 0, "with_artifact": 0, "with_screenshot": 0, "missing_screenshot": 0,
-              "missing_artifact": 0, "screenshot_by_stale_path": 0}
+              "missing_artifact": 0, "screenshot_by_stale_path": 0, "from_transitions": 0}
 
     session = SessionLocal()
     try:
@@ -114,7 +195,45 @@ def load_rows(*, require_screenshot: bool = False) -> tuple[list[Row], dict[str,
                 artifact_path=artifact_path,
                 screenshot_path=shot,
                 facets=facets_for(state, url=cap.url or "", domain_id=cap.domain_id or ""),
+                screenshot_how=how,
             ))
     finally:
         session.close()
+
+    if include_transitions:
+        census["superseded_by_teacher"] = 0
+        known = {(r.filename, r.state) for r in rows}
+        by_filename = {r.filename: i for i, r in enumerate(rows)}
+        for row in transition_label_rows():
+            if (row.filename, row.state) in known:
+                continue
+            if row.filename in by_filename:
+                # SAME capture, DIFFERENT label: the teacher who watched the drive outranks the
+                # older DB label — training both would feed the witness contradictory ground
+                # truth on exactly the states someone bothered to correct. The DB row is
+                # replaced, not merely joined, and the census says so.
+                rows[by_filename[row.filename]] = row
+                known.add((row.filename, row.state))
+                census["superseded_by_teacher"] += 1
+                census["from_transitions"] += 1
+                if row.screenshot_how == "filename":
+                    census["screenshot_by_stale_path"] += 1
+                continue
+            census["labeled"] += 1
+            census["from_transitions"] += 1
+            if row.artifact_path:
+                census["with_artifact"] += 1
+            else:
+                census["missing_artifact"] += 1
+            if row.screenshot_path:
+                census["with_screenshot"] += 1
+                if row.screenshot_how == "filename":
+                    census["screenshot_by_stale_path"] += 1
+            else:
+                census["missing_screenshot"] += 1
+            if require_screenshot and not row.screenshot_path:
+                continue
+            known.add((row.filename, row.state))
+            by_filename[row.filename] = len(rows)
+            rows.append(row)
     return rows, census
