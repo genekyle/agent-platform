@@ -5943,3 +5943,33 @@ a known search keeps recorded provenance rather than erasing it.
 *Still honest about:* the observer calls the questions screen "Unrecognised page" — the same
 witness cold spot the corpus labels will close; and the operator's step-back-in click (and the
 manual Continue behind it) remains the pending human act on NHBB.
+
+## 2026-08-10 (night) — Lost is a state: the arbitration stops forcing a menu, and orient becomes the primary
+
+Straight from the operator's screenshot: a reopened application on smartapply's questions screen,
+the observer reading UNKNOWN — and the panel forcing *"Work this · Open the posting"* (the
+re-walk's first rung, presuming a page we were not on) with the observer's re-read demoted for
+"no disagreement to resolve". The wording branch had been made honest on 2026-08-05; the
+BEHAVIOUR was still wrong: "the rung stands because it is all there is" was false, because
+orienting was there.
+
+**The arbitration's lost branch.** UNKNOWN/UNREADABLE with a live rung and no mismatch now
+resolves to an **Orient primary** (`lost: true`, endpoint `/orient_now`), the rung demoted "until
+the page is recognised". `/orient_now` re-reads the tab with every witness, answers with the
+scored candidates, and writes an orientation trial per press — pressing it on confusing ground is
+literally the orienter practising. The work surface renders the whereabouts: the fused verdict
+with confidence, and each witness's claim, weight and its own words. On the live NHBB page those
+words are the diagnosis: url says indeed_quick_apply (w 1.00), content abstains, dom:tfidf has
+never seen the page (novelty 1.0), visual:apple says Workday off a stale capture — the exact
+"where does it think it is, and how sure" display the operator asked for, and a labeling guide
+for free.
+
+**The phantom SAP profile, rooted.** `apply_fill`/`apply_sections` defaulted
+`ats="successfactors"`, so a press on an Indeed page read SAP's section bars against a smartapply
+tab and rendered nine unreadable sections of `career<N>.sapsf.com` — stale-looking data that was
+never stale, just another ATS's declaration checked against the wrong page. The ats now resolves
+from the OPEN application's platform; no declared bars means no sections, never another ATS's
+list. The UI's own hardcoded fallback is gone too.
+
+One evolved pin: `test_an_unreadable_page_is_never_narrated_as_agreement` now asserts the
+stronger contract — not just honest words, but the orient primary and the demoted rung.
