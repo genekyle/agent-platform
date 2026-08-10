@@ -655,3 +655,20 @@ def test_transition_rows_keep_param_names_never_answer_content(monkeypatch):
     # and the row's before-half carries the capture, field-for-field like step_runner rows
     assert recorded["before"].artifact == "a.json"
     assert recorded["before"].screenshot == "/shots/s.png"
+
+
+# --- field-less intents in the field section --------------------------------------------
+def test_a_fieldless_scroll_refuses_honestly_instead_of_raising():
+    """A teacher-instructed scroll (params carry direction/amount, no field) reached the field
+    section with addr=None and died on `addr.get(...)` — a 500 that killed the whole attended
+    run route (live, 2026-08-10). The contract is the bottom fallthrough's: an intent with no
+    dispatch is an honest NOT_FOUND, never an exception."""
+    fake = FakeTransport(url=_INDEED)
+    act = _actuator(fake)
+    act.observe()
+
+    out = act.act(Decision(intent="scroll", params={"direction": "up", "amount": "700"},
+                           confidence=0.9, rung="teacher", rationale="see the section above"))
+
+    assert out.outcome == Outcome.NOT_FOUND.value
+    assert "no dispatch" in out.detail

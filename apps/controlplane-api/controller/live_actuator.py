@@ -427,6 +427,13 @@ class LiveActuator:
             return self._out(Outcome.NOT_FOUND.value, self._last_state,
                              detail=f"cannot address field {field!r} — not in apply_fields nor the "
                                     f"live scan (stale recipe or the form changed)")
+        # A field-less intent down here (scroll; upload without a field) used to fall onto
+        # `addr.get(...)` and 500 the whole run route (live, 2026-08-10 — a teacher-instructed
+        # scroll killed an attended drive). Nothing below can dispatch without an address:
+        # say so, don't raise — the same honest refusal as the bottom fallthrough.
+        if addr is None:
+            return self._out(Outcome.NOT_FOUND.value, self._last_state,
+                             detail=f"LiveActuator has no dispatch for intent {intent!r} yet")
 
         if intent == Intent.SET_TEXT.value:
             exe: dict[str, Any] = {**self._addr(), "action_id": "type", "target_bbox": {},
