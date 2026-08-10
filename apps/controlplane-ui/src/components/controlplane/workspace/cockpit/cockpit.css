@@ -179,12 +179,12 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .trace__body p { margin: 3px 0 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
 .trace__body small { display: block; margin-top: 2px; color: var(--text-subtle); font-size: 10px; overflow-wrap: anywhere; }
 
-.cockpit {
-  display: grid;
-  grid-template-columns: 232px minmax(0, 1fr) 320px;
-  gap: var(--space-3);
-  align-items: start;
-}
+/* NOTE deliberately no bare `.cockpit` rule here. The legacy workspace surfaces
+   (DomainWorkspace, ErrandsPanel, TrainingReadiness) still render `className="cockpit"`
+   styled by App.css as a flex column — an earlier iteration of this rebuild redefined the
+   same name as a fixed 3-column grid and silently crushed every one of them into a 232px
+   track (found 2026-08-10: the Domains attention card rendering one word per line). The new
+   cockpit's own containers are namespaced `.cockpit-now*` / `.cockpit-page*`. */
 
 .cockpit__pane {
   background: var(--surface-1);
