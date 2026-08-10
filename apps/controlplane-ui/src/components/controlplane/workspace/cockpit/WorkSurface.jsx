@@ -108,6 +108,44 @@ function FlowStrip({ flow }) {
 
 // THE GATE. One press, and it is the only irreversible one on the ladder — so it states exactly
 // what is about to leave, in the operator's terms, before the button rather than in a tooltip.
+// WHERE ARE WE — the lost-state's evidence, on the acting surface (operator, 2026-08-10:
+// "show scores and confidence of where it thinks it's at"). Every witness's read with its own
+// claim and detail, and the observer's fused verdict on top. This is what makes "Orient" an
+// informed press instead of a shrug: you can see exactly who recognised what before looking again.
+function WhereAmI({ whereabouts }) {
+  if (!whereabouts) return null;
+  const witnesses = whereabouts.witnesses || [];
+  return (
+    <div className="whereami">
+      <div className="whereami__verdict">
+        <strong>{whereabouts.headline || whereabouts.state || "Unrecognised"}</strong>
+        {whereabouts.platform && <span className="badge badge--muted">{whereabouts.platform}</span>}
+        {whereabouts.confidence && (
+          <span className={`badge ${whereabouts.confidence === "high" ? "badge--ready" : "badge--warn"}`}>
+            {whereabouts.confidence} confidence
+          </span>
+        )}
+        {whereabouts.state && <code>{whereabouts.state}</code>}
+      </div>
+      {witnesses.length > 0 && (
+        <ul className="whereami__witnesses">
+          {witnesses.map((w, i) => (
+            <li key={`${w.source}-${i}`}>
+              <code>{w.source}</code>
+              {w.claim
+                ? <span className="badge badge--muted">{w.claim}</span>
+                : <span className="badge badge--muted">abstains</span>}
+              {w.weight !== undefined && <small>w {Number(w.weight).toFixed(2)}</small>}
+              {w.detail && <p>{w.detail}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
 function GateBody({ focus }) {
   const s = focus.sending || {};
   return (
@@ -351,9 +389,11 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
           <div className="work__section-head"><AppIcon name="listTree" size={13} /> The form on this page</div>
           <FormSections sections={last?.sections} busy={busy}
                         ats={panel.account_state?.ats} accordionAts={panel.accordion_ats}
+                        // No ats sent: the backend resolves the OPEN application's platform. The
+                        // old hardcoded "successfactors" fallback read SAP's bars against an
+                        // Indeed tab and rendered a phantom profile (2026-08-10).
                         onExpand={(what) => call("/apply_sections",
-                          { ats: panel.account_state?.ats || "successfactors",
-                            ...(what ? { expand: what } : {}) })} />
+                          { ...(what ? { expand: what } : {}) })} />
           {last?.fill_plan && (
             <FillPlan plan={last.fill_plan} summary={last.fill_summary} busy={busy}
                       onPlan={() => call("/apply_fill", { execute: false })}
@@ -442,7 +482,8 @@ function ProposalBody({ proposal, busy, decide }) {
 }
 
 const SETUP_KINDS = new Set(["declare", "clean_start", "login"]);
-const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "application", "gate"]);
+const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "application", "gate",
+  "orient"]);
 
 export function WorkSurface({
   panel, cockpit, viewMoment, onExitDetour, onNewSearch, busy, error, call, decide, onFlag,
@@ -504,6 +545,9 @@ export function WorkSurface({
 
         {/* What is about to leave, stated before the button that sends it. */}
         {focus.kind === "gate" && <GateBody focus={focus} />}
+
+        {/* Lost: the witnesses' scored reads, before the button that looks again. */}
+        {focus.kind === "orient" && <WhereAmI whereabouts={focus.whereabouts} />}
 
         <Say focus={focus} />
         {focus.kind !== "proposal" && (

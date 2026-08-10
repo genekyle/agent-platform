@@ -341,6 +341,19 @@ function executeFocus(p, step, nextAction) {
       ] };
   }
 
+  // LOST IS ITS OWN MOMENT (operator, 2026-08-10). The arbitration says the screen is
+  // unrecognised mid-application: the primary is a LOOK — orient, with the witnesses' scored
+  // reads on the surface — and the ladder's presumed rung waits demoted until the page is
+  // recognised. Forcing "Work this · Open the posting" here was the wrong-menu bug.
+  if (nextAction?.lost) {
+    return { ...base, kind: "orient", flow: p.apply_flow || null,
+      whereabouts: p.observer || null,
+      why: nextAction.why || "The screen isn't one the recipe or the observer recognises.",
+      primary: actionFrom(nextAction),
+      alternates: nextAction.secondary ? [actionFrom(nextAction.secondary,
+        { demoted: nextAction.secondary.demoted_because })].filter(Boolean) : [] };
+  }
+
   // THE ARBITRATED ACTION, and it is the ONLY place it renders. The old panel drew `next_action`
   // in a band AND the same rung again as the queue step's own button — same label, same
   // `/apply_step` endpoint, both styled primary, ~700px apart. One authority, one button.
@@ -470,7 +483,7 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   else focus = setupFocus(p, p.last_step);
 
   const pageMoments = new Set(["read", "recover", "choose", "proposal", "account_handoff",
-    "account", "application", "gate"]);
+    "account", "application", "gate", "orient"]);
   const current = pageMoments.has(focus.kind) ? `page:${page}` : "session";
   focus = { ...focus, group: current,
     groupLabel: current === "session" ? "Session" : `Page ${page}` };

@@ -449,6 +449,30 @@ def _resolve_next_action(step: Optional[Any],
                         reason="No application step is open, so the page's own next move is all "
                                "there is to go on.")
 
+    # LOST IS A STATE, NOT A FOOTNOTE (operator, 2026-08-10). We read the page and recognised
+    # nothing (UNKNOWN), or there was nothing to read (UNREADABLE), while the ladder wants to act
+    # on a premise about a page it cannot see — after a reopen that premise is literally "open the
+    # posting" on a tab already deep in the application. "The rung stands because it is all there
+    # is" was false: ORIENTING is there. The primary becomes a look, the scored witnesses render
+    # beside it, and the rung is kept demoted until the page is recognised.
+    if rung_opt is not None and not mismatch \
+            and (observer or {}).get("kind") in (al.UNKNOWN, al.UNREADABLE):
+        blind = ("there was nothing on it to read"
+                 if (observer or {}).get("kind") == al.UNREADABLE
+                 else "we read it and recognised nothing in it")
+        orient = {"source": "orient", "id": "orient", "label": "Orient — find where we are",
+                  "why": (f"{headline} — {blind}, and the ladder's "
+                          + (f"`{rung_opt['id']}`" if rung_opt["id"] else "next")
+                          + " rung presumes a page we cannot confirm. Orienting re-reads the tab "
+                            "with every witness and shows the scored candidates before anything "
+                            "acts."),
+                  "endpoint": "/orient_now", "body": {}, "driveable": True, "lost": True}
+        return _decided(orient, rung_opt,
+                        reason=(f"{headline} — {blind}. Mid-application on a screen we cannot "
+                                f"name, being lost is a state of its own, and the way out is to "
+                                f"look, not to act."),
+                        demoted="the ladder's position — take it only once the page is recognised.")
+
     if mismatch:
         # Contradicted, with nowhere to go: the observer says the rung is wrong and offers no move
         # of its own. Presenting the rung anyway is honest only if the warning travels with it.
@@ -1066,6 +1090,38 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
 #: Platforms with an end-to-end recipe, for the observer's plan wording. Mirrors
 #: apply_steps.DRIVEN_PLATFORMS without importing the executor's policy into a read path.
 DRIVEN_PLATFORMS_VIEW = frozenset({"indeed", "workday", "greenhouse"})
+
+
+class OrientNowBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/orient_now")
+async def orient_now(session_id: int, body: OrientNowBody,
+                     db: Session = Depends(get_db)) -> dict[str, Any]:
+    """LOOK, deliberately: re-read the application tab with every witness and answer "where are
+    we" with the scored candidates — the lost-state's primary action (operator, 2026-08-10:
+    *"we don't know what's going on but we are in the application process, maybe we need to
+    orient"*). Read-only on the page; each run also writes an orientation trial, so pressing it
+    on confusing ground is literally the orienter practising.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    observer = await _orient_now(bb, obs, browser_url)
+    if observer is None:
+        return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                     last={"ok": False, "action": "orient",
+                           "detail": "No application tab to orient on — nothing was read."})
+    win = observer.get("witnesses") or []
+    named = ", ".join(f"{w.get('source')}: {w.get('claim') or 'abstains'}" for w in win[:4])
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
+                 observer=observer,
+                 last={"ok": True, "action": "orient", "whereabouts": observer,
+                       "detail": (f"Oriented: {observer.get('headline')} "
+                                  f"({observer.get('confidence')} confidence)"
+                                  + (f" — {named}" if named else ""))})
 
 
 class OrientActionBody(BaseModel):
@@ -3456,7 +3512,10 @@ def _fill_plan_for(bb: Any, fields: list[dict[str, Any]], db: Session) -> list[d
 
 class ApplySectionsBody(BaseModel):
     initiator: str = "operator"
-    ats: str = "successfactors"
+    #: None = resolve from the OPEN application's platform. The old default ("successfactors")
+    #: meant a press on an Indeed page read SAP's bars against a smartapply tab and rendered a
+    #: phantom nine-sections-unreadable profile (the 2026-08-10 screenshot).
+    ats: Optional[str] = None
     expand: Optional[str] = None   # None = just read; "all" = the Expand-all control; else a field key
 
 
@@ -3479,14 +3538,17 @@ async def apply_sections(session_id: int, body: ApplySectionsBody,
     import form_fill
     af = apply_fields
 
-    if not af.has_section_bars(body.ats):
+    _q = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    _step_now = _q.current() or _parked_step(_q)
+    ats = body.ats or (_step_now.platform if _step_now else "") or ""
+    if not af.has_section_bars(ats):
         raise HTTPException(status_code=400,
-                            detail=f"No section bars declared for {body.ats!r}. Absent means the "
+                            detail=f"No section bars declared for {ats!r}. Absent means the "
                                    f"form is flat or nobody has checked — not that it is flat.")
 
     obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     tab_id = _apply_tab(bb, obs).get("tab_id", "")
-    before = form_fill.section_status(body.ats, await _scan_ax(browser_url, tab_id))
+    before = form_fill.section_status(ats, await _scan_ax(browser_url, tab_id))
 
     if not body.expand:
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
@@ -3500,7 +3562,7 @@ async def apply_sections(session_id: int, body: ApplySectionsBody,
     addrs: dict[str, dict] = {}
     for key in keys:
         try:
-            addrs[key] = af.addressing_for(body.ats, key)
+            addrs[key] = af.addressing_for(ats, key)
         except af.FieldNotFound as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3521,13 +3583,13 @@ async def apply_sections(session_id: int, body: ApplySectionsBody,
     import step_runner as sr
     _report = await sr.run_step(
         _expand_bars,
-        action={"action": "apply_sections", "expand": keys, "ats": body.ats,
+        action={"action": "apply_sections", "expand": keys, "ats": ats,
                 "initiator": body.initiator},
         expect=sr.Expectation(kind="content_changed"),
         capture_post=_capture_post, browser_url=browser_url, tab_id=tab_id,
         session_id=session.id, rung_id="apply_sections")
 
-    after = form_fill.section_status(body.ats, await _scan_ax(browser_url, tab_id))
+    after = form_fill.section_status(ats, await _scan_ax(browser_url, tab_id))
     opened = sorted(set(before["closed"]) - set(after["closed"]))
     # The honest failure: the click reported ok and the bar is still shut. Naming it here is the
     # difference between "we opened it" and "we asked".
@@ -3558,7 +3620,9 @@ def _sections_detail(status: dict[str, Any]) -> str:
 class ApplyFillBody(BaseModel):
     initiator: str = "operator"
     execute: bool = False          # False = plan only (see the bunch); True = fill the fillable ones
-    ats: str = "successfactors"    # whose accordion declaration to check the form against
+    #: Whose accordion declaration to check the form against. None = the open application's
+    #: platform; a platform with no declared bars gets sections=None, never another ATS's list.
+    ats: Optional[str] = None
 
 
 @router.post("/api/session_control/{session_id}/apply_fill")
@@ -3593,7 +3657,11 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     summary = form_fill.summarise(rows)
     # A plan over a shut accordion is an accurate summary of a page nobody opened. Carry the
     # caveat with the plan so "0 fields" and "0 fields, nine sections closed" cannot read alike.
-    sections = form_fill.section_status(body.ats, candidates)
+    # Sections are checked against the OPEN application's platform — a platform with no declared
+    # bars yields None, never a phantom reading of another ATS's accordion (2026-08-10).
+    ats = body.ats or (step.platform if step else "") or ""
+    sections = (form_fill.section_status(ats, candidates)
+                if ats and apply_fields.has_section_bars(ats) else None)
     caveat = form_fill.sections_caveat(sections, summary["total"])
 
     if not body.execute:

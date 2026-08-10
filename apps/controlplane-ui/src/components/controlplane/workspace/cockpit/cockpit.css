@@ -795,3 +795,20 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .cockpit-sessions__meta { margin-left: auto; color: var(--text-subtle); font-size: 11.5px; white-space: nowrap; }
 
 .work__parked { margin-left: 10px; vertical-align: middle; }
+
+/* --- where are we: the lost-state's evidence ------------------------------------------- */
+.whereami {
+  padding: 10px 12px;
+  margin: 10px 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.whereami__verdict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.whereami__verdict strong { font-size: 13px; }
+.whereami__verdict code { color: var(--text-subtle); font-size: 10.5px; }
+.whereami__witnesses { margin: 9px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+.whereami__witnesses li { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+.whereami__witnesses code { font-size: 10.5px; }
+.whereami__witnesses small { color: var(--text-subtle); font-size: 10px; }
+.whereami__witnesses p { flex-basis: 100%; margin: 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }

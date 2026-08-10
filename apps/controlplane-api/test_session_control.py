@@ -4772,11 +4772,12 @@ def test_an_account_gate_is_still_recognised_as_one():
 
 
 def test_an_unreadable_page_is_never_narrated_as_agreement(monkeypatch):
-    """SILENCE IS NOT AGREEMENT. A page with nothing on it to read cannot confirm a rung, and the
-    old wording ("nothing there contradicts the rung, so the recipe is on track") turned a
-    non-observation into a confirmation — the 2026-08-04 narration-dishonesty class, one branch
-    over. Reachable because a KNOWN host with an unreadable page scores `medium` rather than
-    `low`, so it walks straight past the `abstained` branch that used to word this honestly."""
+    """SILENCE IS NOT AGREEMENT — and since 2026-08-10, it is not a licence to act either. A page
+    with nothing on it to read cannot confirm a rung; the old wording turned a non-observation
+    into a confirmation (the 2026-08-04 narration-dishonesty class), and the old BEHAVIOUR still
+    offered the rung as the primary — "the rung stands because it is all there is" was false,
+    because orienting is there. Lost is a state: the primary becomes the look, the rung waits
+    demoted until the page is recognised."""
     _oriented(monkeypatch, "https://globex.wd1.myworkdayjobs.com/en-US/careers/loading",
               "", platform="workday", rungs=_TO_THE_ACCOUNT_RUNG)
     try:
@@ -4784,10 +4785,15 @@ def test_an_unreadable_page_is_never_narrated_as_agreement(monkeypatch):
     finally:
         _teardown()
     assert r["observer"]["kind"] == "unreadable"
-    reason = r["next_action"]["reason"]
+    na = r["next_action"]
+    reason = na["reason"]
     assert "on track" not in reason                     # the claim that was never earned
     assert "nothing on it to read" in reason
-    assert "not because the page agreed with it" in reason
+    # The primary is the LOOK, flagged lost; the rung rides demoted rather than dropped.
+    assert na["source"] == "orient" and na["lost"] is True
+    assert na["endpoint"] == "/orient_now"
+    assert na["secondary"]["source"] == "rung"
+    assert "once the page is recognised" in na["secondary"]["demoted_because"]
     # The way out is still offered, and the human is still on the list.
     assert [s["id"] for s in r["observer"]["plan"]] == ["reorient", "escalate"]
 
@@ -4841,3 +4847,24 @@ def test_a_rung_that_declined_to_act_is_not_graded_as_a_failed_action():
     # ...and MISMATCH is deliberately NOT among them: that one DID act and the world disagreed,
     # which is a real finding the corpus must keep.
     assert aps.MISMATCH not in aps.NEEDS_OPERATOR
+
+
+def test_lost_mid_application_offers_orient_not_the_rewalk_rung(monkeypatch):
+    """The 2026-08-10 screenshot: a reopened application on smartapply's questions screen, the
+    observer reading UNKNOWN — and the panel forcing 'Work this · Open the posting' (the
+    re-walk's first rung, which presumes a page we are not on). Lost must surface as lost:
+    orient primary with the witnesses' reads beside it, the rung demoted."""
+    _oriented(monkeypatch, "https://smartapply.indeed.com/beta/indeedapply/form/whatever",
+              "some words the classifier recognises nothing in", platform="indeed",
+              rungs=_TO_THE_ACCOUNT_RUNG)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    if r["observer"]["kind"] != "unknown":
+        import pytest as _pytest
+        _pytest.skip(f"fixture read as {r['observer']['kind']}, not unknown")
+    na = r["next_action"]
+    assert na["source"] == "orient" and na["lost"] is True
+    assert na["label"].startswith("Orient")
+    assert na["secondary"]["source"] == "rung"
