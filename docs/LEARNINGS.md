@@ -5906,3 +5906,40 @@ refocus bar ("display everything the system knows"): the Trace and run response 
 shape; the true gaps felt from the teacher's seat are the attended double-gate (every instruct
 re-parks as a review of itself) and park packages not yet carrying the previous act's
 `outcome_detail` — both queued behind drives, not ahead of them.
+
+## 2026-08-10 (later still) — The cockpit tells the truth about the apply: parked is attention, arrival stops guessing, and the "slop" was one class collision
+
+Operator-directed pass over the cockpit's confusions, each rooted rather than patched.
+
+**The UI "mess" had one root.** The rebuild left a bare `.cockpit` rule (fixed 232px/1fr/320px
+grid) in cockpit.css that nothing in the new cockpit uses — its containers are `.cockpit-now*` —
+while DomainWorkspace, ErrandsPanel and TrainingReadiness still render `className="cockpit"`
+expecting App.css's flex column. The later-loaded rule crushed them all into a 232px track: the
+Domains attention card rendering one word per line was this, not layout drift. One dead rule
+deleted; a comment stands guard against the name being re-taken.
+
+**Parked is attention, not history — in three places at once.** `parked:*` is a terminal flag,
+so `queue.current()` skips it, and everything built on current() went dark the moment a step
+parked: `_apply_flow` null, `_orient_now` null (the Lens read "not watching an application" over
+a live smartapply tab), and the frontend's `currentStep` fell through to the pick table — the
+cockpit showing "pick more, or advance" while a half-finished application held the window. The
+attention step (current OR last parked) now feeds all three; the flow renders flagged `parked`;
+the work surface titles the application with a parked badge, the park's own terminal_detail as
+the why, and ONE primary — **Step back in** — wired to the `/apply_reopen` that had existed
+since 07-27 with no surface. The NHBB application now renders: Questions current, "at most 4
+screens from Submit", Review marked as the gate.
+
+**Arrival stops guessing.** `/cockpit` followed "the live session, whoever's it is" — resolved
+as the NEWEST live session, which kept landing on an idle LinkedIn browser while Indeed held
+the parked work. More than one live session now renders a Live-sessions chooser, each row
+badged with how many teacher parks wait in it; exactly one live session still follows silently.
+The domain button (`?domain=`) and pinned URLs behave as before.
+
+**The search join is complete.** Sightings (SearchSighting), applications
+(Application.search_id) and now the decision ledger (JobDecision.search_id) all join the Search
+row — picks, passes, and outcomes of one query answer to one WHERE clause. A re-choose without
+a known search keeps recorded provenance rather than erasing it.
+
+*Still honest about:* the observer calls the questions screen "Unrecognised page" — the same
+witness cold spot the corpus labels will close; and the operator's step-back-in click (and the
+manual Continue behind it) remains the pending human act on NHBB.
