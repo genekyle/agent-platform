@@ -162,7 +162,7 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 
 /* Trace */
 .trace { display: grid; gap: var(--space-3); }
-.trace__summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
+.trace__summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-2); }
 .trace__summary article { display: grid; gap: 2px; padding: 11px 12px; background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-md); }
 .trace__summary article > span { color: var(--text-subtle); font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .trace__summary article strong { font-size: 18px; }
@@ -732,3 +732,33 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .learning__trial .is-hit { color: var(--accent); }
 .learning__trial .is-miss { color: var(--danger); }
 .learning__trial .is-unscored { color: var(--text-muted); }
+
+/* --- Trace: the per-step "what the system knew" register (2026-08-09) ----------------- */
+.trace__parks-banner { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: color-mix(in srgb, var(--warning) 12%, var(--surface-1)); border: 1px solid var(--warning); border-radius: var(--radius-md); font-size: 12px; }
+.trace__parks-banner span { color: var(--text-muted); }
+.trace__entries > li[data-source="step"] .trace__mark { color: var(--success); border-color: var(--success); }
+.trace__entries > li[data-source="decide"] .trace__mark { color: var(--reasoning); border-color: var(--reasoning); }
+.trace__entries > li[data-source="teacher"] .trace__mark { color: var(--warning); border-color: var(--warning); }
+.trace__step { margin-top: 6px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-1); }
+.trace__step > summary { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: 11px; font-weight: 600; color: var(--text-muted); list-style: none; }
+.trace__step > summary::before { content: "▸"; font-size: 10px; }
+.trace__step[open] > summary::before { content: "▾"; }
+.trace__step[open] > summary { border-bottom: 1px solid var(--line); }
+.trace__shots { display: flex; gap: 8px; padding: 10px; flex-wrap: wrap; }
+.trace__shots--single { padding: 6px 0 0; }
+.trace__shot { margin: 0; flex: 1 1 180px; min-width: 0; display: grid; gap: 3px; }
+.trace__shot span { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-subtle); }
+.trace__shot img { width: 100%; max-height: 220px; object-fit: contain; object-position: top; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-2); }
+.trace__shot--empty small { color: var(--text-subtle); font-size: 10.5px; }
+.trace__facts { margin: 0; padding: 4px 10px 10px; display: grid; gap: 4px; }
+.trace__facts > div { display: grid; grid-template-columns: 70px 1fr; gap: 8px; font-size: 11px; }
+.trace__facts dt { color: var(--text-subtle); font-weight: 700; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.05em; padding-top: 1px; }
+.trace__facts dd { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.trace__teacher-label { margin: 0 10px 10px; padding: 8px 10px; border-left: 3px solid var(--reasoning); background: var(--surface-2); border-radius: var(--radius-sm); font-size: 11px; display: grid; gap: 3px; }
+.trace__teacher-label code { font-size: 10.5px; }
+.trace__teacher-label p { margin: 0; color: var(--text-muted); }
+.trace__correct { display: grid; gap: 6px; padding: 0 10px 10px; }
+.trace__correct textarea { width: 100%; resize: vertical; font: inherit; font-size: 11px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-0, var(--surface-1)); color: inherit; }
+.trace__correct-states { display: flex; gap: 6px; flex-wrap: wrap; }
+.trace__correct-states input { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 11px; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-0, var(--surface-1)); color: inherit; }
+.trace__correct small { color: var(--text-subtle); font-size: 10px; }
