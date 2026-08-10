@@ -82,6 +82,9 @@ def migrate_schema() -> None:
         # applications → the Search that produced them (v19) — provenance to query+date, so
         # "which search led to this application" is a join, not a guess (operator, 2026-08-10).
         ("applications", "search_id", "INTEGER"),
+        # job_decisions → the same Search join (v19): picks and passes tie to the query+date that
+        # put the cards on the table, not just its display string.
+        ("job_decisions", "search_id", "INTEGER"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:

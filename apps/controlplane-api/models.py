@@ -751,6 +751,9 @@ class JobDecision(Base):
     # The search that surfaced it: provenance travels WITH the row (state is context-bound).
     query: Mapped[str] = mapped_column(String(300), default="")
     platform: Mapped[str] = mapped_column(String(40), default="", index=True)
+    # The Search row itself (models.Search) — the query string above stays for display, the id is
+    # the join. Nullable: decisions recorded before searches were rows have only the string.
+    search_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     # A snapshot of what the decider could actually SEE at decision time — title, company,
     # location, salary as rendered on the card. The canonical Job drifts (a description gets

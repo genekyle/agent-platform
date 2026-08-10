@@ -47,7 +47,8 @@ def _canonical_key(db: Session, job_id: str) -> Optional[str]:
 
 def record_page_decisions(db: Session, *, cards: list[dict[str, Any]], picked: set[str],
                           decided_by: str, session_id: Optional[int], page: int,
-                          query: str, reasons: Optional[dict[str, str]] = None) -> dict[str, int]:
+                          query: str, reasons: Optional[dict[str, str]] = None,
+                          search_id: Optional[int] = None) -> dict[str, int]:
     """One row per card under review — picked AND passed. Returns {picked, passed, skipped}.
 
     `cards` is the page as the decider saw it, IN ORDER, so `rank` is the card's own position.
@@ -87,6 +88,7 @@ def record_page_decisions(db: Session, *, cards: list[dict[str, Any]], picked: s
         row.rank = rank
         row.shown_count = shown
         row.query = (query or "")[:300]
+        row.search_id = search_id if search_id is not None else row.search_id
         row.platform = str(card.get("platform") or job_id.split(":", 1)[0])[:40]
         # What the decider could SEE — never the enriched canonical job, which drifts.
         row.card = {k: card.get(k) for k in ("title", "company", "location", "salary", "url")

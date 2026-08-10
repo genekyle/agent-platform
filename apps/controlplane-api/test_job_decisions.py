@@ -10,7 +10,7 @@ import job_decisions as jd
 import pytest
 from db import Base
 from models import JobDecision, ObservedJob
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 
@@ -114,3 +114,20 @@ def test_the_summary_watches_the_ratio_that_matters(db):
     s = jd.summary(db)
     assert s["decisions"] == 4 and s["picked"] == 1 and s["passed"] == 3
     assert s["with_reason"] == 1 and s["by_decider"] == {"operator": 4}
+
+
+def test_decisions_carry_the_search_join(db):
+    """Picks and passes tie to the Search row that put the cards on the table (2026-08-10) —
+    the query string stays for display, the id is the join."""
+    cards = [{"job_id": "indeed:s1", "title": "A"}, {"job_id": "indeed:s2", "title": "B"}]
+    jd.record_page_decisions(db, cards=cards, picked={"indeed:s1"}, decided_by="operator",
+                             session_id=25, page=1, query="data analytics", search_id=7)
+    db.commit()
+    rows = db.scalars(select(JobDecision)).all()
+    assert len(rows) == 2
+    assert all(r.search_id == 7 for r in rows)
+    # a re-choose without a known search must not erase the recorded provenance
+    jd.record_page_decisions(db, cards=cards, picked={"indeed:s2"}, decided_by="operator",
+                             session_id=25, page=1, query="data analytics", search_id=None)
+    db.commit()
+    assert all(r.search_id == 7 for r in db.scalars(select(JobDecision)).all())

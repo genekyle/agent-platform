@@ -5910,7 +5910,8 @@ async def choose(session_id: int, body: ChooseBody,
         counts = job_decisions.record_page_decisions(
             db, cards=list((bb.world or {}).get("page_results", [])), picked=set(body.picks),
             decided_by=body.decided_by, session_id=session.id, page=page,
-            query=bb.search_state.query or "", reasons=body.reasons)
+            query=bb.search_state.query or "", reasons=body.reasons,
+            search_id=(bb.world or {}).get("search_id"))
         db.commit()
         bb.log("decisions", f"page {page}: recorded {counts['picked']} picked / "
                             f"{counts['passed']} passed by {body.decided_by}")
