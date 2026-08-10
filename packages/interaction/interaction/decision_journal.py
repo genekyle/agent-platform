@@ -123,6 +123,7 @@ def record_for(
     verdict: Optional["SupervisorVerdict"] = None,
     delta: Optional["StateDelta"] = None,
     authority: Optional["AuthorityVerdict"] = None,
+    outcome_detail: str = "",
 ) -> DecisionRecord:
     """Build a DecisionRecord from a Decision + the Bundle it decided on. PURE — no IO, no
     time; `log_decision` stamps `ts`. Keeps construction replayable from journaled inputs."""
@@ -207,6 +208,7 @@ def record_for(
         # an empty CapturedTurn yields Bundle.capture=None upstream, so nothing leaks here.
         capture_artifact=(bundle.capture or {}).get("artifact") if bundle.capture else None,
         capture_screenshot=(bundle.capture or {}).get("screenshot_filename") if bundle.capture else None,
+        outcome_detail=outcome_detail or "",
     )
 
 

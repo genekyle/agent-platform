@@ -433,6 +433,13 @@ class DecisionRecord:
     capture_artifact: Optional[str] = None        # observer-traces JSON basename
     capture_screenshot: Optional[str] = None      # observer-screenshots PNG basename
 
+    #: --- act result: the executor's own account of what happened, compact. For a read intent
+    #: this IS the entire value — describe's widget description, a failed select's enumerated
+    #: option list — and before this column the account died at the actuator seam, so the teacher
+    #: re-probed the endpoints by hand to see what the drive had already fetched (live,
+    #: 2026-08-10). Appended and defaulted like belief/staleness/capture: old rows read fine.
+    outcome_detail: str = ""
+
 
 # --- the frozen serialization: prompt today, feature set tomorrow -------------------
 def _fmt_bool(b: Optional[bool]) -> str:

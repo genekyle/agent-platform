@@ -298,10 +298,11 @@ def run_controller(
     def journal(dec: Decision, bundle: Bundle, *, outcome: Optional[str] = None,
                 landed: Optional[str] = None, verified: Optional[bool] = None,
                 cost: float = 0.0, proposed: Optional[Decision] = None,
-                golden: bool = False, verdict=None, delta=None) -> None:
+                golden: bool = False, verdict=None, delta=None, detail: str = "") -> None:
         rec = record_for(dec, bundle, outcome=outcome, landed_state=landed, verified=verified,
                          session_id=session_id, cost_usd=cost, proposed=proposed, golden=golden,
-                         verdict=verdict, delta=delta, authority=current_authority)
+                         verdict=verdict, delta=delta, authority=current_authority,
+                         outcome_detail=detail)
         saved = log_decision(rec)
         records.append(saved or rec)
 
@@ -493,7 +494,8 @@ def run_controller(
         )
         journal(acting, bundle, outcome=result.outcome, landed=result.landed_state,
                 verified=verified, cost=result.cost_usd, proposed=proposed_for_golden,
-                golden=bool(proposed_for_golden), verdict=verdict, delta=action_delta)
+                golden=bool(proposed_for_golden), verdict=verdict, delta=action_delta,
+                detail=getattr(result, "detail", "") or "")
         decision = acting          # downstream stale/escalation logic acts on what actually ran
         if on_supervise:
             on_supervise(bundle, decision, verdict)

@@ -261,6 +261,7 @@ async def run_live(body: RunBody) -> dict[str, Any]:
             "rationale": decision.rationale,
             "outcome": getattr(result, "outcome", None),
             "landed_state": getattr(result, "landed_state", None),
+            "detail": getattr(result, "detail", "") or "",
             "expected_next": list(decision.expected_next),
         })
 

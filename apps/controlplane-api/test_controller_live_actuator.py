@@ -672,3 +672,52 @@ def test_a_fieldless_scroll_refuses_honestly_instead_of_raising():
 
     assert out.outcome == Outcome.NOT_FOUND.value
     assert "no dispatch" in out.detail
+
+
+# --- describe is a real dispatch, and failures keep their enumerations ---------------------
+def test_describe_reaches_the_widget_probe_and_returns_its_account():
+    """`describe` was a "re-observed" stub — the teacher instructed it, the widget's account
+    went nowhere, and the option question got answered by hand-probing the endpoint (live,
+    2026-08-10). Now it posts /describe_widget and the account rides ActOutcome.detail."""
+    raw = [{"field": "How did you hear about this opportunity? *",
+            "selector": "#q-hear", "kind": "div"}]
+    fake = FakeTransport(url=_INDEED, unanswered=raw, responses={
+        "/describe_widget": {"ok": True, "outcome": "ok", "widget_type": "aria_listbox",
+                             "label": "Select an option", "value_preview": "Select an option",
+                             "options": None, "options_enumerable_by": "open",
+                             "commit": {"kind": "on_select"}, "opens_on": "click"}})
+    act = _actuator(fake)
+    act.observe()
+
+    out = act.act(Decision(intent="describe",
+                           params={"field": "How did you hear about this opportunity? *"},
+                           confidence=0.9, rung="teacher", rationale="read before touching"))
+
+    assert "/describe_widget" in fake.paths()
+    assert fake.payload_for("/describe_widget")["selector"] == "#q-hear"
+    assert out.outcome == Outcome.OK.value
+    assert "aria_listbox" in out.detail
+    assert "options enumerable by open" in out.detail
+    assert "commit on_select" in out.detail
+
+
+def test_a_refused_select_keeps_the_options_it_enumerated():
+    """no_option's response carries the widget's real option list; dropping it at the actuator
+    seam made every miss a second manual probe. The list is page vocabulary, not an operator
+    answer, so it is journal-safe (§4)."""
+    raw = [{"field": "How did you hear about this opportunity? *",
+            "selector": "#q-hear", "kind": "div"}]
+    fake = FakeTransport(url=_INDEED, unanswered=raw, responses={
+        "/select_option": {"ok": False, "outcome": "no_option",
+                           "detail": "no option \"Indeed\"",
+                           "options": ["Career Site", "Job Board", "Other"]}})
+    act = _actuator(fake)
+    act.observe()
+
+    out = act.act(Decision(intent="select_option",
+                           params={"field": "How did you hear about this opportunity? *",
+                                   "value": "Indeed"},
+                           confidence=0.9, rung="teacher", rationale="try the canonical answer"))
+
+    assert out.outcome == "no_option"
+    assert "options: Career Site, Job Board, Other" in out.detail

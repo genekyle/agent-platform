@@ -399,6 +399,21 @@ class LiveActuator:
             return ActOutcome(outcome=_outcome_of(res), landed_state=landed,
                               detail=res.get("detail", ""),
                               ax_identities=identities, unanswered_after=unanswered)
+        if intent == Intent.DESCRIBE.value:
+            # A real dispatch, not a "re-observed" stub: the whole value of a describe is the
+            # widget's returned account, and the stub threw it away — a teacher who instructed
+            # `describe` got nothing back anywhere and re-probed the endpoint by hand (live,
+            # 2026-08-10). The account rides ActOutcome.detail into the journal's outcome_detail.
+            d_field = p.get("field") or ""
+            d_addr = self._address(d_field) if d_field else None
+            if d_addr is None or not d_addr.get("selector"):
+                return self._out(Outcome.NOT_FOUND.value, self._last_state,
+                                 detail=f"describe: cannot address field {d_field!r} — needs a "
+                                        f"live-scan selector (radio groups describe by their row)")
+            res = self._post("/describe_widget", {**self._addr(), "selector": d_addr["selector"],
+                                                  "ats": self._ats, "field": d_field})
+            return self._out(_outcome_of(res), self._current_state(),
+                             detail=_widget_account(res))
         if intent in _READ_INTENTS:
             return self._out(Outcome.OK.value, self._current_state(), detail="re-observed")
 
@@ -560,8 +575,16 @@ class LiveActuator:
         """A field-fill stays on the same page — its landed state is where we were; the endpoint's
         verified outcome (it re-reads the DOM) says whether the value took."""
         identities, unanswered = self._after_look()
+        detail = str(res.get("detail") or "")
+        # A refused select ENUMERATED the real options on its way to failing — keep them, they
+        # are precisely what the next decision needs. Dropping them here made every no_option a
+        # second manual probe for the teacher (live, 2026-08-10).
+        opts = res.get("options")
+        if opts and _outcome_of(res) != Outcome.OK.value:
+            listed = ", ".join(str(o) for o in list(opts)[:20])
+            detail = f"{detail} · options: {listed}" if detail else f"options: {listed}"
         return ActOutcome(outcome=_outcome_of(res), landed_state=self._last_state,
-                          cost_usd=float(res.get("cost_usd") or 0.0), detail=res.get("detail", ""),
+                          cost_usd=float(res.get("cost_usd") or 0.0), detail=detail,
                           ax_identities=identities, unanswered_after=unanswered)
 
     def _read_url(self) -> str:
@@ -758,6 +781,30 @@ class LiveActuator:
             "commit": described.get("commit") or addr.get("commit"),
             "widget_type": described.get("widget_type") or addr.get("widget_type")})
         return _outcome_of(res) == Outcome.OK.value
+
+
+def _widget_account(res: dict) -> str:
+    """/describe_widget's answer, compact enough for a journal row: what the widget IS, what it
+    currently reads, what it offers, and how it commits. Page vocabulary only — option labels
+    and widget structure, never an operator answer — so it is safe for the journal (§4)."""
+    if not res.get("ok") and res.get("outcome") not in (Outcome.OK.value,):
+        return str(res.get("detail") or "describe failed")
+    parts = [str(res.get("widget_type") or "unknown")]
+    if res.get("label"):
+        parts.append(f"label={str(res['label'])[:60]!r}")
+    if res.get("value_preview") is not None:
+        parts.append(f"value={str(res['value_preview'])[:60]!r}")
+    opts = res.get("options")
+    if opts:
+        parts.append("options: " + ", ".join(str(o) for o in list(opts)[:20]))
+    elif res.get("options_enumerable_by"):
+        parts.append(f"options enumerable by {res['options_enumerable_by']}")
+    commit = res.get("commit") or {}
+    if isinstance(commit, dict) and commit.get("kind"):
+        parts.append(f"commit {commit['kind']}")
+    if res.get("opens_on"):
+        parts.append(f"opens on {res['opens_on']}")
+    return " · ".join(parts)
 
 
 #: The only decision-param keys a transition row may keep: element/control NAMES, never the
