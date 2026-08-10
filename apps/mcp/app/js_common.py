@@ -99,6 +99,21 @@ WIDGET_TELLS_JS = r"""
     if (el.tagName === 'SELECT')
       return {read_at: '.value', answered: el.selectedIndex > 0 && el.value !== '',
               preview: (el.value || '').slice(0, 40)};
+    // An ARIA combobox/listbox OPENER — a div with no .value anywhere. Its truth is its own
+    // visible label (the widget protocol's `opener_label`). The generic fallback below read
+    // el.value (undefined on a div), so smartapply's question dropdowns scanned as unanswered
+    // FOREVER, even freshly committed (live, 2026-08-10). Placeholder text still counts as
+    // UNANSWERED on purpose: the dangerous mistake is a placeholder passing form_complete_gate,
+    // not a filled field being asked about twice.
+    const __role = el.getAttribute ? (el.getAttribute('role') || '') : '';
+    if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' &&
+        (__role === 'combobox' ||
+         (el.getAttribute && el.getAttribute('aria-haspopup') === 'listbox'))) {
+      const t = __txt(el).trim();
+      const ph = /^(select|choose)( an?| your)? (option|answer|one)\b/i.test(t) ||
+                 /^(select|choose)(\.{3}|…)?$/i.test(t);
+      return {read_at: 'opener_label', answered: !!t && !ph, preview: t.slice(0, 40)};
+    }
     const v = String(el.value == null ? '' : el.value);
     return {read_at: '.value', answered: !!v.trim(), preview: v.slice(0, 40)};
   };
