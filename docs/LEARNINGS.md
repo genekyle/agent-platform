@@ -5862,3 +5862,47 @@ the click and the call.
 **Friction to fix when it earns its slot:** attended double-gates the teacher — every instruct
 comes back as a review park of the same decision (six approve-my-own-instruction round-trips
 today). The inbox could auto-pass a decision whose rung is already `teacher`.
+
+## 2026-08-10 (later) — The build pass the drive paid for: Lens unbroken, read intents made real, the scanner told the truth, and the search became a row
+
+Six operator-directed fixes, each traced to something the morning's attended drive surfaced.
+
+**The Lens was two breaks wearing one face.** `belief.uncertainty` is an OBJECT of axes and the
+pane rendered it as a React child — one throw took the whole pane down; and the snapshot only
+updated on ladder turns, so a morning of controller driving left an 08-06 visual presented as
+current. Axes render as scalars now, witnesses fall back to the snapshot belief's own list, and
+the API serves whichever snapshot is fresher — blackboard or decision journal (§10: the journal
+is the display's source). What the Lens IS, for the record: the between-drives window into what
+local perception last safely received and concluded; the Trace is history, the Lens is now.
+
+**Read intents now return what they read.** `describe` dispatches to `/describe_widget` for real
+and its compact account rides `ActOutcome.detail` into a new additive journal column
+(`outcome_detail`, belief-pattern, replay-green); a `no_option` select keeps the option list it
+enumerated. The teacher never again re-probes by hand for evidence the drive already fetched.
+
+**The scanner reads listbox openers at their own truth.** `__valueTruth` gained the
+`opener_label` branch — placeholders still count as unanswered on purpose (the dangerous
+direction is a placeholder passing `form_complete_gate`). Live regression on the session-25
+fixture: 2 phantom unanswered → **0, "all required fields answered"**.
+
+**The session is the browser; the search is the query — now in the schema.** New `Search` +
+`SearchSighting` tables: a Search row mints lazily on the first recorded page, pagination reuses
+it, a new query mints a SIBLING, closing a search never touches the session (cookies and
+sign-ins stay alive — the operator's whole point). Both write paths (ladder page-review, bounded
+sweep) attach every card; applications carry `search_id` provenance; `/api/searches` is the read
+surface. The next query run through either path creates row #1.
+
+**A confirmed submit lands in BOTH halves.** `_record_outcome` stamped the sighting and never
+minted the canonical Application — the manual endpoint has mirrored since 07-30, so "did we
+apply?" had two answers depending on the table. `mirror_application` moved to
+`application_events`, the live seam calls it (savepoint-scoped, search provenance attached).
+
+**The census after the morning:** transition corpus 59 → **72** (67 on session 25, 13 today,
+all with screenshots), journal 107 teacher-rung rows all-time, shadow agreement 46% over 50
+loose pairs — and the questions-page scenario sits at 7%, which is precisely the cold spot the
+morning's drive kept hitting at novelty 1.0. Zero NEW Trace labels yet: the operator's
+correction pass is the un-cranked half of train-on-label. Controller-output verdict against the
+refocus bar ("display everything the system knows"): the Trace and run response have the right
+shape; the true gaps felt from the teacher's seat are the attended double-gate (every instruct
+re-parks as a review of itself) and park packages not yet carrying the previous act's
+`outcome_detail` — both queued behind drives, not ahead of them.
