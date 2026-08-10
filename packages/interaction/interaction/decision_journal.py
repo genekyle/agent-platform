@@ -202,6 +202,11 @@ def record_for(
         session_id=session_id,
         duration_ms=duration_ms,
         cost_usd=cost_usd,
+        # What the decision was looking at, flattened at the SAME choke point — basenames only
+        # (durable, servable), no pixels. None on collect=False credential rows by construction:
+        # an empty CapturedTurn yields Bundle.capture=None upstream, so nothing leaks here.
+        capture_artifact=(bundle.capture or {}).get("artifact") if bundle.capture else None,
+        capture_screenshot=(bundle.capture or {}).get("screenshot_filename") if bundle.capture else None,
     )
 
 

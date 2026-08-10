@@ -83,6 +83,7 @@ def build_bundle(
     window: Optional[dict] = None,
     staleness: Optional[dict] = None,
     applied: Optional[dict] = None,
+    capture: Optional[dict] = None,
 ) -> Bundle:
     """Assemble the controller's input for ONE tab. Pure — no IO, no network.
 
@@ -108,6 +109,9 @@ def build_bundle(
         staleness: a serialized `perception.staleness.Staleness` — how old this view is and
             what that costs. Pure passthrough, like `belief`: assessed by the caller, which
             is the only place that knows when we last acted. None when nobody assessed it.
+        capture: durable refs to this observation's artifact + screenshot (see
+            `Bundle.capture`). Pure passthrough, like `belief`; None when nothing was
+            collected — which is exactly what a `collect=False` credential flow must journal.
     """
     ats = ats or ats_registry.classify_ats(url)
     desc = apply_recipe.describe_for_ats(ats, url, page_text)
@@ -140,4 +144,5 @@ def build_bundle(
         window=window,
         staleness=staleness,
         applied=applied,
+        capture=capture,
     )

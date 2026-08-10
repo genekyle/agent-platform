@@ -323,3 +323,52 @@ def test_an_empty_or_unseen_window_says_nothing_at_all():
     assert window_to_prompt(None) == ""
     assert window_to_prompt({}) == ""
     assert window_to_prompt({"count": 0}) == ""
+
+
+# --- the CAPTURE refs: the journal keeps what the decision saw (2026-08-09) ------------
+def test_a_bundle_with_capture_renders_and_hashes_exactly_as_without():
+    """THE property that let capture refs into the contract at all: 117 journaled decisions
+    carried no image reference, and the fix must not cost the corpus its comparability. The
+    refs stay out of the prompt (feature contract unchanged) and out of the digest (two
+    observations of one decision point keep one identity, each with its own screenshot)."""
+    from dataclasses import replace
+
+    from interaction.decision import bundle_digest, bundle_to_prompt
+
+    plain = _bundle()
+    seen = replace(plain, capture={
+        "artifact": "2026-08-09T12-00-00__live_mcp__controller_turn.json",
+        "screenshot": "/abs/observer-screenshots/2026-08-09T11-59-59__controller_turn.png",
+        "screenshot_filename": "2026-08-09T11-59-59__controller_turn.png",
+    })
+    assert bundle_to_prompt(seen) == bundle_to_prompt(plain)
+    assert bundle_digest(seen) == bundle_digest(plain)
+
+
+def test_record_for_flattens_capture_basenames_at_the_choke_point():
+    """No seam can journal a decision and silently drop what it saw: the flattening lives in
+    `record_for`, beside belief and staleness, so every writer inherits it. Basenames only —
+    the durable, servable names — never the absolute path."""
+    from dataclasses import replace
+
+    from interaction.decision_journal import record_for
+
+    seen = replace(_bundle(), capture={
+        "artifact": "a__live_mcp__controller_turn.json",
+        "screenshot": "/somewhere/that/may/go/stale/s__controller_turn.png",
+        "screenshot_filename": "s__controller_turn.png",
+    })
+    rec = record_for(Decision("click", {}, 1.0, "recipe", "r"), seen)
+    assert rec.capture_artifact == "a__live_mcp__controller_turn.json"
+    assert rec.capture_screenshot == "s__controller_turn.png"
+
+
+def test_a_credential_posture_bundle_journals_no_capture_refs():
+    """collect=False must journal capture=None by construction (PRINCIPLES §4): the empty
+    CapturedTurn upstream yields Bundle.capture=None, and the record's columns stay None —
+    the row is honest about having no eyes, rather than leaking a ref it should not hold."""
+    from interaction.decision_journal import record_for
+
+    rec = record_for(Decision("click", {}, 1.0, "recipe", "r"), _bundle())
+    assert rec.capture_artifact is None
+    assert rec.capture_screenshot is None

@@ -148,6 +148,10 @@ class CapturedTurn:
 
     artifact: Optional[dict[str, Any]] = None
     screenshot: Optional[Path] = None
+    # The capture's own durable name (the observer-traces JSON basename). Carried because the
+    # parsed artifact above cannot tell you what file it came from, and the journal needs the
+    # NAME, not the pixels — a row that cannot point at what the controller saw is the 0/117 gap.
+    artifact_filename: Optional[str] = None
 
 
 def read_artifact(artifact_filename: str) -> Optional[dict[str, Any]]:
@@ -227,7 +231,8 @@ def capture_now(post: Any, addr: dict[str, Any], *, scenario: str = "controller_
         if not filename:
             return CapturedTurn()
         return CapturedTurn(artifact=read_artifact(filename),
-                            screenshot=screenshot_for_artifact(filename))
+                            screenshot=screenshot_for_artifact(filename),
+                            artifact_filename=filename)
     except Exception:
         logger.exception("perception: capture failed; the drive continues without a new row")
         return CapturedTurn()

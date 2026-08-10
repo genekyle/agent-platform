@@ -258,6 +258,24 @@ class Bundle:
     #: comparable.
     applied: Optional[dict] = None
 
+    #: --- capture: what the controller SAW this turn — durable references to the observation's
+    #: artifact and screenshot, or None when nothing was collected (`collect=False` credential
+    #: posture, or the capture simply failed).
+    #:
+    #: Shape: `{"artifact": <observer-traces JSON basename>, "screenshot": <absolute path str>,
+    #: "screenshot_filename": <observer-screenshots basename>}` — the basenames are the durable
+    #: refs (the 2026-07-22 stale-path finding: directories get renamed, filenames survive), the
+    #: absolute path is a best-effort convenience matching the transition-corpus convention.
+    #:
+    #: Follows `belief`/`staleness`, not `applied`: appended last, defaulted, and DELIBERATELY NOT
+    #: RENDERED by `bundle_to_prompt` — the reasoner's feature contract does not change because we
+    #: started keeping receipts. Also DELIBERATELY NOT in `bundle_digest`: two observations of the
+    #: same decision point must keep the same identity even though each has its own screenshot.
+    #: It exists because 117 journaled decisions carried zero image references (2026-08-09 audit):
+    #: the evidence the teacher decided FROM was captured, used once, and orphaned. A correction
+    #: without its screenshot is half a training pair.
+    capture: Optional[dict] = None
+
 
 # --- the Decision: what the controller EMITS ----------------------------------------
 @dataclass(frozen=True)
@@ -405,6 +423,15 @@ class DecisionRecord:
     staleness_rules: Optional[str] = None
     staleness_idle_s: Optional[float] = None
     staleness_page_age_s: Optional[float] = None
+
+    #: --- capture: what this decision was looking at, by durable NAME (never pixels, never
+    #: paths that go stale — basenames resolve under the current artifacts root and the existing
+    #: `GET /api/observations/screenshots/{filename}` route serves them). None on rows journaled
+    #: from a `collect=False` credential flow, honestly. Flattened from `Bundle.capture` at the
+    #: `record_for` choke point like belief and staleness, so no seam can journal a decision and
+    #: silently drop what it saw — the exact 0-of-117 hole the 2026-08-09 audit measured.
+    capture_artifact: Optional[str] = None        # observer-traces JSON basename
+    capture_screenshot: Optional[str] = None      # observer-screenshots PNG basename
 
 
 # --- the frozen serialization: prompt today, feature set tomorrow -------------------
