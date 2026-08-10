@@ -464,6 +464,52 @@ class ObservedJob(Base):
     canonical_job_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
 
+class Search(Base):
+    """One executed search — the durable identity a session's findings hang off.
+
+    A SESSION is a browser with a signed-in account: cookies, tabs, liveness — worth keeping
+    alive across many queries (operator, 2026-08-10). A SEARCH is one query actually run inside
+    one: engine + query + location, with its date. Sightings and applications tie HERE, so
+    "what did the 08-10 'data analytics' Boston search yield?" is a WHERE clause instead of an
+    archaeology over per-row JSON lists. The blackboard's `SearchState` remains the live cursor;
+    this row is the identity it writes through — created lazily the first time a page of results
+    is recorded, reused while (session, engine, query, location) still match, and never a
+    replacement for the session (closing a search must not close the browser)."""
+    __tablename__ = "searches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    #: BrowserSession.id, kept loose (no FK) like every cross-table id in this file — a search
+    #: outlives its session row's lifecycle states.
+    session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    engine: Mapped[str] = mapped_column(String(40), default="indeed", index=True)
+    query: Mapped[str] = mapped_column(String(300), default="", index=True)
+    location: Mapped[str] = mapped_column(String(300), default="")
+    radius_miles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    #: active | exhausted | abandoned — set by the ladder/operator; re-declaring the same query
+    #: while active reuses the row rather than minting a twin.
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    pages_swept: Mapped[int] = mapped_column(Integer, default=0)
+    results_seen: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SearchSighting(Base):
+    """One search surfaced one sighting — the pair the JSON query-list can't answer from.
+
+    `ObservedJob` dedupes by job identity across every search, which is right for the job and
+    wrong for provenance: "what did THIS search find?" and "which searches keep surfacing this
+    job?" both need the association. One row per (search, job); the page it first appeared on
+    rides along for the triage view."""
+    __tablename__ = "search_sightings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    search_id: Mapped[int] = mapped_column(Integer, index=True)
+    job_id: Mapped[str] = mapped_column(String(160), index=True)     # ObservedJob.job_id
+    page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Job(Base):
     """One real job in the world — the canonical entity, independent of where we met it.
 
@@ -596,6 +642,9 @@ class Application(Base):
     # which is itself a thing worth measuring: do Indeed applies get answered less than direct ones?
     via_platform: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
     ats: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+    # The SEARCH that led here (models.Search) — provenance to the query+date that surfaced the
+    # job, kept loose like every cross-table id. Nullable: manual marks and legacy rows have none.
+    search_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     # applied | acknowledged | responded | screening | interview | offer | rejected | withdrawn.
     # Derived from events; see the class docstring.

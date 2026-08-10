@@ -126,17 +126,20 @@ def is_ghosted(app: Application, events: Iterable[ApplicationEvent], *,
 
 
 def ensure_application(db: Session, job_key: str, *, applied_at: Optional[datetime] = None,
-                       via_platform: Optional[str] = None, ats: Optional[str] = None
-                       ) -> Application:
+                       via_platform: Optional[str] = None, ats: Optional[str] = None,
+                       search_id: Optional[int] = None) -> Application:
     """The application for a job, created on first use.
 
     One per job by construction (`Application.job_key` is unique), so applying twice through two
     doors — the failure mode that started all of this — updates one row instead of making a second.
+    `search_id` is the provenance to the query that surfaced the job (models.Search) — recorded
+    when the caller knows it, never invented.
     """
     app = db.scalar(select(Application).where(Application.job_key == job_key))
     if app is None:
         app = Application(job_key=job_key, applied_at=applied_at or utcnow(),
-                          via_platform=via_platform, ats=ats, status="applied")
+                          via_platform=via_platform, ats=ats, status="applied",
+                          search_id=search_id)
         db.add(app)
         db.flush()
         record_event(db, app, kind="applied", source="agent" if via_platform else "human",
@@ -148,6 +151,7 @@ def ensure_application(db: Session, job_key: str, *, applied_at: Optional[dateti
             app.applied_at = applied_at
         app.via_platform = app.via_platform or via_platform
         app.ats = app.ats or ats
+        app.search_id = app.search_id or search_id
     return app
 
 

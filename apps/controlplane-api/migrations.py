@@ -79,6 +79,9 @@ def migrate_schema() -> None:
         ("observed_jobs", "canonical_job_key", "VARCHAR(64)"),
         # jobs: observations split from distinct sightings (v18) — see the Job model docstring.
         ("jobs", "seen_count", "INTEGER NOT NULL DEFAULT 0"),
+        # applications → the Search that produced them (v19) — provenance to query+date, so
+        # "which search led to this application" is a join, not a guess (operator, 2026-08-10).
+        ("applications", "search_id", "INTEGER"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:

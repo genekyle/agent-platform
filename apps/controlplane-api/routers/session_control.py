@@ -1732,7 +1732,20 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
                 "detail": f"Could not read the results ({ex.get('detail') or 'extractor said no'})."}
 
     cards = ex.get("jobs") or []
-    new_count, dup_count = upsert_observed_jobs(db, cards, engine["platform"], bb.search_state.query)
+    # The search is the query, the session is the browser (2026-08-10): recording a page is the
+    # moment a search becomes real, so the row is ensured here — same tuple reuses, a new query
+    # in the same session mints a sibling — and every card on the page joins it.
+    import searches as searches_mod
+    search = searches_mod.ensure_active_search(
+        db, session_id=bb.session_id, engine=engine["platform"],
+        query=bb.search_state.query, location=bb.search_state.location,
+        radius_miles=(bb.world or {}).get("radius_miles"))
+    new_count, dup_count = upsert_observed_jobs(db, cards, engine["platform"],
+                                                bb.search_state.query,
+                                                search=search, page=page)
+    if search is not None:
+        bb.world = dict(bb.world or {})
+        bb.world["search_id"] = search.id
     db.commit()
 
     # Give every card just written a canonical job. The other two scrape endpoints in `main.py`

@@ -112,6 +112,7 @@ from routers import facebook as facebook_router  # noqa: E402
 from routers import inventory as inventory_router  # noqa: E402
 from routers import providers as providers_router  # noqa: E402
 from routers import session_control as session_control_router  # noqa: E402
+from routers import searches as searches_router  # noqa: E402
 from routers import sessions as sessions_router  # noqa: E402
 from routers import transitions as transitions_router  # noqa: E402
 from routers import workspace as workspace_router  # noqa: E402
@@ -2047,6 +2048,12 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     scroll_log: list[dict] = []
     shortlist_refs: list[str] = list(bb.search_state.shortlist or [])
     stopped_reason = "max_pages"
+    # The search is the query, the session is the browser (2026-08-10): one Search row for this
+    # sweep's tuple, so every page's sightings join it and the sweep is queryable afterwards.
+    import searches as searches_mod
+    sweep_search = searches_mod.ensure_active_search(
+        db, session_id=body.training_session_id, engine=platform,
+        query=query, location=location, radius_miles=min_miles)
     for _ in range(max_pages):
         # `/extract_jobs` walks a virtualised list itself (wheel over the list column, re-read until
         # it stops growing) and reports what the scrolling did in `meta.scroll`. That is carried out
@@ -2060,7 +2067,8 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
         if scroll_meta:
             scroll_log.append({"page": pages_swept + 1, "batches": scroll_meta.get("batches"),
                                "moved": scroll_meta.get("moved"), "cards": len(cards)})
-        new_c, _dup = upsert_observed_jobs(db, cards, platform, query)
+        new_c, _dup = upsert_observed_jobs(db, cards, platform, query,
+                                           search=sweep_search, page=pages_swept + 1)
         db.commit()
         # Per page, so a long sweep's canonical view is current as it goes rather than only at the
         # end — the operator watches this table while the sweep is still walking.
@@ -5336,6 +5344,7 @@ def create_app() -> FastAPI:
     app.include_router(facebook_router.router)
     app.include_router(inventory_router.router)
     app.include_router(providers_router.router)
+    app.include_router(searches_router.router)
     app.include_router(session_control_router.router)
     app.include_router(sessions_router.router)
     app.include_router(transitions_router.router)

@@ -71,6 +71,16 @@ class _FakeDB:
     def add(self, row):
         self.added.append(row)
 
+    def scalar(self, stmt):
+        # The search layer asks for the active Search row; sweep tests never seed one, so the
+        # honest answer is "none on file" — ensure_active_search then creates it via add/flush.
+        return None
+
+    def flush(self):
+        for i, row in enumerate(self.added, start=1):
+            if getattr(row, "id", None) is None:
+                row.id = i
+
     def commit(self):
         pass
 
