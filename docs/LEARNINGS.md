@@ -5811,3 +5811,54 @@ are adversarially verified, the posture/contract ones I verified by hand against
 context → answers journal golden with screenshots → labels via the Trace → refit fires on its
 own → shadow agreement climbs toward the 90/25 gate. The next session starts at "launch a
 drive", not at "build a thing".
+
+## 2026-08-10 — First attended drive through the new seat: ten parks serviced, two defects found, one near-withdrawal caught, and the gate handed to a human on purpose
+
+The refocus's loop ran end to end for the first time: `POST /api/controller/run` keyed to cockpit
+session 25 → parks announced at open → session-Claude serviced them (instruct / approve /
+escalate) → **13 journal rows today, all rung=teacher, 13/13 with screenshots** — the capture
+contract holding live — and the transition corpus grew 59 → 67. The drive resumed the
+half-finished NHBB application (Continuous Improvement Engineer, smartapply screener questions)
+and drove it to a gate only a human can pass.
+
+**Enumerate-and-translate is the dropdown move.** A closed react listbox renders options only
+while open; `describe_widget` is read-only by design and honest about it (`options_enumerable_by:
+open`). The working probe: `/select_option` with a value that can't match — its `no_option`
+payload carries `options: [...]`, the protocol's own enumeration. Then the teacher translates the
+store's canonical answer into the widget's vocabulary (`Indeed` → `Job Board`; `Bachelor of
+Science` → `Bachelor's level degree`) — resolve_answer's design, performed at the teacher rung.
+
+**Defect, fixed same-session (`8762859`):** a field-less intent (a teacher-instructed `scroll`)
+slipped past the field-addressing guard with `addr=None` and died on `addr.get(...)` — a 500
+that killed the whole attended run route mid-drive. The honest "no dispatch yet" fallthrough was
+unreachable for exactly the intents it was written for. Guarded now, regression-tested.
+
+**Defect, chip filed:** `scan_required`'s answered-detection never reads aria_listbox opener
+labels, so filled dropdowns scan as unanswered forever (the bundle's UNANSWERED overcounts all
+drive long). Trust `describe_widget`'s `value_read_at` on these. Related stubs worth knowing:
+the `describe` and `resolve_answer` INTENTS are actuator no-ops ("re-observed") — a teacher
+instructing `describe` gets nothing back anywhere, and the options a failed select returns are
+discarded at the actuator seam. The teacher read them by calling the mcp endpoint directly.
+
+**The smartapply internal-applicant trap (nearly a self-withdrawal).** "Are you an Active
+Employee?" stood blind-answered **Yes** (an earlier autofill's yes-bias). That opens an
+ADP-instructions branch whose REQUIRED control reads *"To avoid duplicate candidate profiles,
+please confirm below to close this application"* — and on Continue the page auto-scrolls to it
+as first-invalid, which is also the diagnostic: whatever the page scrolls to is what its
+validation actually wants. A blind click-through would have **withdrawn a real application**.
+The truthful "No, I am not an Active Employee" collapses the branch — verified by the control
+VANISHING from the AX tree, the clean binary signal. Corollary: the page's own validation is the
+referee for hidden-required controls (the age-majority radio surfaced the same way).
+
+**The gate that ended the drive, on purpose.** Form complete and valid by its own rules; the
+single real Continue (node 37987, re-resolved fresh each time) clicked twice, outcome ok, zero
+navigation, zero errors, zero visible challenge — with reCAPTCHA enterprise live on the page
+(anchor `solved:true`, no bframe). A silent server-side swallow (bot score or a broken handler)
+is beyond the machine's sound moves: escalated twice IN A ROW deliberately so the drive ends
+with the window intact, and pushed the operator a handoff — click Continue by hand; and the job
+is **100% onsite Peterborough NH** against a 1-2-onsite-days preference, so the human owns both
+the click and the call.
+
+**Friction to fix when it earns its slot:** attended double-gates the teacher — every instruct
+comes back as a review park of the same decision (six approve-my-own-instruction round-trips
+today). The inbox could auto-pass a decision whose rung is already `teacher`.
