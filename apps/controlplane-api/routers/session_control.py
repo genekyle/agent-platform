@@ -5483,7 +5483,8 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     obs = await _observe(_session_browser_url(session), bb.search_state.query, session_id=session.id)
     # RECORD BEFORE CLOSE — the epilogue's own rule. A closed tab with no record is unrecoverable,
     # and the record is what the NEXT session gets to ask (applied_index).
-    recorded = _record_outcome(db, step, ats_url=_apply_tab(bb, obs).get("url", ""))
+    recorded = _record_outcome(db, step, ats_url=_apply_tab(bb, obs).get("url", ""),
+                               search_id=(bb.world or {}).get("search_id"))
     # DOES THE TAB HAVE TO SURVIVE? Terminal for the ladder is not finished in the world.
     # Measured live 2026-08-04: an application sitting on smartapply's review step — complete,
     # one click from sent — was parked because Submit is the operator's gate, and the cleanup
@@ -5527,7 +5528,8 @@ _TERMINAL_TO_STATUS = {
 }
 
 
-def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "") -> dict[str, Any]:
+def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "",
+                    search_id: Optional[int] = None) -> dict[str, Any]:
     """Write the step's terminal to `ObservedJob`, so the next session can ask the database.
 
     APPLY_EPILOGUE always said RECORD before CLOSE, "because a closed tab with no record is
@@ -5563,6 +5565,14 @@ def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "") -> d
         row.applied_at = datetime.now(timezone.utc)
     if step.terminal_detail:
         row.notes = (step.terminal_detail or "")[:2000]
+    # The canonical half of the record. The sighting write above answered "did the drive finish
+    # this step"; the Application row answers "did we apply to this JOB" — and only the second is
+    # what the dashboard and the next drive's applied-check read. The manual mark endpoint has
+    # mirrored since 07-30; the LIVE submit seam never did (found 2026-08-10), which is how a
+    # confirmed submit could still read as never-applied. `search_id` carries which query led here.
+    if status == "applied":
+        from application_events import mirror_application
+        mirror_application(db, row, search_id=search_id)
     db.commit()
     return {"recorded": True, "status": status, "job_id": step.job_id,
             "applied_at": row.applied_at.isoformat() if row.applied_at else None}

@@ -125,6 +125,37 @@ def is_ghosted(app: Application, events: Iterable[ApplicationEvent], *,
     return (now or utcnow()) - as_aware(app.applied_at) > GHOSTED_AFTER
 
 
+def mirror_application(db: Session, sighting, *, search_id: Optional[int] = None) -> None:
+    """Give a just-applied sighting a canonical Application. Best-effort by design: the apply
+    already happened out in the world, so failing to mirror it must not fail the request that
+    records it. `/api/career_search/reindex` rebuilds anything missed.
+
+    Lived in `main.py` and was called only by the MANUAL status endpoint — the live drive's
+    submit seam (`_record_outcome`) updated the sighting and never created the Application, so
+    "did we apply?" had two answers depending on which table you asked (found 2026-08-10). Moved
+    here so every recorder of an applied sighting can reach it.
+
+    Inside a SAVEPOINT, not a bare try/except: a plain `db.rollback()` would also discard the
+    caller's own `application_status = applied` write, turning a cosmetic mirroring failure into
+    losing the very fact being recorded. The nested transaction scopes the undo to this function.
+    """
+    import job_dedup  # function-local: job_dedup imports this module
+
+    try:
+        with db.begin_nested():
+            job = job_dedup.resolve_sighting(db, sighting)
+            if job is None:
+                return
+            db.flush()
+            ensure_application(db, job.job_key, applied_at=sighting.applied_at,
+                               via_platform=sighting.platform, ats=sighting.application_platform,
+                               search_id=search_id)
+            if job.status in ("new", ""):
+                job.status = "applied"
+    except Exception:  # noqa: BLE001 — see docstring: best-effort, scoped by the savepoint
+        pass
+
+
 def ensure_application(db: Session, job_key: str, *, applied_at: Optional[datetime] = None,
                        via_platform: Optional[str] = None, ats: Optional[str] = None,
                        search_id: Optional[int] = None) -> Application:

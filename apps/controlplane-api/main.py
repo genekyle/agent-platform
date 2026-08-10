@@ -68,6 +68,7 @@ from schemas import (
 from settings import settings
 import browser_provisioning
 from deps import _artifacts_dir, _session_browser_url, _slugify, utcnow
+import application_events
 import job_dedup
 from observed_jobs import upsert_observed_jobs
 from migrations import migrate_schema
@@ -2177,36 +2178,11 @@ def update_job(job_id: str, body: JobStatusUpdate, db: Session = Depends(get_db)
             # the apply flow keeps stamping sightings and the career-search dashboard — which reads
             # canonical jobs — shows nothing applied, which is precisely the question it exists to
             # answer. Everything the employer does next hangs off the application this creates.
-            _mirror_application(db, row)
+            application_events.mirror_application(db, row)
     if body.notes is not None:
         row.notes = body.notes
     db.commit()
     return _job_dict(row)
-
-
-def _mirror_application(db: Session, sighting: ObservedJob) -> None:
-    """Give a just-applied sighting a canonical Application. Best-effort by design: the apply
-    already happened out in the world, so failing to mirror it must not fail the request that
-    records it. `/api/career_search/reindex` rebuilds anything missed.
-
-    Inside a SAVEPOINT, not a bare try/except: a plain `db.rollback()` here would also discard the
-    caller's own `application_status = applied` write, turning a cosmetic mirroring failure into
-    losing the very fact being recorded. The nested transaction scopes the undo to this function.
-    """
-    from application_events import ensure_application
-
-    try:
-        with db.begin_nested():
-            job = job_dedup.resolve_sighting(db, sighting)
-            if job is None:
-                return
-            db.flush()
-            ensure_application(db, job.job_key, applied_at=sighting.applied_at,
-                              via_platform=sighting.platform, ats=sighting.application_platform)
-            if job.status in ("new", ""):
-                job.status = "applied"
-    except Exception:  # noqa: BLE001
-        pass
 
 
 @router.post("/api/training/page-states")
