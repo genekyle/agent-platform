@@ -594,7 +594,7 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         },
         # HOW FAR THIS APPLICATION IS FROM SUBMIT, and the screens between here and there. The
         # ladder's tail, rendered — so "what is left" stops being something only the recipe knows.
-        "apply_flow": _apply_flow(queue.current()),
+        "apply_flow": _apply_flow(queue.current() or _parked_step(queue)),
         # WHAT THE INNER LAYERS ARE GETTING RIGHT. Both are measured on every crank and neither had
         # a surface: the operator asked for the orienter to practise, and practice nobody can see
         # is indistinguishable from no practice at all.
@@ -607,26 +607,45 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     }
 
 
+def _parked_step(queue: Any) -> Optional[Any]:
+    """The most recent PARKED step — attention, not history.
+
+    `parked:*` is a terminal flag, so `queue.current()` skips it and every surface built on
+    current() went dark the moment a step parked: apply_flow null, observer null, the panel
+    falling back to the pick table while a half-finished application held the tab open (the
+    2026-08-10 screenshots). Parked means "waiting on you", and the cockpit's job is exactly
+    the things waiting on you."""
+    for step in reversed(list(getattr(queue, "steps", []) or [])):
+        if (step.terminal or "").startswith("parked"):
+            return step
+    return None
+
+
 def _apply_flow(step: Optional[Any]) -> Optional[dict[str, Any]]:
     """The application's remaining screens, and how far the gate is. None when nothing is open.
 
     The recipe has always known this and only Workday ever said it out loud. Rendering it is what
     turns "Work this step" pressed five times into a walk with a visible end — and the operator's
     whole complaint was not knowing where in the application they were.
-    """
-    if step is None or step.done:
+
+    A PARKED step still renders its flow (flagged `parked`): the application is mid-flight and
+    resumable, and hiding the walk is what made parked read as closed."""
+    parked = bool(step is not None and (step.terminal or "").startswith("parked"))
+    if step is None or (step.done and not parked):
         return None
     import apply_recipe as ar
     state = step.landing_state or ""
     progress = ar.flow_progress(state, platform=step.platform or "")
     if not progress.get("recognised"):
         return {"recognised": False, "state": state, "platform": step.platform or "",
+                "parked": parked,
                 "why": "the recipe does not place this screen on a flow it can count along"}
     order = ar.flow_order(step.platform)
     gate = ar.gate_state(step.platform)
     here = progress.get("position") or 0
     return {
         "recognised": True, "platform": progress.get("platform"), "state": state,
+        "parked": parked,
         "steps_to_submit": progress.get("steps_to_submit"),
         "at_review_gate": bool(progress.get("at_review_gate")),
         # An UPPER BOUND, and labelled as one — platforms skip screens the profile already answers,
@@ -996,7 +1015,10 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
     from ats_registry import ats_for_company
 
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
-    step = queue.current()
+    # A parked application is still THE work — its tab is open and resumable, and the observer
+    # going dark on parked is how the Lens read "not watching an application" over a live
+    # smartapply tab (2026-08-10).
+    step = queue.current() or _parked_step(queue)
     if step is None:
         return None
     url = _apply_tab_url(bb, obs)

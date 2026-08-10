@@ -485,7 +485,15 @@ export function WorkSurface({
           {cockpit.blocker && !detour && <span className="badge badge--warn">needs you</span>}
         </div>
 
-        <h2 className="work__title">{focus.title}</h2>
+        <h2 className="work__title">
+          {focus.title}
+          {focus.parked && (
+            <span className="badge badge--warn work__parked"
+                  title="This application parked mid-flight and is waiting on you — it is not closed.">
+              {String(focus.parked).replace("parked:", "parked · for ")}
+            </span>
+          )}
+        </h2>
         {focus.subtitle && <p className="work__subtitle">{focus.subtitle}</p>}
         {/* The walk BEFORE the reasoning: "where am I in this application" is the question the
             operator asks first, and it was the one the surface could not answer at all. */}

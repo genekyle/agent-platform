@@ -762,3 +762,36 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .trace__correct-states { display: flex; gap: 6px; flex-wrap: wrap; }
 .trace__correct-states input { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 11px; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-0, var(--surface-1)); color: inherit; }
 .trace__correct small { color: var(--text-subtle); font-size: 10px; }
+
+/* --- the arrival chooser: several live browsers, pick one ------------------------------- */
+.cockpit-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 640px;
+}
+.cockpit-sessions__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 4px;
+}
+.cockpit-sessions__head span { color: var(--text-subtle); font-size: 12px; }
+.cockpit-sessions__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.cockpit-sessions__row:hover { border-color: var(--accent); }
+.cockpit-sessions__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cockpit-sessions__meta { margin-left: auto; color: var(--text-subtle); font-size: 11.5px; white-space: nowrap; }
+
+.work__parked { margin-left: 10px; vertical-align: middle; }

@@ -285,6 +285,20 @@ function executeFocus(p, step, nextAction) {
     more: TERMINAL_CHOICES,
   };
 
+  // PARKED: the application is mid-flight and waiting on the operator — the truth of the step,
+  // so it outranks any stale proposal riding on it. One primary: step back in. Reopen archives
+  // the walked rungs and re-walks from the top of the page (apply_steps.reopen's own contract).
+  if ((step.terminal || "").startsWith("parked")) {
+    return { ...base, kind: "application", parked: step.terminal,
+      flow: p.apply_flow || null,
+      why: step.terminal_detail
+        || "This application parked for you. Stepping back in resumes it where the page really is.",
+      primary: { label: "Step back in", endpoint: "/apply_reopen",
+        body: { job_id: step.job_id, reason: "operator stepped back in from the cockpit" },
+        why: "Reopen the parked application and re-walk this page's ladder from the top." },
+      alternates: [] };
+  }
+
   if (proposal) {
     return { ...base, kind: "proposal", proposal,
       why: proposal.rationale,
@@ -425,6 +439,12 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   const steps = p.queue?.steps || [];
   const qs = p.queue_summary || { total: 0, done: 0, submitted: 0, blocks_page: false };
   const currentStep = steps.find((s) => !s.done) || null;
+  // A PARKED application is attention, not history. `parked:*` is a terminal flag so it never
+  // shows as the current step — and the cockpit fell back to the pick table while a half-finished
+  // application held the tab open (2026-08-10). Waiting-on-you outranks "pick more".
+  const parkedStep = currentStep ? null
+    : [...steps].reverse().find((s) => (s.terminal || "").startsWith("parked")) || null;
+  const attentionStep = currentStep || parkedStep;
   const atLine = !!p.progress?.at_start_line;
   const page = p.page ?? 1;
 
@@ -444,7 +464,7 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   let focus;
   if (blocker?.stage === "session") focus = setupFocus(p, p.last_step);
   else if (blocker?.stage === "end") focus = endFocus(qs);
-  else if (currentStep) focus = executeFocus(p, currentStep, p.next_action);
+  else if (attentionStep) focus = executeFocus(p, attentionStep, p.next_action);
   else if (results.length > 0) focus = decideFocus(p, results, picks, qs);
   else if (atLine) focus = readFocus(p);
   else focus = setupFocus(p, p.last_step);
