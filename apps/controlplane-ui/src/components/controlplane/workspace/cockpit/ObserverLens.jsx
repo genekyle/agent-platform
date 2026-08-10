@@ -44,6 +44,23 @@ export function ObserverLens({ sessionId }) {
   const observer = panel.observer;
   const snapshot = panel.perception_snapshot;
   const belief = snapshot?.belief;
+  // belief.uncertainty is an OBJECT of axes ({state, element, answer, effect, novelty}) — an
+  // object rendered as a React child throws and takes the whole pane down (found 2026-08-10).
+  const unc = belief?.uncertainty;
+  const uncState = unc && typeof unc === "object" ? unc.state : unc;
+  const novelty = unc && typeof unc === "object" ? unc.novelty : belief?.novelty;
+  // Outside ladder drives `observer` is null, but the snapshot's belief carries the same
+  // witnesses — show what the system actually has instead of an empty card.
+  const witnesses = (observer?.witnesses?.length ? observer.witnesses : null)
+    || (belief?.witnesses || []).map((w) => ({
+      source: w.name,
+      claim: w.label,
+      detail: [
+        w.margin !== undefined ? `margin ${Number(w.margin).toFixed(2)}` : null,
+        w.novelty !== undefined ? `novelty ${Number(w.novelty).toFixed(2)}` : null,
+        (w.top_evidence || []).length ? `evidence: ${(w.top_evidence || []).join(", ")}` : null,
+      ].filter(Boolean).join(" · "),
+    }));
   const screenshot = snapshot?.screenshot_filename
     ? `${API}/api/observations/screenshots/${encodeURIComponent(snapshot.screenshot_filename)}`
     : null;
@@ -99,8 +116,8 @@ export function ObserverLens({ sessionId }) {
               <dt>Kind</dt><dd><Value>{observer?.kind}</Value></dd>
               <dt>URL</dt><dd className="is-mono"><Value>{observedUrl}</Value></dd>
               <dt>Local belief</dt><dd><Value>{belief?.state || belief?.label}</Value></dd>
-              <dt>Uncertainty</dt><dd><Value>{belief?.uncertainty}</Value></dd>
-              <dt>Novelty</dt><dd><Value>{belief?.novelty}</Value></dd>
+              <dt>Uncertainty</dt><dd><Value>{uncState !== undefined && uncState !== null ? Number(uncState).toFixed(2) : null}</Value></dd>
+              <dt>Novelty</dt><dd><Value>{novelty !== undefined && novelty !== null ? Number(novelty).toFixed(2) : null}</Value></dd>
             </dl>
             {observer?.mismatch && (
               <div className="lens__mismatch">
@@ -131,14 +148,14 @@ export function ObserverLens({ sessionId }) {
 
         <section className="cockpit__pane lens__card">
           <div className="cockpit__pane-head">
-            <AppIcon name="boxes" size={14} /> Evidence · {(observer?.witnesses || []).length} witnesses
+            <AppIcon name="boxes" size={14} /> Evidence · {witnesses.length} witnesses
           </div>
           <div className="lens__card-body">
-            {(observer?.witnesses || []).length === 0 ? (
+            {witnesses.length === 0 ? (
               <p className="lens__missing">No observer witnesses reported for this moment.</p>
             ) : (
               <ul className="lens__witnesses">
-                {observer.witnesses.map((w, i) => (
+                {witnesses.map((w, i) => (
                   <li key={`${w.source}-${i}`}>
                     <div><code>{w.source}</code>{w.claim
                       ? <span className="badge badge--muted">{w.claim}</span>

@@ -503,7 +503,7 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     # Indeed" on every ladder, which a LinkedIn session renders as an instruction to go and sign in
     # to the wrong site — found the first time a LinkedIn session was started, 2026-07-27.
     engine_label = engine_for(session, obs.get("search_tab"))["label"]
-    cached_perception = (bb.world or {}).get("last_belief") or None
+    cached_perception = _freshest_snapshot(session.id, (bb.world or {}).get("last_belief") or None)
     return {
         "session_id": session.id,
         "goal": bb.goal,
@@ -881,6 +881,31 @@ async def initialize(session_id: int, body: InitializeBody,
     obs = await _observe(_session_browser_url(session), query)
     _persist(bb, ledger)
     return _view(session, bb, ledger, obs, page=bb.search_state.page or 1)
+
+
+def _freshest_snapshot(session_id: Any,
+                       cached: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """The Lens's snapshot, from whichever source is newest.
+
+    The blackboard's `last_belief` only updates on ladder/StepRunner turns — a controller drive
+    journals its captures instead, so after one the Lens showed a days-old visual as if it were
+    current (found 2026-08-10: snapshot from 08-06 after a morning of attended driving). The
+    journal is the display's source (§10): if it holds a fresher capture for this session, serve
+    that — belief omitted rather than faked, which the pane renders as "not measured"."""
+    from interaction import decision_journal
+    try:
+        rows = [r for r in decision_journal.read_rows(limit=200)
+                if str(r.get("session_id")) == str(session_id) and r.get("capture_screenshot")]
+        if not rows:
+            return cached
+        newest = rows[-1]
+        if cached and str(cached.get("ts") or "") >= str(newest.get("ts") or ""):
+            return cached
+        return {"url": newest.get("url", ""), "ts": newest.get("ts", ""), "belief": None,
+                "artifact": newest.get("capture_artifact"),
+                "screenshot_filename": newest.get("capture_screenshot")}
+    except Exception:  # noqa: BLE001 — the Lens is an aid; a read hiccup must not break the panel
+        return cached
 
 
 def _cache_belief(bb: Any, observation: Any) -> Optional[dict[str, Any]]:
