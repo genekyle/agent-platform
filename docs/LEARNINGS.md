@@ -5698,3 +5698,55 @@ worked perfectly while the action underneath it did not, which is the right way 
 Cockpit renders the true shape now: **Session → Search N → Page N**, with "Search something else"
 offered as a detour from read/choose/walked-out. Driven live: session #25 search 2, "data analytics"
 / Boston / 100mi, `provisioned` and `authenticated` still held, 22 results (14 new).
+
+## 2026-08-09 — The progress audit, and the refocus: the controller is the middle step, and the teacher is this session
+
+**Operator, returning after a burnout pause:** *"a lot of building and going no-where burnt me out
+for a while but i am looking to take a calculated next step… we've been so focused on the
+microsteps that we forgot about the product as a whole."* The audit that followed measured the
+feeling, and the feeling was correct.
+
+**The numbers.** 451 commits since April; July ran 45/65/108/93 commits per week. Against that:
+**zero trained model checkpoints exist anywhere in the repo** — the only artifacts are JSON count
+tables and a July Naive Bayes fit; the newest "training run" (08-04) fit 8 rows to 50% top-1 with a
+100% backoff rate; grounding sits at 0.0 on 5 approved bboxes. `training_captures` is flat: 271
+rows, **zero new since 07-30**, while the August drives that should have fed it produced 28
+`controller_turn` PNGs no row points at. `SESSION_02` — the plan's own declared keystone — has been
+the lowest-numbered unfinished brief since 07-17. `PROJECT_STATUS.md` went stale 07-22. The first
+real shadow-agreement numbers in the project's life arrived 08-06 (47% over 15 pairs, against a
+90%-over-25 promotion gate). The flywheel plan's own words held: *anything short of all six is
+infrastructure, not a revolution* — and none of the six held. "Don't build ahead of the wheel" was
+written 2026-07-16 and then violated for three straight weeks, mostly by the assistant; the log
+itself had counted the built-never-wired pattern to six.
+
+**The one healthy organ:** the transition corpus. 59 rows in 3 days, 117/117 screenshots present on
+disk, 10 teacher labels, the drive→row→review→label→train loop closed 08-04. Three months of
+building produced less usable training data than three days of driving.
+
+**And the operator's spot-check was right about the teacher's eyes.** The decision journal (117
+rows), intent journal (754), and orientation corpus (40) contain **zero image references between
+them**. Structural, not accidental: `Bundle` has no screenshot field, so `record_for` — the one
+choke point every decision passes through — has nothing to copy. `live_actuator.observe()` captures
+the PNG, feeds it to perception once, and orphans it. The teacher has been deciding on evidence the
+corpus never keeps.
+
+**The refocus (operator-directed).** The full revolution is re-sequenced, not abandoned — proven in
+steps, per transition. The **controller is the middle step and the priority, and legibility is its
+deliverable**: at every step it must gather and *display* everything the system knows at that
+moment — state, witnesses, beliefs, candidates, history, the screenshot. And the teacher rung is
+re-priced: **the teacher is literally the Claude session the operator already pays for** — *"not
+haiku and api calls but rather literally claude itself… use up all of the token usage in here first
+before we go to the api."* Attended drives escalate deterministic → session-Claude → (only then)
+API → human; Haiku is demoted to an unattended fallback behind a flag. A revolution on these terms:
+drive → controller decides or escalates to the teacher → everything journaled with full context →
+the teacher's corrections ARE the labels → training comes later, per transition, when volume
+exists. *"Let our system make mistakes but be there and correct it and learn from the mistakes"* —
+the mistake plus the correction is the training pair; a mistake nobody saw, or saw without its
+screenshot, is the event-log mistake again.
+
+**What this binds next:** screenshot refs into `Bundle`/`DecisionRecord` at the `record_for` seam;
+the attended-mode flag that routes escalation to the teacher inbox before any API rung; the cockpit
+pane that renders what the journal carries (the journal is the display's source — if the display
+can't show it, the corpus didn't keep it); and a truthful `PROJECT_STATUS.md` so the map matches
+the territory. The unit of success changes with it: **a session is measured by rows banked, not
+code written.**
