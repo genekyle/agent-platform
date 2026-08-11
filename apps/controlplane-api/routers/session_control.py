@@ -232,6 +232,31 @@ async def _observe(browser_url: str, query: str, *,
             "reachable": True}
 
 
+def _engine_page_tab(tabs: list[dict]) -> Optional[dict]:
+    """The engine's OWN page — results or search, whatever query it currently shows.
+
+    Not `_find_search_tab`, deliberately: that one is context-bound to THIS session's query
+    ("which tab PROVES our query ran") and rightly answers None the moment a new query is
+    declared. Typing the new query happens exactly where a human would type it — the engine tab
+    that already exists, showing the previous search. And not `_find_site_tab` either: its host
+    match accepts `smartapply.indeed.com`, which is an APPLICATION, and pointing the query rung
+    at it is how drive 2 scanned a screener for a search box (2026-08-10)."""
+    for t in tabs:
+        if engine_of_url(t.get("url", "") or "") is not None:
+            return t
+    return None
+
+
+def _navigable_tab(tabs: list[dict]) -> Optional[dict]:
+    """A tab that may be POINTED somewhere else without destroying work. Never an apply or errand
+    tab: a parked application lives in one, deliberately left open, and navigating it away is the
+    exact loss `parked` exists to prevent."""
+    for t in tabs:
+        if _win.classify_tab(t.get("url", "") or "") not in ("apply", "errand"):
+            return t
+    return None
+
+
 def _find_site_tab(tabs: list[dict], engine: Optional[dict] = None) -> Optional[dict]:
     """Any tab on a job engine — the fallback the auth probe uses when no results tab matches this
     session's query. Auth is a property of the SITE, not of the query, so a job-detail or home tab
@@ -514,6 +539,27 @@ def _resolve_next_action(step: Optional[Any],
                              "the observer's way out, offered with no disagreement to resolve."))
 
 
+def _parked_all(bb: Any, queue: aps.Queue) -> list[dict[str, Any]]:
+    """Every parked application the session still owes, slim rows for the panel: the current
+    queue's parked steps plus the survivors of finished searches (`world["parked_apps"]`).
+    Deduped by job_id with the current queue's record winning — it is the fresher fact."""
+    rows: dict[str, dict[str, Any]] = {}
+    for p in ((bb.world or {}).get("parked_apps") or []):
+        if p.get("job_id"):
+            rows[p["job_id"]] = {**p, "in_current_queue": False}
+    for s in queue.steps:
+        if (s.terminal or "").startswith("parked:"):
+            rows[s.job_id] = {"job_id": s.job_id, "title": s.title, "company": s.company,
+                              "platform": s.platform, "terminal": s.terminal,
+                              "terminal_detail": s.terminal_detail, "in_current_queue": True}
+    return [{"job_id": r.get("job_id"), "title": r.get("title"), "company": r.get("company"),
+             "platform": r.get("platform"), "terminal": r.get("terminal"),
+             "terminal_detail": r.get("terminal_detail"),
+             "from_search": r.get("from_search"), "from_page": r.get("from_page"),
+             "in_current_queue": bool(r.get("in_current_queue"))}
+            for r in rows.values()]
+
+
 def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, Any], *,
           page: int, results: Optional[list[dict]] = None,
           awaiting: Optional[str] = None, last: Optional[dict] = None,
@@ -600,6 +646,11 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # reasoner should never have to spend a drive answering.
         "applied_check": (bb.world or {}).get("applied_check"),
         "queue_summary": queue.summary(),
+        # EVERY parked application this session still owes — the current queue's parked steps
+        # plus the ones harvested when their search ended (`_reset_for_new_search`). Parked is
+        # attention for the whole session, not just for the search it happened in: the half-done
+        # application holds a real tab whichever query the ladder is walking now.
+        "parked": _parked_all(bb, queue),
         "awaiting": awaiting,
         # WHICH ATSes hide their form behind section bars. The panel needs this to know whether to
         # offer the section reader at all, and the declaration lives in apply_fields — so it is
@@ -817,14 +868,32 @@ _SEARCH_SCOPED_WORLD: tuple[str, ...] = (
 )
 
 
-def _reset_for_new_search(bb: Any) -> None:
+def _reset_for_new_search(bb: Any, *, leaving_search: Optional[int] = None) -> None:
     """Clear what belonged to the search we are leaving, and nothing else.
 
     The picks go too: `approved` is a list of job ids chosen off the OLD result set, and carrying
     them into a new search would offer the operator a queue built from results that are no longer
     on screen — the display-side contextual clobbering the cockpit rebuild exists to prevent.
+
+    PARKED APPLICATIONS SURVIVE THE SEARCH THEY PARKED IN. Dropping `apply_queue` wholesale
+    silently orphaned them: parked means "not now, come back" (a REAL half-finished application
+    holding a live tab), and the only handle to come back — the step record `apply_reopen` reads —
+    died with the queue. So the parked steps are harvested into the session-level `parked_apps`
+    before the queue goes. They render as attention, not as the focus: a parked application from
+    search 2 must not imprison search 3's surface (the arrest half of the 2026-08-10 audit), and
+    it must not vanish either (this harvest). `apply_reopen` resurrects from here into whatever
+    queue is current.
     """
-    bb.world = {k: v for k, v in (bb.world or {}).items() if k not in _SEARCH_SCOPED_WORLD}
+    world = dict(bb.world or {})
+    queue = aps.Queue.from_dict(world.get("apply_queue"))
+    survivors = {p.get("job_id"): p for p in (world.get("parked_apps") or []) if p.get("job_id")}
+    for s in queue.steps:
+        if (s.terminal or "").startswith("parked:"):
+            survivors[s.job_id] = {**s.as_dict(),
+                                   "from_search": leaving_search, "from_page": queue.page}
+    bb.world = {k: v for k, v in world.items() if k not in _SEARCH_SCOPED_WORLD}
+    if survivors:
+        bb.world["parked_apps"] = list(survivors.values())
     bb.search_state.approved = []
 
 
@@ -901,8 +970,9 @@ async def initialize(session_id: int, body: InitializeBody,
                 detail=(f"{in_flight.title or in_flight.job_id} is still open in this search — "
                         f"starting a new one would drop it silently. Finish it or flag it, then "
                         f"search again."))
+        leaving = ledger.search
         started_search = ledger.start_new_search()
-        _reset_for_new_search(bb)
+        _reset_for_new_search(bb, leaving_search=leaving)
         bb.log("new_search",
                f"search {started_search}: {spent!r} -> {query!r} (same session, still signed in)")
 
@@ -1443,7 +1513,12 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
             style = xs.pick_style()
             nav = await _capture_post("/navigate", {
                 "browser_url": browser_url, "url": engine["home"],
-                "tab_id": ((obs.get("tabs") or [{}])[0]).get("tab_id", ""),
+                # A tab that is SAFE to point somewhere else — the engine's own page first, then
+                # any non-apply tab. tabs[0] can be a parked application's tab, and navigating
+                # that to the engine home would destroy real half-finished work.
+                "tab_id": ((obs.get("search_tab") or _engine_page_tab(obs.get("tabs") or [])
+                            or _navigable_tab(obs.get("tabs") or [])
+                            or (obs.get("tabs") or [{}])[0]) or {}).get("tab_id", ""),
                 "settle_seconds": 3.0})
             await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
             if not nav.get("ok"):
@@ -1592,7 +1667,16 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
     import search_cadence
 
     query, location = bb.search_state.query, bb.search_state.location
-    tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
+    # THE ENGINE'S PAGE, never "the first tab". A session with a parked application keeps that
+    # application's tab open (deliberately), and it is frequently the window's frontmost — so
+    # tabs[0] pointed the query rung at a smartapply screener, which it scanned and honestly
+    # reported had no search box (live, drive 2, 2026-08-10: "67 elements scanned"). And
+    # `search_tab` alone is not enough: it is query-bound, so on a freshly declared NEW query it
+    # is rightly None while the engine's results page (previous query) sits open — the exact tab
+    # a human would type the new query into.
+    tabs = obs.get("tabs") or []
+    tab_id = ((obs.get("search_tab") or _engine_page_tab(tabs)
+               or (tabs or [{}])[0]) or {}).get("tab_id", "")
 
     async def _act(action_id: str, ctrl: dict, value: str = "") -> tuple[bool, str]:
         """One AX-addressed action. Returns (acted, detail).
@@ -3655,6 +3739,11 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     fields = _form_fields_from(candidates)
     rows = _fill_plan_for(bb, fields, db)
     summary = form_fill.summarise(rows)
+    # THE FORM AS IT STANDS, beside the plan. The plan only speaks to fields it recognises
+    # (form_fill.plan drops the rest by design), so "0 of 0 fields" rendered alike for an empty
+    # page and for a fully-answered screener the planner had no names for — the census is the
+    # scanner's own truth per required control, answered rows included.
+    census = await _form_census(browser_url, tab_id)
     # A plan over a shut accordion is an accurate summary of a page nobody opened. Carry the
     # caveat with the plan so "0 fields" and "0 fields, nine sections closed" cannot read alike.
     # Sections are checked against the OPEN application's platform — a platform with no declared
@@ -3668,9 +3757,11 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
                      last={"ok": True, "action": "apply_fill", "queue": queue.summary(),
                            "fill_plan": rows, "fill_summary": summary, "sections": sections,
+                           "form_scan": census,
                            "detail": f"Planned {summary['fillable']} of {summary['total']} fields. "
                                      + (f"Need your data for: {', '.join(summary['missing'])}. "
                                         if summary["missing"] else "Every field has a value. ")
+                                     + _census_story(census)
                                      + caveat})
 
     style = xs.pick_style()
@@ -3714,9 +3805,13 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     _save_queue(bb, queue)
     _persist(bb, ledger)
     obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    # Re-census AFTER the fill: the panel's form must show the page as the fill left it, not as
+    # the plan found it.
+    census = await _form_census(browser_url, tab_id) or census
     return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
                  last={"ok": not failed, "action": "apply_fill", "queue": queue.summary(),
                        "fill_plan": rows, "fill_summary": summary, "sections": sections,
+                       "form_scan": census,
                        "verification": _report.verification(),
                        "pace": xs.describe(style),
                        "detail": f"Filled {len(filled)} field(s) at {style.name} pace."
@@ -4396,6 +4491,9 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     #: shadow pair. Reported by the branch rather than parsed back out of its prose: a metric that
     #: depends on a detail string's wording breaks silently the first time somebody rewords it.
     _acted: dict[str, Any] = {}
+    #: Structured facts a rung wants the PANEL to carry beside its prose (`last.form_scan` from a
+    #: required-fields refusal). Reported, never parsed back out of the detail string.
+    _rung_extra: dict[str, Any] = {}
 
     if rung.id == "open_pane":
         ext = step.job_id.split(":", 1)[-1]
@@ -4681,7 +4779,8 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # cannot reach a submit control (the lexicons are deliberately separate), so the worst this
         # can do is move the application forward a page it was always going to move forward.
         detail = await _work_advance_rung(rung, step, bb, obs, browser_url, style,
-                                          initiator=body.initiator, acted=_acted)
+                                          initiator=body.initiator, acted=_acted,
+                                          out=_rung_extra)
 
     # --- STEPRUNNER, the after half: observe → diff → verify → settle. The rung's record above
     # is a claim; this is the world's answer. The verifier only DEMOTES a claimed ok — a rung
@@ -4740,6 +4839,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
 
     return await _save_queue_and_view(session, bb, ledger, queue, obs,
                                 ok=step.last_flag == aps.OK, detail=detail, pace=style,
+                                extra=_rung_extra or None,
                                 # The same look that judged the rung also feeds the orienter, so
                                 # the card the operator reads and the row the corpus keeps are
                                 # two renderings of ONE observation rather than two guesses.
@@ -4965,7 +5065,17 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
     view["last_step"]["taught"] = {"journaled": res.get("journaled"), "held": res.get("held"),
                                    "outcome": res.get("outcome"),
                                    "landed_state": res.get("landed_state"),
-                                   "verified": res.get("verified")}
+                                   "verified": res.get("verified"),
+                                   # The act's own account — a `no_option` select carries the
+                                   # option list it enumerated, a `describe` its reading. Dropping
+                                   # it forced the teacher to re-probe by hand for evidence the
+                                   # drive already fetched (2026-08-10 audit).
+                                   "detail": res.get("detail", ""),
+                                   "intent": body.intent, "field": (body.params or {}).get("field")}
+    # The form AS THE ACT LEFT IT. Without this the census vanished at the exact moment the
+    # operator most wants to re-check it (the response's last_step replaces the one that carried
+    # the scan) — and "did my answer take?" is the question a correction exists to answer.
+    view["last_step"]["form_scan"] = await _form_census(_session_browser_url(session), tab_id)
     return view
 
 
@@ -5121,13 +5231,18 @@ async def _refusal_text(browser_url: str, tab_url: str) -> str:
     return ""
 
 
-async def _unanswered_required(browser_url: str, tab_id: str) -> Optional[list[str]]:
-    """Required fields the page still wants, or None if we could not look.
+async def _form_census(browser_url: str, tab_id: str) -> Optional[dict[str, Any]]:
+    """The page's required form AS IT STANDS — unanswered AND answered — or None if we could
+    not look.
 
-    None and `[]` are different answers and the caller must not merge them: "the form is complete"
-    licenses an advance, "we could not check" does not. Same distinction the challenge pre-gate
-    draws between found-nothing and could-not-look.
+    This is the cockpit's "observe the form": the scanner has always computed every required
+    control's truth and then thrown the satisfied rows away, so the surface could render a count
+    but never the form — and an ANSWERED-but-wrong field (the "Are you an Active Employee → Yes"
+    near-self-withdrawal, 2026-08-10) was invisible by construction. Previews pass through the
+    journal's own field-aware redaction: a secret-named field's value never reaches the panel
+    (§4), a screener answer stays readable for the human judging it.
     """
+    from interaction.contract import redact
     try:
         scan = await _capture_post("/scan_required",
                                    {"browser_url": browser_url, "tab_id": tab_id}, timeout=25.0)
@@ -5135,17 +5250,69 @@ async def _unanswered_required(browser_url: str, tab_id: str) -> Optional[list[s
         return None
     if not scan or scan.get("ok") is False:
         return None
+
+    def _rows(key: str) -> list[dict[str, Any]]:
+        out = []
+        for row in (scan.get(key) or []):
+            field = str(row.get("field") or "").strip()
+            if not field:
+                continue
+            out.append({"field": field[:90], "kind": row.get("kind") or "",
+                        "answered": bool(row.get("answered")), "valid": row.get("valid", True),
+                        "value_preview": redact(str(row.get("value_preview") or ""), field=field),
+                        "options": list(row.get("options") or []) or None})
+        return out
+
+    return {"unanswered": _rows("unanswered"), "answered": _rows("answered"),
+            "url": (scan.get("steps") or [{}])[0].get("url") or ""}
+
+
+def _census_story(census: Optional[dict[str, Any]]) -> str:
+    """One honest sentence about the form as scanned — "" when we could not look.
+
+    Exists so an empty fill PLAN cannot masquerade as an empty PAGE: "Planned 0 of 0" beside
+    "8 required fields, all answered" are two different mornings, and the panel showed them
+    as one (2026-08-10)."""
+    if not census:
+        return ""
+    answered, unanswered = len(census["answered"]), len(census["unanswered"])
+    if not answered and not unanswered:
+        return "The page shows no required form fields. "
+    if not unanswered:
+        return (f"The page's own required form: all {answered} field(s) answered — "
+                f"review them below before advancing. ")
+    return (f"The page's own required form: {unanswered} unanswered, {answered} answered. ")
+
+
+async def _unanswered_required(browser_url: str, tab_id: str,
+                               census_out: Optional[dict[str, Any]] = None) -> Optional[list[str]]:
+    """Required fields the page still wants, or None if we could not look.
+
+    None and `[]` are different answers and the caller must not merge them: "the form is complete"
+    licenses an advance, "we could not check" does not. Same distinction the challenge pre-gate
+    draws between found-nothing and could-not-look.
+
+    `census_out`, when given, receives the full form census from the SAME look — the refusal this
+    feeds must carry the form it refused over, not a count of it (a refusal that names the fix in
+    prose is the cockpit gap of 2026-08-10).
+    """
+    census = await _form_census(browser_url, tab_id)
+    if census is None:
+        return None
+    if census_out is not None:
+        census_out["form_scan"] = census
     out: list[str] = []
-    for row in (scan.get("unanswered") or []):
-        label = str(row.get("field") or "").strip()
-        if label and len(label) <= 60:
+    for row in census["unanswered"]:
+        label = row["field"][:60] if len(row["field"]) <= 60 else ""
+        if label:
             out.append(label)
     return out
 
 
 async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
                              browser_url: str, style: Any, *, initiator: str,
-                             acted: Optional[dict[str, Any]] = None) -> str:
+                             acted: Optional[dict[str, Any]] = None,
+                             out: Optional[dict[str, Any]] = None) -> str:
     """Advance the application ONE SCREEN with the page's own control. Reversible, always.
 
     Two refusals, both deliberate:
@@ -5180,7 +5347,7 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
     # The cost is one scan per advance; the benefit is that no screen on any platform gets a
     # Continue clicked over an answer nobody chose to leave out. And a screen with nothing required
     # returns `[]` immediately, which is the common case and cheap.
-    pending = await _unanswered_required(browser_url, tab_id)
+    pending = await _unanswered_required(browser_url, tab_id, census_out=out)
     if pending is None:
         step.record(rung.id, aps.UNKNOWN,
                     "could not scan the form for required fields", initiator=initiator)
@@ -5190,6 +5357,9 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
         step.record(rung.id, aps.HUMAN_REQUIRED,
                     f"{len(pending)} required field(s) unanswered: {', '.join(pending[:6])}",
                     initiator=initiator)
+        # The census this refusal was made FROM rides `out` into the panel (`last.form_scan`),
+        # so the cockpit renders the fields as pressable work instead of prose pointing at an
+        # endpoint it never shows (the 2026-08-10 audit's core finding).
         return (f"This screen still wants {len(pending)} answer(s) — "
                 f"{', '.join(pending[:6])}"
                 + ("…" if len(pending) > 6 else "")
@@ -5500,7 +5670,8 @@ def _depth_phrase(progress: dict[str, Any]) -> str:
 async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok: bool,
                                detail: str, pace=None,
                                verification: Optional[dict[str, Any]] = None,
-                               belief: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                               belief: Optional[dict[str, Any]] = None,
+                               extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Persist, then render — WITH a fresh observation. Async so the observer fires on every
     apply-step render, not only on the poll: the moment after an action is exactly when the world
     is most likely to have moved (operator-directed 2026-07-30)."""
@@ -5515,6 +5686,11 @@ async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok
         last["verification"] = verification
     if pace is not None:
         last["pace"] = xs.describe(pace)
+    if extra:
+        # A rung's structured facts (a refusal's `form_scan`), carried beside the prose so the
+        # panel can render the work instead of describing it. Reserved keys stay the panel's own.
+        last.update({k: v for k, v in extra.items()
+                     if k not in ("ok", "action", "detail", "queue")})
     observer = await _orient_now(bb, obs, _session_browser_url(session), belief=belief)
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
                  awaiting="apply", last=last, observer=observer)
@@ -5804,8 +5980,24 @@ async def apply_reopen(session_id: int, body: ApplyReopenBody,
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
     step = next((s for s in queue.steps if s.job_id == body.job_id), None)
     if step is None:
-        raise HTTPException(status_code=404,
-                            detail=f"{body.job_id} is not in this page's apply queue.")
+        # A SURVIVOR OF A FINISHED SEARCH. Its search's queue is gone (`_reset_for_new_search`
+        # harvested it into `parked_apps`), but parked means "not now", never "not reachable" —
+        # stepping back in resurrects it into whatever queue is current, where the ladder
+        # re-walks it exactly like a same-search reopen.
+        world = dict(bb.world or {})
+        survivors = list(world.get("parked_apps") or [])
+        held = next((p for p in survivors if p.get("job_id") == body.job_id), None)
+        if held is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{body.job_id} is not in this page's apply queue, nor parked from an "
+                       f"earlier search in this session.")
+        step = aps.ApplyStep.from_dict(
+            {k: v for k, v in held.items() if k not in ("from_search", "from_page",
+                                                        "in_current_queue")})
+        queue.steps.append(step)
+        world["parked_apps"] = [p for p in survivors if p.get("job_id") != body.job_id]
+        bb.world = world
     try:
         step.reopen(body.reason, initiator=body.initiator)
     except ValueError as exc:

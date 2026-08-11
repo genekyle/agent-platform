@@ -230,7 +230,12 @@ class LiveActuator:
         url = auth.get("url") or self._last_url or ""
         page_text = str(auth.get("page_text") or "")
         raw = scan.get("unanswered") or []
-        self._last_scan = raw
+        # ADDRESSING KNOWS THE WHOLE FORM, not just the blockers. `_address`'s scan fallback used
+        # to see only the unanswered rows, so an ANSWERED field was structurally unaddressable —
+        # and re-answering an answered-but-WRONG field is precisely the correction the census
+        # surfaces (the sponsorship "Yes" caught live 2026-08-10, same class as the Active
+        # Employee near-withdrawal). The bundle's unanswered view below stays as it was.
+        self._last_scan = raw + (scan.get("answered") or [])
 
         # A URL CHANGE IS A NEW VIEW. It restarts the page's age and discards the unsaved-work
         # flag: whatever we typed belonged to the page we just left, and carrying the flag
@@ -613,7 +618,9 @@ class LiveActuator:
         if scan.get("ok") is False:
             return identities, None          # unknown, not zero — zero would read as "complete"
         rows = scan.get("unanswered") or []
-        self._last_scan = rows               # act() addresses off the freshest scan
+        # Answered rows included for the same reason as in observe(): the freshest scan is the
+        # address book, and a correction addresses a field that is already answered.
+        self._last_scan = rows + (scan.get("answered") or [])
         return identities, len(rows)
 
     def _current_state(self, *, changed_from: Optional[str] = None) -> Optional[str]:
