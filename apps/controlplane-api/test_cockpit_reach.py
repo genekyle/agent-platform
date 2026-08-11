@@ -251,3 +251,81 @@ def test_a_taught_act_returns_its_own_account(monkeypatch):
     assert taught["detail"].endswith("Job Board, Referral, Other")
     assert taught["intent"] == "select_option"
     assert taught["field"] == "How did you hear about us?"
+
+
+# --- the cleanup protocol -----------------------------------------------------------------------
+
+def test_close_out_refuses_silently_discarding_work(monkeypatch):
+    """Half-finished applications never die silently: without confirm_discards_work the close-out
+    409s and NAMES them — the clean-start rule, applied to the session's whole life."""
+    bb = _at_start_line()
+    bb.world["apply_queue"] = _parked_queue().as_dict()
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/close_out", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    assert "Continuous Improvement Engineer" in r.json()["detail"]
+
+
+def test_close_out_flags_the_work_and_reports_everything(monkeypatch):
+    """Confirmed close-out: parked and in-flight steps end abandoned WITH the reason, the
+    session-level parked survivors clear, and the report says what happened — while the Chrome
+    stop path is exercised through the one seam that knows how."""
+    import main as main_mod
+
+    bb = _at_start_line()
+    q = _parked_queue()
+    q.enqueue([{"job_id": "indeed:open1", "title": "Open One"}])   # an in-flight one too
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["parked_apps"] = [{"job_id": "indeed:old", "title": "Old Survivor",
+                                "terminal": aps.PARKED_OPERATOR, "from_search": 1}]
+    stopped = {}
+
+    def _fake_stop(session_id, force=False, db=None):
+        stopped["id"] = session_id
+        return None
+
+    monkeypatch.setattr(main_mod, "stop_training_session", _fake_stop)
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/close_out",
+                        json={"confirm_discards_work": True,
+                              "reason": "tabs mixed old work into the new search"})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["closed"] is True
+    assert stopped["id"] == 1
+    assert {d["job_id"] for d in body["discarded"]} == {"indeed:nhbb", "indeed:open1",
+                                                        "indeed:old"}
+    back = aps.Queue.from_dict(saved["bb"].world["apply_queue"])
+    assert all(s.terminal == aps.ABANDONED_OPERATOR for s in back.steps)
+    assert "tabs mixed old work" in back.steps[0].terminal_detail
+    assert saved["bb"].world.get("parked_apps") is None
+    assert body["profile_kept"] is not None or body["chrome"]["stopped"]
+
+
+def test_close_out_of_a_clean_session_needs_no_confirmation(monkeypatch):
+    import main as main_mod
+    monkeypatch.setattr(main_mod, "stop_training_session",
+                        lambda session_id, force=False, db=None: None)
+    bb = _at_start_line()
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/close_out", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    assert r.json()["discarded"] == []

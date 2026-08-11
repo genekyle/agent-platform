@@ -6016,6 +6016,117 @@ async def apply_reopen(session_id: int, body: ApplyReopenBody,
                                   + (f"Now working: {nxt.title or nxt.job_id}." if nxt else ""))})
 
 
+class CloseOutBody(BaseModel):
+    initiator: str = "operator"
+    #: Required when closing would discard real half-finished work (in-flight or parked
+    #: applications) — the clean-start pattern: nothing that may hold somebody's application
+    #: dies silently.
+    confirm_discards_work: bool = False
+    reason: str = ""
+
+
+@router.post("/api/session_control/{session_id}/close_out")
+async def close_out(session_id: int, body: CloseOutBody,
+                    db: Session = Depends(get_db)) -> dict[str, Any]:
+    """THE CLEANUP PROTOCOL — end a session completely, on the record, in one press.
+
+    Born from the 2026-08-10 tab mess: a parked application's tab deliberately outlived its
+    search, got stepped back into a NEW search's queue, and old work bled into new. The missing
+    verb was a truthful CLOSE: before this, "ending a session" meant a Chrome stop that left the
+    ledger holding half-finished applications, open Search rows, a stale drive latch — state that
+    ambushed the next session.
+
+    What it does, in order, all reported:
+      1. Surveys the window (what tabs were open rides the report).
+      2. Refuses without `confirm_discards_work` when in-flight/parked applications would die —
+         listing them by name, the same rule `clean_start` enforces.
+      3. Flags every unfinished application `abandoned:operator` with the close-out reason —
+         parked means "not now", and closing the session is the operator saying "not ever, not
+         here"; the detail string keeps the truth distinguishable from a seen-and-rejected.
+      4. Closes the session's ACTIVE Search rows (`abandoned`) — findings keep their provenance.
+      5. Releases the drive latch when this session holds it.
+      6. Stops the session's Chrome through the training-session stop (protected sessions still
+         refuse without force there).
+      7. KEEPS the persistent profile — the sign-in is the session's whole savings account, and
+         cleanup must never log us out.
+    """
+    from models import Search as SearchRow
+    from sqlalchemy import select
+
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+
+    dying: list[dict[str, Any]] = []
+    for s in queue.steps:
+        if not s.done or (s.terminal or "").startswith("parked:"):
+            dying.append({"job_id": s.job_id, "title": s.title, "company": s.company,
+                          "state": "in flight" if not s.done else s.terminal})
+    seen_dying = {d["job_id"] for d in dying}
+    for p in ((bb.world or {}).get("parked_apps") or []):
+        if p.get("job_id") and p["job_id"] not in seen_dying:
+            dying.append({"job_id": p["job_id"], "title": p.get("title"),
+                          "company": p.get("company"), "state": p.get("terminal") or "parked"})
+
+    if dying and not body.confirm_discards_work:
+        raise HTTPException(
+            status_code=409,
+            detail=("Closing this session discards "
+                    + ", ".join(f"{d['title'] or d['job_id']} ({d['state']})" for d in dying)
+                    + ". Say so explicitly (confirm_discards_work) — half-finished applications "
+                      "do not die silently."))
+
+    why = body.reason.strip() or "session closed out"
+    for s in queue.steps:
+        if not s.done or (s.terminal or "").startswith("parked:"):
+            s.finish(aps.ABANDONED_OPERATOR, f"closed out with the session — {why}")
+    world = dict(bb.world or {})
+    world["apply_queue"] = queue.as_dict()
+    world.pop("parked_apps", None)
+    bb.world = world
+
+    searches_closed = 0
+    for row in db.scalars(select(SearchRow).where(SearchRow.session_id == session_id,
+                                                  SearchRow.status == "active")).all():
+        row.status = "abandoned"
+        searches_closed += 1
+
+    import drive_lock as drive_lock_mod
+    lock = drive_lock_mod.state()
+    lock_released = False
+    if lock.get("locked") and str(session_id) in str(lock.get("holder") or ""):
+        drive_lock_mod.release()
+        lock_released = True
+
+    bb.log("close_out", f"session closed out by {body.initiator} — {why}; "
+                        f"{len(dying)} application(s) discarded, {searches_closed} search(es) closed")
+    _persist(bb, ledger)
+    db.commit()
+
+    # The Chrome stop, through the one seam that already knows how (protected checks included).
+    # `import main` at call time resolves the loaded module — main imports this router at boot,
+    # so a top-level import would be circular.
+    import main as main_mod
+    chrome = {"stopped": False, "detail": ""}
+    try:
+        main_mod.stop_training_session(session_id, force=False, db=db)
+        chrome = {"stopped": True, "detail": "session Chrome stopped"}
+    except HTTPException as exc:
+        chrome = {"stopped": False, "detail": str(exc.detail)}
+
+    return {"ok": True, "closed": True, "session_id": session_id,
+            "discarded": dying, "searches_closed": searches_closed,
+            "lock_released": lock_released, "chrome": chrome,
+            "profile_kept": getattr(session, "persistent_profile", None),
+            "tabs_at_close": [(t.get("url") or "")[:120] for t in (obs.get("tabs") or [])],
+            "detail": (f"Closed out. {len(dying)} application(s) discarded on the record, "
+                       f"{searches_closed} search(es) closed, Chrome "
+                       + ("stopped" if chrome["stopped"] else f"NOT stopped — {chrome['detail']}")
+                       + ". The signed-in profile is kept.")}
+
+
 # --- the clean start: provisioning through the tab manager ------------------------------------
 def _fresh_start_plan(obs: dict[str, Any]) -> dict[str, Any]:
     """What this window would have to close to be a clean start, via `controller.window` — the
