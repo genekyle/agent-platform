@@ -921,3 +921,32 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
   font: inherit;
   color: inherit;
 }
+
+/* --- the window strip: every tab, its role, and whose application it is ------------------- */
+.window-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  margin: 8px 0 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.window-strip__label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-subtle); font-size: 11px; }
+.window-strip__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.window-strip__tab code { font-size: 11px; }
+.window-strip__tab em { color: var(--text-subtle); font-style: normal; font-size: 11px; }
+.window-strip__note { color: var(--text-subtle); font-size: 11px; }
+.window-strip__confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.window-strip__confirm em { color: var(--warn, #b58a3c); font-size: 11px; }

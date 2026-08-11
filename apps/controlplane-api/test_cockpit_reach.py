@@ -329,3 +329,51 @@ def test_close_out_of_a_clean_session_needs_no_confirmation(monkeypatch):
         _teardown()
     assert r.status_code == 200
     assert r.json()["discarded"] == []
+
+
+# --- tab claims: the window knows whose tab each is ---------------------------------------------
+
+def test_tab_claims_survive_the_step_and_cleanup_closes_them(monkeypatch):
+    """A tab watched appearing during an application is claimed by it durably — the census dies
+    with the step, the claim does not — and the application's terminal cleanup closes every tab
+    it still claims (operator, 2026-08-10: associate tabs to the task so finishing it knows
+    exactly what to clean)."""
+    import asyncio
+
+    bb = _at_start_line()
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:j1", "title": "One"}])
+    step = q.steps[0]
+
+    # Crank 1: baseline census (search tab only), then the ATS tab appears on crank 2.
+    sc._note_tab_drift(bb, {"tabs": [{"tab_id": "T-search", "url": "https://www.indeed.com/jobs?q=x"}]}, step)
+    sc._note_tab_drift(bb, {"tabs": [
+        {"tab_id": "T-search", "url": "https://www.indeed.com/jobs?q=x"},
+        {"tab_id": "T-ats", "url": "https://careers.example.com/apply/1"}]}, step)
+    assert bb.world["tab_claims"]["T-ats"]["job_id"] == "indeed:j1"
+
+    # The queue moves on (census re-keys to another job); the claim survives.
+    other = aps.ApplyStep(job_id="indeed:j2", title="Two")
+    sc._note_tab_drift(bb, {"tabs": [
+        {"tab_id": "T-search", "url": "https://www.indeed.com/jobs?q=x"},
+        {"tab_id": "T-ats", "url": "https://careers.example.com/apply/1"}]}, other)
+    assert bb.world["tab_claims"]["T-ats"]["job_id"] == "indeed:j1"
+
+    # j1 finishes: cleanup closes the claimed tab (never the search tab) and drops the claim.
+    closed_calls = []
+
+    async def _fake_post(path, payload, timeout=30.0):
+        if path == "/close_tab":
+            closed_calls.append(payload["tab_id"])
+            return {"ok": True}
+        return {"ok": True, "tabs": []}
+
+    monkeypatch.setattr(sc, "_capture_post", _fake_post)
+    step.finish(aps.SUBMITTED, "test")
+    obs = {"tabs": [{"tab_id": "T-search", "url": "https://www.indeed.com/jobs?q=x"},
+                    {"tab_id": "T-ats", "url": "https://careers.example.com/apply/1"}],
+           "search_tab": {"tab_id": "T-search", "url": "https://www.indeed.com/jobs?q=x"}}
+    report = asyncio.run(sc._apply_cleanup(bb, obs, "http://127.0.0.1:9222", step))
+    assert "T-ats" in closed_calls and "T-search" not in closed_calls
+    assert "T-ats" not in bb.world["tab_claims"]
+    assert any(c["tab_id"] == "T-ats" for c in report["closed"])

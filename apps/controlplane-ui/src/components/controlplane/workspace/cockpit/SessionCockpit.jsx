@@ -6,6 +6,7 @@ import { WorkSurface } from "./WorkSurface";
 import { NowContext, NowPath } from "./NowContext";
 import TeacherParks from "./TeacherParks";
 import CloseOut from "./CloseOut";
+import WindowStrip from "./WindowStrip";
 import "./cockpit.css";
 
 // ONE SESSION'S COCKPIT — the keyed composition root.
@@ -213,6 +214,11 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
           cockpit open (2026-08-10 audit). */}
       <TeacherParks parks={parks} sessionId={sessionId}
                     onAnswered={() => { settleUntilRef.current = Date.now() + SETTLE_WINDOW_MS; }} />
+
+      {/* THE WINDOW — every tab, its role, and whose application it is. Most valuable exactly
+          when the apply stage is hopping across sites and the window is changing under us. */}
+      <WindowStrip sessionId={sessionId} panel={p}
+                   onActed={() => { settleUntilRef.current = Date.now() + SETTLE_WINDOW_MS; load(); }} />
 
       {/* PARKED, SESSION-WIDE — the applications this session still owes, wherever their search
           went. A parked app from an earlier search has no page group in the current path, so

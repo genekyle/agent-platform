@@ -613,7 +613,11 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
                   "title": tb.get("title", ""),
                   "role": _win.classify_tab(tb.get("url", "")),
                   "is_search": bool((obs.get("search_tab") or {}).get("tab_id") == tb.get("tab_id")),
-                  "is_apply": bool(_apply_tab(bb, obs).get("tab_id") == tb.get("tab_id"))}
+                  "is_apply": bool(_apply_tab(bb, obs).get("tab_id") == tb.get("tab_id")),
+                  # WHOSE tab this is — the durable claim written while its application was being
+                  # worked. The window stops being anonymous: a leftover ATS tab names the job it
+                  # belonged to, which is what lets cleanup (and the operator) act on it safely.
+                  "claimed_by": ((bb.world or {}).get("tab_claims") or {}).get(tb.get("tab_id"))}
                  for tb in (obs.get("tabs") or [])],
         "results": results if results is not None else (bb.world or {}).get("page_results", []),
         "picks": list(ss.approved or []),
@@ -4421,11 +4425,26 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                 step.finish(aps.SUBMITTED,
                             f"confirmed by {tail_view['state']} at {read['url'][:90]}")
                 _save_queue(bb, queue)
+                # THE SAME EPILOGUE AS EVERY OTHER TERMINAL, in the same order: record before
+                # close, then the cleanup crew. This branch used to finish the step and walk away
+                # — no durable Application row (the applied-index stayed blind to the commonest
+                # success path) and the application's tabs left standing, which is precisely the
+                # old-work-into-new-search mixing of 2026-08-10.
+                recorded = _record_outcome(db, step, ats_url=read["url"],
+                                           search_id=(bb.world or {}).get("search_id"))
+                cleanup = await _apply_cleanup(bb, obs, browser_url, step)
+                bb.world.pop("apply_tab", None)
+                _persist(bb, ledger)
+                obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+                tidied = sum(1 for c in cleanup["closed"] if c["ok"])
                 return await _save_queue_and_view(
-                    session, bb, ledger, queue, obs, ok=True,
+                    session, bb, ledger, queue, obs2, ok=True,
+                    extra={"cleanup": cleanup, "recorded": recorded},
                     detail=(f"Confirmed sent — the page reached {tail_view['state']}. Recorded as "
                             f"submitted for {step.title or step.job_id}"
-                            + (f" at {step.company}." if step.company else ".")))
+                            + (f" at {step.company}." if step.company else ".")
+                            + (f" Closed {tidied} finished tab(s); back on the search."
+                               if tidied else "")))
 
             found = aps.tail_rung_for(step.platform, tail_view["state"])
             if found is not None:
@@ -4773,6 +4792,21 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         else:
             _ok, detail = await _work_submit_rung(step, bb, obs, browser_url, style,
                                                   initiator=body.initiator, acted=_acted)
+            if _ok and step.terminal == aps.SUBMITTED:
+                # THE SAME EPILOGUE AS EVERY OTHER TERMINAL — record before close, then the
+                # cleanup crew. The gate's own success path was the third seam that finished a
+                # step and walked away (found live minutes after wiring the second: application
+                # #1 submitted and its post-app tab stood open, still claimed, while the queue
+                # moved on — the exact leftover the operator's tab-cleanup mandate names).
+                obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+                _rung_extra["recorded"] = _record_outcome(
+                    db, step, ats_url=_apply_tab(bb, obs).get("url", ""),
+                    search_id=(bb.world or {}).get("search_id"))
+                _rung_extra["cleanup"] = await _apply_cleanup(bb, obs, browser_url, step)
+                bb.world.pop("apply_tab", None)
+                tidied = sum(1 for c in _rung_extra["cleanup"]["closed"] if c["ok"])
+                if tidied:
+                    detail += f" Closed {tidied} finished tab(s); back on the search."
 
     else:
         # A TAIL RUNG: advance this screen by one. Reversible by construction — `advance_control`
@@ -5258,6 +5292,7 @@ async def _form_census(browser_url: str, tab_id: str) -> Optional[dict[str, Any]
             if not field:
                 continue
             out.append({"field": field[:90], "kind": row.get("kind") or "",
+                        "required_via": row.get("required_via") or "",
                         "answered": bool(row.get("answered")), "valid": row.get("valid", True),
                         "value_preview": redact(str(row.get("value_preview") or ""), field=field),
                         "options": list(row.get("options") or []) or None})
@@ -5303,6 +5338,11 @@ async def _unanswered_required(browser_url: str, tab_id: str,
         census_out["form_scan"] = census
     out: list[str] = []
     for row in census["unanswered"]:
+        # VOLUNTARY groups (required_via 'none' — the unstarred EEO radios) are in the census so
+        # they can be SEEN and TAUGHT, but they must not block an advance: the gate's contract
+        # stays "required fields only".
+        if row.get("required_via") == "none":
+            continue
         label = row["field"][:60] if len(row["field"]) <= 60 else ""
         if label:
             out.append(label)
@@ -5877,6 +5917,20 @@ def _note_tab_drift(bb: Any, obs: dict[str, Any], step: aps.ApplyStep) -> dict[s
     bb.world = dict(bb.world or {})
     bb.world["apply_tab_census"] = {"job_id": step.job_id, "tabs": live, "opened": opened}
 
+    # THE DURABLE CLAIM: which APPLICATION each tab belongs to, surviving queue turnover. The
+    # census above is keyed to the CURRENT job — the moment the queue moves on, a leftover tab
+    # loses its association and nobody can say whose it was (operator, 2026-08-10: tabs must be
+    # associated with the task so a finished application knows exactly what to clean). Claims
+    # accrue when a step's own drift watches a tab appear; they drop when the tab vanishes,
+    # whoever closed it.
+    claims = dict(bb.world.get("tab_claims") or {})
+    for a in appeared:
+        claims.setdefault(a["tab_id"], {"job_id": step.job_id, "url": a["url"],
+                                        "title": step.title or ""})
+    for tid in [k for k in claims if k not in live]:
+        claims.pop(tid, None)
+    bb.world["tab_claims"] = claims
+
     drift = {"appeared": appeared, "vanished": vanished, "count": len(live),
              "baseline": bool(same_step), "opened_by_this_step": opened}
     if appeared or vanished:
@@ -5935,6 +5989,22 @@ async def _apply_cleanup(bb: Any, obs: dict[str, Any], browser_url: str,
                     and tid != (obs.get("search_tab") or {}).get("tab_id"):
                 await _close(tid, by_id[tid], f"a doorway this step opened on the way to the ATS")
         bb.world.pop("apply_tab_census", None)
+
+    # THE DURABLE CLAIMS, same warrant across time: a tab this application was WATCHED opening is
+    # its to close even if the queue has since moved on and back (the census above dies with the
+    # step; claims survive). Every claim this job holds is closed here and dropped either way —
+    # closed tabs are gone, and a claim on a vanished tab is bookkeeping debt.
+    claims = dict((bb.world or {}).get("tab_claims") or {})
+    by_id_live = {t.get("tab_id"): t.get("url", "") for t in tabs}
+    for tid, claim in list(claims.items()):
+        if claim.get("job_id") != step.job_id:
+            continue
+        if tid in by_id_live and tid not in {c["tab_id"] for c in closed} \
+                and tid != (obs.get("search_tab") or {}).get("tab_id"):
+            await _close(tid, by_id_live[tid],
+                         f"claimed by {step.job_id} while it was being worked")
+        claims.pop(tid, None)
+    bb.world["tab_claims"] = claims
 
     # Whatever else the window manager would retire anyway — blanks, exact duplicates, orphaned
     # duplicate apply flows. Its four rails (never the active tab, the last tab, an UNKNOWN role,
@@ -6014,6 +6084,75 @@ async def apply_reopen(session_id: int, body: ApplyReopenBody,
                        "detail": (f"{step.title or body.job_id} is back in the queue and the "
                                   f"ladder restarts at the top. "
                                   + (f"Now working: {nxt.title or nxt.job_id}." if nxt else ""))})
+
+
+class CloseTabBody(BaseModel):
+    tab_id: str
+    initiator: str = "operator"
+    #: Required when the tab is claimed by an UNFINISHED application, or is the apply tab of the
+    #: step being worked — closing live work needs saying so.
+    confirm_discards_work: bool = False
+    reason: str = ""
+
+
+@router.post("/api/session_control/{session_id}/close_tab")
+async def close_tab(session_id: int, body: CloseTabBody,
+                    db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Close ONE tab from the cockpit's window panel — guarded, recorded, never the search tab.
+
+    The window panel's per-tab verb (operator, 2026-08-10: the cockpit must surface the tab
+    manager, especially on out-of-Indeed applications). Guards, in order: the search tab is never
+    closable from here (it is the session's spine — walking away from a search is `initialize` or
+    `close_out`, both on the record); a tab claimed by an application still OPEN in the queue
+    needs `confirm_discards_work`; everything else closes with the reason logged.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+
+    if body.tab_id == (obs.get("search_tab") or {}).get("tab_id"):
+        raise HTTPException(status_code=409,
+                            detail="That is the search tab — the session's spine. End the search "
+                                   "with a new declare or the session with close-out; neither "
+                                   "happens by closing its tab.")
+    live = {t.get("tab_id"): t.get("url", "") for t in (obs.get("tabs") or [])}
+    if body.tab_id not in live:
+        raise HTTPException(status_code=404, detail="That tab is no longer open.")
+
+    claims = dict((bb.world or {}).get("tab_claims") or {})
+    claim = claims.get(body.tab_id)
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    holder = next((s for s in queue.steps if claim and s.job_id == claim.get("job_id")), None)
+    apply_tab_id = _apply_tab(bb, obs).get("tab_id")
+    holds_live_work = (holder is not None and not holder.done) \
+        or (body.tab_id == apply_tab_id and queue.current() is not None)
+    if holds_live_work and not body.confirm_discards_work:
+        who = (holder.title or holder.job_id) if holder else "the application being worked"
+        raise HTTPException(
+            status_code=409,
+            detail=f"That tab belongs to {who}, which is still open — closing it can lose "
+                   f"filled-in work. Say so explicitly (confirm_discards_work), or flag the "
+                   f"application first.")
+
+    res = await _capture_post("/close_tab", {
+        "browser_url": browser_url, "tab_id": body.tab_id,
+        "focus_tab_url": (obs.get("search_tab") or {}).get("url") or "indeed.com/jobs"})
+    if not res.get("ok"):
+        raise HTTPException(status_code=502,
+                            detail=f"The tab did not close: {res.get('detail', 'no reason given')}")
+    claims.pop(body.tab_id, None)
+    bb.world = dict(bb.world or {})
+    bb.world["tab_claims"] = claims
+    bb.log("close_tab", f"operator closed tab {body.tab_id[:8]} ({live[body.tab_id][:80]})"
+                        + (f" — {body.reason}" if body.reason else ""))
+    _persist(bb, ledger)
+    obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
+                 last={"ok": True, "action": "close_tab",
+                       "detail": f"Closed {live[body.tab_id][:80]}"
+                                 + (f" (was claimed by {claim.get('title') or claim.get('job_id')})"
+                                    if claim else "")})
 
 
 class CloseOutBody(BaseModel):

@@ -205,6 +205,7 @@
   "POST /api/session_control/{session_id}/choose",
   "POST /api/session_control/{session_id}/clean_start",
   "POST /api/session_control/{session_id}/close_out",
+  "POST /api/session_control/{session_id}/close_tab",
   "POST /api/session_control/{session_id}/initialize",
   "POST /api/session_control/{session_id}/login_action",
   "POST /api/session_control/{session_id}/observe/start",

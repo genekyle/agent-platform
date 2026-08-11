@@ -6105,3 +6105,54 @@ titled action (WorkSurface, census, teach, parks, fill, close-out, start). The t
 the pick pause. Picks are the operator's consent; the cadence after them is drive-to-submitted
 through the cockpit (gate pressed as operator under that consent), captcha/2FA still absolute
 stops, teacher fixing both sides mid-flight.
+
+## 2026-08-11 — Two applications submitted through the cockpit alone: the census catches what autofill invents, every terminal gets the cleanup crew, and the window stops being anonymous
+
+The picked-applications drive, operator-consented at the pick, driven and taught entirely from
+the cockpit. **Two real submissions confirmed by the platform's own terminal state** (Clinical
+Reporting Analyst · Charles River Community Health; Accountant Analyst · Next Deavor), five picks
+queued behind them.
+
+**The census catches what the autofill invents — again, worse.** The blind yes-bias's newest
+shape: "Conversational/Intermediate" claimed in Spanish, Portuguese AND Haitian Creole *in a
+clinical setting* — three middle-option picks with zero basis, on a health-center application.
+Corrected to "Cannot speak this language" through the teach seam, each with its why. The rule the
+drive keeps proving: an autofill answer is a CLAIM about the operator, and the census is where
+claims meet the person they are about.
+
+**Two scanner blind spots, both rooted:**
+* **The star-cap bug.** `groupLabel` sliced to 160 chars BEFORE testing for the required '*', so
+  a long question (CRCH's family-members question, star at ~280 chars) read as optional and
+  vanished — while the page's own "Choose an option to continue." blocked the advance. Detection
+  now runs on the full text; the cap is display-only.
+* **Voluntary is not invisible.** The CC-305 disability self-ID carries no star (it is
+  voluntary), yet smartapply refuses Continue until every EEO group holds an explicit choice —
+  and a group the census cannot see is a group the teach seam cannot address (`_last_scan` is
+  the actuator's address book). Unchecked voluntary groups now file with `required_via: none`:
+  visible, teachable, badged "voluntary" — and the required GATE still filters on `required_via`,
+  exactly as strict as before. Declined per the operator's standing preference.
+
+**Every terminal now has the cleanup crew — it took three seams.** apply_flag had it; the
+confirmed-from-outside branch got it this session; and the GATE's own success path was the third
+(found live minutes later: application #1 submitted, its post-app tab standing, still claimed).
+All three now run the same epilogue in the same order: record the durable outcome, then close
+the application's tabs — including the durable `tab_claims` (tab → job association written when
+a step's drift watches a tab appear, surviving queue turnover, dropped when the tab dies). The
+panel serves `claimed_by` per tab; the WindowStrip renders the window with roles and owners and
+a guarded per-tab close (never the search tab; a live application's tab demands explicit
+discard). Application #1's leftover was closed through the EXISTING `/apply/epilogue` — the seam
+had been there since 07-30; reuse, don't rebuild.
+
+**Worth knowing for the next drive:** smartapply's questions module paginates (three sub-pages
+here) and each Continue that "did not verify — nothing observable changed" was actually a NEW
+questions sub-page whose AX shape matched the last (the URL stays `questions-module`) — the
+census read is what tells them apart; the arbitration's orient-primary yields once the observer
+recognises a screen, and by application #2 the gate rendered as the PRIMARY in its own moment;
+the recruiting-texts consent question defaults No (privacy-preserving, non-essential); the
+conditional free-text under a gating radio inherits the autofill's answer (a stray "Yes"
+overwritten to "No" when the gate flipped — watch these on review).
+
+*Owed:* the five remaining picks (BI Analyst/Developer, EPIC Report Writer, Data Business
+Analyst, Sig Sauer BA, Teradyne Pricing Ops) run this exact cadence — several will exit Indeed
+(the ATS taxonomy's ground); the WindowStrip and claims were built for precisely those. TeacherParks
+remains built-but-unexercised (no controller-run park has opened yet).

@@ -62,7 +62,15 @@ function Row({ row, busy, onArm, armed }) {
               filled but invalid
             </span>
           )}
-          {!row.answered && <span className="badge badge--warn">unanswered</span>}
+          {!row.answered && (
+            <span className="badge badge--warn">unanswered</span>
+          )}
+          {row.required_via === "none" && (
+            <span className="badge badge--muted"
+                  title="The form calls this voluntary — it never blocks the required-fields gate, but some pages still refuse to advance until an explicit choice (declining counts) is made">
+              voluntary
+            </span>
+          )}
         </div>
         {row.answered && row.value_preview && (
           <div className="rung__meta"><code>{row.value_preview}</code></div>

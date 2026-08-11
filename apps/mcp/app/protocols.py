@@ -381,12 +381,30 @@ SCAN_REQUIRED_JS = r"""
     // options box is no tell; the question text ('?' or the required '*') is the signal.
     let node = lca(group);
     for (let i = 0; i < 5 && node && node !== document.body; i++) {
-      const t = txt(node).slice(0, 160);
-      if (/[?*]/.test(t))
-        return t || fallback;
+      // Detect on the FULL text, cap only what we return. The cap used to run first, so a long
+      // question's trailing required-'*' (CRCH's family-members question: ~280 chars, the star
+      // at the very end) was amputated before the test — the group read as optional, vanished
+      // from the census, and the page's own "Choose an option to continue." was the only thing
+      // left telling the truth (live, 2026-08-10).
+      const full = txt(node);
+      if (/[?*]/.test(full))
+        return full.slice(0, 160) || fallback;
       node = node.parentElement;
     }
     return txt(lca(group)).slice(0, 160) || fallback;
+  };
+
+  // Whether the group's QUESTION (the same climbed container) marks itself required — tested on
+  // the uncapped text, because the star on a long question lives past any display cap.
+  const groupStarred = (group) => {
+    let node = lca(group);
+    for (let i = 0; i < 5 && node && node !== document.body; i++) {
+      const full = txt(node);
+      if (/[?*]/.test(full))
+        return /\*/.test(full);
+      node = node.parentElement;
+    }
+    return /\*/.test(txt(lca(group)));
   };
 
   // A group MEMBER's own label — the option's word ("True", "Job Board"), not the question's.
@@ -417,7 +435,8 @@ SCAN_REQUIRED_JS = r"""
     const label = groupLabel(group, k);
     const anyDisabled = group.every(b => b.disabled);
     const req = !anyDisabled &&
-                (group.some(b => b.required || attr(b, 'aria-required') === 'true') || /\*/.test(label));
+                (group.some(b => b.required || attr(b, 'aria-required') === 'true')
+                 || groupStarred(group));
     if (!req) continue;
     const checked = group.filter(b => b.checked);
     const row = {field: label.slice(0, 90), selector: __idSel(group[0]),
@@ -439,11 +458,18 @@ SCAN_REQUIRED_JS = r"""
   for (const r of radios) { let k = r.name || r.id; if (!k) k = '__lone_radio_' + (rsynth++); (rgroups[k] = rgroups[k] || []).push(r); }
   for (const [k, group] of Object.entries(rgroups)) {
     const label = groupLabel(group, k);
-    const req = group.some(r => r.required || attr(r, 'aria-required') === 'true') || /\*/.test(label);
-    if (!req) continue;
+    const req = group.some(r => r.required || attr(r, 'aria-required') === 'true')
+                || groupStarred(group);
     const picked = group.find(r => r.checked);
+    // A VOLUNTARY group with nothing picked is reported too, marked as such — the EEO self-ID
+    // radios carry no star ("voluntary"), yet smartapply's own Continue refuses until each has
+    // an explicit choice (including "I don't wish to answer"), and a group the census cannot
+    // see is a group the teach seam cannot address (live, 2026-08-10). The required GATE
+    // filters on `required_via` and stays exactly as strict as before.
+    if (!req && picked) continue;
     const row = {field: label.slice(0, 90), selector: __idSel(group[0]),
-                 kind: 'radio_group', required_via: 'group', value_read_at: 'aria-checked',
+                 kind: 'radio_group', required_via: req ? 'group' : 'none',
+                 value_read_at: 'aria-checked',
                  answered: !!picked, valid: true,
                  value_preview: picked ? optLabel(picked) : '',
                  options: optLabels(group)};
