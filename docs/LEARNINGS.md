@@ -5973,3 +5973,91 @@ list. The UI's own hardcoded fallback is gone too.
 
 One evolved pin: `test_an_unreadable_page_is_never_narrated_as_agreement` now asserts the
 stronger contract — not just honest words, but the orient primary and the demoted rung.
+
+## 2026-08-10 (operator-seat audit) — The cockpit could see the car but reach one pedal: the audit that sat in the operator's chair, and the build that gave the controller the driver's hands
+
+The operator's framing, verbatim in spirit: *we built an F1 car and gave the cockpit half the
+controls*. The session's method was new — play the OPERATOR first (start a session, declare
+"reporting analyst / Nashua, NH / 50mi", drive only what the cockpit offers), and only then put
+the teacher hat on and fix what the seat could not reach. The audit's verdict is sharper than the
+metaphor: the backend was a complete driving system and the cockpit had **one arbitrated button
+plus a radio describing the rest**. Nearly every wall had a working, tested, journaled endpoint
+behind it with no surface: `/apply_teach` (any intent, validated, journaled, recorded on the
+step) had **zero UI callers**; the teacher inbox could be counted but not answered;
+`_work_advance_rung` refused over unanswered fields and pointed at `/apply_fill` **in prose**
+while `_resolve_next_action` could only ever emit `/apply_step` or `/orient_action`; and
+`explain.js` said "those are not built yet" about things built weeks ago. The anesthetic that
+kept this painless for so long: the teacher (session-Claude) bypassed the cockpit and curl'd the
+endpoints directly — the pain never landed on anyone who couldn't route around it.
+
+**Three rules adopted, so the shape cannot regrow:**
+* **Parity: if the teacher can curl it, the operator can click it.** A capability lands WITH its
+  surface, or with a written exemption.
+* **Every focus offers a truthful way OUT.** The parked NHBB application imprisoned the surface:
+  every exit that freed it falsified the record (Submitted / Job gone / Not a fit) and the
+  truthful flag (Park) re-imprisoned. Attention must never require a lie to escape.
+* **A refusal carries its fix as an action**, never as a sentence about an endpoint.
+
+**What was built (all live-driven this session):**
+* **The form census.** `SCAN_REQUIRED_JS` now FILES satisfied rows instead of dropping them
+  (`answered` beside `unanswered`, options for radio/checkbox groups and native selects,
+  passwords masked at the page — §4 made explicit now that answered values leave). It rides
+  `/apply_fill` and the advance-rung refusal into `last.form_scan`; `FormCensus` renders every
+  required field with its verb: choice chips and typed answers act through **`/apply_teach`**
+  (arm → editable rationale → act), so cockpit work IS corpus work.
+* **Answered fields became addressable.** `LiveActuator._address`'s scan fallback only knew the
+  UNANSWERED rows — re-answering an answered-but-wrong field was structurally impossible, the
+  old "only blockers matter" worldview fossilised into the address book. First live census read
+  found smartapply's sponsorship question standing **Yes** against the operator's standing No
+  (the same yes-bias autofill class as the Active-Employee near-withdrawal); the fix journaled
+  `not_found`. `_last_scan` now includes answered rows; the second press flipped the real radio,
+  `check_group → ok, verified`, and the re-read census shows **No**. Observe → catch → correct →
+  verify, all from the seat, all on the record.
+* **Name this page.** The lost surface's knowledge moment now labels in place: the newest
+  transition row renders WITH its screenshot (state is context-bound — you label the capture you
+  can see, not the page you assume), posts the same `/correct` seam the Trace uses, and
+  train-on-label refits. First use banked a real correction: the witnesses believed
+  `resume_selection`; the screenshot plainly showed the questions screen (ADP branch, sponsorship
+  radio). It rides UNRECOGNISED GROUND (`flow.recognised === false`), not just the orient focus —
+  the observer can blink while the page stays nameless.
+* **Parked survives the search, visibly.** `_reset_for_new_search` harvested-then-dropped
+  nothing before — `apply_queue` died wholesale and every parked step's reopen handle with it.
+  Parked steps now harvest into session-level `parked_apps`, the panel serves `parked`, a strip
+  renders them under the path with **Step back in** (which resurrects across searches), and the
+  parked focus carries **Search something else**. In-flight focuses deliberately do NOT — the
+  backend 409s a new search over open work, and a button that always leads to a refusal is a
+  lie-shaped affordance; the honest path is Park (one press) → search.
+* **The teacher's seat is on the surface.** `TeacherParks` renders open parks (kind, state, the
+  local prediction, reach gaps, the frozen bundle) with Approve / Correct / Instruct / resume /
+  Escalate posting `/api/controller/teacher/{id}/respond`. Built and lint-clean; NOT yet
+  exercised against a live park (none was open) — the first attended `controller/run` through it
+  is owed.
+* **The ladder types where a human would.** The new query's first press scanned the smartapply
+  tab (67 elements, no search box): `_run_query` took `tabs[0]`, and the parked application's
+  tab — deliberately left open — is frequently frontmost. The deeper trap: `search_tab` is
+  QUERY-BOUND ("which tab proves OUR query ran") and rightly None right after a new declare, so
+  it cannot answer "where do I type". New `_engine_page_tab` (any engine results/search page,
+  whatever query it shows) resolves the typing surface — exactly the tab a human re-queries in —
+  and `_navigable_tab` keeps the unauthenticated home-navigation from ever pointing an
+  apply/errand tab somewhere else (it would have navigated NHBB's tab to indeed.com). Third
+  press: query ran, verified by URL, radius set, page 1 read — 16 results into the decide surface.
+
+**The worktree-serving trap, data edition.** Serving from a worktree with `module.__file__`
+verified is NOT enough: every module-relative data root (`apps/mcp/output` — blackboards,
+transitions, journals, screenshots) silently forked into the worktree's empty tree, and the
+panel rendered a blank session over a live browser. Env-relocatable roots now exist everywhere
+(`MCP_OUTPUT_DIR` for the capture server, joining `OBSERVER_ARTIFACTS_DIR` /
+`INTERACTION_ARTIFACTS_DIR`), set ONLY on the server processes — tests keep worktree isolation
+by not setting them. Corollary kept from the incident: the fresh-blank blackboard was written to
+the worktree store, main's corpus untouched.
+
+*Smaller truths for the next session:* the distance pill landed on 100mi against a 50mi ask
+(floor held; Indeed's pill options for this search likely lack exactly-50 — read the pill before
+assuming); the census taken in the same beat as a teach can photograph the pre-act DOM (Re-read
+answers it; a short settle would too); `apply_teach` responses now carry a fresh `form_scan` so
+the census survives its own act; scanner `kind` for smartapply's aria-listbox openers reads
+`div` (cosmetic); the header's `page` shows the OLD search's page until the new query runs. And
+the audit's two remaining dark seams, deliberately left for their own sessions:
+`/apply_prompt_select` has no per-field surface yet (Workday prompts), and `resolve_answer`
+remains routeless with a no-op actuator stub — the operator is the translator for now, by
+design.
