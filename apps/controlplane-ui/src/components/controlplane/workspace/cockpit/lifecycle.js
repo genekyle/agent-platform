@@ -288,9 +288,16 @@ function executeFocus(p, step, nextAction) {
   // PARKED: the application is mid-flight and waiting on the operator — the truth of the step,
   // so it outranks any stale proposal riding on it. One primary: step back in. Reopen archives
   // the walked rungs and re-walks from the top of the page (apply_steps.reopen's own contract).
+  //
+  // AND A TRUTHFUL WAY OUT (2026-08-10 audit): a parked application is attention, not arrest.
+  // Without `searchAgain` the only exits from this focus were the terminal flags — every one
+  // that frees the surface falsifies the outcome, and the truthful one (Park) re-imprisons.
+  // Declaring the next search leaves the park exactly as it is; the backend harvests it into
+  // the session-level parked list, where Step back in still reaches it.
   if ((step.terminal || "").startsWith("parked")) {
     return { ...base, kind: "application", parked: step.terminal,
       flow: p.apply_flow || null,
+      searchAgain: true,
       why: step.terminal_detail
         || "This application parked for you. Stepping back in resumes it where the page really is.",
       primary: { label: "Step back in", endpoint: "/apply_reopen",
@@ -345,6 +352,10 @@ function executeFocus(p, step, nextAction) {
   // unrecognised mid-application: the primary is a LOOK — orient, with the witnesses' scored
   // reads on the surface — and the ladder's presumed rung waits demoted until the page is
   // recognised. Forcing "Work this · Open the posting" here was the wrong-menu bug.
+  // (No `searchAgain` on the in-flight focuses below, deliberately: `/initialize` refuses a new
+  // search over an OPEN application — "finish it or flag it" — and a button that always leads to
+  // a refusal is a lie-shaped affordance. The truthful exit from in-flight is one press away in
+  // More (Park, "not now"), and the PARKED focus above carries `searchAgain` from there.)
   if (nextAction?.lost) {
     return { ...base, kind: "orient", flow: p.apply_flow || null,
       whereabouts: p.observer || null,
@@ -584,8 +595,13 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
     cycle: {
       page,
       pages_reviewed: p.progress?.pages_reviewed ?? 0,
-      application: currentStep
-        ? { index: steps.filter((s) => s.done).length + 1, total: qs.total, job_id: currentStep.job_id }
+      // The ATTENTION step, not just the in-flight one: a parked application is the surface's
+      // subject too, and building this from `currentStep` alone meant every terminal-flag press
+      // on a parked focus posted `job_id: undefined` and bounced off validation (found 2026-08-10
+      // working the cockpit as the operator).
+      application: attentionStep
+        ? { index: steps.filter((s) => s.done).length + (currentStep ? 1 : 0),
+            total: qs.total, job_id: attentionStep.job_id }
         : null,
     },
   };

@@ -181,6 +181,9 @@ export function CockpitPage({ routeSessionId, routeTab }) {
           // leaking into the next session's story.
           key={active.id}
           sessionId={active.id}
+          // The open teacher parks, answerable in place (TeacherParks) — a parked drive is the
+          // current moment's real question, and counting questions is not a seat.
+          parks={parks}
           onOpenLens={() => navigate(pathFor(active.id, "lens"))}
           onOpenTrace={() => navigate(pathFor(active.id, "trace"))}
         />

@@ -3,6 +3,8 @@ import { AppIcon } from "../../../../ui/Icon";
 import { PickOrb } from "../OrderedPicks";
 import FormSections from "../FormSections";
 import FillPlan from "../FillPlan";
+import FormCensus from "../FormCensus";
+import NameThisPage from "./NameThisPage";
 import { chooseFocus, newSearchFocus, TERMINAL_CHOICES } from "./lifecycle";
 
 // THE WORK SURFACE — the one thing the operator can act on now.
@@ -379,14 +381,22 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
       )}
 
       {/* THE FORM ON THIS PAGE — the object being filled, in its own register.
-          It renders once something has actually been READ (a fill plan, or the accordion's
-          sections). Before that there is one quiet way in, not two standing buttons: the old panel
-          offered "Plan the fill" for the whole of Execute because `remaining > 0` is true the whole
-          time, so an unrecognised page with no form on it still showed a fill control. An
-          affordance that is right for one screen in ten reads as noise on the other nine. */}
-      {(last?.fill_plan || last?.sections) ? (
+          Once anything has been READ (the census, a fill plan, the accordion's sections) the full
+          panel renders: the form as it stands with its per-field verbs, then the bunch-fill plan.
+          Before a read there is one quiet way in, not a wall of standing buttons — but that way in
+          is ALWAYS here on an execute focus. The 2026-08-10 audit's finding was precisely a rung
+          refusing over unanswered fields while the surface offered no way to see or answer them:
+          the capability lived behind `/apply_fill` and `/apply_teach` with no control anywhere. */}
+      {(last?.form_scan || last?.fill_plan || last?.sections) ? (
         <div className="work__section">
           <div className="work__section-head"><AppIcon name="listTree" size={13} /> The form on this page</div>
+          <FormCensus census={last?.form_scan} busy={busy} taught={last?.taught}
+                      // Every verb is /apply_teach: validated against the intent vocabulary,
+                      // journaled with the rationale, recorded on the apply step. Cockpit work
+                      // IS corpus work — that is the whole point of routing it here.
+                      onTeach={(intent, params, rationale) =>
+                        call("/apply_teach", { intent, params, rationale })}
+                      onReread={() => call("/apply_fill", { execute: false })} />
           <FormSections sections={last?.sections} busy={busy}
                         ats={panel.account_state?.ats} accordionAts={panel.accordion_ats}
                         // No ats sent: the backend resolves the OPEN application's platform. The
@@ -403,7 +413,7 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
       ) : (
         <div className="work__section">
           <button className="btn btn-sm btn-ghost" disabled={busy}
-                  title="Read the open form and show what would be typed — types nothing"
+                  title="Read the open form as it stands — shows every required field and what would be typed; types nothing"
                   onClick={() => call("/apply_fill", { execute: false })}>
             Read this page&apos;s form
           </button>
@@ -548,6 +558,13 @@ export function WorkSurface({
 
         {/* Lost: the witnesses' scored reads, before the button that looks again. */}
         {focus.kind === "orient" && <WhereAmI whereabouts={focus.whereabouts} />}
+        {/* The teaching control rides UNRECOGNISED GROUND, not just the orient moment — the
+            observer can blink (a poll with no watched tab) while the screen stays one nobody has
+            named, and the human's knowledge is the same either way (2026-08-10 audit: labeling
+            lived two tabs away in the Trace, farthest from where the knowledge strikes). */}
+        {(focus.kind === "orient" || (focus.flow && !focus.flow.recognised)) && (
+          <NameThisPage sessionId={panel.session_id} whereabouts={focus.whereabouts} />
+        )}
 
         <Say focus={focus} />
         {focus.kind !== "proposal" && (

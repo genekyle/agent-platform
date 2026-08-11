@@ -222,8 +222,10 @@ function explainApplication(p, jobId) {
       ? { text: s.terminal_detail || `Ended as ${s.terminal}.`, source: "terminal flag" }
       : s.next_rung
         ? { text: `Next rung: ${s.next_rung.replace(/_/g, " ")}`, source: "apply_steps.py — the apply prefix" }
-        : { text: "Past the known prefix — the rungs from here depend on where we landed, and "
-            + "those are not built yet.", source: "apply_steps.py" },
+        : { text: "Past the known prefix — from here each screen synthesises its own rung, and "
+            + "the form work is live on the surface: read the form, fill the ready fields, or "
+            + "answer a field directly (each press is journaled).",
+            source: "apply_steps.py — the tail" },
     observed: [
       { label: "Platform", value: s.platform || NOT_MEASURED },
       { label: "Landed on", value: s.landing_state?.replace(/_/g, " ") || NOT_MEASURED },

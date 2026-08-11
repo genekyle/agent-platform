@@ -52,8 +52,10 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
 
       {plan.length === 0 && (
         <p className="rung__meta">
-          Nothing recognised on the page. If the form is an accordion, check the sections above —
-          a closed section's fields are not on the page to be found.
+          The planner recognises none of this page&apos;s fields — it only speaks to fields whose
+          name maps to a stored answer. The form itself is what the census above shows; answer
+          those fields individually. (If the form is an accordion, a closed section&apos;s fields
+          are not on the page to be found.)
         </p>
       )}
 

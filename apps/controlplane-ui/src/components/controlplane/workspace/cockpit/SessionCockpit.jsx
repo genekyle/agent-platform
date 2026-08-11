@@ -4,6 +4,7 @@ import { useOrderedPicks } from "../useOrderedPicks";
 import { deriveCockpit } from "./lifecycle";
 import { WorkSurface } from "./WorkSurface";
 import { NowContext, NowPath } from "./NowContext";
+import TeacherParks from "./TeacherParks";
 import "./cockpit.css";
 
 // ONE SESSION'S COCKPIT — the keyed composition root.
@@ -39,7 +40,7 @@ const PING_MS = 5000;
 const SETTLE_MS = 1000;
 const SETTLE_WINDOW_MS = 12000;
 
-export function SessionCockpit({ sessionId, onOpenLens, onOpenTrace }) {
+export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
   const [panel, setPanel] = useState(null);
   const [form, setForm] = useState({ query: "", location: "", radius_miles: 50 });
   const [note, setNote] = useState("");
@@ -151,6 +152,9 @@ export function SessionCockpit({ sessionId, onOpenLens, onOpenTrace }) {
       const d = await postJSON(`/api/session_control/${sessionId}${path}`,
                                { ...(body || {}), initiator: "operator" });
       setPanel(d);
+      // A successful initialize ENDS the declare detour — the next search is now the work, and
+      // leaving the form standing re-asks a question that was just answered (drive 2, 2026-08-10).
+      if (path === "/initialize") setViewMoment(null);
       return d;
     } catch (e) {
       setError(e.message || "the call failed");
@@ -202,6 +206,45 @@ export function SessionCockpit({ sessionId, onOpenLens, onOpenTrace }) {
       </div>
 
       <NowPath cockpit={cockpit} selection={selection} onSelect={onSelect} />
+
+      {/* THE TEACHER'S QUESTIONS, answerable where the operating happens. A parked drive is
+          frozen on these; a count with no answer surface was the seat standing empty with the
+          cockpit open (2026-08-10 audit). */}
+      <TeacherParks parks={parks} sessionId={sessionId}
+                    onAnswered={() => { settleUntilRef.current = Date.now() + SETTLE_WINDOW_MS; }} />
+
+      {/* PARKED, SESSION-WIDE — the applications this session still owes, wherever their search
+          went. A parked app from an earlier search has no page group in the current path, so
+          without this strip it simply vanished from the surface (the orphan half of the
+          2026-08-10 audit; the arrest half is fixed in lifecycle.js). Chips only: the one
+          action is stepping back in, and the strip hides rows the focus is already showing. */}
+      {(p.parked || []).filter((pk) => !pk.in_current_queue
+        || !["application", "orient", "gate", "proposal", "account", "account_handoff"]
+          .includes(cockpit.focus.kind)).length > 0 && (
+        <div className="cockpit-parked">
+          <span className="cockpit-parked__label">
+            Parked — waiting on you, whichever search is running
+          </span>
+          {(p.parked || [])
+            .filter((pk) => !pk.in_current_queue
+              || !["application", "orient", "gate", "proposal", "account", "account_handoff"]
+                .includes(cockpit.focus.kind))
+            .map((pk) => (
+              <span key={pk.job_id} className="cockpit-parked__chip"
+                    title={`${pk.terminal || "parked"}${pk.terminal_detail ? ` — ${pk.terminal_detail}` : ""}${pk.from_search ? ` · from search ${pk.from_search}` : ""}`}>
+                {pk.title || pk.job_id}
+                {pk.company ? <em> · {pk.company}</em> : null}
+                <button className="btn btn-sm btn-ghost" disabled={busy}
+                        onClick={() => call("/apply_reopen", {
+                          job_id: pk.job_id,
+                          reason: "operator stepped back in from the parked strip",
+                        })}>
+                  Step back in
+                </button>
+              </span>
+            ))}
+        </div>
+      )}
 
       <div className="cockpit-now__layout">
         <WorkSurface

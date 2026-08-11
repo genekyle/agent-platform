@@ -812,3 +812,81 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .whereami__witnesses code { font-size: 10.5px; }
 .whereami__witnesses small { color: var(--text-subtle); font-size: 10px; }
 .whereami__witnesses p { flex-basis: 100%; margin: 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+
+/* --- the form census: the page's required form with its verbs on each field -------------- */
+.form-census__verbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.form-census__type { display: inline-flex; align-items: center; gap: 6px; }
+.form-census__type input {
+  width: 200px;
+  padding: 4px 8px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: inherit;
+  font-size: 12px;
+}
+.form-census__confirm { margin-top: 8px; }
+
+/* --- name this page: the lost surface's teaching control --------------------------------- */
+.name-page { margin-top: 8px; }
+.name-page__shot {
+  max-width: 320px;
+  max-height: 200px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin: 6px 0;
+  display: block;
+}
+.name-page__fields { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+
+/* --- parked, session-wide: the applications still owed, whichever search runs ------------- */
+.cockpit-parked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  margin: 8px 0 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.cockpit-parked__label { color: var(--text-subtle); font-size: 11px; }
+.cockpit-parked__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 9px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.cockpit-parked__chip em { color: var(--text-subtle); font-style: normal; }
+
+/* --- the teacher's seat: parked questions, answerable in place --------------------------- */
+.teacher-parks {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--warn, #b58a3c);
+  border-radius: var(--radius-sm);
+}
+.teacher-parks__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.teacher-parks__head span { color: var(--text-subtle); font-size: 11px; }
+.teacher-park { margin-top: 8px; padding: 8px 10px; background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.teacher-park__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.teacher-park__head small { color: var(--text-subtle); }
+.teacher-park__bundle {
+  max-height: 220px;
+  overflow: auto;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
