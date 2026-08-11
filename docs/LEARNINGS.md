@@ -6061,3 +6061,47 @@ the audit's two remaining dark seams, deliberately left for their own sessions:
 `/apply_prompt_select` has no per-field surface yet (Workday prompts), and `resolve_answer`
 remains routeless with a no-op actuator stub — the operator is the translator for now, by
 design.
+
+## 2026-08-10 (cleanup + fresh drive) — Close-out becomes a verb, the empty cockpit gets a door, the radius obeys the declaration, and the AX tree tells the truth
+
+Phase 2 of the operator-seat exercise, operator-directed: *close everything, build the cleanup
+protocol, then one full clean drive pausing only at the pick.*
+
+**The mixing the operator saw was real, and it was a missing verb.** The parked NHBB application
+(deliberately kept alive) got stepped back into the NEW search's queue — old work bleeding into
+new with no way to END a session on the record. `POST /close_out` is the cleanup protocol:
+surveys the window, refuses without `confirm_discards_work` when in-flight/parked applications
+would die (naming them), flags each `abandoned:operator` WITH the operator's reason, closes the
+session's active Search rows, releases the drive latch it holds, stops the session Chrome
+through the training-stop seam — and KEEPS the persistent profile, because the sign-in is the
+savings account. Cockpit press included (parity rule). Used live on 25 and 26 plus five stale
+July zombies; session 14 refused on its `protected` flag — the do-not-touch marker outranking a
+bulk cleanup is the flag working. One honest wrinkle: a 6-day-old Chrome outlived the stop's 8s
+window and the close-out REPORTED it instead of lying; the retry landed.
+
+**The empty cockpit now opens.** With zero live sessions, /cockpit fell back to an arbitrary
+CLOSED session's declare form — a dead browser's setup screen — because the start-a-session hint
+only rendered when the session list was literally empty (it never is after the first session
+ever). `StartSession` is the cockpit's own door: domain → default scenario (search_results) →
+the domain's `_default` account → create + start → arrive. The fresh-session path ran end to
+end: provisioned Chrome, "Signed in." off the persistent profile, declare, climb.
+
+**The radius bug was a provenance bug.** `set_distance`'s early-exit accepted any current
+radius >= the floor — and the tab's URL still carried the PREVIOUS search's `radius=100`, so a
+declared 50 was "already satisfied" by a filter nobody chose. "Already" now means equality with
+the target (the smallest offered option >= the floor, shared `distance_target()`), the commit
+confirmation checks the same equality (a `>=` there would re-accept the leftover and mask an
+uncommitted pill), both engines fixed, pinned. Verified live on the fresh drive: **"Distance
+filter set to 50 miles."**
+
+**The AX invisibility was two truths.** The harness's reader is viewport-scoped (below-the-fold
+buttons are absent until scrolled — drive the cockpit like a human: scroll, read, act). And ours:
+every button carrying a `title` tooltip was announced BY the title — readers that prefer it got
+the why instead of the pressable words. `aria-label` now mirrors the visible label on every
+titled action (WorkSurface, census, teach, parks, fill, close-out, start). The tree reads
+"Orient — find where we are", not a paragraph.
+
+*The drive this leaves open:* session 27 stands at Page 1 · 17 results on the true 50mi radius —
+the pick pause. Picks are the operator's consent; the cadence after them is drive-to-submitted
+through the cockpit (gate pressed as operator under that consent), captcha/2FA still absolute
+stops, teacher fixing both sides mid-flight.
