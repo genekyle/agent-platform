@@ -5,6 +5,7 @@ import { deriveCockpit } from "./lifecycle";
 import { WorkSurface } from "./WorkSurface";
 import { NowContext, NowPath } from "./NowContext";
 import TeacherParks from "./TeacherParks";
+import CloseOut from "./CloseOut";
 import "./cockpit.css";
 
 // ONE SESSION'S COCKPIT — the keyed composition root.
@@ -270,6 +271,10 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
         <NowContext panel={p} cockpit={cockpit} selection={selection}
                     onOpenLens={onOpenLens} onOpenTrace={onOpenTrace} />
       </div>
+
+      {/* The cleanup protocol's press — quiet at the bottom, loud about what it discards. */}
+      <CloseOut sessionId={sessionId} panel={p}
+                onClosed={() => { settleUntilRef.current = 0; }} />
     </div>
   );
 }

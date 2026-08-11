@@ -29,8 +29,13 @@ function Actions({ focus, busy, call, onNewSearch }) {
         // STILL EXACTLY ONE PRIMARY — the modifier changes how it reads, never how many there are.
         // A consequential action that looked like the five reversible ones before it is how an
         // application gets sent by muscle memory.
+        //
+        // `aria-label` mirrors the visible label wherever a `title` rides a button (here and on
+        // every action below): assistive readers that prefer `title` were announcing the WHY
+        // instead of the pressable words (found driving the cockpit through an accessibility
+        // tree, 2026-08-10) — and the label a user can see must be the name a user can say.
         <button className={`btn btn-primary${focus.primary.consequential ? " btn-consequential" : ""}`}
-                disabled={busy} title={focus.primary.why}
+                disabled={busy} title={focus.primary.why} aria-label={focus.primary.label}
                 onClick={() => call(focus.primary.endpoint, focus.primary.body)}>
           {busy ? "…" : focus.primary.label}
         </button>
@@ -39,6 +44,7 @@ function Actions({ focus, busy, call, onNewSearch }) {
           it has no endpoint, so it must not be routed through `call`. */}
       {focus.primary?.detour === "declare" && (
         <button className="btn btn-primary" disabled={busy} title={focus.primary.why}
+                aria-label={focus.primary.label}
                 onClick={onNewSearch}>{focus.primary.label}</button>
       )}
       {/* Abandoning a search mid-way: same session, same sign-in, only the query changes. An
@@ -46,6 +52,7 @@ function Actions({ focus, busy, call, onNewSearch }) {
       {focus.searchAgain && (
         <span className="work__alt">
           <button className="btn btn-sm" disabled={busy} onClick={onNewSearch}
+                  aria-label="Search something else"
                   title="Same session and the same sign-in — only the query changes.">
             Search something else
           </button>
@@ -56,6 +63,7 @@ function Actions({ focus, busy, call, onNewSearch }) {
       {(focus.alternates || []).filter(Boolean).map((a, i) => (
         <span key={i} className="work__alt">
           <button className={focus.primary ? "btn btn-sm" : "btn"} disabled={busy} title={a.why}
+                  aria-label={a.label}
                   onClick={() => call(a.endpoint, a.body)}>
             {a.label}
           </button>
@@ -190,13 +198,14 @@ function More({ focus, busy, onFlag }) {
       <div className="work__more-grid">
         {/* Submitted is separated from the rest because it is the only one that means success and
             the only one that claims a real application went out. */}
-        <button className="btn btn-sm" disabled={busy}
+        <button className="btn btn-sm" disabled={busy} aria-label="Submitted"
                 title="Only press this when the application is CONFIRMED sent"
                 onClick={() => onFlag("submitted", "")}>
           Submitted
         </button>
         {focus.more.map((f) => (
           <button key={f.flag} className="btn btn-sm btn-ghost" disabled={busy} title={f.why}
+                  aria-label={f.label}
                   onClick={() => onFlag(f.flag, f.why)}>
             {f.label}
           </button>
@@ -413,6 +422,7 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
       ) : (
         <div className="work__section">
           <button className="btn btn-sm btn-ghost" disabled={busy}
+                  aria-label="Read this page's form"
                   title="Read the open form as it stands — shows every required field and what would be typed; types nothing"
                   onClick={() => call("/apply_fill", { execute: false })}>
             Read this page&apos;s form

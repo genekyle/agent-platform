@@ -109,12 +109,12 @@ function ParkCard({ park, onAnswered }) {
         <div className="work__actions">
           {park.kind === "review" && (
             <>
-              <button className="btn btn-sm" disabled={busy || !pred.intent}
+              <button className="btn btn-sm" disabled={busy || !pred.intent} aria-label="Approve"
                       title="Act the local proposal as it stands"
                       onClick={() => answer("approve", { rationale: "operator approved from the cockpit seat" })}>
                 Approve
               </button>
-              <button className="btn btn-sm" disabled={busy}
+              <button className="btn btn-sm" disabled={busy} aria-label="Correct"
                       onClick={() => setMode("correct")}
                       title="Act a different action instead — journals a golden correction pair">
                 Correct…
@@ -122,7 +122,7 @@ function ParkCard({ park, onAnswered }) {
             </>
           )}
           {park.kind === "instruct" && (
-            <button className="btn btn-sm" disabled={busy}
+            <button className="btn btn-sm" disabled={busy} aria-label="Instruct"
                     onClick={() => { setMode("instruct");
                       setDraft((d) => ({ ...d, intent: pred.intent || "",
                         params: JSON.stringify(pred.params || {}) })); }}
@@ -137,7 +137,7 @@ function ParkCard({ park, onAnswered }) {
                        value={draft.newTab} disabled={busy}
                        onChange={(e) => setDraft((d) => ({ ...d, newTab: e.target.value }))} />
               </span>
-              <button className="btn btn-sm" disabled={busy}
+              <button className="btn btn-sm" disabled={busy} aria-label="I drove it — resume"
                       title="You drove it by hand to a checkpoint — the drive resumes locally"
                       onClick={() => answer("takeover_done",
                         { note: draft.rationale || "operator drove it from the cockpit",
@@ -146,7 +146,7 @@ function ParkCard({ park, onAnswered }) {
               </button>
             </>
           )}
-          <button className="btn btn-sm btn-ghost" disabled={busy}
+          <button className="btn btn-sm btn-ghost" disabled={busy} aria-label="Escalate"
                   title="Not answerable from here — hand it further up; the drive ends cleanly"
                   onClick={() => answer("escalate", { note: "escalated from the cockpit seat" })}>
             Escalate

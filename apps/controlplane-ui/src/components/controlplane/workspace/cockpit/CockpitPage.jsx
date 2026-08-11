@@ -6,6 +6,7 @@ import { SessionCockpit } from "./SessionCockpit";
 import { CockpitSessionBar } from "./CockpitSessionBar";
 import { ObserverLens } from "./ObserverLens";
 import { SessionTrace } from "./SessionTrace";
+import StartSession from "./StartSession";
 
 // THE COCKPIT PAGE — the session cockpit as a first-class destination.
 //
@@ -128,6 +129,25 @@ export function CockpitPage({ routeSessionId, routeTab }) {
             );
           })}
         </div>
+      </div>
+    );
+  }
+
+  // NO LIVE SESSION AND NO EXPLICIT CHOICE: the moment asks "start one", not "here is a dead
+  // session's setup form". The old fallback picked pool[0] — an arbitrary CLOSED session — and
+  // rendered its declare surface over a browser that no longer exists (2026-08-10, right after
+  // the first full cleanup). Closed sessions stay reachable by pinning (/cockpit/:id).
+  if (!pinned && !hinted && liveSessions.length === 0) {
+    return (
+      <div className="cockpit-page">
+        <StartSession onStarted={(id) => navigate(pathFor(id))} />
+        {sessions.length > 0 && (
+          <p className="empty-hint">
+            {sessions.length} closed session{sessions.length === 1 ? "" : "s"} on record — pick
+            one from the switcher after starting, or open <code>/cockpit/&lt;id&gt;</code> to
+            read its trace.
+          </p>
+        )}
       </div>
     );
   }

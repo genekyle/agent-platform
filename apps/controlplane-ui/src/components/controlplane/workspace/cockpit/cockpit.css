@@ -890,3 +890,34 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
   border-radius: var(--radius-sm);
   padding: 8px;
 }
+
+/* --- close out: the cleanup protocol's press --------------------------------------------- */
+.close-out {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.close-out--quiet { background: transparent; border-color: transparent; padding: 2px 0 0; }
+.close-out__head { display: flex; align-items: center; gap: 7px; font-weight: 600; margin-bottom: 4px; }
+
+/* --- start a session: the cockpit's own door ---------------------------------------------- */
+.start-session {
+  margin: 8px 0;
+  padding: 12px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.start-session__head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.start-session__head span { color: var(--text-subtle); font-size: 12px; }
+.start-session select {
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: inherit;
+}

@@ -28,7 +28,7 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
   if (!plan) {
     return (
       <div className="cv-actions">
-        <button className="btn btn-sm" disabled={busy} onClick={onPlan}
+        <button className="btn btn-sm" disabled={busy} onClick={onPlan} aria-label="Plan the fill"
                 title="Read the open form and show what would be typed — types nothing">
           Plan the fill
         </button>
@@ -120,11 +120,12 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
       )}
 
       <div className="cv-actions">
-        <button className="btn btn-sm" disabled={busy} onClick={onPlan}
+        <button className="btn btn-sm" disabled={busy} onClick={onPlan} aria-label="Re-plan"
                 title="Re-read the form and re-plan — types nothing">
           Re-plan
         </button>
         <button className="btn btn-sm btn-primary" disabled={busy || !summary?.fillable}
+                aria-label="Fill the ready fields"
                 title="Types the ready text fields at a human pace. Does NOT submit anything."
                 onClick={onFill}>
           Fill the {summary?.fillable ?? 0} ready field(s)

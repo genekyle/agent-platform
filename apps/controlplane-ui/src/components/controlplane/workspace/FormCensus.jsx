@@ -71,13 +71,14 @@ function Row({ row, busy, onArm, armed }) {
           <div className="rung__meta form-census__verbs">
             {(row.options || []).map((opt) => (
               <button key={opt} className="btn btn-sm btn-ghost" disabled={busy}
+                      aria-label={`${row.field}: ${opt}`}
                       title={`Teach: answer “${row.field}” with “${opt}” — journaled, reversible`}
                       onClick={() => onArm(row, opt)}>
                 {opt}
               </button>
             ))}
             {canEnumerate && (
-              <button className="btn btn-sm btn-ghost" disabled={busy}
+              <button className="btn btn-sm btn-ghost" disabled={busy} aria-label="List choices"
                       title="This dropdown only shows its choices while open — probe it with a value that cannot match; its refusal carries the real option list"
                       onClick={() => onArm(row, ENUMERATE_SENTINEL)}>
                 List choices
@@ -188,7 +189,7 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread }) 
       )}
 
       <div className="cv-actions">
-        <button className="btn btn-sm" disabled={busy} onClick={onReread}
+        <button className="btn btn-sm" disabled={busy} onClick={onReread} aria-label="Re-read the form"
                 title="Re-scan the live form — reads, types nothing">
           Re-read the form
         </button>

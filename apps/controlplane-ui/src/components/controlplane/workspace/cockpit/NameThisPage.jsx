@@ -76,7 +76,7 @@ export default function NameThisPage({ sessionId, whereabouts }) {
   if (!open) {
     return (
       <div className="cv-actions">
-        <button className="btn btn-sm" onClick={openIt}
+        <button className="btn btn-sm" onClick={openIt} aria-label="Name this page — teach it"
                 title="You know where we are and the witnesses don't — label the newest captured step so they learn this screen. The label is the training signal.">
           <AppIcon name="sparkle" size={12} /> Name this page — teach it
         </button>
@@ -128,7 +128,7 @@ export default function NameThisPage({ sessionId, whereabouts }) {
                     onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
           {err && <div className="coaching-error">{err}</div>}
           <div className="work__actions">
-            <button className="btn btn-sm btn-primary"
+            <button className="btn btn-sm btn-primary" aria-label="Teach it"
                     disabled={busy || !form.before_state.trim() || !form.after_state.trim()
                       || !form.note.trim()}
                     title="Both sides are required — a transition is an edge, and half an edge trains nothing"
