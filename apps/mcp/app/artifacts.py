@@ -1,6 +1,7 @@
 import base64
 import imghdr
 import json
+import os
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,8 +10,24 @@ from typing import Any, Optional
 from app.observer.pipeline import build_observer_artifact
 
 
-ARTIFACTS_DIR = Path(__file__).resolve().parent.parent / "output" / "observer-traces"
-SCREENSHOTS_DIR = Path(__file__).resolve().parent.parent / "output" / "observer-screenshots"
+def _output_root() -> Path:
+    """The data root. Module-relative by default; `MCP_OUTPUT_DIR` overrides it.
+
+    The override exists for worktree serving (2026-08-10): a server launched from a git worktree
+    resolves `__file__` inside the worktree, so the REAL corpus — screenshots, traces, the
+    transition spine — silently forks into a second, empty tree while the panel reads blanks.
+    The API and the interaction package already have env-relocatable roots
+    (`OBSERVER_ARTIFACTS_DIR`, `INTERACTION_ARTIFACTS_DIR`); this is the capture server's.
+    Tests deliberately do NOT set it, keeping their worktree-local isolation.
+    """
+    env = os.environ.get("MCP_OUTPUT_DIR")
+    if env:
+        return Path(env).resolve()
+    return Path(__file__).resolve().parent.parent / "output"
+
+
+ARTIFACTS_DIR = _output_root() / "observer-traces"
+SCREENSHOTS_DIR = _output_root() / "observer-screenshots"
 
 
 def build_observation_artifact(

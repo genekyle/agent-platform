@@ -20,7 +20,10 @@ _MAX_LINES = 1000
 
 def _path() -> Path:
     # apps/mcp/app/event_log.py -> apps/mcp/output/cache/event_log.jsonl
-    p = Path(__file__).resolve().parent.parent / "output" / "cache" / "event_log.jsonl"
+    # Same env-relocatable root as artifacts.py (`MCP_OUTPUT_DIR`) — worktree serving must not
+    # fork the data tree (2026-08-10).
+    from app.artifacts import _output_root
+    p = _output_root() / "cache" / "event_log.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
