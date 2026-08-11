@@ -302,6 +302,20 @@ SCAN_REQUIRED_JS = r"""
   )].filter(__isUserField);
 
   const out = [];
+  // The SATISFIED required fields, kept rather than dropped. The gate's list (`unanswered`)
+  // only ever showed what still blocks — so the cockpit could not render the form as it stands,
+  // and an ANSWERED-but-wrong field was invisible by construction. The live case that demands
+  // this: smartapply's "Are you an Active Employee?" standing on a blind-answered Yes, one
+  // Continue away from a self-withdrawal (2026-08-10). Same walk, same truth reads — the only
+  // change is that satisfaction files a row instead of vanishing.
+  const done = [];
+  // A native <select>'s choices are ON the page — hand them over so a surface offering "pick
+  // one" does not have to probe for what the DOM already says. (React listboxes render options
+  // only while open; they stay un-enumerated here and honest about it.)
+  const selectOptions = (el) => {
+    if ((el.tagName || '').toLowerCase() !== 'select') return undefined;
+    return [...el.options].map(o => txt(o).slice(0, 60)).filter(Boolean).slice(0, 24);
+  };
   const seen = new Set();
   for (const el of singles) {
     const disabled = !!(el.disabled || attr(el, 'aria-disabled') === 'true' || el.readOnly);
@@ -321,18 +335,23 @@ SCAN_REQUIRED_JS = r"""
     // would read ANSWERED, drop out of this list, and let form_complete_gate pass an
     // incomplete form. Verified live on KKR 2026-07-16. See app/js_common.py.
     const truth = __valueTruth(el);
+    // A password's value never leaves the page, answered or not (§4). The old shape leaked
+    // nothing only by accident — satisfied fields were dropped entirely; now that they file
+    // a row, the mask has to be explicit.
+    if ((el.type || '').toLowerCase() === 'password') truth.preview = truth.answered ? '••••' : '';
     const invalid = __invalid(el);
-    if (truth.answered && !invalid) continue;   // satisfied — nothing to report
-
     const id = el.id || label;
     if (seen.has(id)) continue;          // a hidden required TWIN is not a second question
     seen.add(id);
-    out.push({field: label.slice(0, 90), selector: __idSel(el),
-              kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
-              required_via: via, value_read_at: truth.read_at,
-              // `answered` is NOT always false here: a FILLED-but-INVALID field is reported
-              // too, and the gate needs the distinction (reason "invalid" vs "empty").
-              answered: truth.answered, valid: !invalid, value_preview: truth.preview});
+    const row = {field: label.slice(0, 90), selector: __idSel(el),
+                 kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
+                 required_via: via, value_read_at: truth.read_at,
+                 // `answered` is NOT always false on the unanswered list: a FILLED-but-INVALID
+                 // field is reported there too, and the gate needs the distinction
+                 // (reason "invalid" vs "empty").
+                 answered: truth.answered, valid: !invalid, value_preview: truth.preview,
+                 options: selectOptions(el)};
+    (truth.answered && !invalid ? done : out).push(row);   // satisfied files, never vanishes
   }
 
   // A GROUP's question container is, BY CONSTRUCTION, the lowest common ancestor of its
@@ -370,6 +389,17 @@ SCAN_REQUIRED_JS = r"""
     return txt(lca(group)).slice(0, 160) || fallback;
   };
 
+  // A group MEMBER's own label — the option's word ("True", "Job Board"), not the question's.
+  // The question container's text is the field; each input's label is the choice. These are what
+  // a surface renders as the pressable answers, and what check_group's `values` expects.
+  const optLabel = (el) => {
+    if (el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+                 if (l) return txt(l).slice(0, 60); }
+    const own = el.closest('label'); if (own) return txt(own).slice(0, 60);
+    return (attr(el, 'value') || '').slice(0, 60);
+  };
+  const optLabels = (group) => group.map(optLabel).filter(Boolean).slice(0, 16);
+
   // rule 2 — checkbox groups, which the old scan missed entirely.
   const boxes = [...document.querySelectorAll('input[type=checkbox]')].filter(vis);
   const groups = {};
@@ -389,10 +419,13 @@ SCAN_REQUIRED_JS = r"""
     const req = !anyDisabled &&
                 (group.some(b => b.required || attr(b, 'aria-required') === 'true') || /\*/.test(label));
     if (!req) continue;
-    if (group.some(b => b.checked)) continue;      // 0 checked = unanswered
-    out.push({field: label.slice(0, 90), selector: __idSel(group[0]),
-              kind: 'checkbox_group', required_via: 'group', value_read_at: 'checked',
-              answered: false, valid: true, value_preview: ''});
+    const checked = group.filter(b => b.checked);
+    const row = {field: label.slice(0, 90), selector: __idSel(group[0]),
+                 kind: 'checkbox_group', required_via: 'group', value_read_at: 'checked',
+                 answered: checked.length > 0, valid: true,
+                 value_preview: checked.map(optLabel).filter(Boolean).join(', ').slice(0, 90),
+                 options: optLabels(group)};
+    (checked.length ? done : out).push(row);       // 0 checked = unanswered
   }
 
   // Radio groups, same reasoning. NB group by NAME before id: smartapply gives every radio
@@ -405,16 +438,19 @@ SCAN_REQUIRED_JS = r"""
   // one-option acknowledgment radios) was skipped by the old `if (k)` — give it a group of one.
   for (const r of radios) { let k = r.name || r.id; if (!k) k = '__lone_radio_' + (rsynth++); (rgroups[k] = rgroups[k] || []).push(r); }
   for (const [k, group] of Object.entries(rgroups)) {
-    if (group.some(r => r.checked)) continue;
     const label = groupLabel(group, k);
     const req = group.some(r => r.required || attr(r, 'aria-required') === 'true') || /\*/.test(label);
     if (!req) continue;
-    out.push({field: label.slice(0, 90), selector: __idSel(group[0]),
-              kind: 'radio_group', required_via: 'group', value_read_at: 'aria-checked',
-              answered: false, valid: true, value_preview: ''});
+    const picked = group.find(r => r.checked);
+    const row = {field: label.slice(0, 90), selector: __idSel(group[0]),
+                 kind: 'radio_group', required_via: 'group', value_read_at: 'aria-checked',
+                 answered: !!picked, valid: true,
+                 value_preview: picked ? optLabel(picked) : '',
+                 options: optLabels(group)};
+    (picked ? done : out).push(row);
   }
 
-  return {unanswered: out, url: (location.href || '').slice(0, 140)};
+  return {unanswered: out, answered: done, url: (location.href || '').slice(0, 140)};
 }
 """
 

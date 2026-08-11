@@ -2502,11 +2502,17 @@ async def scan_required(body: ScanRequiredRequest):
                                                 "returnByValue": True})
     out = (r.get("result") or {}).get("value") or {}
     unanswered = out.get("unanswered") or []
+    # The satisfied rows ride along so a cockpit can show the form AS IT STANDS — an answered
+    # field is not a done field when the answer is wrong (the near-self-withdrawal of
+    # 2026-08-10 was an ANSWERED one). `unanswered` keeps its gate semantics untouched.
+    answered = out.get("answered") or []
     return {"outcome": Outcome.OK, "unanswered": unanswered, "count": len(unanswered),
+            "answered": answered,
             "detail": (f"{len(unanswered)} required field(s) unanswered: "
                        f"{[u['field'] for u in unanswered][:6]}" if unanswered
                        else "all required fields answered"),
-            "steps": [{"step": "scan", "unanswered": len(unanswered), "url": out.get("url")}]}
+            "steps": [{"step": "scan", "unanswered": len(unanswered),
+                       "answered": len(answered), "url": out.get("url")}]}
 
 
 class SetDateRequest(BaseModel):
