@@ -2635,6 +2635,18 @@ DISTANCE_OPTIONS = [0, 5, 10, 15, 25, 35, 50, 100]     # Indeed's own ladder, in
 LINKEDIN_DISTANCE_OPTIONS = [0, 5, 10, 25, 50, 75, 100]  # LinkedIn's own ladder, in miles
 
 
+def distance_target(min_miles: int, options: list[int]) -> int:
+    """The radius to SET: the smallest offered option >= the floor (the widest, if none is).
+
+    One function for both engines and for the "already" test, because the two drifted apart in
+    exactly the way shared rules do: the target was computed correctly while the early-exit
+    accepted any current >= the floor — so a leftover radius=100 from the PREVIOUS search
+    satisfied a declared 50 and the pill was never operated (live, 2026-08-10). "Already" means
+    already AT THE TARGET; the URL's radius is provenance-bound to the search that set it.
+    """
+    return next((m for m in options if m >= min_miles), options[-1])
+
+
 # LinkedIn's distance filter is a SLIDER, not a list of options — so the pill protocol above does
 # not transfer, and this is a different widget with the same shape: open → stage → commit → confirm
 # from outside. Step 1 opens it and reports the slider's geometry so the caller can drive the
@@ -2724,13 +2736,16 @@ async def _set_distance_linkedin(body: SetDistanceRequest) -> dict:
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
 
-    target_miles = next((m for m in LINKEDIN_DISTANCE_OPTIONS if m >= body.min_miles),
-                        LINKEDIN_DISTANCE_OPTIONS[-1])
+    target_miles = distance_target(body.min_miles, LINKEDIN_DISTANCE_OPTIONS)
     log: list[dict] = []
     current = await _read_distance_param(body.browser_url, body.tab_id, body.tab_url, "distance")
-    if current is not None and current >= body.min_miles:
+    # Same rule as the Indeed path: "already" is equality with the target, never merely >= the
+    # floor — a leftover wider radius from the previous search is not the one the operator asked
+    # for (2026-08-10).
+    if current == target_miles:
         return {"ok": True, "applied": True, "selected_miles": current, "method": "already",
-                "detail": f"distance already {current} (>= {body.min_miles})", "log": []}
+                "detail": f"distance already {current} — the smallest offered option "
+                          f">= {body.min_miles}", "log": []}
 
     target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
     async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
@@ -2787,7 +2802,9 @@ async def _set_distance_linkedin(body: SetDistanceRequest) -> dict:
     for _ in range(16):
         await asyncio.sleep(0.5)
         r = await _read_distance_param(body.browser_url, body.tab_id, body.tab_url, "distance")
-        if r is not None and r >= body.min_miles:
+        # Equality with the slid-to target, not >= the floor — a leftover wider distance would
+        # otherwise confirm a slider that never committed (same rule as the Indeed pill).
+        if r == target_miles:
             applied = r
             break
     if applied is not None:
@@ -2864,12 +2881,19 @@ async def set_distance(body: SetDistanceRequest):
             return {"ok": False, "applied": False, "selected_miles": None,
                     "method": "error", "detail": str(exc), "log": []}
 
-    target_miles = next((m for m in DISTANCE_OPTIONS if m >= body.min_miles), DISTANCE_OPTIONS[-1])
+    target_miles = distance_target(body.min_miles, DISTANCE_OPTIONS)
     try:
         current = await _read_radius(body.browser_url, body.tab_id, body.tab_url)
-        if current is not None and current >= body.min_miles:
+        # "Already" means already AT THE TARGET — not merely somewhere above the floor. The URL's
+        # radius is provenance-bound to the PREVIOUS search: re-querying in the same tab carries
+        # the old filter along, and `current >= min` accepted a leftover 100 when the operator
+        # declared 50 (live, 2026-08-10 — asked 50, got 100, and the panel dutifully reported a
+        # filter nobody chose). The floor stays a floor; the target is the smallest offered
+        # option >= it, and anything else — wider included — gets the pill operated.
+        if current == target_miles:
             return {"ok": True, "applied": True, "selected_miles": current, "method": "already",
-                    "detail": f"radius already {current} (>= {body.min_miles})", "log": []}
+                    "detail": f"radius already {current} — the smallest offered option "
+                              f">= {body.min_miles}", "log": []}
 
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
@@ -2886,11 +2910,14 @@ async def set_distance(body: SetDistanceRequest):
             })
 
         # Confirm from OUTSIDE — the commit navigates, so nothing inside the page can report this.
+        # Confirmation is equality with the option we SELECTED: `>= min` here would re-accept the
+        # previous search's leftover radius and mask a pill that never committed (the same bug the
+        # early-exit above had).
         applied = None
         for _ in range(16):
             await asyncio.sleep(0.5)
             r = await _read_radius(body.browser_url, body.tab_id, body.tab_url)
-            if r is not None and r >= body.min_miles:
+            if r == target_miles:
                 applied = r
                 break
         if applied is not None:

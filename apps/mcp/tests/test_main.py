@@ -374,3 +374,18 @@ class ListTabsTest(unittest.TestCase):
             out = asyncio.run(ms.list_tabs(ms.ListTabsRequest(browser_url="http://b")))
         self.assertFalse(out["ok"])
         self.assertEqual(out["tabs"], [])
+
+
+def test_distance_target_and_the_already_rule():
+    """Pin for the 2026-08-10 radius bug: the operator declared 50, the tab's URL still carried
+    the previous search's radius=100, and an `already >= floor` early-exit accepted it. The
+    target is the smallest offered option >= the floor, and "already" is EQUALITY with it —
+    a leftover wider radius must operate the pill, not satisfy it."""
+    from app.main_server import DISTANCE_OPTIONS, LINKEDIN_DISTANCE_OPTIONS, distance_target
+
+    assert distance_target(50, DISTANCE_OPTIONS) == 50          # exactly-50 exists on Indeed
+    assert distance_target(50, LINKEDIN_DISTANCE_OPTIONS) == 50
+    assert distance_target(30, DISTANCE_OPTIONS) == 35          # smallest >= floor
+    assert distance_target(999, DISTANCE_OPTIONS) == 100        # widest when none reaches
+    # The live failure, as arithmetic: current 100, declared 50 — NOT "already".
+    assert distance_target(50, DISTANCE_OPTIONS) != 100
