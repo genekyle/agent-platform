@@ -277,6 +277,17 @@ def rung_applies(rung_id: str, *, platform: Optional[str],
         if entry is not None and entry.get("auth") not in ("account",):
             return False, (f"{platform}'s account posture is unmeasured — the wall, if it exists, "
                            f"shows itself after Apply, and the rung engages when it is seen")
+        # A MEASURED wall still has a WHEN, and only the page answers it. `auth: account` says
+        # this platform HAS a wall; the flow position says the wall is two screens past the
+        # posting (Workday: posting → apply-method → auth). Serving the account rung on the
+        # posting made the cockpit's whole surface account-creation while the Lens correctly
+        # showed a landing page (operator, live 2026-08-11). Before the wall, the tail leads;
+        # at or past it — or with no readable position — the rung engages as ever.
+        import apply_recipe as ar
+        if ar.before_the_wall(platform, state):
+            return False, (f"the page is still before {platform}'s account wall on its own "
+                           f"flow — press the screen's Apply first; the wall engages when "
+                           f"it arrives")
     return True, ""
 
 

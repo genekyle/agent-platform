@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2885,6 +2886,25 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
                               f"submitting now would opt you in — nothing was submitted."}
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
+    # CHECKS — required boxes that must end ON (the refusals' mirror). Label-independent by
+    # design: `values: ["*"]` means every box in the addressed group ends checked, because a
+    # consent's label is tenant prose and a walk that must quote it exactly breaks per tenant
+    # (SolutionHealth's "I consent" vs US Bank's "I confirm…", live 2026-08-11). Converges —
+    # an already-checked box is never re-clicked — and a check we cannot verify stops the
+    # submit, same as a refusal: consent is not a best-effort field.
+    for field in form.get("checks", ()):
+        addr = apply_fields.addressing_for(ats, field)
+        staged = True
+        res = await _capture_post("/check_group", {
+            "browser_url": browser_url, "tab_id": tab_id,
+            "selector": addr["selector"], "values": ["*"]})
+        if not res.get("ok"):
+            return {"ok": False, "reason": "check_failed", "staged": staged,
+                    "detail": f"Could not check {field!r} "
+                              f"({res.get('code') or res.get('detail')}). The form requires it, "
+                              f"so submitting now would bounce — nothing was submitted."}
+        await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+
     # CONFIRMS — required consents, always a deliberate act against a field somebody wrote down,
     # never a control swept up by a fill-everything pass.
     #
@@ -3776,13 +3796,21 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     # DOM census named them by proximity and minted structural selectors (live 2026-08-11).
     # Census rows ride in WITH their selector, and the bunch below types by selector when the
     # accessible name cannot address the node. AX names stay first: they win the dedupe.
-    known_names = {(f.get("name") or "").strip().lower() for f in fields}
+    # Compared with the REQUIRED MARKER STRIPPED: the census reads a label as the page prints it
+    # ("First Name*") while AX reports the accessible name ("First Name"), so a raw compare called
+    # them different fields and planned BOTH — 14 rows for 7 boxes on Workday's My Information,
+    # every value typed twice into the same node (live 2026-08-11). Same field, same box.
+    def _bare(name: str) -> str:
+        return re.sub(r"[\s*:]+$", "", (name or "").strip()).strip().lower()
+
+    known_names = {_bare(f.get("name") or "") for f in fields}
     for c_row in ((census or {}).get("unanswered") or []):
         c_name = (c_row.get("field") or "").strip()
         if (c_row.get("kind") in ("input", "textarea") and c_row.get("selector")
-                and c_name and c_name.lower() not in known_names):
+                and c_name and _bare(c_name) not in known_names):
             fields.append({"role": "textbox", "name": c_name,
                            "selector": c_row["selector"]})
+            known_names.add(_bare(c_name))
     rows = _fill_plan_for(bb, fields, db)
     summary = form_fill.summarise(rows)
     # A plan over a shut accordion is an accurate summary of a page nobody opened. Carry the

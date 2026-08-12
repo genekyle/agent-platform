@@ -473,6 +473,13 @@ class LiveActuator:
 
         wt = (addr.get("widget_type") or "").lower()
 
+        #: A prompt is addressed by ACCESSIBLE NAME, and the dispatcher was handing it the
+        #: INTERNAL FIELD KEY — "prompt field not found: 'how_did_you_hear'" over a page whose
+        #: prompt was right there (live 2026-08-11, Workday's source field). The recipe's own
+        #: `name` is the accessible name when it has one; the caller's word is the fallback,
+        #: because a teacher naming a field the way the PAGE does must also work.
+        prompt_name = addr.get("name") or field
+
         if intent == Intent.SELECT_OPTION.value:
             # A native radio group is not driveable by /select_option (react-select/listbox only) —
             # route it to the native-click mechanism. react-select / listbox stay on the endpoint.
@@ -480,7 +487,7 @@ class LiveActuator:
                 return self._field_result(self._autofill_native(field, p.get("value", "")))
             res = self._post("/select_option", {
                 **self._addr(), "selector": addr.get("selector"), "value": p.get("value", ""),
-                "ats": self._ats, "field": field, "commit": addr.get("commit"),
+                "ats": self._ats, "field": prompt_name, "commit": addr.get("commit"),
                 "widget_type": addr.get("widget_type")})
             return self._field_result(res)
 

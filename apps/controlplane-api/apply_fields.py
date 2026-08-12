@@ -158,8 +158,12 @@ WORKDAY_FIELDS: dict[str, dict[str, Any]] = {
                         "account boundary). Present so the Account Manager can resolve it."),
     "verify_password": _f(ats="workday", role="textbox", name="Verify New Password",
                           widget_type=WidgetType.TEXT, note="OPERATOR-ONLY — as above."),
-    "acknowledge": _f(ats="workday", role="checkbox",
-                      name="I confirm that I have read and acknowledge",
+    # BY AUTOMATION-ID, NOT BY LABEL: the label is TENANT PROSE ("I confirm that I have read and
+    # acknowledge" on US Bank, "I consent" on SolutionHealth — measured live 2026-08-11 when the
+    # name-matched checkbox went unfound, the box stayed empty, and Create Account bounced with
+    # "Please check the box to continue"). The automation-id is the one handle Workday renders
+    # from its own component library, which is this whole table's founding rule, two entries up.
+    "acknowledge": _f(ats="workday", selector="[data-automation-id=createAccountCheckbox]",
                       widget_type=WidgetType.CHECKBOX_GROUP),
     # The honeypot is DATA the resolver must know about, so a future "fill every field" pass
     # can be made to refuse it by name rather than by luck.

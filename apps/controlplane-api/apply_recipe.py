@@ -285,7 +285,13 @@ WORKDAY_APPLY_BRANCHES = {
     "ats_unavailable":  {"human_required": False, "note": "req 404'd on the ATS — but if AUTHED, tenant-search the title first (stale-re-post pattern); only then skip"},
     "account_creation": {"human_required": True,  "note": "no candidate account for this employer — needs the operator (persistent per-employer profile). ABANDON this prospect (don't create an account): record blocked, then run APPLY_EPILOGUE — close the ATS tab + refocus search"},
     "captcha":          {"human_required": True,  "note": "anti-bot challenge — human clears it (captcha-first check on any blocked action)"},
-    "nested_prompt_gap": {"human_required": True, "note": "Workday nested-prompt multiselect resists CDP input — hand the single field to the operator, continue after"},
+    "nested_prompt_gap": {"human_required": False, "note":
+        "SOLVED 2026-08-11 (SolutionHealth): the prompt is DRILLED, not typed. A category's row "
+        "click SELECTS and leaves the list unmoved; its CHEVRON opens the children. Typing a leaf "
+        "name mid-drill runs Workday's GLOBAL search, abandons the hierarchy and can return an "
+        "empty list for a leaf that is one click away. /select_prompt_path now drills by chevron "
+        "for every level but the last. Category names are TENANT vocabulary — SolutionHealth says "
+        "'Job Sites' where the older note said 'Job Board'; read the open list, never assume."},
 }
 
 # What the live teacher LEARNED driving Workday — the planner's seed knowledge. `works` are proven
@@ -1111,6 +1117,57 @@ def flow_order(platform: Optional[str]) -> list[str]:
     return list(_FLOW_ORDERS.get(_canon(platform), []))
 
 
+def _wall_index(order: list[str]) -> Optional[int]:
+    """The position of the first auth-ish state in a flow order, or None if the flow has none."""
+    for i, s in enumerate(order):
+        tail = s.split("_", 1)[-1] if "_" in s else s
+        if any(t in tail for t in ("auth", "account", "sign_in", "create_account")):
+            return i
+    return None
+
+
+def before_the_wall(platform: Optional[str], state: Optional[str]) -> bool:
+    """Is the live page strictly BEFORE this platform's account wall on its own flow?
+
+    THE PAGE DECIDES WHEN, EVEN ON A MEASURED PLATFORM. Workday's registry row says
+    `auth: account` — a measured fact — and the ladder read that as "the wall is NOW": the
+    moment classify said workday, the cockpit's whole surface became account-creation while the
+    LENS correctly showed a job posting (operator, live 2026-08-11: "the lens is accurate but
+    our cockpit isn't"). Even on Workday the wall only exists after Apply → apply-method; the
+    flow order has said so since it was written (`workday_apply_auth` is two screens past the
+    posting). A measured `auth` answers WHETHER this platform has a wall; the flow position
+    answers WHEN — and only the page may answer when.
+
+    False when the state is missing or unplaced: an unreadable position keeps the legacy
+    behaviour (the wall engages at classify), which is also the honest default — "we cannot
+    see where we are" must not silently defer a wall that may be on screen.
+    """
+    if not platform or not state:
+        return False
+    p = flow_progress(state, platform=platform)
+    if not p.get("recognised") or p.get("position") is None:
+        return False
+    order = (_FLOW_ORDERS.get(_canon(platform))
+             or [f"{platform}_{k}" for k in GENERIC_ATS_ORDER])
+    wall = _wall_index(order)
+    return wall is not None and int(p["position"]) < wall
+
+
+#: The Workday tail's advance controls, keyed by the state they advance FROM — the same shape the
+#: generic spine's entries carry, sourced from WORKDAY_APPLY_RECIPE's own selectors. The posting
+#: advances on its Apply button; the method modal takes the manual path (Use-My-Last needs an
+#: account that, pre-wall, does not exist yet).
+_WORKDAY_TAIL: dict[str, dict[str, Any]] = {
+    "workday_job_posting": {"action": "click Apply — the posting's own control",
+                            "controls": ["apply"],
+                            "expect": ["workday_apply_method", "workday_apply_auth"]},
+    "workday_apply_method": {"action": "choose the apply method — Apply Manually unless the "
+                                       "candidate account already exists",
+                             "controls": ["apply manually"],
+                             "expect": ["workday_apply_auth"]},
+}
+
+
 def gate_state(platform: Optional[str]) -> str:
     """The screen whose next action is the irreversible one, or ""."""
     named = _GATE_STATES.get(_canon(platform), "")
@@ -1204,6 +1261,17 @@ def named_control(platform: str, state: Optional[str], ax_identities) -> str:
                 return max(matches, key=len)
         return ""
 
+    # The Workday tail's named controls, same match rules and the same exclusions — "Apply with
+    # LinkedIn"-shaped detours are wrong on every platform.
+    if _canon(platform) == "workday" and state in _WORKDAY_TAIL:
+        for wanted in _WORKDAY_TAIL[state]["controls"]:
+            matches = [n for n in names
+                       if n and wanted in n.lower()
+                       and not any(x in n.lower() for x in GENERIC_CONTROL_EXCLUSIONS)]
+            if matches:
+                return max(matches, key=len)
+        return ""
+
     if _canon(platform) != "indeed_quick_apply":
         return ""
     wanted = ""
@@ -1226,6 +1294,8 @@ def advance_action(platform: str, state: Optional[str]) -> str:
     kind = _generic_kind(platform, state)
     if kind:
         return str(_generic_entry(kind).get("action") or "")
+    if _canon(platform) == "workday" and state in _WORKDAY_TAIL:
+        return str(_WORKDAY_TAIL[state]["action"])
     if _canon(platform) != "indeed_quick_apply":
         return ""
     for entry in INDEED_APPLY_RECIPE:
@@ -1244,6 +1314,8 @@ def expected_after(platform: str, state: Optional[str]) -> tuple[str, ...]:
     kind = _generic_kind(platform, state)
     if kind:
         return tuple(f"{platform}_{k}" for k in (_generic_entry(kind).get("expect") or ()))
+    if _canon(platform) == "workday" and state in _WORKDAY_TAIL:
+        return tuple(_WORKDAY_TAIL[state]["expect"])
     if _canon(platform) != "indeed_quick_apply":
         return ()
     for entry in INDEED_APPLY_RECIPE:

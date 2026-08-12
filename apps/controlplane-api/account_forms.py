@@ -66,6 +66,14 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
         "workday": {
             "fields": (("email", "username"), ("password", "password"),
                        ("verify_password", "password")),
+            # CHECKS — required boxes that must end ON before the submit. The consent's label is
+            # TENANT PROSE ("I consent" / "I confirm that I have read and acknowledge"), so it is
+            # addressed by Workday's own stable automation-id and checked label-independently.
+            # The walk had NO checkbox step at all: the recipe's prose said "CHECK the acknowledge
+            # checkbox" since 07-12 and nothing ever executed it — SolutionHealth's tenant made it
+            # required and Create Account bounced with "Please check the box to continue"
+            # (live 2026-08-11).
+            "checks": ("acknowledge",),
             "submit": "create_account_submit",
         },
         "icims": {

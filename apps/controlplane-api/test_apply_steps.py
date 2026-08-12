@@ -556,3 +556,31 @@ def test_the_walk_skips_the_unmeasured_wall_and_serves_the_generic_tail():
     rung, passed = step.walk_to_next_rung()
     assert rung is not None and rung.id == "cornerstone_job_posting"
     assert any(r_id == "account" and "unmeasured" in why for r_id, why in passed)
+
+
+def test_a_measured_wall_still_waits_for_the_page_to_reach_it():
+    """Workday's registry row says auth=account — a measured fact — and the ladder read that as
+    "the wall is NOW": on the posting, the cockpit's whole surface became account-creation while
+    the Lens correctly showed a landing page (operator, live 2026-08-11). The flow order has
+    always said the wall is two screens later. WHETHER is the registry's answer; WHEN is the
+    page's."""
+    # Before the wall on the platform's own flow: the tail leads.
+    applies, why = aps.rung_applies("account", platform="workday",
+                                    state="workday_job_posting")
+    assert applies is False and "before" in why
+    assert aps.rung_applies("account", platform="workday",
+                            state="workday_apply_method")[0] is False
+    # At the wall: engages.
+    assert aps.rung_applies("account", platform="workday",
+                            state="workday_apply_auth")[0] is True
+    # Past it: still engages (re-auth mid-flow is real).
+    assert aps.rung_applies("account", platform="workday",
+                            state="workday_my_information")[0] is True
+    # No readable position: legacy behaviour — the wall engages at classify, honestly.
+    assert aps.rung_applies("account", platform="workday", state=None)[0] is True
+    assert aps.rung_applies("account", platform="workday",
+                            state="not_a_workday_state")[0] is True
+    # The generic cadence gets the same courtesy: an unmeasured platform already defers, and a
+    # measured-account generic platform on its posting would too.
+    assert aps.rung_applies("account", platform="successfactors",
+                            state="successfactors_job_posting")[0] is False

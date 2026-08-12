@@ -222,23 +222,32 @@ CHECK_GROUP_JS = r"""
   log.push({step: 'precheck', group: keys[0], n_boxes: group.length,
             already_checked: group.filter(b => b.checked).map(label)});
 
+  // values ["*"] = EVERY box in this group ends CHECKED — the label-independent contract a
+  // required consent needs: the box's text is TENANT PROSE ("I consent" on SolutionHealth,
+  // "I confirm that I have read and acknowledge" on US Bank), and a caller that must quote it
+  // exactly breaks per tenant. Converges like everything else here: an already-checked box is
+  // left alone, so re-entering the leg never toggles a recorded consent off.
+  const wantAll = cfg.values.length === 1 && cfg.values[0] === '*';
   const available = group.map(label);
-  const missing = cfg.values.filter(v => !available.some(a => a === v));
-  if (missing.length)
-    return {ok: false, code: 'no_option', detail: 'no option(s) ' + JSON.stringify(missing),
-            options: available, log: log};
+  if (!wantAll) {
+    const missing = cfg.values.filter(v => !available.some(a => a === v));
+    if (missing.length)
+      return {ok: false, code: 'no_option', detail: 'no option(s) ' + JSON.stringify(missing),
+              options: available, log: log};
+  }
 
   // Exact match only. Toggle by CLICK (not .checked = true) so React sees the event.
   const changed = [];
   for (const b of group) {
-    const want = cfg.values.includes(label(b));
+    const want = wantAll || cfg.values.includes(label(b));
     if (b.checked !== want) { b.scrollIntoView({block: 'center'}); b.click(); changed.push(label(b)); }
   }
   log.push({step: 'select', changed: changed});
 
   // CONFIRM by re-reading the DOM, not by trusting the clicks.
   const now = group.filter(b => b.checked).map(label);
-  const okSet = cfg.values.length === now.length && cfg.values.every(v => now.includes(v));
+  const okSet = wantAll ? now.length === group.length
+                        : cfg.values.length === now.length && cfg.values.every(v => now.includes(v));
   log.push({step: 'commit', kind: 'on_select', value_read_at: 'checked', observed: now});
   if (!okSet)
     return {ok: false, code: 'not_staged', detail: 'wanted ' + JSON.stringify(cfg.values) +
@@ -535,6 +544,31 @@ SCAN_REQUIRED_JS = r"""
                  value_preview: picked ? optLabel(picked) : '',
                  options: optLabels(group)};
     (picked ? done : out).push(row);
+  }
+
+  // THE PAGE'S OWN VERDICT OUTRANKS OUR ELEMENT LIST. `aria-invalid=true` is the site saying,
+  // in its own words, that this control is not satisfied — and it is the ONE signal that does not
+  // depend on us having guessed the right tags. Workday renders its State picker as a bare
+  // <button> with no role, no automation-id and no aria-required: invisible to `singles` above,
+  // so the census read the form COMPLETE while the page printed "Error: The field State is
+  // required and must have a value" and refused every Continue (live 2026-08-11).
+  //
+  // Filed only when the walk above did not already report the control, and always as
+  // `required_via: aria-invalid` so the row's provenance is legible. This cannot mint a false
+  // blocker: a page that marks a control invalid is a page that will not advance past it.
+  const seenSel = new Set(out.map(r => r.selector).filter(Boolean));
+  for (const el of document.querySelectorAll('[aria-invalid=true]')) {
+    if (!__isUserField(el)) continue;
+    const sel = __idSel(el) || __cssPath(el);
+    if (sel && seenSel.has(sel)) continue;
+    const label = labelFor(el);
+    const t = __valueTruth(el);
+    out.push({field: label.slice(0, 90), selector: sel,
+              kind: (el.tagName || '').toLowerCase(),
+              required_via: 'aria-invalid', value_read_at: t.read_at,
+              answered: t.answered, valid: false, value_preview: t.preview,
+              options: selectOptions(el)});
+    if (sel) seenSel.add(sel);
   }
 
   return {unanswered: out, answered: done, optional,

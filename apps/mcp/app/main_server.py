@@ -303,7 +303,13 @@ class SelectPromptRequest(BaseModel):
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
     field_role: Optional[str] = "textbox"
-    field_name: str            # accessible name of the prompt field, e.g. "How Did You Hear About Us?"
+    field_name: str = ""       # accessible name of the prompt field, e.g. "How Did You Hear About Us?"
+    #: …or a SELECTOR, like every other tier-2 protocol endpoint takes. This was the one that
+    #: could not, so a recipe field addressed the stable way (Workday's
+    #: `[data-automation-id=formField-source]`) had no way in, the dispatcher fell back to
+    #: passing the internal field KEY as an accessible name, and the endpoint answered "prompt
+    #: field not found: 'how_did_you_hear'" over a prompt that was on screen (2026-08-11).
+    selector: Optional[str] = None
     value: str                 # the leaf to select, e.g. "Indeed" (searched across the hierarchy)
     settle_seconds: float = 0.8
 
@@ -381,17 +387,21 @@ async def select_prompt(body: SelectPromptRequest):
     # No outer try/except: @journaled catches and journals as Outcome.ERROR. A local catch
     # would swallow the row — which is how a broken prompt used to surface as a bare
     # {"ok": false} that taught the system nothing.
-    common = {"addressed_by": "role_name",
-              "target": f"{body.field_role or '*'}:{body.field_name}",
+    common = {"addressed_by": "selector" if body.selector else "role_name",
+              "target": body.selector or f"{body.field_role or '*'}:{body.field_name}",
               "widget_type": WidgetType.PROMPT_HIERARCHICAL.value}
     steps: list[dict] = []
 
-    node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
-                                     body.field_role, body.field_name)
-    steps.append({"step": "resolve", "field": body.field_name, "node": node_id})
+    if body.selector:
+        node_id = await _resolve_node_by_selector(body.browser_url, body.tab_id, body.tab_url,
+                                                  body.selector)
+    else:
+        node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
+                                         body.field_role, body.field_name)
+    steps.append({"step": "resolve", "field": common["target"], "node": node_id})
     if node_id is None:
         return {**common, "outcome": Outcome.NOT_FOUND, "steps": steps,
-                "detail": f"prompt field not found: {body.field_name!r}"}
+                "detail": f"prompt field not found: {common['target']!r}"}
 
     # 1. OPEN the prompt via the proven driver node-click (same path /execute uses) — a
     # trusted-mouse-at-box-center did NOT reliably open Workday prompt popups.
@@ -491,6 +501,33 @@ _PROMPT_CLEAR_SEARCH_JS = r"""
 """
 
 
+# DRILL a hierarchical prompt CATEGORY open — the disclosure, not the selection.
+#
+# A Workday prompt row (`[data-automation-id=menuItem]`) holds two things: the option text
+# (`promptOption` / `promptLeafNode`), whose click SELECTS, and a chevron whose click OPENS THE
+# CHILDREN. Clicking the text of a category does not drill — the list stays exactly as it was,
+# and a walk that keeps clicking it stalls forever on the same level (measured live 2026-08-11,
+# "Job Sites" clicked three times, three identical lists). The chevron carries no accessible name
+# and no automation-id of its own, so it is addressed structurally: the element holding the row's
+# svg. Falls back to the row itself when a tenant renders no chevron, and reports WHICH it used.
+_PROMPT_DRILL_JS = r"""
+(label => {
+  const norm = s => (s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const want = norm(label);
+  const rows = [...document.querySelectorAll('[data-automation-id=menuItem], [role=option]')];
+  const row = rows.find(r => norm(r.innerText).startsWith(want)) ||
+              rows.find(r => norm(r.innerText).includes(want));
+  if (!row) return {ok: false, detail: 'row not found'};
+  const svg = row.querySelector('svg');
+  const holder = svg && (svg.closest('button, [role=button], span, div') || svg.parentElement);
+  const target = holder && holder !== row ? holder : row;
+  target.scrollIntoView({block: 'center'});
+  target.click();
+  return {ok: true, via: target === row ? 'row' : 'chevron'};
+})(%s)
+"""
+
+
 # Read whether a prompt field has COMMITTED a value: its own value/pill text and whether it is
 # still flagged invalid. This is the verification /select_prompt never did — clicking an option is
 # not the same as the field accepting it (a category click drills in and commits nothing).
@@ -585,22 +622,56 @@ async def select_prompt_path(body: SelectPromptPathRequest):
         await cdp.send("Runtime.evaluate", {"expression": _PROMPT_CLEAR_SEARCH_JS})
         await asyncio.sleep(0.3)
 
+        last = len(levels) - 1
         for i, level in enumerate(levels):
             # Try to find the row as-is (top-level categories are visible without typing); if it is
             # not there, type to filter/fetch, then look again.
+            #
+            # TYPING IS A LAST RESORT ON A CATEGORY, NEVER A DRILL. Workday's search is GLOBAL:
+            # typing a leaf name while a category is open abandons the drill and filters the whole
+            # tree, which on SolutionHealth returned an EMPTY list for "Indeed" — a leaf that was
+            # sitting one click away under Job Sites (live 2026-08-11). So the search is only
+            # attempted for a row we cannot see; the walk itself is structural.
             box = await _find_box(cdp, level)
             typed = False
             if not box.get("found"):
                 typed = await _type_search(cdp, level)
                 box = await _find_box(cdp, level)
-            steps.append({"step": f"level{i}", "value": level, "typed": typed,
-                          "found": bool(box.get("found")), "matched": box.get("txt")})
+                if typed:
+                    # The filtered list is a FLAT global result — the hierarchy is gone, so the
+                    # remaining path levels no longer exist as rows. Say so instead of walking on.
+                    steps.append({"step": f"level{i}", "value": level, "typed": True,
+                                  "found": bool(box.get("found")), "matched": box.get("txt"),
+                                  "note": "found via global search — the drill was abandoned"})
             if not box.get("found"):
+                steps.append({"step": f"level{i}", "value": level, "typed": typed,
+                              "found": False, "matched": None})
                 return {**common, "outcome": Outcome.NO_OPTION if typed else Outcome.NOT_OPENED,
                         "steps": steps,
                         "detail": f"level {i} {level!r} not found (typed={typed})"}
-            # Trusted mouse click on the ROW center — a category drills in, a leaf commits.
-            await _trusted_click(cdp, box["x"], box["y"])
+            if not typed:
+                steps.append({"step": f"level{i}", "value": level, "typed": False,
+                              "found": True, "matched": box.get("txt")})
+
+            # A CATEGORY DRILLS BY ITS CHEVRON; ONLY A LEAF COMMITS BY ITS ROW. Clicking the row
+            # text of a category SELECTS it — the list does not move, and the walk silently
+            # stalls on the same level (measured live 2026-08-11: three clicks on "Job Sites",
+            # three identical option lists). The chevron is the disclosure control, and it has no
+            # accessible name of its own, so it is addressed structurally: the svg's holder inside
+            # the row. The leaf keeps the row click it has always used.
+            if i < last:
+                drilled = (await cdp.send("Runtime.evaluate", {
+                    "returnByValue": True,
+                    "expression": _PROMPT_DRILL_JS % _json.dumps(level)})
+                    ).get("result", {}).get("value") or {}
+                steps.append({"step": f"drill{i}", "value": level, "via": drilled.get("via"),
+                              "ok": bool(drilled.get("ok"))})
+                if not drilled.get("ok"):
+                    return {**common, "outcome": Outcome.NOT_OPENED, "steps": steps,
+                            "detail": f"level {i} {level!r} would not drill "
+                                      f"({drilled.get('detail') or 'no disclosure control'})"}
+            else:
+                await _trusted_click(cdp, box["x"], box["y"])
             await asyncio.sleep(0.8)
             # Reset the search filter before the next drill level.
             await cdp.send("Runtime.evaluate", {"expression": _PROMPT_CLEAR_SEARCH_JS})
@@ -2542,6 +2613,10 @@ async def select_option(body: SelectOptionRequest):
     if WidgetType.PROMPT_HIERARCHICAL.value in (classified, body.widget_type):
         inner = await select_prompt(SelectPromptRequest(
             browser_url=body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url,
+            # The SELECTOR when the caller has one (a recipe's stable address); the field name
+            # only as the fallback. Passing the caller's `field` as an accessible name is what
+            # sent the internal key "how_did_you_hear" at the AX resolver.
+            selector=body.selector,
             field_role=None, field_name=body.field or body.value, value=body.value))
         return {**common, "outcome": inner.get("outcome", Outcome.ERROR),
                 "steps": inner.get("steps", []), "detail": inner.get("detail", ""),

@@ -99,6 +99,24 @@ WIDGET_TELLS_JS = r"""
     if (el.tagName === 'SELECT')
       return {read_at: '.value', answered: el.selectedIndex > 0 && el.value !== '',
               preview: (el.value || '').slice(0, 40)};
+    // WORKDAY'S MULTISELECT — the third shape of the `.value` lie, same family as react-select.
+    // The node the scan holds is a SEARCH box inside `multiselectInputContainer`; the answer is
+    // the selected-item pill beside it, and the container's own aria-label states it outright
+    // ("1 item selected, United States of America (+1)"). Reading `.value` called an answered
+    // Country Phone Code unanswered and blocked a Continue over a field the page considered
+    // done (live 2026-08-11, SolutionHealth's Workday). The container's label is the truth the
+    // widget publishes about itself, so that is what we read.
+    const __ms = el.closest ? el.closest('[data-automation-id=multiselectInputContainer]') : null;
+    if (__ms) {
+      const aria = __attr(__ms, 'aria-label') || '';
+      const m = aria.match(/^\s*(\d+)\s+items?\s+selected\s*,?\s*(.*)$/i);
+      const chosen = m ? (m[2] || '').trim() : '';
+      const n = m ? parseInt(m[1], 10) : 0;
+      // Fall back to the pills when the container states no count (older tenants).
+      const pill = chosen || __txt(__ms.querySelector('[data-automation-id*=selectedItem]') || null);
+      return {read_at: 'multiselect_selected_items', answered: n > 0 || !!pill,
+              preview: (pill || '').slice(0, 40)};
+    }
     // An ARIA combobox/listbox OPENER — a div with no .value anywhere. Its truth is its own
     // visible label (the widget protocol's `opener_label`). The generic fallback below read
     // el.value (undefined on a div), so smartapply's question dropdowns scanned as unanswered
