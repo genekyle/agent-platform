@@ -201,3 +201,36 @@ def test_upload_is_confirmed_by_the_widget_when_the_input_was_reset():
     # …and a genuine refusal from the uploader is reported as one, not polled over ten times.
     cdp = _CDP({"files": 0, "rendered": False, "error": "too large", "scope": "File too large"})
     assert asyncio.run(drv.DirectDriver()._element_act(cdp, req)).startswith("upload:rejected")
+
+
+# --- frames: the top document is not the page ---------------------------------------------
+def test_the_selector_resolver_searches_same_origin_frames():
+    """iCIMS renders its ENTIRE apply flow inside `icims_content_iframe`, so a top-document query
+    finds nothing and the failure reads exactly like a stale recipe — "could not fill 'first_name'
+    (not_found)" over a form plainly on screen (live 2026-08-12, Odyssey Consulting). The driver
+    already translated frame coordinates; the RESOLVER never looked in.
+
+    Asserted against the JS we actually ship (jsdom has no frames worth testing, and the live drive
+    is where the behaviour is proven — it resolved `#email` in iframe#icims_content_iframe)."""
+    js = ms._RESOLVE_SCOPED_JS
+    assert "contentDocument" in js, "the resolver must descend into frames"
+    assert "ownerDocument" in js, "a path is minted and verified in the node's OWN document"
+    # Cross-origin frames throw on contentDocument — that is a real boundary, caught and skipped.
+    assert "catch" in js
+
+
+def test_the_captcha_rail_sees_a_challenge_nested_in_a_frame():
+    """THE SAFETY RAIL, and it was blind on exactly the platforms that need it. The hCaptcha guarding
+    iCIMS's Candidate Profile is an iframe INSIDE the same-origin content frame, so a top-document
+    query answered `hcaptcha_count: 0, blocking: false, solved: true` — a green light — over a form
+    carrying two live challenges (measured 2026-08-12; after the fix, hcaptcha_count: 2).
+
+    A rail that reports "clear" when it cannot see is worse than no rail."""
+    js = ms._CHALLENGE_VISIBILITY_JS
+    assert "contentDocument" in js, "the rail must walk frames"
+    assert "hcaptcha" in js and "recaptcha" in js
+    # Judged in the element's own view: a rect from one frame against another frame's viewport is
+    # wrong in both directions.
+    assert "defaultView" in js
+    # Bounded descent — a cycle or a deep tree must not hang the check.
+    assert "depth" in js

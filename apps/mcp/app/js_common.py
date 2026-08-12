@@ -94,6 +94,9 @@ WIDGET_TELLS_JS = r"""
   // page reading different pages.
   const __questionOf = (el) => {
     if (!el) return {question: '', source: 'none', section: ''};
+    // A control's labels, ids and body live in ITS OWN document — load-bearing now that the resolver
+    // reaches into same-origin frames, where the top document knows nothing about this node.
+    const __doc = el.ownerDocument || document;
     // The section that CONTAINS the control: the nearest heading PRECEDING it in document order.
     //
     // Not `ancestor.querySelector('h1,…')`, which was the first cut and is subtly wrong: that
@@ -118,7 +121,7 @@ WIDGET_TELLS_JS = r"""
       return hs.length ? __txt(hs[hs.length - 1]) : '';   // the LAST one is the closest preceding
     };
     const HEADING = 'h1,h2,h3,h4,h5,[role=heading]';
-    for (let n = el, d = 0; n && n !== document.body && d < 12 && !section; d++, n = n.parentElement) {
+    for (let n = el, d = 0; n && n !== __doc.body && d < 12 && !section; d++, n = n.parentElement) {
       for (let sib = n.previousElementSibling; sib && !section; sib = sib.previousElementSibling) {
         const t = lastIn(sib, HEADING);
         if (t && t.length <= 120) section = t;
@@ -134,13 +137,13 @@ WIDGET_TELLS_JS = r"""
     const strong = (q, src) => ({question: (q || '').slice(0, 240), source: src, section});
     const named = [];
     if (el.id) {
-      try { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      try { const l = __doc.querySelector('label[for="' + CSS.escape(el.id) + '"]');
             if (l) named.push([__txt(l), 'label-for']); } catch (e) { /* bad id */ }
     }
     named.push([__attr(el, 'aria-label'), 'aria-label']);
     const ref = __attr(el, 'aria-labelledby');
     if (ref) {
-      const parts = ref.split(/\s+/).map(id => { const n = document.getElementById(id); return n ? __txt(n) : ''; })
+      const parts = ref.split(/\s+/).map(id => { const n = __doc.getElementById(id); return n ? __txt(n) : ''; })
                        .filter(Boolean);
       if (parts.length) named.push([parts.join(' '), 'aria-labelledby']);
     }
@@ -208,7 +211,7 @@ WIDGET_TELLS_JS = r"""
     // `__isUserField` is the same distinction the census uses for the hidden-required-twin trap: a
     // control a human cannot reach is part of a widget, not a question of its own.
     let start = el;
-    for (let n = el.parentElement, d = 0; n && n !== document.body && d < 6; d++, n = n.parentElement) {
+    for (let n = el.parentElement, d = 0; n && n !== __doc.body && d < 6; d++, n = n.parentElement) {
       const whole = __txt(n);
       if (whole.length > 400) break;             // n now spans the section, not the field
       let others = 0;

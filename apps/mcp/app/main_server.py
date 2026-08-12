@@ -265,14 +265,29 @@ async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab
             await cdp.send("DOM.enable")
             doc = await cdp.send("DOM.getDocument", {"depth": 0})
             root = (doc.get("root") or {}).get("nodeId")
+            # A node inside a same-origin FRAME is queried in that frame's own document. The path is
+            # minted and verified against `el.ownerDocument`, so it means nothing to the top one.
+            frame_sel = out.get("frame") or ""
+            if frame_sel:
+                fr = await cdp.send("DOM.querySelector", {"nodeId": root, "selector": frame_sel})
+                fr_id = fr.get("nodeId")
+                if not fr_id:
+                    return None, f"frame {frame_sel!r} vanished between look and act", tgt
+                desc_fr = await cdp.send("DOM.describeNode", {"nodeId": fr_id})
+                content = (desc_fr.get("node") or {}).get("contentDocument") or {}
+                root = content.get("nodeId")
+                if not root:
+                    return None, f"frame {frame_sel!r} exposed no content document", tgt
             found = await cdp.send("DOM.querySelector", {"nodeId": root, "selector": path})
             node_id = found.get("nodeId")
             if not node_id:
-                return None, f"scoped path did not re-resolve: {path!r}", tgt
+                where = f" in {frame_sel}" if frame_sel else ""
+                return None, f"scoped path did not re-resolve{where}: {path!r}", tgt
             desc = await cdp.send("DOM.describeNode", {"nodeId": node_id})
             bnid = (desc.get("node") or {}).get("backendNodeId")
             q = tgt.get("question") or ""
-            return bnid, (f"re-resolved {selector!r}" + (f" -> {q!r}" if q else "")), tgt
+            return bnid, (f"re-resolved {selector!r}" + (f" in {frame_sel}" if frame_sel else "")
+                          + (f" -> {q!r}" if q else "")), tgt
     except Exception as exc:  # noqa: BLE001
         logger.warning("selector resolve failed for %r: %s", selector, exc)
         return None, f"selector resolve failed: {exc}", {}
@@ -289,13 +304,20 @@ _RESOLVE_SCOPED_JS = r"""
 (cfg) => {
   __WIDGET_TELLS__
   const txt = __txt;
-  const idSel = (n) => (n.id && document.querySelectorAll('#' + CSS.escape(n.id)).length === 1)
-                       ? '#' + CSS.escape(n.id) : null;
+  // A node's identity is resolved IN ITS OWN DOCUMENT — `el.ownerDocument`, not the top one.
+  // Otherwise every path minted for a node inside a frame is verified against the wrong document
+  // and rejected, which is the same as not supporting frames at all.
+  const idSel = (n) => {
+    const d = n.ownerDocument || document;
+    return (n.id && d.querySelectorAll('#' + CSS.escape(n.id)).length === 1)
+           ? '#' + CSS.escape(n.id) : null;
+  };
   const cssPath = (el) => {
     try {
+      const d = el.ownerDocument || document;
       const steps = [];
       let n = el;
-      while (n && n !== document.body) {
+      while (n && n !== d.body) {
         const anchor = idSel(n);
         if (anchor) { steps.unshift(anchor); break; }
         const p = n.parentElement;
@@ -306,11 +328,32 @@ _RESOLVE_SCOPED_JS = r"""
       if (!steps.length) return null;
       if (!steps[0].startsWith('#')) steps.unshift('body');
       const sel = steps.join(' > ');
-      return document.querySelector(sel) === el ? sel : null;
+      return d.querySelector(sel) === el ? sel : null;
     } catch (e) { return null; }
   };
-  let cands;
-  try { cands = [...document.querySelectorAll(cfg.selector)]; }
+  // SEARCH THE FRAMES TOO. iCIMS renders its ENTIRE apply flow inside `icims_content_iframe`, so a
+  // top-document query finds nothing and the failure reads exactly like a stale recipe: "could not
+  // fill 'first_name' (not_found)" over a form that is plainly on screen (live 2026-08-12, Odyssey
+  // Consulting). The driver already translates frame coordinates; the RESOLVER never looked in.
+  // Same-origin only — a cross-origin frame throws on contentDocument, and that is a real boundary,
+  // not an obstacle to route around.
+  const docs = [{doc: document, frameSel: ''}];
+  const frames = [...document.querySelectorAll('iframe')];
+  frames.forEach((f, i) => {
+    let d = null;
+    try { d = f.contentDocument; } catch (e) { d = null; }
+    if (!d) return;
+    const sel = f.id ? ('iframe#' + CSS.escape(f.id))
+                     : ('iframe:nth-of-type(' + (i + 1) + ')');
+    if (document.querySelector(sel) === f) docs.push({doc: d, frameSel: sel});
+  });
+  let cands = [];
+  try {
+    for (const d of docs) for (const el of d.doc.querySelectorAll(cfg.selector)) {
+      cands.push(el);
+      el.__frameSel = d.frameSel;
+    }
+  }
   catch (e) { return {matched: 0, error: 'bad selector: ' + e}; }
   const want = (cfg.within || '').trim().toLowerCase();
   const scoped = cands.map(el => ({el, q: __questionOf(el)}));
@@ -335,7 +378,7 @@ _RESOLVE_SCOPED_JS = r"""
       return {matched: 1, mismatch: true, target: identify(hit), expected: cfg.expect_question};
   }
   return {matched: 1, path: cssPath(hit.el), section: hit.q.section || '',
-          target: identify(hit)};
+          frame: hit.el.__frameSel || '', target: identify(hit)};
 }
 """
 
@@ -3927,19 +3970,43 @@ async def next_page(body: NextPageRequest):
 _CHALLENGE_VISIBILITY_JS = r"""
 (() => {
   const shown = (el) => {
+    // Judged in the element's OWN view: getBoundingClientRect is relative to the frame the element
+    // lives in, so comparing it against the TOP window's innerWidth/innerHeight measures one frame's
+    // rect against another frame's viewport — and gets it wrong in both directions.
+    const view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
     let n = el;
     while (n && n.nodeType === 1) {
-      const s = getComputedStyle(n);
+      const s = view.getComputedStyle(n);
       if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') === 0) return false;
       n = n.parentElement;
     }
     const r = el.getBoundingClientRect();
     if (r.width < 10 || r.height < 10) return false;
-    const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+    const vw = view.innerWidth || 0, vh = view.innerHeight || 0;
     if (r.bottom < 0 || r.right < 0 || r.top > vh + 200 || r.left > vw + 200) return false;
     return true;
   };
-  const ifr = Array.from(document.querySelectorAll('iframe'));
+  // EVERY FRAME, NOT JUST THE TOP DOCUMENT. This is a SAFETY rail, and it was blind on exactly the
+  // platforms that need it most: iCIMS renders its whole apply flow inside `icims_content_iframe`,
+  // and the hCaptcha guarding the Candidate Profile form is an iframe INSIDE that frame. The check
+  // queried the top document only, so it answered `hcaptcha_count: 0, blocking: false, solved: true`
+  // — a green light — over a form carrying two live hCaptcha challenges (measured live 2026-08-12,
+  // Odyssey Consulting). A rail that reports "clear" when it cannot see is worse than no rail.
+  //
+  // Descending SAME-ORIGIN frames is enough to find the captcha, because what identifies one is the
+  // iframe ELEMENT's src, and that element lives in the parent document. The captcha's own frame is
+  // cross-origin and is never entered.
+  const ifr = [];
+  const collect = (doc, depth) => {
+    if (!doc || depth > 3) return;
+    for (const f of doc.querySelectorAll('iframe')) {
+      ifr.push(f);
+      let inner = null;
+      try { inner = f.contentDocument; } catch (e) { inner = null; }   // cross-origin: fine, skip
+      if (inner) collect(inner, depth + 1);
+    }
+  };
+  collect(document, 0);
   const match = (re) => ifr.filter(f => re.test(f.src || ''));
   const bframes  = match(/recaptcha\/(enterprise|api2)\/bframe/);   // the image-challenge popup
   const anchors  = match(/recaptcha\/(enterprise|api2)\/anchor/);   // the "I'm not a robot" checkbox
