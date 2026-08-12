@@ -273,7 +273,7 @@ CHECK_GROUP_JS = r"""
 #   2. CHECKBOX GROUPS COUNT. The scan that missed `restrictions` and `languages` only looked
 #      at inputs/selects. Group by id prefix before '[]'; 0-checked = unanswered.
 SCAN_REQUIRED_JS = r"""
-() => {
+(doc) => {
   __WIDGET_TELLS__
   const vis = __vis, txt = __txt, attr = __attr;
 
@@ -290,11 +290,11 @@ SCAN_REQUIRED_JS = r"""
   // Per-control label, NOT the container's whole text — that is exactly what makes
   // /scan_form useless on Workday (First/Middle/Last all report the fieldset's text).
   const labelFor = (el) => {
-    if (el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+    if (el.id) { const l = doc.querySelector('label[for="' + CSS.escape(el.id) + '"]');
                  if (l) return txt(l); }
     const al = attr(el, 'aria-label'); if (al) return al;
     const ref = attr(el, 'aria-labelledby');
-    if (ref) { const n = document.getElementById(ref); if (n) return txt(n); }
+    if (ref) { const n = doc.getElementById(ref); if (n) return txt(n); }
     const own = el.closest('label'); if (own) return txt(own);
     const aid = attr(el, 'data-automation-id'); if (aid) return aid;
     const ph = attr(el, 'placeholder'); if (ph) return ph;
@@ -330,7 +330,7 @@ SCAN_REQUIRED_JS = r"""
     try {
       const steps = [];
       let n = el;
-      while (n && n !== document.body) {
+      while (n && n !== doc.body) {
         const anchor = __idSel(n);
         if (anchor) { steps.unshift(anchor); break; }
         const p = n.parentElement;
@@ -342,7 +342,7 @@ SCAN_REQUIRED_JS = r"""
       if (!steps.length) return null;
       if (!steps[0].startsWith('#')) steps.unshift('body');
       const sel = steps.join(' > ');
-      return document.querySelector(sel) === el ? sel : null;   // hand out only what resolves
+      return doc.querySelector(sel) === el ? sel : null;   // hand out only what resolves
     } catch (e) { return null; }
   };
 
@@ -357,7 +357,7 @@ SCAN_REQUIRED_JS = r"""
   // vendor-neutral tell, not a Workday special case. Requiredness is then read the usual way —
   // and Workday states it in the accessible name ("Degree Select One Required"), which the
   // label-asterisk rule below is widened to accept.
-  const singles = [...document.querySelectorAll(
+  const singles = [...doc.querySelectorAll(
     'input:not([type=checkbox]):not([type=radio]):not([type=hidden]), select, textarea, ' +
     '[role=combobox], [aria-haspopup=listbox]'
   )].filter(__isUserField);
@@ -481,7 +481,7 @@ SCAN_REQUIRED_JS = r"""
   // Found live: scan said 0 while three required radio questions sat unanswered.
   const lca = (group) => {
     let node = group[0];
-    while (node && node !== document.body && !group.every(m => node.contains(m)))
+    while (node && node !== doc.body && !group.every(m => node.contains(m)))
       node = node.parentElement;
     return node || group[0].parentElement;
   };
@@ -498,7 +498,7 @@ SCAN_REQUIRED_JS = r"""
     // "True False" and ended the climb one level short. A structural tell that can name the
     // options box is no tell; the question text ('?' or the required '*') is the signal.
     let node = lca(group);
-    for (let i = 0; i < 5 && node && node !== document.body; i++) {
+    for (let i = 0; i < 5 && node && node !== doc.body; i++) {
       // Detect on the FULL text, cap only what we return. The cap used to run first, so a long
       // question's trailing required-'*' (CRCH's family-members question: ~280 chars, the star
       // at the very end) was amputated before the test — the group read as optional, vanished
@@ -516,7 +516,7 @@ SCAN_REQUIRED_JS = r"""
   // the uncapped text, because the star on a long question lives past any display cap.
   const groupStarred = (group) => {
     let node = lca(group);
-    for (let i = 0; i < 5 && node && node !== document.body; i++) {
+    for (let i = 0; i < 5 && node && node !== doc.body; i++) {
       const full = txt(node);
       if (/[?*]/.test(full))
         return /\*/.test(full);
@@ -529,7 +529,7 @@ SCAN_REQUIRED_JS = r"""
   // The question container's text is the field; each input's label is the choice. These are what
   // a surface renders as the pressable answers, and what check_group's `values` expects.
   const optLabel = (el) => {
-    if (el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+    if (el.id) { const l = doc.querySelector('label[for="' + CSS.escape(el.id) + '"]');
                  if (l) return txt(l).slice(0, 60); }
     const own = el.closest('label'); if (own) return txt(own).slice(0, 60);
     return (attr(el, 'value') || '').slice(0, 60);
@@ -537,7 +537,7 @@ SCAN_REQUIRED_JS = r"""
   const optLabels = (group) => group.map(optLabel).filter(Boolean).slice(0, 16);
 
   // rule 2 — checkbox groups, which the old scan missed entirely.
-  const boxes = [...document.querySelectorAll('input[type=checkbox]')].filter(vis);
+  const boxes = [...doc.querySelectorAll('input[type=checkbox]')].filter(vis);
   const groups = {};
   let synth = 0;
   for (const b of boxes) {
@@ -568,7 +568,7 @@ SCAN_REQUIRED_JS = r"""
   // Radio groups, same reasoning. NB group by NAME before id: smartapply gives every radio
   // on the page the SAME id (single-select-question) while the name (q_<hash>) is the real
   // group identity — id-first grouping would fuse three questions into one.
-  const radios = [...document.querySelectorAll('input[type=radio]')].filter(vis);
+  const radios = [...doc.querySelectorAll('input[type=radio]')].filter(vis);
   const rgroups = {};
   let rsynth = 0;
   // Same lone-control fix as checkboxes: a single required radio with no name/id (rare but seen on
@@ -605,7 +605,7 @@ SCAN_REQUIRED_JS = r"""
   // `required_via: aria-invalid` so the row's provenance is legible. This cannot mint a false
   // blocker: a page that marks a control invalid is a page that will not advance past it.
   const seenSel = new Set(out.map(r => r.selector).filter(Boolean));
-  for (const el of document.querySelectorAll('[aria-invalid=true]')) {
+  for (const el of doc.querySelectorAll('[aria-invalid=true]')) {
     if (!__isUserField(el)) continue;
     const sel = __idSel(el) || __cssPath(el);
     if (sel && seenSel.has(sel)) continue;
@@ -631,7 +631,7 @@ SCAN_REQUIRED_JS = r"""
   // section they sit in, and nothing else. It travels on the row so the teach seam and the fill
   // can name the one they mean.
   const uploaders = [];
-  for (const el of document.querySelectorAll('input[type=file]')) {
+  for (const el of doc.querySelectorAll('input[type=file]')) {
     const sel = __idSel(el) || __cssPath(el);
     if (sel && seenSel.has(sel)) continue;
     // The section that NAMES this uploader: the nearest heading above it. On Workday that is
@@ -657,7 +657,7 @@ SCAN_REQUIRED_JS = r"""
     // The uploader's own container — the walk that stops before a neighbouring file input, so
     // one uploader's rendered row never answers for another.
     let box = null;
-    for (let n = el.parentElement, d = 0; n && n !== document.body && d < 8; d++, n = n.parentElement) {
+    for (let n = el.parentElement, d = 0; n && n !== doc.body && d < 8; d++, n = n.parentElement) {
       if (n.querySelectorAll('input[type=file]').length > 1) break;
       box = n;
     }
@@ -710,11 +710,11 @@ SCAN_REQUIRED_JS = r"""
   // refusing to advance (live 2026-08-12). What matters is whether the page is ASSERTING errors
   // right now — the banner's own header is on screen — not whether the operator has the details
   // unfolded. So: the header gates, the items are read either way.
-  const asserting = [...document.querySelectorAll('*')].some(
+  const asserting = [...doc.querySelectorAll('*')].some(
     el => __vis(el) && /^errors? found\b/i.test(txt(el)) && txt(el).length < 400);
   const complained = new Set();
   const errText = [];
-  for (const el of document.querySelectorAll(
+  for (const el of doc.querySelectorAll(
         '[data-automation-id*=rror], [role=alert], [aria-live=assertive], [class*=rror]')) {
     if (!__vis(el) && !asserting) continue;
     const t = txt(el);

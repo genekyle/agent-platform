@@ -20,6 +20,7 @@ from app.artifacts import ARTIFACTS_DIR, SCREENSHOTS_DIR, write_observation_arti
 from app.event_log import log_event as _log_event
 from app.intent_api import journaled
 from app.js_common import WIDGET_TELLS_JS
+from app.protocols import SCAN_REQUIRED_JS
 from app.main import observe_live_capture
 from app.observer.ax_proposer import MODEL_VERSION as AX_MODEL_VERSION
 from app.observer.ax_proposer import AXProposerStats, propose_ax_candidates
@@ -293,6 +294,45 @@ async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab
         return None, f"selector resolve failed: {exc}", {}
 
 
+#: THE CENSUS, RUN ONCE PER DOCUMENT — the top page and every same-origin frame — with the rows
+#: merged. `SCAN_REQUIRED_JS` takes a document for exactly this reason.
+#:
+#: Without it the census is blind on every iframe-based ATS, which is not a niche: iCIMS renders its
+#: entire apply flow inside `icims_content_iframe`, so a 20-field Candidate Profile — resume upload,
+#: middle name, address, source, salary — censused as ZERO required fields (measured live 2026-08-12,
+#: Odyssey Consulting). A form the census cannot see is a form the invariant gate cannot hold, the
+#: teach seam cannot address, and the fill cannot answer.
+#:
+#: Each document is scanned INDEPENDENTLY and on purpose: the page-error join matches a complaint to
+#: the control it names, and a frame's errors belong to the frame's controls. Merging first would let
+#: one document's complaint adopt another's field. A scan that throws in one document does not lose
+#: the others; `docs` reports how many answered, so a silent partial is visible.
+_SCAN_EVERY_DOCUMENT_JS = r"""
+(() => {
+  const scan = __SCAN_REQUIRED__;
+  const docs = [document];
+  const walk = (d, depth) => {
+    if (depth > 2) return;                      // bounded: nested frames get deep fast
+    for (const f of d.querySelectorAll('iframe')) {
+      let inner = null;
+      try { inner = f.contentDocument; } catch (e) { inner = null; }   // cross-origin: skip
+      if (inner && !docs.includes(inner)) { docs.push(inner); walk(inner, depth + 1); }
+    }
+  };
+  walk(document, 0);
+  const parts = [];
+  for (const d of docs) { try { const p = scan(d); if (p) parts.push(p); } catch (e) { /* keep going */ } }
+  const all = (k) => parts.reduce((a, p) => a.concat(p[k] || []), []);
+  return {
+    unanswered: all('unanswered'), answered: all('answered'), optional: all('optional'),
+    page_errors: [...new Set(all('page_errors'))],
+    docs: parts.length, frames: docs.length - 1,
+    url: (location.href || '').slice(0, 140),
+  };
+})()
+"""
+
+
 #: Resolve a selector to AT MOST ONE node — scoped to the section that names it when `within` is
 #: given, and CONFIRMED against the question the caller means when `expect_question` is. Hands back
 #: a structural path that resolves to exactly that node, plus the question the target itself answers
@@ -386,6 +426,9 @@ _RESOLVE_SCOPED_JS = r"""
 # resolver, so the address book and the act cannot disagree about what a control is for.
 _RESOLVE_SCOPED_JS = _RESOLVE_SCOPED_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
 assert "__WIDGET_TELLS__" not in _RESOLVE_SCOPED_JS, "the tells placeholder did not substitute"
+
+_SCAN_EVERY_DOCUMENT_JS = _SCAN_EVERY_DOCUMENT_JS.replace("__SCAN_REQUIRED__", SCAN_REQUIRED_JS)
+assert "__SCAN_REQUIRED__" not in _SCAN_EVERY_DOCUMENT_JS, "the census placeholder did not substitute"
 
 
 @app.post("/execute")
@@ -2982,12 +3025,11 @@ async def scan_required(body: ScanRequiredRequest):
     """
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
-    from app.protocols import SCAN_REQUIRED_JS
 
     target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
     async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
         cdp = _CDPSession(ws)
-        r = await cdp.send("Runtime.evaluate", {"expression": f"({SCAN_REQUIRED_JS})()",
+        r = await cdp.send("Runtime.evaluate", {"expression": _SCAN_EVERY_DOCUMENT_JS,
                                                 "returnByValue": True})
     out = (r.get("result") or {}).get("value") or {}
     # A SCAN THAT DID NOT RUN IS NOT A CLEAN FORM. A page-side exception anywhere in the census
