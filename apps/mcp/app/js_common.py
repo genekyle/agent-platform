@@ -173,6 +173,11 @@ WIDGET_TELLS_JS = r"""
     // it and read the question the field actually asks.
     const FURNITURE = /^(or|drop files here|select files?|browse|drag and drop|choose file|select one|please select|choose one|select\.\.\.|select…|select an option|-- ?select)/i;
     const NEIGHBOUR = /current value is|^MM$|^DD$|^YYYY$/i;
+    // PAGE LEGENDS ARE NOT QUESTIONS. "* Indicates a required field" sits at the top of every
+    // Workday step, and on Voluntary Disclosures — where the real questions are asked by a heading
+    // above a control rather than by a label — three fields adopted the legend as their identity
+    // (live 2026-08-12). It describes the FORM's notation, not anything being asked.
+    const LEGEND = /indicates? a required field|^\*+$|^required$/i;
 
     // WHAT DOES THIS FIELD SAY, APART FROM THE WIDGET ITSELF? For a composite widget the label is
     // a SIBLING OF THE WIDGET INSIDE THE FIELD WRAPPER, not a previous sibling of anything on the
@@ -215,7 +220,8 @@ WIDGET_TELLS_JS = r"""
       const inner = __txt(start);
       const own = (inner && whole.startsWith(inner) ? whole.slice(inner.length)
                                                     : whole.replace(inner, '')).trim();
-      if (own && own.length >= 2 && own.length <= 240 && !FURNITURE.test(own) && !NEIGHBOUR.test(own))
+      if (own && own.length >= 2 && own.length <= 240 && !FURNITURE.test(own) &&
+          !NEIGHBOUR.test(own) && !LEGEND.test(own))
         return strong(own, 'proximity');
       start = n;
     }
@@ -223,7 +229,7 @@ WIDGET_TELLS_JS = r"""
       for (let sib = hop.previousElementSibling; sib; sib = sib.previousElementSibling) {
         const t = __txt(sib);
         if (NEIGHBOUR.test(t)) break;
-        if (t && FURNITURE.test(t)) continue;
+        if (t && (FURNITURE.test(t) || LEGEND.test(t))) continue;
         if (t && t.length >= 2 && t.length <= 60) return strong(t, 'proximity');
         if (t && t.length > 60) break;
       }

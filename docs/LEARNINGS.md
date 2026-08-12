@@ -6450,3 +6450,95 @@ and the commit live), never via `make dev-stop`, which `pkill`s the session Chro
 *Where it stands:* SolutionHealth JR11587 is at the sign-in wall with the resume server-side and
 the operator's account already created on this tenant (last night). Tests: mcp 91 → 98,
 apply_fields 23 → 26.
+
+### The same day, second half — the sign-out nobody could see, and REFRESH FIRST
+
+With the resume finally in Resume/CV, Save and Continue answered with `Errors Found · Error-Page
+Error · Error Code: VPS|…` — two FRESH codes per press, naming no field, over a census reading zero
+unanswered. Retrying is proven useless when the codes change every time. A **reload** told the truth:
+the flow had reset to *"step 1 of 7 — Create Account/Sign In"*. **The session had been signed out
+server-side hours earlier and nothing local knew.** Pristine screenshot, intact AX tree, rich
+`/page_content`, every field readable, the upload "Successfully Uploaded!" — and every write
+unauthenticated.
+
+Operator: *"the most basic step when things get stale and things are randomly erroring and we haven't
+refreshed yet? I think it's time to make the refresh almost the default step after we find out we're
+dealing with stale sessions."* Recorded as [[feedback_refresh_first_on_stale]], and it paid out
+TWICE more within the hour: after signing back in, the content area read *"Something went wrong ·
+Please refresh the page and then try again"* while the stepper and the signed-in tell both looked
+perfect — and I called it "signed in and at My Information" off a text PREFIX plus a tell, exactly
+the mistake §4's screenshot rule exists to stop. The refresh restored the whole draft, every answer
+intact. **A page that states its own remedy should be believed.**
+
+* `page_errors` on the census: an error the page attributes to NO field is its own state class —
+  not a field problem, not a click problem, same response as a captcha (name it, never guess).
+  The endpoint no longer says "all required fields answered" without adding that the page refuses.
+* A **COLLAPSED banner is still a verdict**. Workday's summary collapses itself after a press and
+  the items go `display:none`, so a visibility-gated read saw an empty "Errors Found" and went back
+  to reporting a complete form. The header on screen is the page asserting errors NOW.
+* Our idle timer measures when WE last acted, not whether the server still knows us. `staleness`
+  said "fresh" throughout, and its own `unmeasured: [page_age_s, cookie_ttl_s]` was the honest tell.
+* **OPTIMISTIC UI IS NOT A SERVER RECORD.** Everything done while signed out — three attachment
+  deletions and the Resume/CV upload — rendered as success and persisted NOWHERE. After sign-in the
+  server's draft still held last night's three Attachments copies and an empty Resume/CV. The
+  rendered-row witness is still the best LOCAL signal; only a reload distinguishes it from the
+  server's opinion. (It also means "one delete cleared all three" earlier that morning was the
+  client agreeing with itself.)
+
+**The wall itself, and a recipe that had described the fix since 07-12.** The sign-in leg typed the
+credential into the CREATE form — Workday serves both from one url and this tenant defaults to
+Create Account, whose Email/Password boxes share their accessible names — then died looking for
+`signInSubmitButton`. `toggle` (conditional on a MEASURED absence of this leg's submit, verified
+after pressing) now reveals the form first. Third instance in two days of "the prose said to and no
+step did it". And `sign_in_toggle` is addressed by SELECTOR because the page carries TWO buttons
+named exactly "Sign In" — `utilityButtonSignIn` in the nav and `signInLink` beside the form — and
+role+name takes the first, which LEAVES THE APPLICATION.
+
+**A reopened step re-walks from classify, and the crank walks the recipe while the readout says
+otherwise.** `apply_reopen` (correctly) cleared the step's platform, and `apply_account` needs a
+classified ATS, so the account rung was unreachable until `reconcile_step` recorded what the live
+window proved. Worth noting for the cockpit: `next_action` said "Work the account step … follow the
+plan, not the rung. The observation leads" with `driveable: false, endpoint: ""`, and the only
+pressable thing did the opposite — an observer-led verdict with no endpoint is a lie-shaped
+affordance ([[feedback_cockpit_reach_parity]]).
+
+**Naming, three more shapes — all the same principle.** Six required Application Questions arrived
+as three rows called " Select One Required" plus three textareas; on Voluntary Disclosures three
+fields adopted the page LEGEND ("* Indicates a required field"); and once answered, the openers
+renamed themselves to " No Required" / " Yes Required".
+* **Boilerplate is furniture** ("Select One", "Please Select", "Drop files here"): it names a widget
+  KIND. Every candidate — label[for], aria-label, aria-labelledby, own label — is filtered before it
+  is returned, because a worthless name must not outrank a real one further down the chain.
+* **A name that is the control's own VALUE is not a question.** No page labels a field with its own
+  contents; name == value is decisive. Without this the ANSWERED census could not say which question
+  got which answer — precisely what the operator reads at a Submit gate.
+* **A question is allowed to be LONG, and it lives in the field's own wrapper** — the largest box
+  around this control holding no other USER field. Composite widgets ship private controls (Workday
+  pairs each opener with an off-screen proxy input); counting those as neighbours stopped the walk
+  one level below the question text. `__isUserField` is the same distinction as the hidden-twin trap.
+* And: **a scan that did not run is not a clean form.** A page-side exception (an assignment to a
+  `const` label, mine) returned an empty census, which read downstream as zero unanswered — "all
+  required fields answered" over a screen with six required questions. `url` is the census's proof
+  of life; its absence is now an ERROR.
+
+**The segmented date is solved, by the picker.** `/set_date` refuses Workday's linked
+auto-advancing spinbuttons honestly ("CDP typing scrambles across sub-fields"). The CC-305 signature
+date has a **Calendar** button whose every day is a uniquely-named AX node — "Wednesday 12 August
+2026". One click. The unsolved widget was only unsolved through the typing door.
+
+**I made the very mistake I was fixing, and it is the owed work.** With the resume in BOTH sections
+there were two identically-named "Delete GM_Resume.pdf" buttons; I addressed by role+name, and the
+first match was the Resume/CV row I had just uploaded. `/execute` refuses an ambiguous SELECTOR and
+says how many it saw — `_resolve_ax_node` still takes the first exact role+name match, silently. One
+door closed, the other left open. The fix wants care (every role+name act in the system flows through
+it) and tests; the evidence is here, and the deletes were redone by minting a UNIQUE structural path
+per row, last-first so the nth-child indices stayed valid.
+
+*Where it stands:* **SolutionHealth JR11587 is at the operator's Submit gate** — all six steps green,
+resume committed, every question answered (start date and salary supplied by the operator: the
+store's `availability_date` had gone a month stale and its salary figure contradicted the recorded
+floor), demographics declined per preference, terms accepted on the operator's explicit say-so.
+Two things flagged rather than silently accepted: a CONDITIONAL follow-up to the work-authorization
+question ("please choose the answer which most accurately fits your situation") stands at *No
+Response* — not required, so Workday let it pass — and the relatives question asked for "NA" while
+we answered "None". Tests: mcp 98, controlplane-api targeted 294.
