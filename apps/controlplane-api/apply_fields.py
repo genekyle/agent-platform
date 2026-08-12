@@ -261,24 +261,41 @@ INDEED_FIELDS: dict[str, dict[str, Any]] = {
 _ICIMS_PW_RULE = ("Minimum 8 characters, 1 alphabetic, 1 lowercase, 1 uppercase, 1 numeric, "
                   "1 special character(s)")
 
+# ADDRESSED BY SELECTOR, not by accessible name, and the reason is structural: iCIMS renders the
+# whole flow inside `icims_content_iframe`, and the CDP-AX tree does not cross into frames — so a
+# role+name address for any of these fields resolves to nothing at all ("could not fill
+# 'first_name' (not_found)" over a form plainly on screen, live 2026-08-12, Odyssey Consulting).
+# The selector resolver DOES descend same-origin frames, so these are the addresses that work.
+#
+# The ids are iCIMS's own field keys (`PersonProfileFields.*` / `PortalProfileFields.*`), stable
+# across tenants because they name the platform's data model rather than a tenant's layout. They
+# contain a DOT, so they are written as attribute selectors — `#PersonProfileFields.Login` would
+# parse as "#PersonProfileFields with class Login" and match nothing.
+#
+# The old accessible names are kept in the notes: when AX learns to cross frames they become
+# usable again, and they are the exact strings the page announces.
 ICIMS_FIELDS: dict[str, dict[str, Any]] = {
-    "first_name": _f(ats="icims", role="textbox", name="First Name",
-                     widget_type=WidgetType.TEXT, answer_key="first_name"),
-    "last_name": _f(ats="icims", role="textbox", name="Last Name",
-                    widget_type=WidgetType.TEXT, answer_key="last_name"),
-    "email": _f(ats="icims", role="textbox", name="Email", widget_type=WidgetType.TEXT,
-                answer_key="email",
-                note="EXACT name. The branded wrapper's newsletter box ('Enter your email address "
-                     "here') is the first email textbox in document order — a substring match on "
-                     "'email' typed the operator's address into the hospital mailing list."),
+    "first_name": _f(ats="icims", selector='[id="PersonProfileFields.FirstName"]',
+                     widget_type=WidgetType.TEXT, answer_key="first_name",
+                     note='AX name "First Name" (unreachable: inside icims_content_iframe)'),
+    "last_name": _f(ats="icims", selector='[id="PersonProfileFields.LastName"]',
+                    widget_type=WidgetType.TEXT, answer_key="last_name",
+                    note='AX name "Last Name"'),
+    "email": _f(ats="icims", selector='[id="PersonProfileFields.Email"]',
+                widget_type=WidgetType.TEXT, answer_key="email",
+                note="the id is exact, which also retires the old hazard: the branded wrapper's "
+                     "newsletter box ('Enter your email address here') is the first email textbox "
+                     "in document order, and a substring match on 'email' once typed the "
+                     "operator's address into a hospital mailing list."),
     # iCIMS wants a username SEPARATE from the email. We put the same address in both: one
     # credential to remember, and the account convention is already "one shared address".
-    "login": _f(ats="icims", role="textbox", name="Login", widget_type=WidgetType.TEXT,
-                answer_key="email", note="the account's USERNAME, distinct from the email field"),
-    "password": _f(ats="icims", role="textbox", name=f"Password: {_ICIMS_PW_RULE}",
-                   widget_type=WidgetType.TEXT),
-    "verify_password": _f(ats="icims", role="textbox",
-                          name=f"Password (Re-enter): {_ICIMS_PW_RULE}",
+    "login": _f(ats="icims", selector='[id="PersonProfileFields.Login"]',
+                widget_type=WidgetType.TEXT, answer_key="email",
+                note="the account's USERNAME, distinct from the email field"),
+    "password": _f(ats="icims", selector='[id="PersonProfileFields.Password"]',
+                   widget_type=WidgetType.TEXT,
+                   note=f"the site states its rule in the label: {_ICIMS_PW_RULE}"),
+    "verify_password": _f(ats="icims", selector='[id="PersonProfileFields.Password_Confirm"]',
                           widget_type=WidgetType.TEXT),
     "resume": _f(ats="icims", role="button",
                  name="My Computer (Opens new window) Or please select your resume from one of "
