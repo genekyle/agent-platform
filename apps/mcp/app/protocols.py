@@ -402,7 +402,17 @@ SCAN_REQUIRED_JS = r"""
         const t0 = __valueTruth(el);
         if ((el.type || '').toLowerCase() === 'password') t0.preview = t0.answered ? '••••' : '';
         const q0 = __questionOf(el);
-        optional.push({field: label.slice(0, 90), selector: __idSel(el) || __cssPath(el),
+        // The SAME naming rules as the required rows below — "regardless of whether it's required or
+        // not" (operator, 2026-08-12). Applying them only to required rows is how a conditional
+        // follow-up to the work-authorization question filed as " Select One" and then, once
+        // answered, as its own answer. An optional field nobody can name is an optional field
+        // nobody can answer, and this one was a work-eligibility question.
+        const __n0 = (s) => (s || '').toLowerCase().replace(/\s*required\s*$/i, '')
+                                     .replace(/[^a-z0-9]+/g, ' ').trim();
+        const label0 = ((__isBoilerplate(label) ||
+                         (!!t0.preview && __n0(label) === __n0(t0.preview))) && q0.question)
+                       ? q0.question : label;
+        optional.push({field: label0.slice(0, 90), selector: __idSel(el) || __cssPath(el),
                        within: (q0.section || '').slice(0, 90), question_source: q0.source,
                        kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
                        required_via: 'none', value_read_at: t0.read_at,
