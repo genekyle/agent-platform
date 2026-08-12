@@ -23,6 +23,10 @@ import app.main_server as ms
 @pytest.fixture(autouse=True)
 def corpus(tmp_path, monkeypatch):
     monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", str(tmp_path))
+    # The dialect store keys on MCP_OUTPUT_DIR; without this, a test's verified win writes into
+    # the LIVE store and a later test reads it as a learned prior — a cross-test leak measured
+    # the day the store was born (greenhouse::react_select, 4 phantom wins).
+    monkeypatch.setenv("MCP_OUTPUT_DIR", str(tmp_path))
     return tmp_path
 
 
@@ -43,6 +47,8 @@ def route(*, describe=None, focus=None, option=None, single_value=None, year=Non
     def responder(expr: str):
         if "VALUE_READ_AT" in expr:                 # only the classifier defines this table
             return describe
+        if "HTMLSelectElement.prototype" in expr:   # only the native-select protocol sets via it
+            return default
         if "el.focus()" in expr:                    # only _FOCUS_AND_OPEN_JS focuses
             return focus
         if "role=option" in expr:                   # only _find_option_js enumerates options
@@ -80,19 +86,28 @@ def wire_cdp(monkeypatch, responder):
 
 
 # --- /select_option -----------------------------------------------------------------
-def test_select_option_refuses_to_guess_a_protocol_for_an_unknown_widget(corpus, monkeypatch):
-    """The single most important refusal in the API.
+def test_select_option_cycles_an_unknown_widget_and_reports_every_attempt(corpus, monkeypatch):
+    """The refusal, superseded by the dialect cycle (operator, 2026-08-11).
 
-    An unclassified widget driven by a guessed protocol is how every one of 2026-07-15's
-    bugs started. Refusing is the whole point of dispatching on widget_type.
+    The old rule — "widget_type=unknown → refuse" — existed because a GUESSED protocol acted
+    blind. The cycle is not a guess: each candidate verifies at the widget's own truth before
+    claiming anything, fails cleanly on the wrong shape, and the whole attempt list rides out
+    in `tried`. What survives from the old rule is its spirit: nothing here reports a success
+    that did not happen, and an unknown widget that defeats every protocol comes back a loud,
+    enumerated failure — not a silent shrug and not a lucky click.
     """
     wire_cdp(monkeypatch, lambda e: {"found": True, "widget_type": "unknown"})
     out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
         selector="#weird", value="Yes", ats="greenhouse", field="mystery")))
     assert out["ok"] is False
-    assert out["outcome"] == "not_found"
-    assert "refusing to guess" in out["detail"]
-    assert rows(corpus)[0]["widget_type"] == "unknown"
+    assert [t["protocol"] for t in out["tried"]] \
+        == ["native_select", "aria_listbox", "react_select"]
+    assert all(t["outcome"] != "ok" for t in out["tried"])
+    # The strongest hypothesis's failure is the reported verdict; the journal keeps the row.
+    # LAST row, not first: the cycle's aria attempt runs through /widget_select, which journals
+    # its own inner row before select_option's lands.
+    assert out["via_protocol"] == "native_select"
+    assert rows(corpus)[-1]["widget_type"] == "unknown"
 
 
 def test_select_option_classifies_when_the_caller_doesnt_say(corpus, monkeypatch):

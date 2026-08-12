@@ -201,6 +201,10 @@ DESCRIBE_WIDGET_JS = r"""
   return {
     found: true,
     widget_type: type,
+    // The raw tag rides along for the DIALECT layer's structural filter: which protocols are
+    // even possible for this node (a bare <select> can never be a react-select) is a cheaper
+    // and steadier fact than the full classification above it.
+    tag: el.tagName.toLowerCase(),
     label: label.slice(0, 120),
     opener: opener ? {role: attr(opener, 'role') || opener.tagName.toLowerCase(),
                       aria_expanded: attr(opener, 'aria-expanded'),

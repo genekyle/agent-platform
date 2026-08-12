@@ -2470,60 +2470,101 @@ async def _classify(cdp, selector: str) -> dict:
 async def select_option(body: SelectOptionRequest):
     """ONE endpoint for every option widget — the caller stops needing to know which it is.
 
-    Dispatch:
-      react_select / month_year  → per-char keystrokes, exact-match, verify at singleValue
-      prompt_hierarchical        → the Workday prompt protocol (native open + trusted search)
-      aria_listbox / native_select → the staged-commit popup protocol (aria-controls scoped)
+    Dispatch is now a DIALECT CYCLE (operator, 2026-08-11: *"once we honed in the best way to
+    interact with the page, it then becomes that 'way' throughout the rest of the interaction"*).
+    A site renders one component library, so the protocol that verifies on its first option
+    widget is the protocol for all of them — and the diagnosis that used to be re-paid per widget
+    (four identical "popup did not open" failures on Cornerstone's four selects) is paid once:
 
-    This is the generalization the plan asks for, earned at the SECOND site rather than
-    designed up front: _POPUP_SELECT_JS was right to start Indeed-only, then Workday forced
-    aria-controls scoping, then Greenhouse forced keystroke-opening. Frozen after Indeed it
-    would be wrong; delayed until "perfect" it would be three scripts.
+      order:  the platform's LEARNED dialect → the classifier's verdict → remaining candidates
+              (cheapest first, structurally-impossible ones dropped by the node's tag)
+      each attempt verifies at the widget's own truth; the first verified win RECORDS the
+      dialect for (ats, option_select) and every later call tries it first.
+
+    Trust but verify: a learned dialect that stops verifying costs one wasted attempt and loses
+    its seat — the cycle continues, and the new winner displaces it on the record. The old
+    "widget_type=unknown → refuse" rule is superseded BY the cycle: refusing existed because a
+    guessed protocol acted blind, and a cycle of clean-failing, self-verifying protocols is not
+    a guess — every claim is confirmed before it is made, and what was tried is reported.
+
+    prompt_hierarchical (Workday's search-prompt) stays outside the cycle: it is its own multi-
+    session protocol, correctly classified by its data-automation markers, never confused with
+    the three portalish shapes the cycle covers.
     """
     import asyncio
 
     import websockets
+    from app import dialect
     from app.observer.ax_proposer import _CDPSession, _discover_target
     from app.protocols import react_select_pick
 
     common = {"addressed_by": "selector", "target": body.selector}
     target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
-    async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
-        cdp = _CDPSession(ws)
-        await cdp.send("Page.enable", {})
-        await cdp.send("Runtime.enable", {})
-        if body.bring_to_front:
-            # A popup WILL NOT RENDER in a hidden tab — document.visibilityState must be
-            # 'visible' or the opener click no-ops. A human's tab is visible when they click.
-            await cdp.send("Page.bringToFront", {})
-            await asyncio.sleep(0.3)
 
-        wt = body.widget_type
-        commit = body.commit
-        if not wt:
+    # month_year rides the react_select protocol; normalise hints into protocol names.
+    def _proto_of(wt: Optional[str]) -> Optional[str]:
+        if wt == WidgetType.MONTH_YEAR.value:
+            return "react_select"
+        return wt if wt in ("native_select", "aria_listbox", "react_select") else None
+
+    # A caller that NAMES a protocol starts the cycle there without a classification look — a
+    # recipe's word is a measured fact about this screen. A caller that doesn't (or names
+    # something that is not a protocol) buys one classify: the verdict seeds the order and the
+    # node's tag drops the structurally impossible. Either way the word is a HINT for ordering,
+    # never a mandate — the stale-scan bug that sent four native selects into the popup protocol
+    # is exactly a mandate honored past its evidence.
+    commit = body.commit
+    tag = None
+    classified = _proto_of(body.widget_type) or body.widget_type
+    if not classified or (classified not in (WidgetType.PROMPT_HIERARCHICAL.value,)
+                          and _proto_of(classified) is None):
+        async with websockets.connect(target["webSocketDebuggerUrl"],
+                                      max_size=16 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("Page.enable", {})
+            await cdp.send("Runtime.enable", {})
+            if body.bring_to_front:
+                # A popup WILL NOT RENDER in a hidden tab — document.visibilityState must be
+                # 'visible' or the opener click no-ops. A human's tab is visible when they click.
+                await cdp.send("Page.bringToFront", {})
+                await asyncio.sleep(0.3)
             desc = await _classify(cdp, body.selector)
             if not desc.get("found"):
                 return {**common, "outcome": Outcome.NOT_FOUND,
                         "detail": f"no node matching {body.selector!r}"}
-            wt = desc.get("widget_type")
+            classified = desc.get("widget_type")
+            tag = desc.get("tag")
             if commit is None and (desc.get("commit") or {}).get("kind") == "footer_button":
                 commit = (desc["commit"] or {}).get("label")
-        common["widget_type"] = wt
+    common["widget_type"] = classified
 
-        if wt in (WidgetType.REACT_SELECT.value, WidgetType.MONTH_YEAR.value):
-            outcome, steps, detail = await react_select_pick(
-                cdp, selector=body.selector, value=body.value)
-            return {**common, "outcome": outcome, "steps": steps, "detail": detail,
-                    "actions": ["clear", "type", "click"]}
+    # Workday's hierarchical prompt is its own beast — not part of the option-select family.
+    if WidgetType.PROMPT_HIERARCHICAL.value in (classified, body.widget_type):
+        inner = await select_prompt(SelectPromptRequest(
+            browser_url=body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url,
+            field_role=None, field_name=body.field or body.value, value=body.value))
+        return {**common, "outcome": inner.get("outcome", Outcome.ERROR),
+                "steps": inner.get("steps", []), "detail": inner.get("detail", ""),
+                "actions": ["click", "type", "click"]}
 
-        if wt == WidgetType.NATIVE_SELECT.value:
-            # A plain <select> has no DOM popup — the OS draws it — so the popup protocol's every
-            # open-signal is unfalsifiable here. Set the value natively, fire the framework
-            # events, and read the selection back (see _NATIVE_SELECT_JS).
-            r = await cdp.send("Runtime.evaluate", {
-                "expression": f"({_NATIVE_SELECT_JS})"
-                              f"({json.dumps({'selector': body.selector, 'value': body.value})})",
-                "returnByValue": True})
+    order = dialect.candidate_order(
+        body.ats or "", dialect.FAMILY_OPTION_SELECT,
+        classified=_proto_of(classified) or _proto_of(body.widget_type), tag=tag)
+    if not order:
+        return {**common, "outcome": Outcome.NOT_FOUND,
+                "detail": f"no candidate protocol for tag={tag!r} — the widget's shape rules "
+                          f"out every protocol this family knows"}
+
+    async def _attempt(protocol: str) -> dict[str, Any]:
+        if protocol == "native_select":
+            async with websockets.connect(target["webSocketDebuggerUrl"],
+                                          max_size=16 * 1024 * 1024) as ws2:
+                cdp2 = _CDPSession(ws2)
+                await cdp2.send("Runtime.enable", {})
+                r = await cdp2.send("Runtime.evaluate", {
+                    "expression": f"({_NATIVE_SELECT_JS})"
+                                  f"({json.dumps({'selector': body.selector, 'value': body.value})})",
+                    "returnByValue": True})
             v = (r.get("result") or {}).get("value") or {}
             d = v.get("detail") or ""
             if v.get("ok"):
@@ -2536,36 +2577,71 @@ async def select_option(body: SelectOptionRequest):
                 outcome = Outcome.NOT_STAGED
             else:
                 outcome = Outcome.NOT_FOUND
-            return {**common, "outcome": outcome, "detail": d,
-                    "actions": ["set_value"], "selected": v.get("selected"),
+            return {"outcome": outcome, "detail": d, "actions": ["set_value"],
+                    "selected": v.get("selected"),
                     **({"options": v["options"]} if v.get("options") else {})}
-
-        if wt == WidgetType.UNKNOWN.value:
-            # Refuse rather than guess. An unclassified widget driven by a guessed protocol
-            # is how every one of 2026-07-15's bugs started.
-            return {**common, "outcome": Outcome.NOT_FOUND,
-                    "detail": "widget_type=unknown — refusing to guess a protocol. Send a "
-                              "/probe to learn its shape, then add it to the classifier."}
-
-    # The listbox/prompt paths open their own sessions (the prompt protocol re-discovers the
-    # target after its native click), so they run outside the block above.
-    if wt == WidgetType.PROMPT_HIERARCHICAL.value:
-        inner = await select_prompt(SelectPromptRequest(
+        if protocol == "react_select":
+            async with websockets.connect(target["webSocketDebuggerUrl"],
+                                          max_size=16 * 1024 * 1024) as ws2:
+                cdp2 = _CDPSession(ws2)
+                await cdp2.send("Page.enable", {})
+                await cdp2.send("Runtime.enable", {})
+                outcome, steps, detail = await react_select_pick(
+                    cdp2, selector=body.selector, value=body.value)
+            return {"outcome": outcome, "steps": steps, "detail": detail,
+                    "actions": ["clear", "type", "click"]}
+        # aria_listbox — the staged-commit popup protocol, via the existing endpoint.
+        inner = await widget_select(WidgetSelectRequest(
             browser_url=body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url,
-            field_role=None, field_name=body.field or body.value, value=body.value))
-        return {**common, "outcome": inner.get("outcome", Outcome.ERROR),
+            opener_selector=body.selector, option_label=body.value,
+            option_selector=body.option_selector,
+            commit_names=[commit] if commit else [], bring_to_front=body.bring_to_front))
+        return {"outcome": inner.get("outcome", Outcome.ERROR),
                 "steps": inner.get("steps", []), "detail": inner.get("detail", ""),
-                "actions": ["click", "type", "click"]}
+                "actions": ["click", "click"] + (["click"] if commit else []),
+                **({"options": inner["options"]} if "options" in inner else {})}
 
-    inner = await widget_select(WidgetSelectRequest(
-        browser_url=body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url,
-        opener_selector=body.selector, option_label=body.value,
-        option_selector=body.option_selector,
-        commit_names=[commit] if commit else [], bring_to_front=body.bring_to_front))
-    return {**common, "outcome": inner.get("outcome", Outcome.ERROR),
-            "steps": inner.get("steps", []), "detail": inner.get("detail", ""),
-            "actions": ["click", "click"] + (["click"] if commit else []),
-            **({"options": inner["options"]} if "options" in inner else {})}
+    # ONLY NON-ENGAGEMENT CYCLES. `not_opened` / `not_found` mean the protocol never engaged
+    # the widget — the shape hypothesis was wrong, try the next one — and `error` is a mechanism
+    # failure that says nothing about shape either way. Everything else means the protocol DID
+    # engage: AMBIGUOUS/NO_OPTION are vocabulary verdicts over the widget's real enumerated
+    # options (a slower protocol would re-ask the same question), and NOT_STAGED /
+    # NOT_COMMITTED mean it half-acted — cycling another protocol onto a widget that just
+    # staged something risks acting twice on a real application. Engaged-and-failed stops, loud.
+    _cycle_on = {Outcome.NOT_OPENED.value, Outcome.NOT_FOUND.value, Outcome.ERROR.value}
+    tried: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
+    for protocol in order:
+        result = await _attempt(protocol)
+        out = result.get("outcome")
+        out_v = out.value if hasattr(out, "value") else str(out)
+        tried.append({"protocol": protocol, "outcome": out_v,
+                      "detail": (result.get("detail") or "")[:120]})
+        attempts.append(result)
+        if out_v == Outcome.OK.value:
+            dialect.record_win(body.ats or "", dialect.FAMILY_OPTION_SELECT, protocol,
+                               evidence=f"{body.selector} · {(result.get('detail') or '')[:80]}")
+            return {**common, **result, "via_protocol": protocol, "tried": tried}
+        if out_v not in _cycle_on:
+            return {**common, **result, "via_protocol": protocol, "tried": tried}
+
+    # Every candidate failed to engage. Report the FIRST attempt's verdict — the strongest
+    # hypothesis's failure is the informative one — with the whole cycle on the record.
+    first = attempts[0] if attempts else {"outcome": Outcome.NOT_FOUND, "detail": "nothing tried"}
+    return {**common, **first, "via_protocol": tried[0]["protocol"] if tried else None,
+            "tried": tried}
+
+
+@app.get("/dialects")
+async def dialects():
+    """The learned interaction dialects — which protocol each platform's widget family speaks.
+
+    Read-only observability: the operator (and the teacher) can see what the cycle has learned,
+    per site, with win counts and the evidence line from the first verified success. The map IS
+    the deliverable of the dialect layer — recipe-shaped knowledge accumulated from live drives.
+    """
+    from app import dialect
+    return {"ok": True, "dialects": dialect.all_dialects()}
 
 
 class CheckGroupRequest(BaseModel):
