@@ -6287,3 +6287,66 @@ guard asked and the page answered). The application stands at `workday_job_posti
 from Submit" on the SCRIPTED spine — the generic cadence handed over to the recipe exactly as
 designed. Next chapter: the Workday account leg (measured auth=account; credentials generated,
 gates = captcha/email-code) → form → gate. 3/7 submitted, 4 open.
+
+## 2026-08-11 (night) — WHETHER vs WHEN: a measured wall still waits for the page, and three census blind spots
+
+Operator, watching the cockpit while the Lens read correctly: *"the lens is accurate but our
+cockpit isn't — it still thinks it needs to create an account but it should know that we're on a
+landing page."* Exactly right, and one layer deeper than the morning's fix. Workday's registry row
+says `auth: account` — a MEASURED fact — and the ladder read that as *the wall is NOW*, so the
+instant `classify` named workday the whole work surface became account-creation over a job
+posting. **WHETHER a platform has a wall is the registry's answer; WHEN is the page's.**
+`apply_recipe.before_the_wall()` reads the platform's own flow order (posting → apply-method →
+auth) and the account rung defers until the page arrives — with no readable position it engages as
+before, which is the honest default.
+
+**The Workday tail had no rungs for its first two screens.** The recipe's selectors had described
+Apply and the apply-method modal since 07-12 and nothing executed them, so the ladder could not
+press the button in front of it. `_WORKDAY_TAIL` now serves both, same shape as the generic spine.
+
+**The account leg, three findings in one wall:**
+* The create walk never CHECKED the consent box — the recipe's prose said to since 07-12 and no
+  step did it, so Create Account bounced on "Please check the box to continue". `checks` is the
+  refusals' mirror, driven label-independently (`values: ["*"]`) because the label is TENANT
+  PROSE ("I consent" here, "I confirm that I have read and acknowledge" on US Bank), and the box
+  is addressed by Workday's own automation-id.
+* An EXISTING account makes Workday's Create Account REDIRECT to Sign In rather than error. The
+  operator had one; mark_created + the sign-in leg went straight through to My Information.
+* Workday's MULTISELECT is the third shape of the `.value` lie (after react-select and the ARIA
+  opener): the scanned node is a search box, the answer is the pill, and the container says so in
+  its own aria-label ("1 item selected, United States of America (+1)").
+
+**THE PAGE'S OWN VERDICT OUTRANKS OUR ELEMENT LIST.** Workday renders State and Degree as bare
+`<button>`s — no role, no automation-id, no aria-required — invisible to every clause of the
+census, which therefore called the form COMPLETE while the page refused every Continue. Two new
+tells, both vendor-neutral: `aria-invalid=true` files a row whatever the tag (the site telling us
+in its own words that a control is unsatisfied), and `[aria-haspopup=listbox]` joins the scanned
+elements (the ARIA contract for an option widget) so the miss is caught BEFORE a failed submit.
+
+**The nested prompt is solved, not a gap.** A category's row click SELECTS and leaves the list
+unmoved — three clicks on "Job Sites", three identical lists; the CHEVRON drills. And typing a
+leaf mid-drill runs Workday's GLOBAL search, abandons the hierarchy, and returned an EMPTY list
+for "Indeed" sitting one click under Job Sites. `/select_prompt_path` now drills structurally for
+every level but the last. Category names are TENANT vocabulary ("Job Sites", not the older note's
+"Job Board"), as are option lists — this tenant's degrees are RN DIPLOMA / LPN / PHARM D /
+BACHERLORS-spelled-BACHELORS, which is why `no_option` enumerating the real options is the
+useful failure. And `/select_prompt` was the only tier-2 endpoint that could not take a SELECTOR,
+so a recipe field addressed the stable way had no way in.
+
+**THE DIALECT LOCK-IN WORKS, first live proof:** the first verified Workday select recorded
+`workday::option_select → aria_listbox` with its evidence, and every option widget after it led
+with that protocol. One diagnosis, paid once — which was the whole point.
+
+**Where it stopped, honestly:** the SolutionHealth application is answered end to end (School via
+the page's own OTHER+Enter path, Degree from the tenant vocabulary, Certification = "No
+Certification Needed" exactly as the page instructs) and PARKED on one real gap: Workday's file
+uploader ingests through its own handler, so `DOM.setFileInputFiles` stages `files.length > 0` and
+the page still demands the upload. That made a third confirmation gap visible — an upload was
+reported `ok` on the dispatch alone; it now verifies at the node and returns `not_staged`
+otherwise. The park preserves the tab (`leaves_work_open`), and the next drive's first job is the
+uploader as a widget PROTOCOL (trusted drag-drop / the widget's own commit), not a form answer.
+
+*Also:* the census/AX join planned every field twice ("First Name*" and "First Name" are one
+field — compare with the required marker stripped), and `apply_fields` correctly refuses a field
+addressed two ways, which is why the prompt's accessible name became the endpoint's problem to
+solve rather than the table's.
