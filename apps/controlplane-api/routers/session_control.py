@@ -4214,6 +4214,26 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
                     initiator=body.initiator)
         if disc.outcome == aps.OK:
             added.append("classify")
+    # A SETTLED CLASSIFY MEANS "WE NAMED IT ONCE", NOT "THE WORLD CANNOT DISAGREE". The platform is
+    # first guessed on Indeed from the apply href — a PREDICTION — and a settled rung made that guess
+    # permanent: Odyssey Consulting's card said `workday`, the application landed on
+    # `careers-odysseyconsult.icims.com`, and the account rung was one press from driving Workday's
+    # create-account recipe (Workday field names, Workday's consent box) against an iCIMS form and
+    # filing the credential under `ats_odyssey_consulting_workday` (live 2026-08-12).
+    #
+    # This is the whole reconcile contract: when the record and the window disagree, MEMORY YIELDS.
+    # A contradiction re-classifies; both entries stay on the record (§10 — keep both sides of a
+    # correction), because the wrong platform is the evidence that the href tell can lie.
+    elif disc.platform and step.platform and disc.platform != step.platform:
+        was = step.platform
+        step.platform = disc.platform
+        step.landing_state = None        # a state named for the OTHER platform describes nothing
+        step.record("classify", disc.outcome,
+                    f"RE-CLASSIFIED from the live window: recorded as {was!r}, the open tab is "
+                    f"{disc.platform!r} ({ats_url[:70]}). The earlier name came from the Indeed "
+                    f"card's apply href, which predicts the destination and can be wrong.",
+                    initiator=body.initiator)
+        added.append(f"classify:{was}->{disc.platform}")
 
     bb.world = dict(bb.world or {})
     bb.world["apply_tab"] = next((t for t in (obs.get("tabs") or [])

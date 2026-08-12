@@ -2157,6 +2157,65 @@ def test_reconcile_step_records_what_the_open_ats_tab_proves(monkeypatch):
     assert saved["bb"].world["apply_tab"]["url"].startswith("https://mfs.wd1")
 
 
+def test_reconcile_reclassifies_when_the_window_names_another_platform(monkeypatch):
+    """A settled classify means "we named it once", not "the world cannot disagree".
+
+    The platform is first guessed on Indeed from the apply href — a PREDICTION — and a settled rung
+    made that guess permanent. Live 2026-08-12: Odyssey Consulting's card said `workday`, the
+    application landed on `careers-odysseyconsult.icims.com`, and the account rung was one press
+    from driving Workday's create-account recipe against an iCIMS form and filing the credential
+    under `ats_odyssey_consulting_workday`. Reconcile's whole contract is that memory yields.
+    """
+    bb = _with_queue(("indeed:a1", "Data Business Analyst", "Odyssey Consulting"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK, "from the Indeed card")
+    q.steps[0].platform = "workday"                       # the href tell's guess
+    q.steps[0].landing_state = "workday_my_information"    # a state that describes nothing here
+    bb.world["apply_queue"] = q.as_dict()
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL,
+            "https://careers-odysseyconsult.icims.com/jobs/8308/data-business-analyst/login"),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/reconcile_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "icims"
+    assert step.landing_state is None, "a state named for the other platform must not survive"
+    # BOTH SIDES STAY ON THE RECORD (§10): the wrong name is the evidence that the tell can lie.
+    classifies = [m for m in step.minis if m.rung == "classify"]
+    assert len(classifies) == 2
+    assert "RE-CLASSIFIED" in classifies[-1].detail and "workday" in classifies[-1].detail
+    assert "icims" in r["last_step"]["detail"]
+
+
+def test_reconcile_leaves_an_agreeing_classification_alone(monkeypatch):
+    """The mirror: re-classifying when the window AGREES would write a correction that corrects
+    nothing and bury the real one in noise."""
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Associate", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK, "already walked")
+    q.steps[0].platform = "workday"
+    bb.world["apply_queue"] = q.as_dict()
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "workday"
+    assert len([m for m in step.minis if m.rung == "classify"]) == 1
+
+
 def test_reconcile_reopens_a_rung_its_own_verification_demoted(monkeypatch):
     """THE STALL RECONCILE EXISTS TO END, AND COULD NOT.
 
