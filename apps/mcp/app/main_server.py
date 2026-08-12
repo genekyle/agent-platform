@@ -1774,6 +1774,12 @@ async def extract_jobs(body: ExtractJobsRequest):
 class AutofillFormRequest(BaseModel):
     answers: list[dict]                  # [{key,value,options[],patterns[]}] from the profile
     browser_url: str = "http://127.0.0.1:9222"
+    #: Which tab holds the form. `tab_id` wins when given — the caller that KNOWS its tab must be
+    #: obeyed. The 'smartapply' default is only the legacy no-args behaviour: with it in place and
+    #: tab_id ignored, every non-Indeed application was undrivable by this endpoint ("No target
+    #: whose URL contains 'smartapply'" over a Cornerstone form, live 2026-08-11) — the third
+    #: Indeed-ism found in this one path in one day.
+    tab_id: Optional[str] = None
     tab_url: Optional[str] = "smartapply"
 
 
@@ -1797,7 +1803,12 @@ _AUTOFILL_JS = r"""
         if(pl && q.includes(pl)) s+=3; else { s += toks(p).filter(t=>qt.has(t)).length; } }
       if(s>bs){bs=s;best=a;}
     }
-    return bs>=2?best:null;
+    // >=3 so a SUBSTRING hit always qualifies while bare token overlap needs three shared
+    // meaningful words. At 2, one answer offered alone sprayed: "authorized to work in the US"
+    // token-matched the SPONSORSHIP question ({work, us}) and clicked Yes on it — the exact
+    // answer the operator's profile forbids (caught live 2026-08-11, Cornerstone). With a
+    // single answer there is no best-match competition to save you; the floor has to.
+    return bs>=3?best:null;
   }
   function setNativeValue(el,val){
     const proto = el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
@@ -1848,7 +1859,9 @@ _AUTOFILL_JS = r"""
           setNativeValue(texts[0],a.value); texts[0].scrollIntoView({block:'center'});
           report.push({q:qtext.slice(0,45),key:a.key,via:'text',status:'filled'});
         } else if(checks.length){
-          const affirm=/^(yes|true|agree|accept)/i.test(a.value||'');
+          // "I agree" / "I accept" style values start with "I ", which the old affirm regex
+          // missed — so a matched consent was reported filled with no click ever dispatched.
+          const affirm=/^(yes|true|agree|accept|i agree|i accept|i acknowledge|i consent|i certify|i have read)/i.test(a.value||'');
           if(checks[0].checked!==affirm) checks[0].click();
           report.push({q:qtext.slice(0,45),key:a.key,via:'checkbox',status:'filled'});
         }
@@ -1856,6 +1869,66 @@ _AUTOFILL_JS = r"""
         report.push({q:qtext.slice(0,55),status:'unmatched'});
       }
     } catch(e){ report.push({q:qtext.slice(0,45),status:'error:'+e.message}); }
+  }
+
+  // ── THE VENDOR-NEUTRAL FALLBACK ────────────────────────────────────────────────────────────
+  // The container loop above keys on Indeed smartapply's OWN class names ('.ia-Questions-item'),
+  // so on any other vendor it finds zero containers and the whole matcher reports nothing —
+  // measured live 2026-08-11 on Cornerstone: eight radio questions, one consent checkbox, all
+  // 'not_found' on a page where every group was plainly answerable. The structure that IS
+  // vendor-neutral is the platform's: native radios share a name= attribute, their labels carry
+  // the option text, and the question is the nearest ancestor whose text says more than the
+  // options alone. No class names, no per-site branches.
+  const lbl = (x) => ((x.closest('label')&&x.closest('label').innerText)
+                      || (x.labels&&x.labels[0]&&x.labels[0].innerText)
+                      || x.getAttribute('aria-label') || '').replace(/\s+/g,' ').trim();
+  const seen = new Set();
+  for(const c of containers)
+    for(const x of c.querySelectorAll('input[type=radio],input[type=checkbox]')) seen.add(x);
+
+  const byName = new Map();
+  for(const r of document.querySelectorAll('input[type=radio]')){
+    if(seen.has(r)) continue;
+    const k = r.name || r.id || '';
+    if(!k) continue;
+    if(!byName.has(k)) byName.set(k, []);
+    byName.get(k).push(r);
+  }
+  for(const [nm, els] of byName){
+    try {
+      const optText = els.map(lbl).join(' ');
+      let anc = els[0].parentElement, hops = 0;
+      while(anc && hops < 8){
+        const t = (anc.innerText||'').replace(/\s+/g,' ').trim();
+        if(els.every(e => anc.contains(e)) && t.length > optText.length + 10) break;
+        anc = anc.parentElement; hops++;
+      }
+      const qtext = ((anc&&anc.innerText)||'').replace(/\s+/g,' ').trim();
+      if(qtext.length < 5) continue;
+      const a = match(qtext);
+      if(!a){ report.push({q:qtext.slice(0,55),via:'radio_by_name',status:'unmatched'}); continue; }
+      const want=((a.options&&a.options.length?a.options:[a.value])).map(x=>(x||'').toLowerCase());
+      const r = els.find(x=>{const l=lbl(x).toLowerCase();
+        return want.some(w=>l===w||l.startsWith(w)||l.includes(w));});
+      if(r){ r.scrollIntoView({block:'center'}); r.click();
+        report.push({q:qtext.slice(0,45),key:a.key,via:'radio_by_name',status:'filled'}); }
+      else report.push({q:qtext.slice(0,45),key:a.key,via:'radio_by_name',status:'no_option',
+                        options: els.map(lbl).slice(0,15)});
+    } catch(e){ report.push({q:('group '+nm).slice(0,45),status:'error:'+e.message}); }
+  }
+
+  // Standalone labelled checkboxes (a consent line outside any container): match by the label's
+  // own text, check only on an affirmation value — never uncheck, never guess.
+  for(const c of document.querySelectorAll('input[type=checkbox]')){
+    if(seen.has(c)) continue;
+    const t = lbl(c);
+    if(t.length < 3) continue;
+    const a = match(t);
+    if(!a) continue;
+    const affirm=/^(yes|true|agree|accept|i agree|i accept|i acknowledge|i consent|i certify|i have read)/i.test(a.value||'');
+    if(affirm && !c.checked){ c.scrollIntoView({block:'center'}); c.click(); }
+    report.push({q:t.slice(0,45),key:a.key,via:'checkbox_by_label',
+                 status: affirm||c.checked ? 'filled' : 'no_option'});
   }
   return {report, combos};
 }
@@ -1872,7 +1945,8 @@ async def autofill_form(body: AutofillFormRequest):
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
-        target = await _discover_target(body.browser_url, tab_id=None, tab_url=body.tab_url)
+        target = await _discover_target(body.browser_url, tab_id=body.tab_id,
+                                        tab_url=None if body.tab_id else body.tab_url)
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             r = await cdp.send("Runtime.evaluate", {
@@ -2237,6 +2311,57 @@ class WidgetSelectRequest(BaseModel):
     bring_to_front: bool = True
 
 
+# ── The native-<select> protocol ──────────────────────────────────────────────────────────────────
+# A plain <select> has NO popup the DOM can observe: the OS renders its dropdown, so every clause of
+# the popup protocol (aria-expanded, option deltas, scoped [role=option]s) is unfalsifiable there —
+# it reported "popup did not open (even after a trusted-mouse open)" forever on a widget that was
+# working perfectly (measured live 2026-08-11, Cornerstone's #EEOQuestion selects, the first plain
+# HTML this layer ever met after learning React portals first). The native protocol is the value
+# property + the framework events, verified by reading the selection back:
+#
+#  1. MATCH THE OPTION BY TEXT — exact first, then unique prefix (the census truncates long option
+#     text at ~60 chars, so the teacher's value may be a prefix; AMBIGUOUS prefixes refuse and
+#     carry the enumeration, per the no_option lesson).
+#  2. SET VIA THE PROTOTYPE SETTER — a framework-controlled select shadows .value with its own
+#     accessor; the prototype setter is the one React cannot intercept (same lesson as the
+#     humanized typer: type for timing, set authoritatively).
+#  3. DISPATCH input THEN change — the pair a real selection fires; React listens on change.
+#  4. VERIFY BY RE-READ — el.selectedOptions[0].text is the widget's own word for what is chosen
+#     now. No navigation, so the same evaluation can confirm.
+_NATIVE_SELECT_JS = r"""
+((cfg) => {
+  // PREFER THE MATCH THAT IS A SELECT. Cornerstone puts the SAME id on the label and its
+  // control (invalid HTML, shipped anyway), so querySelector returns the LABEL. All matches
+  // are consulted, a label's own .control is followed, and only then do we give up.
+  const matches = [...document.querySelectorAll(cfg.selector)];
+  if (!matches.length) return {ok: false, detail: `no node matching ${cfg.selector}`};
+  let el = matches.find(m => m.tagName === 'SELECT') || matches[0];
+  if (el.tagName === 'LABEL' && el.control && el.control.tagName === 'SELECT') el = el.control;
+  if (el.tagName !== 'SELECT')
+    return {ok: false, detail: `not a native select (tag=${el.tagName})`};
+  const options = [...el.options].map(o => o.text.trim());
+  const want = (cfg.value || '').trim().toLowerCase();
+  const texts = options.map(t => t.toLowerCase());
+  let idx = texts.findIndex(t => t === want);
+  if (idx < 0) {
+    const pref = texts.map((t, i) => [t, i]).filter(([t]) => t.startsWith(want));
+    if (pref.length === 1) idx = pref[0][1];
+    else if (pref.length > 1)
+      return {ok: false, options, detail: `ambiguous: ${pref.length} options start with ${cfg.value}`};
+  }
+  if (idx < 0) return {ok: false, options, detail: `no option matching ${cfg.value}`};
+  el.focus();
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+  setter.call(el, el.options[idx].value);
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+  const now = el.selectedOptions[0] ? el.selectedOptions[0].text.trim() : '';
+  return {ok: now === options[idx], selected: now, value: el.value, options,
+          detail: now === options[idx] ? `selected ${now}` : `set did not hold (reads ${now})`};
+})
+"""
+
+
 @app.post("/widget_select")
 @journaled(Intent.SELECT_OPTION)
 async def widget_select(body: WidgetSelectRequest):
@@ -2391,6 +2516,30 @@ async def select_option(body: SelectOptionRequest):
             return {**common, "outcome": outcome, "steps": steps, "detail": detail,
                     "actions": ["clear", "type", "click"]}
 
+        if wt == WidgetType.NATIVE_SELECT.value:
+            # A plain <select> has no DOM popup — the OS draws it — so the popup protocol's every
+            # open-signal is unfalsifiable here. Set the value natively, fire the framework
+            # events, and read the selection back (see _NATIVE_SELECT_JS).
+            r = await cdp.send("Runtime.evaluate", {
+                "expression": f"({_NATIVE_SELECT_JS})"
+                              f"({json.dumps({'selector': body.selector, 'value': body.value})})",
+                "returnByValue": True})
+            v = (r.get("result") or {}).get("value") or {}
+            d = v.get("detail") or ""
+            if v.get("ok"):
+                outcome = Outcome.OK
+            elif d.startswith("ambiguous"):
+                outcome = Outcome.AMBIGUOUS
+            elif d.startswith("no option"):
+                outcome = Outcome.NO_OPTION
+            elif d.startswith("set did not hold"):
+                outcome = Outcome.NOT_STAGED
+            else:
+                outcome = Outcome.NOT_FOUND
+            return {**common, "outcome": outcome, "detail": d,
+                    "actions": ["set_value"], "selected": v.get("selected"),
+                    **({"options": v["options"]} if v.get("options") else {})}
+
         if wt == WidgetType.UNKNOWN.value:
             # Refuse rather than guess. An unclassified widget driven by a guessed protocol
             # is how every one of 2026-07-15's bugs started.
@@ -2508,6 +2657,9 @@ async def scan_required(body: ScanRequiredRequest):
     answered = out.get("answered") or []
     return {"outcome": Outcome.OK, "unanswered": unanswered, "count": len(unanswered),
             "answered": answered,
+            # Optional-but-visible controls, for ADDRESSING only — the gate above reads
+            # `unanswered` and nothing else, exactly as before.
+            "optional": out.get("optional") or [],
             "detail": (f"{len(unanswered)} required field(s) unanswered: "
                        f"{[u['field'] for u in unanswered][:6]}" if unanswered
                        else "all required fields answered"),

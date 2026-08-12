@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 
+import ats_registry
 import step_runner as sr
 
 
@@ -84,6 +85,41 @@ def test_enter_apply_mismatches_when_the_click_left_the_window_unchanged():
     same = [("t1", "https://www.indeed.com/jobs")]
     verdict, why = sr.verify(ex, sr.diff(_obs(tabs=same), _obs(tabs=same)), _obs(tabs=same))
     assert verdict == sr.MISMATCH and "unchanged" in why
+
+
+def test_every_ats_the_registry_names_confirms_the_hand_off():
+    """A STALE PREDICTION DOES NOT ABSTAIN, IT CONTRADICTS.
+
+    `hosts_hint` was six hand-typed hosts, so an enter_apply that clicked the right button and
+    landed on the right ATS was demoted `ok` -> `mismatch` ("something moved, but not to an
+    application host: https://bc.csod.com/…"). That pinned the ladder on a rung already completed,
+    and since a mismatch hard-stops the irreversible rungs it would have blocked Submit at the end
+    of the same application (measured live 2026-08-11, Boston College / Cornerstone).
+
+    So the hint tracks the registry, and this is the test that says so.
+    """
+    before = _obs(url="https://www.indeed.com/jobs", tabs=[("t1", "https://www.indeed.com/jobs")])
+    for ats in ats_registry.ATS_PLATFORMS:
+        if ats["ats_id"] in ats_registry._ON_ENGINE_APPLY:
+            continue
+        for host in ats["hosts"]:
+            landed = f"https://tenant.{host.lstrip('.')}/careers/job/12345"
+            after = _obs(url="https://www.indeed.com/jobs",
+                         tabs=[("t1", "https://www.indeed.com/jobs"), ("t2", landed)])
+            verdict, why = sr.verify(sr.expectation_for("enter_apply"),
+                                     sr.diff(before, after), after)
+            assert verdict == sr.CONFIRMED, f"{ats['ats_id']} ({host}) read as {verdict}: {why}"
+
+
+def test_the_cornerstone_hand_off_that_was_demoted_now_confirms():
+    """The exact pair from the live drive, verbatim."""
+    before = _obs(url="https://www.indeed.com/jobs", tabs=[("t1", "https://www.indeed.com/jobs")])
+    after = _obs(url="https://www.indeed.com/jobs",
+                 tabs=[("t1", "https://www.indeed.com/jobs"),
+                       ("t2", "https://bc.csod.com/ux/ats/careersite/2/home/requisition/11102"
+                              "?c=bc&lang=en-US&source[0]=IndeedATSSync")])
+    verdict, why = sr.verify(sr.expectation_for("enter_apply"), sr.diff(before, after), after)
+    assert verdict == sr.CONFIRMED and "csod.com" in why
 
 
 def test_read_only_rungs_are_paired_but_never_judged():

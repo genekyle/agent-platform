@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+import ats_registry
 from settings import settings
 
 #: Rungs whose action cannot be taken back. A verification failure anywhere else recovers or
@@ -307,9 +308,18 @@ def expectation_for(rung_id: str, *, external_id: str = "") -> Expectation:
         return Expectation(kind="url_param", param="vjk", value=external_id)
     if rung_id == "enter_apply":
         # Clicking Apply either opens the application's own tab or navigates this one to it.
+        #
+        # WHICH HOSTS COUNT AS "THE APPLICATION" IS THE REGISTRY'S ANSWER, NOT A HAND-KEPT SIX.
+        # This tuple was typed out and went stale, and a stale hosts_hint does not merely fail to
+        # praise — it CONTRADICTS: an enter_apply that clicked the right button and opened the
+        # right tab was demoted from `ok` to `mismatch` ("something moved, but not to an
+        # application host: https://bc.csod.com/…"), which pinned the ladder on a rung it had
+        # already completed and, because a mismatch hard-stops the irreversible rungs, would have
+        # blocked Submit at the end of it (measured live 2026-08-11, Boston College / Cornerstone).
+        # A prediction is only honest if the thing it predicts against is kept current.
         return Expectation(kind="new_tab_or_nav",
-                           hosts_hint=("smartapply.indeed.com", "myworkdayjobs", "greenhouse.io",
-                                       "icims.com", "successfactors", "sapsf.com"))
+                           hosts_hint=("smartapply.indeed.com", "sapsf.com")
+                                      + ats_registry.off_engine_apply_hosts())
     if rung_id in ("verify_identity", "classify", "account", "orient"):
         # These read the world; they change nothing.
         return Expectation(kind="read_only")

@@ -285,6 +285,27 @@ function executeFocus(p, step, nextAction) {
     more: TERMINAL_CHOICES,
   };
 
+  // THE RECORD CAN FALL BEHIND THE WINDOW, AND THE WAY OUT WAS CURL-ONLY.
+  //
+  // `/reconcile_step` has existed since the rebuilt-queue work — the apply-step half of "the
+  // browser is truth, the record is memory" — and it was reachable by nothing the operator can
+  // press. Which broke the reach-parity rule exactly where it costs most: found live 2026-08-11
+  // with the ladder pinned on an `enter_apply` that had already succeeded (a stale hosts list
+  // demoted it), the application tab plainly open on Cornerstone, and no button in the cockpit
+  // that could say so. The operator's only offers were to redo work the world had done or to
+  // flag an outcome that had not happened — one wastes a click, the other falsifies the record.
+  //
+  // Offered only when an application tab is actually open: reconcile refuses without one ("there
+  // is nothing the window can prove"), and an affordance that can only refuse is a lie-shaped one.
+  const applyTabOpen = (p.tabs || []).some((t) => t.role === "apply");
+  const realign = applyTabOpen ? {
+    label: "Catch up to the window",
+    endpoint: "/reconcile_step", body: {},
+    why: "Record only what the open application tab PROVES — the browser is truth and the record "
+       + "is memory, so when they disagree, memory yields. It never invents progress: the "
+       + "near-miss guard still refuses to rubber-stamp an identity it cannot match.",
+  } : null;
+
   // PARKED: the application is mid-flight and waiting on the operator — the truth of the step,
   // so it outranks any stale proposal riding on it. One primary: step back in. Reopen archives
   // the walked rungs and re-walks from the top of the page (apply_steps.reopen's own contract).
@@ -361,8 +382,11 @@ function executeFocus(p, step, nextAction) {
       whereabouts: p.observer || null,
       why: nextAction.why || "The screen isn't one the recipe or the observer recognises.",
       primary: actionFrom(nextAction),
-      alternates: nextAction.secondary ? [actionFrom(nextAction.secondary,
-        { demoted: nextAction.secondary.demoted_because })].filter(Boolean) : [] };
+      alternates: [
+        ...(nextAction.secondary ? [actionFrom(nextAction.secondary,
+          { demoted: nextAction.secondary.demoted_because })] : []),
+        realign,
+      ].filter(Boolean) };
   }
 
   // THE ARBITRATED ACTION, and it is the ONLY place it renders. The old panel drew `next_action`
@@ -390,8 +414,11 @@ function executeFocus(p, step, nextAction) {
     why: nextAction?.why || "",
     say: nextAction && !nextAction.driveable ? nextAction.label : "",
     primary,
-    alternates: nextAction?.secondary ? [actionFrom(nextAction.secondary,
-      { demoted: nextAction.secondary.demoted_because })].filter(Boolean) : [] };
+    alternates: [
+      ...(nextAction?.secondary ? [actionFrom(nextAction.secondary,
+        { demoted: nextAction.secondary.demoted_because })] : []),
+      realign,
+    ].filter(Boolean) };
 }
 
 function endFocus(qs) {

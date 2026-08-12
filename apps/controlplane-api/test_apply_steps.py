@@ -489,7 +489,7 @@ def test_the_step_reaches_the_tail_once_the_prefix_is_walked():
 
 def test_a_tail_rung_is_not_suppressed_by_having_been_walked_before():
     """Indeed serves `questions` across several pages — the recipe's own `expect` says so. A tail
-    rung gated on `_settled_rungs` would strand the drive on page two."""
+    rung gated on `settled_rungs` would strand the drive on page two."""
     step = aps.ApplyStep(job_id="indeed:1", platform="indeed")
     for rung in ("open_pane", "verify_identity", "enter_apply", "classify"):
         step.record(rung, aps.OK)
@@ -504,3 +504,55 @@ def test_the_prefix_still_answers_alone_when_no_state_is_offered():
     for rung in ("open_pane", "verify_identity", "enter_apply", "classify", "account"):
         step.record(rung, aps.OK)
     assert step.next_rung() is None       # no landing_state -> no tail, as before
+
+
+# --- the generic cadence meets the ladder --------------------------------------------------------
+
+def test_an_unmapped_ats_gets_a_tail_rung_instead_of_new_territory():
+    """The dead end the cadence exists to end: Cornerstone named, page read, and the ladder said
+    "genuinely new territory — drive it by hand." The shared spine now serves the rung."""
+    rung = aps.tail_rung_for("cornerstone", "cornerstone_job_posting")
+    assert rung is not None and rung.id == "cornerstone_job_posting"
+    assert "press the page's own apply control" in rung.label.lower()
+    assert "shared ats cadence" in rung.why.lower()          # the fuzz is said, not hidden
+
+
+def test_the_generic_review_gate_is_the_submit_rung():
+    assert aps.tail_rung_for("cornerstone", "cornerstone_review") is aps.SUBMIT_RUNG
+
+
+def test_the_generic_wall_hands_to_the_account_rung():
+    """An account_gate screen is the account rung's business — the machinery that already exists
+    (legs, operator gating, handoff card), never a second wall surface coined by the cadence."""
+    rung = aps.tail_rung_for("cornerstone", "cornerstone_account_gate")
+    assert rung is not None and rung.id == "account"
+
+
+def test_the_account_rung_applies_on_measurement_not_prediction():
+    """auth='account' in the registry is a measured posture (Workday, SAP) — the rung stands.
+    An unmeasured platform ('unknown') defers until the wall is SEEN on screen."""
+    # Measured: the wall is a fixture — the rung applies before it is on screen.
+    assert aps.rung_applies("account", platform="successfactors")[0] is True
+    assert aps.rung_applies("account", platform="workday")[0] is True
+    # Unmeasured: not before the page shows it…
+    applies, why = aps.rung_applies("account", platform="cornerstone",
+                                state="cornerstone_job_posting")
+    assert applies is False and "unmeasured" in why
+    # …and the moment it IS the wall, no better measurement exists.
+    assert aps.rung_applies("account", platform="cornerstone",
+                        state="cornerstone_account_gate")[0] is True
+    # The no-account list still outranks everything.
+    assert aps.rung_applies("account", platform="greenhouse")[0] is False
+
+
+def test_the_walk_skips_the_unmeasured_wall_and_serves_the_generic_tail():
+    """After classify names an unmapped ATS, the next press is the page's own Apply — not
+    account-creation for a wall nobody has seen (the premature offer, live 2026-08-11)."""
+    step = aps.ApplyStep(job_id="indeed:x", title="BI Analyst", company="Boston College")
+    for r in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        step.record(r, aps.OK)
+    step.platform = "cornerstone"
+    step.landing_state = "cornerstone_job_posting"
+    rung, passed = step.walk_to_next_rung()
+    assert rung is not None and rung.id == "cornerstone_job_posting"
+    assert any(r_id == "account" and "unmeasured" in why for r_id, why in passed)

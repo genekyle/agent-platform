@@ -72,6 +72,13 @@ _WRITE_INTENTS = frozenset({
 #: The only mechanism that works is /autofill_form's native input.click()-by-question-text.
 _RADIO_WIDGETS = frozenset({"radio_group", "radio"})
 
+#: The census scanner and the widget protocol grew separate vocabularies for the same nodes, and
+#: passing the scan's word through unmapped sent a plain <select> into the POPUP protocol — which
+#: waited forever for a popup the OS renders, "popup did not open (even after a trusted-mouse
+#: open)" on four EEO selects that were working fine (live 2026-08-11, Cornerstone, the first
+#: plain-HTML ATS after a React-first education). One map, at the one seam that reads the scan.
+_SCAN_KIND_TO_WIDGET = {"select": "native_select"}
+
 #: An affirmation value marks a consent/acknowledgment CHECKBOX ("I have read and accept" -> Accept):
 #: checking it is a native click, same mechanism as a radio — not a labelled multi-select group.
 _AFFIRM_PREFIXES = ("accept", "agree", "yes", "true", "i accept", "i agree", "i acknowledge",
@@ -235,7 +242,7 @@ class LiveActuator:
         # and re-answering an answered-but-WRONG field is precisely the correction the census
         # surfaces (the sponsorship "Yes" caught live 2026-08-10, same class as the Active
         # Employee near-withdrawal). The bundle's unanswered view below stays as it was.
-        self._last_scan = raw + (scan.get("answered") or [])
+        self._last_scan = raw + (scan.get("answered") or []) + (scan.get("optional") or [])
 
         # A URL CHANGE IS A NEW VIEW. It restarts the page's age and discards the unsaved-work
         # flag: whatever we typed belonged to the page we just left, and carrying the flag
@@ -522,7 +529,8 @@ class LiveActuator:
             if len(hits) == 1:
                 u = hits[0]
                 return {"selector": u.get("selector"), "role": None, "name": None,
-                        "widget_type": u.get("kind"), "commit": None}
+                        "widget_type": _SCAN_KIND_TO_WIDGET.get(u.get("kind"), u.get("kind")),
+                        "commit": None}
             if len(hits) > 1:
                 logger.warning("field %r matches %d scan rows — refusing to guess which",
                                field, len(hits))
@@ -620,7 +628,7 @@ class LiveActuator:
         rows = scan.get("unanswered") or []
         # Answered rows included for the same reason as in observe(): the freshest scan is the
         # address book, and a correction addresses a field that is already answered.
-        self._last_scan = rows + (scan.get("answered") or [])
+        self._last_scan = rows + (scan.get("answered") or []) + (scan.get("optional") or [])
         return identities, len(rows)
 
     def _current_state(self, *, changed_from: Optional[str] = None) -> Optional[str]:

@@ -2157,6 +2157,48 @@ def test_reconcile_step_records_what_the_open_ats_tab_proves(monkeypatch):
     assert saved["bb"].world["apply_tab"]["url"].startswith("https://mfs.wd1")
 
 
+def test_reconcile_reopens_a_rung_its_own_verification_demoted(monkeypatch):
+    """THE STALL RECONCILE EXISTS TO END, AND COULD NOT.
+
+    Live 2026-08-11 (Boston College / Cornerstone): `enter_apply` clicked the right button and
+    opened the right ATS tab, recorded OK — and the StepRunner's stale hosts list then demoted it
+    to `mismatch`. The ladder re-offered `enter_apply` forever (latest verdict wins, by design),
+    and reconcile — asking a DIFFERENT question, "any OK ever recorded" — saw the superseded OK,
+    called the rung proven, added nothing, and left the operator exactly where they started.
+
+    Both now ask `settled_rungs()`. The demoted rung is unsettled to BOTH, so reconcile re-records
+    it from what the open tab proves and the ladder moves on.
+    """
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Associate", "MFS"))
+    bb.world["open_pane"] = {"title": "Compliance Reporting Associate", "apply_type": "company_site"}
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    st = q.steps[0]
+    ats = ("https://mfs.wd1.myworkdayjobs.com/en-US/MFS-Careers/job/Boston/"
+           "Compliance-Reporting-Associate_M")
+    st.record("open_pane", aps.OK, "pane opened")
+    st.record("verify_identity", aps.OK, "matches the pick")
+    st.record("enter_apply", aps.OK, f"clicked Apply; opened a new tab -> {ats}")
+    st.record("enter_apply", aps.MISMATCH, "world disagrees: not an application host")
+    bb.world["apply_queue"] = q.as_dict()
+    assert "enter_apply" not in st.settled_rungs()          # the stall, reproduced
+
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, ats), "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={}).json()
+    finally:
+        _teardown()
+
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert "enter_apply" in step.settled_rungs()            # reopened and re-proven
+    assert step.platform == "workday"
+    # …and the ladder has moved past the rung it was pinned on.
+    nxt, _ = step.walk_to_next_rung()
+    assert nxt is not None and nxt.id != "enter_apply"
+
+
 def test_reconcile_flags_a_title_drift_instead_of_rubber_stamping_it(monkeypatch):
     """verify_identity is the near-miss guard and the one rung reconcile must NOT auto-confirm.
     A Workday req that does not match the Indeed pick is exactly what it exists to catch."""
@@ -4498,6 +4540,49 @@ def test_the_account_state_says_create_while_the_account_does_not_exist(monkeypa
     st = out["account_state"]
     assert st["leg"] == "create_account"
     assert st["has_creds"] is False
+
+
+def test_no_account_is_offered_before_the_ladder_reaches_the_account_rung(monkeypatch):
+    """A PREDICTION MUST NOT PREEMPT THE RUNG THAT WOULD MEASURE IT.
+
+    The account leg gets the whole work surface — it is a wall, so it outranks the arbitrated
+    action. That is right AT the wall and wrong before it: the instant `classify` names an ATS
+    whose registry row says `auth: account`, "Create Account automatically" became the operator's
+    ONLY door, for a wall nobody had seen. Measured live 2026-08-11 on Boston College's
+    Cornerstone — the page's own "Apply Now" had never been pressed, and whether it even demands
+    an account was (and is) unverified.
+
+    A registry `auth` field is a claim ABOUT a platform; the page is the measurement. So the leg
+    stays quiet until the ladder actually arrives at `account`.
+    """
+    import ats_accounts
+    ats_accounts.ensure_account("Teradyne", "successfactors", login_url="https://career41.sapsf.com/")
+
+    # Same step as `_sap_step`, one rung earlier: classified is NOT yet recorded.
+    bb = _with_queue(("indeed:a1", "Pricing Analyst", "Teradyne"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].platform = "successfactors"          # the platform is KNOWN…
+    bb.world["apply_queue"] = q.as_dict()           # …but `classify` has not been walked
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://career41.sapsf.com/careers"}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        out = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+
+    assert out["account_state"] is None
+    # …and the surface still offers the arbitrated move, with the ladder's own `classify` rung in
+    # it — as the primary, or demoted beside it when the page reads as unrecognised. Which of the
+    # two is the arbitration's business, not this test's; what matters is that the wall did not
+    # take the surface before the rung that would find out whether there is one.
+    na = out["next_action"] or {}
+    offered = {na.get("id"), (na.get("secondary") or {}).get("id")}
+    assert "classify" in offered, offered
 
 
 def test_a_consent_whose_dialog_never_opened_names_the_real_cause(monkeypatch):

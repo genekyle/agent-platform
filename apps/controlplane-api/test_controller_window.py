@@ -5,6 +5,7 @@ photographed a stale post-apply tab, an Apply click whose new tab went unnoticed
 pressed on a tab that had gone stale. All three were "we do not know what else is open".
 """
 
+import ats_registry
 from controller import window as w
 from interaction.decision import window_to_prompt
 
@@ -33,6 +34,43 @@ def test_roles_cover_the_session_shapes_we_actually_drive():
     assert w.classify_tab("https://mail.google.com/mail/u/0/#inbox") == w.ROLE_ERRAND
     assert w.classify_tab("about:blank") == w.ROLE_BLANK
     assert w.classify_tab("https://example.com/some/page") == w.ROLE_UNKNOWN
+
+
+def test_every_ats_the_registry_names_is_an_apply_tab_to_the_window():
+    """The anti-drift test. The window kept its own host list and fell NINE platforms behind the
+    registry — Taleo, SuccessFactors, SmartRecruiters, Ashby, Workable, BrassRing, Jobvite, ADP,
+    Phenom — so a mapped ATS rendered to the operator as a nameless `unknown` tab, the one role
+    hygiene will never touch (measured live 2026-08-11 on Boston College's Cornerstone).
+
+    Adding a platform to the registry must be enough. If this fails, someone re-grew a second
+    host table.
+    """
+    for ats in ats_registry.ATS_PLATFORMS:
+        if ats["ats_id"] in ats_registry._ON_ENGINE_APPLY:
+            continue  # their hosts are the engine's own; an engine host names the SEARCH tab
+        for host in ats["hosts"]:
+            # A bare host with no `/apply` path tell — the honest test, since the path marker
+            # would otherwise pass every URL regardless of whether the host is known.
+            url = f"https://tenant.{host.lstrip('.')}/careers/job/12345"
+            assert w.classify_tab(url) == w.ROLE_APPLY, f"{ats['ats_id']} host {host} is not apply"
+
+
+def test_an_engine_host_still_names_the_search_tab():
+    """The other side of reading the registry: indeed.com and linkedin.com appear in it (as the
+    ON-ENGINE applies), and letting those broad hosts through would have relabelled the results
+    list we return to between applications as an application."""
+    assert w.classify_tab("https://www.indeed.com/jobs?q=analyst&l=Nashua%2C+NH") == w.ROLE_SEARCH
+    assert w.classify_tab("https://www.linkedin.com/jobs/search/?keywords=analyst") == w.ROLE_SEARCH
+    # …while the engine's real apply surface stays an application.
+    assert w.classify_tab("https://smartapply.indeed.com/beta/indeedapply/form/resume") == w.ROLE_APPLY
+
+
+def test_cornerstone_is_a_named_platform_not_a_nameless_tab():
+    """Boston College's requisition page, verbatim from the live hand-off (2026-08-11)."""
+    url = ("https://bc.csod.com/ux/ats/careersite/2/home/requisition/11102"
+           "?c=bc&lang=en-US&source[0]=IndeedATSSync&source[1]=Indeed&jbid=-19")
+    assert ats_registry.classify_ats(url) == "cornerstone"
+    assert w.classify_tab(url) == w.ROLE_APPLY
 
 
 # --- the survey ------------------------------------------------------------------------

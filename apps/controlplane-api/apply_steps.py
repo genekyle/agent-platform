@@ -153,7 +153,7 @@ SUBMIT_RUNG = MiniRung(
     "The irreversible one. The operator confirms every submission, on every platform, always.")
 
 #: Rungs whose id is not a state name. Everything else in the tail is keyed BY the state it
-#: advances from, so `_settled_rungs` retires a screen the moment we leave it.
+#: advances from, so `settled_rungs` retires a screen the moment we leave it.
 RESERVED_RUNG_IDS = frozenset({r.id for r in PREFIX} | {SUBMIT_RUNG.id, "orient", "challenge"})
 
 
@@ -195,19 +195,37 @@ def tail_rung_for(platform: Optional[str], state: Optional[str]) -> Optional[Min
         return None
     if progress.get("at_review_gate"):
         return SUBMIT_RUNG
+    # THE WALL, SEEN — hand it to the account rung rather than coining a second account surface.
+    # On the generic cadence the account gate is a screen the LADDER meets (after Apply, wherever
+    # the platform put it), and the machinery for walls already exists: the `account` rung's
+    # create/sign-in legs, the operator gating, the handoff card. A generic rung that "advances"
+    # a sign-in wall could only refuse (its controls are excluded from the lexicon on purpose);
+    # the honest move is the rung whose whole business is walls.
+    if progress.get("via") == "generic_ats" and state.endswith("_account_gate"):
+        return next(r for r in PREFIX if r.id == "account")
     action = ar.advance_action(platform, state) or "Continue"
     left = progress.get("steps_to_submit")
+    fuzzy = ("" if progress.get("via") != "generic_ats" else
+             " This screen is counted along the SHARED ATS cadence — no platform recipe exists "
+             "yet, so the path may diverge; every advance still runs the census, the verify and "
+             "the operator-only gate.")
     return MiniRung(
         state, f"{screen_label(state)} · {action}",
         f"The recipe advances this screen with {action!r}"
         + (f", and it is at most {left} screen(s) from Submit" if left is not None else "")
-        + ". Reversible: it moves the application forward one screen and nothing is sent.")
+        + ". Reversible: it moves the application forward one screen and nothing is sent."
+        + fuzzy)
 
 
 def screen_label(state: str) -> str:
     """`indeed_apply_resume_selection` -> `Resume selection`. Presentation only — the state id
     stays the identity, because that is what the models are trained on."""
-    for prefix in ("indeed_apply_", "workday_", "greenhouse_apply_", "indeed_"):
+    prefixes = ["indeed_apply_", "workday_", "greenhouse_apply_", "indeed_"]
+    # Every registry platform strips the same way, so `cornerstone_account_gate` reads as
+    # "Account gate" — one rule for all of them instead of a fourth hand-kept list.
+    import ats_registry
+    prefixes += [f"{a['ats_id']}_" for a in ats_registry.ATS_PLATFORMS]
+    for prefix in prefixes:
         if state.startswith(prefix):
             state = state[len(prefix):]
             break
@@ -225,7 +243,8 @@ def screen_label(state: str) -> str:
 NO_ACCOUNT_PLATFORMS = frozenset({"greenhouse", "indeed", "indeed_quick_apply"})
 
 
-def rung_applies(rung_id: str, *, platform: Optional[str]) -> tuple[bool, str]:
+def rung_applies(rung_id: str, *, platform: Optional[str],
+                 state: Optional[str] = None) -> tuple[bool, str]:
     """Does this rung EXIST for the landing we discovered? -> (applies, why-not).
 
     `classify` is documented as the discovery point — "the rungs after this one do not exist until
@@ -236,9 +255,28 @@ def rung_applies(rung_id: str, *, platform: Optional[str]) -> tuple[bool, str]:
     A rung that does not apply is SKIPPED WITH A REASON, never silently dropped: the panel still
     shows it, greyed, saying why. A ladder that quietly loses a step reads as a ladder that never
     had one.
+
+    THE ACCOUNT RUNG APPLIES ON MEASUREMENT, NOT ON PREDICTION. Its old rule made the wall a
+    fixture of every platform not on the no-account list — so the moment `classify` named an
+    unmapped ATS, the ladder's next stop was account-creation for a wall NOBODY HAD SEEN (live
+    2026-08-11: Cornerstone named, "Create Account automatically" offered, the page's own Apply
+    never pressed). Wall-before-apply is a Workday/SAP shape, not a law of ATSs — Greenhouse has
+    no wall, iCIMS raises its email gate only after Apply, and an unmapped platform's posture is
+    exactly the thing we have not measured. So: the rung exists when the registry's `auth` says
+    "account" (a MEASURED posture, recorded from a drive that hit the wall) or when the live page
+    IS the wall (`state`'s kind = account_gate — the wall, seen). Otherwise the honest move is the
+    generic cadence's: press Apply, meet the page, and let the wall engage when it shows up.
     """
-    if rung_id == "account" and (platform or "") in NO_ACCOUNT_PLATFORMS:
-        return False, f"{platform} takes an application without an account of its own"
+    if rung_id == "account":
+        if (platform or "") in NO_ACCOUNT_PLATFORMS:
+            return False, f"{platform} takes an application without an account of its own"
+        if (state or "").endswith("_account_gate"):
+            return True, ""            # the wall is on screen — no better measurement exists
+        import ats_registry
+        entry = ats_registry._BY_ID.get(platform or "")
+        if entry is not None and entry.get("auth") not in ("account",):
+            return False, (f"{platform}'s account posture is unmeasured — the wall, if it exists, "
+                           f"shows itself after Apply, and the rung engages when it is seen")
     return True, ""
 
 
@@ -322,15 +360,24 @@ class ApplyStep:
         which one the LADDER reads. A record that cannot be corrected is not a record of the world,
         it is a record of the first thing we believed about it.
         """
-        settled = self._settled_rungs()
+        settled = self.settled_rungs()
         for rung in PREFIX:
             if rung.id not in settled:
                 return rung
         return tail_rung_for(self.platform, state or self.landing_state)
 
-    def _settled_rungs(self) -> set[str]:
+    def settled_rungs(self) -> set[str]:
         """The prefix rungs this step counts as walked — the LATEST verdict for each, never the
-        best one ever recorded. `next_rung` explains why that distinction is load-bearing."""
+        best one ever recorded. `next_rung` explains why that distinction is load-bearing.
+
+        PUBLIC because "has this rung been walked?" must have exactly ONE answer. `reconcile_step`
+        asked it a second way — any OK ever recorded — and the two rules disagree precisely when a
+        rung was recorded OK and then demoted by its own verification. In that case the ladder
+        keeps offering the rung (latest = mismatch) while reconcile skips it as already proven
+        (an OK exists), so the operator's way out reports "nothing new" and changes nothing —
+        the exact stall measured live 2026-08-11 on Boston College, where a stale hosts list had
+        demoted a perfectly good `enter_apply`.
+        """
         latest: dict[str, str] = {}
         for m in self.minis:
             latest[m.rung] = m.outcome
@@ -348,11 +395,12 @@ class ApplyStep:
         rung came to disagree about the account wall in the first place (2026-07-30).
         """
         passed: list[tuple[str, str]] = []
-        settled = self._settled_rungs()
+        settled = self.settled_rungs()
         for rung in PREFIX:
             if rung.id in settled:
                 continue
-            applies, why_not = rung_applies(rung.id, platform=self.platform)
+            applies, why_not = rung_applies(rung.id, platform=self.platform,
+                                            state=state or self.landing_state)
             if applies:
                 return rung, passed
             passed.append((rung.id, why_not))
@@ -367,7 +415,8 @@ class ApplyStep:
         rather than have them vanish. Silently dropping a rung reads as never having had one."""
         out: list[dict[str, str]] = []
         for rung in PREFIX:
-            applies, why = rung_applies(rung.id, platform=self.platform)
+            applies, why = rung_applies(rung.id, platform=self.platform,
+                                        state=self.landing_state)
             if not applies:
                 out.append({"id": rung.id, "label": rung.label, "why": why})
         return out

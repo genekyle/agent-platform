@@ -289,9 +289,52 @@ SCAN_REQUIRED_JS = r"""
     const own = el.closest('label'); if (own) return txt(own);
     const aid = attr(el, 'data-automation-id'); if (aid) return aid;
     const ph = attr(el, 'placeholder'); if (ph) return ph;
+    // PROXIMITY BEFORE THE WRAP, because nearest wins. Cornerstone's contact inputs carry NO
+    // id, name, association, aria or placeholder — the visible "First Name*" is an
+    // unassociated <label> a couple of hops up-and-before the input (live 2026-08-11). The
+    // wrap branch below reaches FARTHER (closest container, then its first label anywhere),
+    // so with it first these three inputs all read as the section heading — one name for
+    // three fields, which the dedup then collapsed into a single unaddressable aggregate.
+    // The nearest PRECEDING short text (a label reads short; a paragraph does not) names a
+    // box the way a sighted user does — by looking just above it.
+    let hop = el;
+    for (let i = 0; i < 4 && hop; i++) {
+      let sib = hop.previousElementSibling;
+      while (sib) {
+        const t = txt(sib);
+        if (t && t.length >= 2 && t.length <= 60) return t;
+        if (t && t.length > 60) break;   // ran into prose — a paragraph is not a label
+        sib = sib.previousElementSibling;
+      }
+      hop = hop.parentElement;
+    }
     const wrap = el.closest('[class*=field], fieldset, [role=group], li');
     const lbl = wrap && wrap.querySelector('label, legend');
     return lbl ? txt(lbl) : '(unlabeled)';
+  };
+
+  // A structural CSS path for a node with no usable id — :nth-child steps up to the nearest
+  // id-anchored ancestor (or body). Anonymous inputs are otherwise visible to the census but
+  // unaddressable by the teach seam, which is how "the census catches it" turns into "and
+  // nobody can act on it".
+  const __cssPath = (el) => {
+    try {
+      const steps = [];
+      let n = el;
+      while (n && n !== document.body) {
+        const anchor = __idSel(n);
+        if (anchor) { steps.unshift(anchor); break; }
+        const p = n.parentElement;
+        if (!p) break;
+        const idx = [...p.children].indexOf(n) + 1;
+        steps.unshift(n.tagName.toLowerCase() + ':nth-child(' + idx + ')');
+        n = p;
+      }
+      if (!steps.length) return null;
+      if (!steps[0].startsWith('#')) steps.unshift('body');
+      const sel = steps.join(' > ');
+      return document.querySelector(sel) === el ? sel : null;   // hand out only what resolves
+    } catch (e) { return null; }
   };
 
   // __isUserField, not __vis: a required control the user cannot TAB to is a validation
@@ -317,6 +360,13 @@ SCAN_REQUIRED_JS = r"""
     return [...el.options].map(o => txt(o).slice(0, 60)).filter(Boolean).slice(0, 24);
   };
   const seen = new Set();
+  // Optional-but-visible controls, filed for ADDRESSING, never for the gate. The address book
+  // used to be the required census alone, so an optional field simply had no address — the
+  // teach seam answered "cannot address field 'Country'" over a form whose Country dropdown
+  // stood on "Please Select" with the value known (live 2026-08-11, Cornerstone). A field the
+  // operator can see is a field the teacher must be able to act on; requiredness gates the
+  // SUBMIT, not the reach.
+  const optional = [];
   for (const el of singles) {
     const disabled = !!(el.disabled || attr(el, 'aria-disabled') === 'true' || el.readOnly);
     const label = labelFor(el);
@@ -325,7 +375,18 @@ SCAN_REQUIRED_JS = r"""
     else if (el.required) { required = true; via = 'required-attr'; }
     else if (attr(el, 'aria-required') === 'true') { required = true; via = 'aria-required'; }
     else if (/\*/.test(label)) { required = true; via = 'label-asterisk'; }
-    if (!required) continue;
+    if (!required) {
+      if (via !== 'disabled' && label && label !== '(unlabeled)' && optional.length < 40) {
+        const t0 = __valueTruth(el);
+        if ((el.type || '').toLowerCase() === 'password') t0.preview = t0.answered ? '••••' : '';
+        optional.push({field: label.slice(0, 90), selector: __idSel(el) || __cssPath(el),
+                       kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
+                       required_via: 'none', value_read_at: t0.read_at,
+                       answered: t0.answered, valid: true, value_preview: t0.preview,
+                       options: selectOptions(el)});
+      }
+      continue;
+    }
 
     // Answered? Ask the SHARED tell where this widget's truth lives — never guess .value.
     // This used to detect a react-select by the presence of [class*=singleValue], which only
@@ -343,7 +404,7 @@ SCAN_REQUIRED_JS = r"""
     const id = el.id || label;
     if (seen.has(id)) continue;          // a hidden required TWIN is not a second question
     seen.add(id);
-    const row = {field: label.slice(0, 90), selector: __idSel(el),
+    const row = {field: label.slice(0, 90), selector: __idSel(el) || __cssPath(el),
                  kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
                  required_via: via, value_read_at: truth.read_at,
                  // `answered` is NOT always false on the unanswered list: a FILLED-but-INVALID
@@ -476,7 +537,8 @@ SCAN_REQUIRED_JS = r"""
     (picked ? done : out).push(row);
   }
 
-  return {unanswered: out, answered: done, url: (location.href || '').slice(0, 140)};
+  return {unanswered: out, answered: done, optional,
+          url: (location.href || '').slice(0, 140)};
 }
 """
 

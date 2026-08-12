@@ -41,6 +41,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+import ats_registry
+
 #: How many page tabs a session should hold before we consider it cluttered. Not a hard limit —
 #: exceeding it is a CONDITION the reasoner and supervisor can see, not an error. Four is the
 #: working shape of an apply drive: the search results, the application, one errand (a login-code
@@ -61,8 +63,21 @@ ROLE_UNKNOWN = "unknown"      # anything we cannot place. NEVER closable (see be
 #: confirmation lives under the same smartapply host as a live application, and calling it "apply"
 #: is exactly the mistake that had us capture a finished tab as if it were the work.
 _TERMINAL_MARKERS = ("/post-apply", "/application-submitted", "myworkdayjobs.com/thank-you")
-_APPLY_MARKERS = ("smartapply.indeed.com", "myworkdayjobs.com", "greenhouse.io", "lever.co",
-                  "icims.com", "appvault", "/apply", "applystart")
+
+#: Path tells that name an application whatever the host — an ATS nobody has ever mapped still
+#: says `/apply` on the way in — plus the on-engine apply host, which is a real apply tab even
+#: though its platform is excluded from the derived hosts below.
+_APPLY_PATH_MARKERS = ("smartapply.indeed.com", "/apply", "applystart")
+
+
+#: Every ATS host the REGISTRY knows, so a new platform is one table row and not two. This list
+#: used to be hand-kept here, and it drifted: the registry named Taleo, SuccessFactors,
+#: SmartRecruiters, Ashby, Workable, BrassRing, Jobvite, ADP and Phenom while the window still knew
+#: only the five it was born with, so nine mapped platforms landed on `unknown` — the one role
+#: hygiene will never touch, rendered to the operator as a nameless tab (measured live 2026-08-11
+#: on Boston College's Cornerstone). Reading the registry is not a second page classifier; it is
+#: the removal of a second HOST TABLE.
+_APPLY_MARKERS = _APPLY_PATH_MARKERS + ats_registry.off_engine_apply_hosts()
 # `linkedin.com/jobs` without the `/search` covers the jobs HOME too — the logged-out wall and the
 # landing both live there, and the recorder showed them classifying as `unknown`, which is the one
 # role hygiene will never touch. Indeed's entry is already prefix-shaped for the same reason.

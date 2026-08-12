@@ -42,13 +42,14 @@ JOB_POSTING = "job_posting"        # one job, its description, an apply control
 JOB_LIST = "job_list"              # a careers listing / search results — we are not on THE job
 ACCOUNT_GATE = "account_gate"      # sign in or create an account before applying
 APPLICATION_FORM = "application_form"
+REVIEW = "review"                  # the summary before Submit — the gate screen, on every ATS
 CONFIRMATION = "confirmation"      # submitted / thank you
 GONE = "gone"                      # requisition closed, expired, 404
 UNREADABLE = "unreadable"          # nothing to read — not the same as nothing there
 UNKNOWN = "unknown"
 
 #: Every REAL kind (the two non-answers excluded) — the vocabulary a learned witness may vote in.
-KINDS = (JOB_POSTING, JOB_LIST, ACCOUNT_GATE, APPLICATION_FORM, CONFIRMATION, GONE)
+KINDS = (JOB_POSTING, JOB_LIST, ACCOUNT_GATE, APPLICATION_FORM, REVIEW, CONFIRMATION, GONE)
 
 #: Phrases that identify a kind, lowercased. Deliberately vendor-NEUTRAL: the point is that these
 #: work on an employer's own careers page as well as on a named ATS, because that is the case the
@@ -59,11 +60,21 @@ MARKERS: dict[str, tuple[str, ...]] = {
     CONFIRMATION: (
         "application submitted", "thank you for applying", "we have received your application",
         "your application has been submitted", "application complete", "thanks for applying",
+        # Cornerstone's terminal wording, read off the live confirmation 2026-08-11: "Thank You!
+        # You have successfully applied to <job>". None of the six above matched it, so a sent
+        # application read as `unknown` until this row.
+        "successfully applied",
     ),
     GONE: (
         "no longer accepting applications", "this job is no longer available",
         "position has been filled", "requisition is closed", "job posting has expired",
         "page not found", "404",
+    ),
+    # Checked among the weighed kinds but listed before the form: a review screen still SHOWS the
+    # form's words (it is the form, read back), so its own phrases must be able to outweigh them.
+    REVIEW: (
+        "review your application", "review and submit", "review your information",
+        "application summary", "please review", "ready to submit",
     ),
     APPLICATION_FORM: (
         "required field", "* indicates a required", "first name", "last name",
@@ -99,8 +110,9 @@ DECISIVE = (CONFIRMATION, GONE)
 #: on a page that was plainly a job posting (job id, overview, responsibilities, qualifications,
 #: apply). Strict precedence called it an account gate and would have sent the drive looking for a
 #: login it did not need. A header link is not a wall; the weight of evidence says which it is.
-#: Ties fall back to this order, most-specific first.
-WEIGHED = (APPLICATION_FORM, ACCOUNT_GATE, JOB_POSTING, JOB_LIST)
+#: Ties fall back to this order, most-specific first. REVIEW leads: it is the form read back, so
+#: on a tie with the form's own words the more specific claim wins.
+WEIGHED = (REVIEW, APPLICATION_FORM, ACCOUNT_GATE, JOB_POSTING, JOB_LIST)
 
 ORDER = DECISIVE + WEIGHED
 
@@ -113,6 +125,7 @@ STRONG: frozenset = frozenset({
     "enter your information", "returning candidate", "create an account", "log back in",
     "start your application", "resume your application", "already have an account",
     "upload your resume", "* indicates a required", "apply for this job",
+    "review your application", "review and submit",
 })
 
 

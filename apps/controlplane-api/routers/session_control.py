@@ -358,7 +358,23 @@ def _account_state(bb: Any) -> Optional[dict[str, Any]]:
         # for platforms that need no account at all, so the cockpit offered "Create Account
         # automatically" for BRISTOL COUNTY SAVINGS BANK over Indeed's own finished review page
         # (live 2026-07-30). The account rung would have skipped it; the card asserted it first.
-        if not aps.rung_applies("account", platform=step.platform)[0]:
+        if not aps.rung_applies("account", platform=step.platform,
+                                state=step.landing_state)[0]:
+            return None
+        # AND NOT BEFORE THE LADDER GETS THERE. The fix above stopped the card asserting an account
+        # for a platform that needs none; this is its other half — asserting one before the rung
+        # that would ask for it. The cockpit gives the account leg the whole surface (it is a wall,
+        # so it outranks the arbitrated action), which means the moment `classify` names an ATS
+        # with an account, "Create Account automatically" becomes the operator's ONLY door — for a
+        # wall nobody has seen yet. Measured live 2026-08-11: naming Cornerstone flipped the
+        # surface to account-creation while the ladder was still on `classify` and the page's own
+        # "Apply Now" had never been pressed.
+        #
+        # A registry `auth` field is a PREDICTION about a platform. The page is the measurement.
+        # Predictions do not get to preempt the rung whose job is to take the measurement.
+        _prefix = [r.id for r in aps.PREFIX]
+        nxt, _ruled = step.walk_to_next_rung()
+        if nxt is not None and nxt.id in _prefix and _prefix.index(nxt.id) < _prefix.index("account"):
             return None
         action = ats_accounts.next_account_action(step.company, step.platform)
         rec = accounts_mod.get_account(action["account_id"]) or {}
@@ -1137,7 +1153,14 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
         page_text=content.get("text") or "",
         frames=content.get("frames") or [],
         apply_hrefs=content.get("apply_hrefs") or [],
-        rung=(nr.id if nr else "submit"),
+        # NO RUNG MEANS NO PREMISE — never a defaulted one. This fell back to "submit", so the
+        # moment the ladder had nothing to offer (an unmapped ATS whose landing the tail could
+        # not place) the orient was scored against submit's needs and MANUFACTURED the exact
+        # false mismatch the note above warns about: "the `submit` rung needs an application
+        # form, but the page is a job posting" — on a posting nobody had tried to submit
+        # (measured live 2026-08-11, Cornerstone). An empty rung asks the observer what the page
+        # IS without pretending the recipe had a claim about it.
+        rung=(nr.id if nr else ""),
         company=step.company or "",
         ats_lookup=ats_for_company,
         known_recipe=(step.platform or "") in DRIVEN_PLATFORMS_VIEW,
@@ -3741,13 +3764,27 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     tab_id = _apply_tab(bb, obs).get("tab_id", "")
     candidates = await _scan_ax(browser_url, tab_id)
     fields = _form_fields_from(candidates)
-    rows = _fill_plan_for(bb, fields, db)
-    summary = form_fill.summarise(rows)
     # THE FORM AS IT STANDS, beside the plan. The plan only speaks to fields it recognises
     # (form_fill.plan drops the rest by design), so "0 of 0 fields" rendered alike for an empty
     # page and for a fully-answered screener the planner had no names for — the census is the
-    # scanner's own truth per required control, answered rows included.
+    # scanner's own truth per required control, answered rows included. Fetched BEFORE the plan
+    # because it is also the plan's second field source (below).
     census = await _form_census(browser_url, tab_id)
+    # THE CENSUS'S FIELDS JOIN THE PLAN. The AX scan cannot see an input with no accessible
+    # name, and Cornerstone's contact block is four of those — no id, no label association, no
+    # aria, no placeholder — so First/Last/Email/Phone were invisible to this plan while the
+    # DOM census named them by proximity and minted structural selectors (live 2026-08-11).
+    # Census rows ride in WITH their selector, and the bunch below types by selector when the
+    # accessible name cannot address the node. AX names stay first: they win the dedupe.
+    known_names = {(f.get("name") or "").strip().lower() for f in fields}
+    for c_row in ((census or {}).get("unanswered") or []):
+        c_name = (c_row.get("field") or "").strip()
+        if (c_row.get("kind") in ("input", "textarea") and c_row.get("selector")
+                and c_name and c_name.lower() not in known_names):
+            fields.append({"role": "textbox", "name": c_name,
+                           "selector": c_row["selector"]})
+    rows = _fill_plan_for(bb, fields, db)
+    summary = form_fill.summarise(rows)
     # A plan over a shut accordion is an accurate summary of a page nobody opened. Carry the
     # caveat with the plan so "0 fields" and "0 fields, nine sections closed" cannot read alike.
     # Sections are checked against the OPEN application's platform — a platform with no declared
@@ -3775,10 +3812,15 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
         for r in rows:
             if not r["fillable"] or r["widget"] != "text":     # this pass does text fields only
                 continue
-            res = await _capture_post("/execute", {
-                "browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
-                "target_bbox": {}, "target_role": "textbox", "target_name": r["field"],
-                "value": r["value"], "driver": "humanized"})
+            exe = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
+                   "target_bbox": {}, "value": r["value"], "driver": "humanized"}
+            # Selector addressing for the census-derived fields the AX name cannot reach —
+            # an anonymous input's "name" is a proximity label the resolver has never heard of.
+            if r.get("selector"):
+                exe["selector"] = r["selector"]
+            else:
+                exe["target_role"], exe["target_name"] = "textbox", r["field"]
+            res = await _capture_post("/execute", exe)
             (filled if res.get("outcome") in ("ok", "committed_unconfirmed")
              else failed).append(r["field"])
             await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
@@ -4066,7 +4108,13 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
                    "this step. Work it forward instead.")
 
     disc = aps.classify_landing(ats_url)
-    done = {m.rung for m in step.minis if m.outcome == aps.OK}
+    # ONE RULE FOR "WALKED", THE LADDER'S. This asked its own way — any OK ever recorded — and the
+    # two answers diverge exactly where reconcile is most needed: a rung recorded OK and then
+    # DEMOTED by its own verification. The ladder re-offers it (latest verdict wins, by design)
+    # while this skipped it as already proven, so the operator's way out reported "nothing new"
+    # and left them on the same stuck rung. Measured live 2026-08-11: a stale hosts list demoted a
+    # perfectly good `enter_apply` on Boston College's Cornerstone, and reconcile could not undo it.
+    done = step.settled_rungs()
     added: list[str] = []
 
     # open_pane: an ATS tab open for this job is proof the pane was opened and Apply led here.
@@ -4096,16 +4144,15 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
                         initiator=body.initiator)
 
     # enter_apply: we are on the ATS, so Apply was clicked. Only record it once identity is settled.
-    if "verify_identity" in {m.rung for m in step.minis if m.outcome == aps.OK} \
-            and "enter_apply" not in done:
+    # Re-read the settled set after each record — the rungs below gate on the ones above.
+    if "verify_identity" in step.settled_rungs() and "enter_apply" not in done:
         step.record("enter_apply", aps.OK,
                     f"reconciled — an application tab is open on {disc.platform}",
                     initiator=body.initiator)
         added.append("enter_apply")
 
     # classify: name the platform from the live tab.
-    if "enter_apply" in {m.rung for m in step.minis if m.outcome == aps.OK} \
-            and "classify" not in done:
+    if "enter_apply" in step.settled_rungs() and "classify" not in done:
         step.platform = disc.platform
         step.record("classify", disc.outcome, f"{ats_url[:90]} -> {disc.detail}",
                     initiator=body.initiator)
@@ -4402,6 +4449,24 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     # The cost is one extra press, once, at the only moment we genuinely did not know where we
     # were. Every press after this one is a single legible advance.
     tail_view: Optional[dict[str, Any]] = None
+    # A GENERIC-CADENCE RUNG IS RE-CHOSEN FROM A FRESH LOOK, EVERY TIME. The re-read below used to
+    # run only when the walk had NO rung — so a stale landing_state serving the WRONG tail rung
+    # sailed straight to execution: the ladder hunted for "Apply now" on a page deep inside the
+    # form, refused, and the fresh look that would have fixed it never ran (live 2026-08-11,
+    # Cornerstone — the state had regressed to `_job_posting` while the real screen was the
+    # completed form). The scripted flows keep their cheaper path: their states advance through
+    # the recipe's own expectations. The fuzzy cadence's whole premise is that the page decides.
+    if rung is not None and step.platform and rung.id.startswith(f"{step.platform}_"):
+        read = await _read_apply_page(bb, obs, browser_url)
+        if read is not None:
+            fresh = _name_the_screen(step, read["url"], read["text"])
+            f_state = fresh.get("state") or ""
+            if f_state and not f_state.endswith(("unknown", "unreadable")) \
+                    and f_state != step.landing_state:
+                step.landing_state = f_state
+                re_rung, _re_ruled = step.walk_to_next_rung()
+                if re_rung is not None:
+                    rung = re_rung
     if rung is None:
         read = await _read_apply_page(bb, obs, browser_url)
         if read is not None:
@@ -4705,7 +4770,8 @@ async def apply_step(session_id: int, body: ApplyStepBody,
 
         platform = step.platform or ""
         company = step.company or ""
-        applies, why_not = aps.rung_applies("account", platform=platform)
+        applies, why_not = aps.rung_applies("account", platform=platform,
+                                            state=step.landing_state)
         if not applies:
             step.record("account", aps.SKIPPED, why_not, initiator=body.initiator)
             detail = f"No account needed on {platform} — skipped, not skipped over."
@@ -4809,6 +4875,38 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                     detail += f" Closed {tidied} finished tab(s); back on the search."
 
     else:
+        # A COMPLETE SINGLE-PAGE FORM IS ITS OWN REVIEW SCREEN. The generic cadence puts the gate
+        # at `<platform>_review`, but some ATS have no review page at all — Cornerstone's whole
+        # application is one form with Submit at the bottom (live 2026-08-11). On that shape the
+        # form rung dead-ends by design: the census is satisfied, and the only control left is the
+        # one the advance lexicon must never reach. That is not a stall — it IS the review moment:
+        # the form, read back, one irreversible press from sent. So when the census says complete
+        # and the page's own submit control is the only move, the ladder serves the GATE — same
+        # operator-only rung, same confirm affordance, nothing new invented.
+        if rung.id == f"{step.platform}_application_form":
+            _pending = await _unanswered_required(browser_url,
+                                                  (await _observe_tab_now()) or tab_id)
+            if _pending == []:
+                _scan_now = await _capture_post("/ax_scan", {
+                    "browser_url": browser_url,
+                    "tab_id": (await _observe_tab_now()) or tab_id}, timeout=25.0)
+                import apply_recipe as _ar
+                if _ar.submit_control(_ax_identities(_scan_now)):
+                    # The STATE is the lever, not a prose note: `<platform>_review` is what the
+                    # tail serves the SUBMIT rung for, what the panel's flow counts as 0-from-
+                    # Submit, and what the gate's consequential styling keys off. One state
+                    # change, every surface follows.
+                    step.landing_state = f"{step.platform}_review"
+                    step.record("orient", aps.OK,
+                                "the form is complete and the page's only remaining control "
+                                "sends it — a single-page apply's form IS its review screen",
+                                initiator=body.initiator)
+                    _save_queue(bb, queue)
+                    return await _save_queue_and_view(
+                        session, bb, ledger, queue, obs, ok=True,
+                        detail=("Every required field is answered and the only control left is "
+                                "Submit — the operator's gate, on every platform, always. "
+                                "Review the form, then press Submit."))
         # A TAIL RUNG: advance this screen by one. Reversible by construction — `advance_control`
         # cannot reach a submit control (the lexicons are deliberately separate), so the worst this
         # can do is move the application forward a page it was always going to move forward.
@@ -4860,7 +4958,13 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     # just left that screen. Measured live 2026-08-06 on the first advance.
     if _after is not None and getattr(_after, "ok", False):
         _moved_to = _state_from_observation(step, _after)
-        if _moved_to and _moved_to not in ("unknown", "unreadable"):
+        # A NON-ANSWER MUST NOT OVERWRITE AN ANSWER, whatever prefix it wears. The generic
+        # describer renders its non-answers platform-prefixed (`cornerstone_unknown`), so the
+        # bare-string check walked right past them — and the after-look, reading only the sparse
+        # AX names, demoted a landing the classify rung had just named from the page's full text
+        # (measured live 2026-08-11: `cornerstone_job_posting` → `cornerstone_unknown` one act
+        # later). The look that read less does not get to overrule the look that read more.
+        if _moved_to and not _moved_to.endswith(("unknown", "unreadable")):
             step.landing_state = _moved_to
 
     # SHADOW: what the controller WOULD have decided on the page we decided on. Taken from
@@ -5168,8 +5272,18 @@ async def _read_apply_page(bb: Any, obs: dict[str, Any],
                            browser_url: str) -> Optional[dict[str, Any]]:
     """Scan the live application tab: url, tab, AX scan, and the recognition text. None if no tab.
 
-    The recognition text is the page text AND the control names together — the apply modal's
-    buttons are where "Use My Last Application" lives, and the body text never carries it.
+    The recognition text is the page's richest readable document AND the control names together —
+    the apply modal's buttons are where "Use My Last Application" lives, and the body text never
+    carries it.
+
+    /page_content is fetched alongside the AX scan because the scan alone CANNOT name a screen:
+    its `page_text` is empty on this server (the scan returns candidates, not prose), so the
+    recognition text was really just the control names — and a marker classifier fed 26 button
+    names calls a plainly readable job posting `unknown` (measured live 2026-08-11 on Cornerstone:
+    the crank's own "fresh look" kept answering `cornerstone_unknown` while the classify rung,
+    which reads /page_content, had already said `cornerstone_job_posting`). Two looks at one page
+    must read the same page. `pick_content` also reaches into frames — the iCIMS lesson: the
+    content is usually not in the document you are looking at.
     """
     url = _apply_tab_url(bb, obs)
     if not url:
@@ -5177,9 +5291,16 @@ async def _read_apply_page(bb: Any, obs: dict[str, Any],
     tab = next((t for t in (obs.get("tabs") or []) if t.get("url") == url), {})
     scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
                                             "tab_id": tab.get("tab_id", "")}, timeout=25.0)
+    try:
+        content = await _capture_post("/page_content", {"browser_url": browser_url,
+                                                        "tab_url": url}, timeout=15.0)
+    except Exception:  # noqa: BLE001 — an unreadable body leaves the names, same as before
+        content = {}
+    import apply_landing as al
+    body_text, _src = al.pick_content(content.get("text") or "", content.get("frames") or [])
     names = " ".join((c.get("name") or "") for c in (scan.get("candidates") or []))
     return {"url": url, "tab": tab, "scan": scan,
-            "text": f"{scan.get('page_text') or ''} {names}"}
+            "text": f"{body_text} {scan.get('page_text') or ''} {names}"}
 
 
 def _name_the_screen(step: Any, url: str, text: str) -> dict[str, Any]:
@@ -5295,6 +5416,10 @@ async def _form_census(browser_url: str, tab_id: str) -> Optional[dict[str, Any]
                         "required_via": row.get("required_via") or "",
                         "answered": bool(row.get("answered")), "valid": row.get("valid", True),
                         "value_preview": redact(str(row.get("value_preview") or ""), field=field),
+                        # The scanner's address for this control — an anonymous input's ONLY
+                        # address (structural css path), and what lets the fill and the teach
+                        # seam act on a row the AX tree cannot name. An address is not a secret.
+                        "selector": row.get("selector") or None,
                         "options": list(row.get("options") or []) or None})
         return out
 

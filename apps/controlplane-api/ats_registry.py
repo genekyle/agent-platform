@@ -106,6 +106,20 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
      "notes": "legacy Kenexa; account-gated.", "seed_companies": []},
     {"ats_id": "jobvite", "display_name": "Jobvite", "icon": "🟨",
      "hosts": ["jobvite.com"], "recipe": "seed", "auth": "none", "notes": "", "seed_companies": []},
+    {"ats_id": "cornerstone", "display_name": "Cornerstone OnDemand", "icon": "🟤",
+     "hosts": ["csod.com"], "recipe": "seed", "auth": "unknown",
+     "notes": "<tenant>.csod.com, reached straight from an Indeed 'Apply on company site' "
+              "(source[0]=IndeedATSSync in the hand-off URL). MEASURED live 2026-08-11 on Boston "
+              "College (bc.csod.com): the requisition page is "
+              "/ux/ats/careersite/<n>/home/requisition/<req_id>, its apply control is a plain "
+              "button named 'Apply Now' (rendered twice — masthead and footer — so drive the "
+              "VISIBLE one), and the masthead carries both 'Sign In' and 'Create Profile'. Those "
+              "links prove an account SYSTEM exists; whether Apply Now demands it before the form "
+              "is UNMEASURED — auth stays 'unknown' until a drive meets the wall, and the generic "
+              "cadence engages the account rung the moment an account_gate screen is SEEN. "
+              "auth='account' here is a promise the ladder acts on; record it from a measurement, "
+              "never an inference.",
+     "seed_companies": ["Boston College"]},
     {"ats_id": "adp", "display_name": "ADP Workforce Now", "icon": "🔶",
      "hosts": ["workforcenow.adp.com", "myjobs.adp.com"], "recipe": "seed", "auth": "account",
      "notes": "", "seed_companies": []},
@@ -157,6 +171,25 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
 _ON_ENGINE_APPLY = ("indeed_quick_apply", "linkedin_easy_apply")
 
 _BY_ID = {a["ats_id"]: a for a in ATS_PLATFORMS}
+
+
+def off_engine_apply_hosts() -> tuple[str, ...]:
+    """Every host that means "an application lives here", for callers that need only the hosts.
+
+    The window's tab classifier used to keep its own copy of this list and it drifted nine
+    platforms behind (2026-08-11). A registry that names a platform should be the only place that
+    knows where that platform lives, so anything asking "is this tab an application?" asks here.
+
+    On-engine applies are excluded: their hosts are the ENGINE's own (indeed.com, linkedin.com),
+    and an engine host names the SEARCH tab. Callers that need the on-engine apply surface match
+    it explicitly (`smartapply.indeed.com`), exactly as classify_ats does.
+    """
+    hosts: list[str] = []
+    for ats in ATS_PLATFORMS:
+        if ats["ats_id"] in _ON_ENGINE_APPLY:
+            continue
+        hosts.extend(h.lower() for h in ats.get("hosts") or ())
+    return tuple(dict.fromkeys(hosts))
 
 
 # A BRANDED WRAPPER hosts the ATS on the employer's own domain, so the host alone lies: KKR serves a

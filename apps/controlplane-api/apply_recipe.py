@@ -952,6 +952,88 @@ WORKDAY_FLOW_ORDER: list[str] = [
 # one that drifts is always the copy nothing executes.
 INDEED_FLOW_ORDER: list[str] = [str(s["state"]) for s in INDEED_APPLY_RECIPE]
 
+
+# --- THE GENERIC ATS CADENCE — the fuzzy spine every unmapped platform falls back to -------------
+#
+# Operator, 2026-08-11: *"when you step through a lot of these unknown third-party applications
+# it's generally the same steps … a fuzzy path that may diverge but the cadence is still somewhat
+# the same."* Exactly what the drives keep measuring: land on the posting → maybe an account gate →
+# a form (possibly several) → review → submit → confirmation. The platforms differ in skin; the
+# SHAPE barely moves.
+#
+# So the spine is keyed by apply_landing's vendor-neutral KIND — the content axis that already
+# works on any vendor, including an employer's own careers portal — and the state ids stay
+# `<platform>_<kind>` (`landing_state` has synthesized them that way since 07-26). That split is
+# the generalization: the CADENCE and its training rows are shared across every ATS (a screen
+# Cornerstone teaches, Ashby already knows), while the platform prefix keeps provenance so a
+# per-platform recipe can graduate out of the generic path the day one is written. LinkedIn's
+# hand-offs land on these same ATSs, so the spine carries engine-to-engine unchanged.
+#
+# Fuzziness is honest here, not a shortcut: `expect` lists are wide because the path genuinely
+# diverges (an ATS may skip the wall, repeat the form, or jump straight to review), and
+# `flow_progress`'s upper-bound doctrine already covers skipping. What keeps the fuzz safe is that
+# every generic advance still runs the SAME rails as a scripted one — the unanswered-required
+# census, the negation/exit guards on the advance lexicon, the StepRunner verify, and the
+# operator-only Submit gate. A fuzzy path, never a fuzzy gate.
+GENERIC_ATS_SPINE: list[dict[str, Any]] = [
+    {"kind": "job_posting",
+     "action": "press the page's own Apply control",
+     # Matched AS RENDERED via `named_control`, tried in order, most specific first. "apply" alone
+     # is last because it is one substring away from an SSO detour ("Apply with LinkedIn") — the
+     # exclusions below keep those unreachable even then.
+     "controls": ["apply now", "apply for this job", "apply"],
+     "expect": ["account_gate", "application_form", "job_posting", "review"]},
+    {"kind": "account_gate",
+     # No control on purpose: the wall is the ACCOUNT rung's business (create/sign-in legs,
+     # operator-gated credentials) — the ladder hands over rather than pressing anything here.
+     "action": "the account rung's business — sign in or create the account, operator-gated",
+     "expect": ["application_form", "account_gate", "job_posting"]},
+    {"kind": "application_form",
+     "action": "census + fill + Continue",
+     "expect": ["application_form", "review", "account_gate", "confirmation"]},
+    {"kind": "review",
+     "action": "Submit — the operator's gate, on every platform, always",
+     "expect": ["confirmation"]},
+    {"kind": "confirmation", "action": "record the outcome and run the epilogue", "expect": []},
+]
+
+GENERIC_ATS_ORDER: list[str] = [str(e["kind"]) for e in GENERIC_ATS_SPINE]
+
+#: Names an apply-ish substring match must never press: SSO detours and the posting's furniture.
+GENERIC_CONTROL_EXCLUSIONS: tuple[str, ...] = (
+    "linkedin", "indeed", "with ", "save", "share", "back to", "sign in", "create",
+)
+
+
+def _generic_kind(platform: Optional[str], state: Optional[str]) -> str:
+    """The KIND inside `state` when the generic cadence may serve this platform — else "".
+
+    Three conditions, each load-bearing: the platform must be a real off-engine registry entry
+    (an engine's own flow has its own recipe and must never fall through to this — and
+    `company_site` qualifies deliberately, because an employer's unmapped portal is exactly the
+    fuzzy case); the platform must not have a scripted flow of its own (a platform graduates out
+    of the generic path the day its recipe lands in `_FLOW_ORDERS`); and the state must parse as
+    `<platform>_<kind>` with a kind the spine knows. A state that does not parse is a page the
+    content axis could not read, and the honest answer stays unrecognised.
+    """
+    if not platform or not state:
+        return ""
+    if _canon(platform) in _FLOW_ORDERS:
+        return ""
+    import ats_registry
+    entry = ats_registry._BY_ID.get(platform)
+    if entry is None or platform in ats_registry._ON_ENGINE_APPLY:
+        return ""
+    prefix = f"{platform}_"
+    if not state.startswith(prefix):
+        return ""
+    kind = state[len(prefix):]
+    return kind if kind in GENERIC_ATS_ORDER else ""
+
+
+def _generic_entry(kind: str) -> dict[str, Any]:
+    return next(e for e in GENERIC_ATS_SPINE if e["kind"] == kind)
+
 #: One platform, several names. `classify_landing` answers `indeed` where `_TERMINAL_STATES` says
 #: `indeed_quick_apply`, and callers pass through whichever the live page resolved to. Resolved
 #: ONCE, here, rather than by adding the alias to each table — the table that gets forgotten is
@@ -996,6 +1078,19 @@ def flow_progress(state: Optional[str], *, platform: str = "workday") -> dict[st
     order = _FLOW_ORDERS.get(canon)
     gate = _GATE_STATES.get(canon)
     if not order or not gate:
+        # THE GENERIC CADENCE. A platform without a scripted spine of its own is counted along
+        # the shared ATS shape, in its own state names — `cornerstone_review` is 1 from Submit
+        # because REVIEW is, whoever renders it. `via` says which authority did the counting, so
+        # the cockpit can say "the shared cadence" instead of implying a hand-written recipe.
+        kind = _generic_kind(platform, state)
+        if kind:
+            g_order = [f"{platform}_{k}" for k in GENERIC_ATS_ORDER]
+            i = g_order.index(state)
+            gate_i = GENERIC_ATS_ORDER.index("review")
+            return {"state": state, "position": i, "total": len(g_order), "platform": platform,
+                    "steps_to_submit": max(0, gate_i - i), "recognised": True,
+                    "at_review_gate": kind == "review", "done": kind == "confirmation",
+                    "via": "generic_ats"}
         return {"state": state, "position": None, "total": 0, "steps_to_submit": None,
                 "recognised": False, "platform": canon}
     try:
@@ -1018,7 +1113,13 @@ def flow_order(platform: Optional[str]) -> list[str]:
 
 def gate_state(platform: Optional[str]) -> str:
     """The screen whose next action is the irreversible one, or ""."""
-    return _GATE_STATES.get(_canon(platform), "")
+    named = _GATE_STATES.get(_canon(platform), "")
+    if named:
+        return named
+    # On the generic cadence the gate is the review screen, in this platform's own state name.
+    if _generic_kind(platform, f"{platform}_review"):
+        return f"{platform}_review"
+    return ""
 
 
 def workday_progress(state: Optional[str]) -> dict[str, Any]:
@@ -1045,12 +1146,24 @@ def submit_control(ax_identities) -> str:
 
     Same match rules as `decide.advance_control` (render-label, longest wins) against a lexicon
     that only the operator's own gate is ever allowed to consult.
+
+    PRESSABLE ROLES ONLY. The identities carry `role|name` and this used to strip the role and
+    match names alone — so Cornerstone's "Submit Application" SECTION HEADING outscored the
+    footer's real "Submit" button on length, the gate clicked a heading, and the press no-oped
+    (live 2026-08-11). A control is something you can press; a heading is something you read.
+    Un-roled identities stay eligible — refusing them would blind the gate on pages whose scan
+    lost the role, which is the older failure mode.
     """
-    names = [i.partition("|")[2].strip() if "|" in i else str(i).strip()
-             for i in (ax_identities or ())]
-    names = [n for n in names if n]
+    pairs = []
+    for i in (ax_identities or ()):
+        role, _, name = str(i).partition("|")
+        if "|" not in str(i):
+            role, name = "", str(i)
+        name = name.strip()
+        if name and (not role.strip() or role.strip().lower() in ("button", "link")):
+            pairs.append(name)
     for control in SUBMIT_CONTROLS:
-        matches = [n for n in names if control.lower() in n.lower()]
+        matches = [n for n in pairs if control.lower() in n.lower()]
         if matches:
             return max(matches, key=len)
     return ""
@@ -1073,6 +1186,24 @@ def named_control(platform: str, state: Optional[str], ax_identities) -> str:
     control is absent: a recipe naming a button the page does not have is a stale recipe, and the
     honest answer there is "" — not a click on whatever else happened to be lying around.
     """
+    names = [i.partition("|")[2].strip() if "|" in i else str(i).strip()
+             for i in (ax_identities or ())]
+
+    # THE GENERIC CADENCE NAMES ITS CONTROLS TOO — most specific first, with the exclusions doing
+    # the safety work. The posting screen's real control is "Apply Now"/"Apply for this job", which
+    # the advance lexicon deliberately cannot reach; without this the generic ladder's first rung
+    # could only ever refuse. Excluded names ("Apply with LinkedIn", "Save", …) are SSO detours and
+    # furniture — a substring lexicon's classic wrong buttons.
+    kind = _generic_kind(platform, state)
+    if kind:
+        for wanted in (_generic_entry(kind).get("controls") or []):
+            matches = [n for n in names
+                       if n and wanted in n.lower()
+                       and not any(x in n.lower() for x in GENERIC_CONTROL_EXCLUSIONS)]
+            if matches:
+                return max(matches, key=len)
+        return ""
+
     if _canon(platform) != "indeed_quick_apply":
         return ""
     wanted = ""
@@ -1082,8 +1213,6 @@ def named_control(platform: str, state: Optional[str], ax_identities) -> str:
             break
     if not wanted:
         return ""
-    names = [i.partition("|")[2].strip() if "|" in i else str(i).strip()
-             for i in (ax_identities or ())]
     matches = [n for n in names if n and wanted.lower() in n.lower()]
     return max(matches, key=len) if matches else ""
 
@@ -1094,6 +1223,9 @@ def advance_action(platform: str, state: Optional[str]) -> str:
     Returned verbatim so the router never restates it. The recipe is the authority on what advances
     a screen; a second description of the same move in the executor is how the two come to disagree.
     """
+    kind = _generic_kind(platform, state)
+    if kind:
+        return str(_generic_entry(kind).get("action") or "")
     if _canon(platform) != "indeed_quick_apply":
         return ""
     for entry in INDEED_APPLY_RECIPE:
@@ -1104,7 +1236,14 @@ def advance_action(platform: str, state: Optional[str]) -> str:
 
 def expected_after(platform: str, state: Optional[str]) -> tuple[str, ...]:
     """The states this recipe says `state` may lead to — the orienter's prediction, and the thing
-    a practice score is scored AGAINST. Empty when the recipe has nothing to say."""
+    a practice score is scored AGAINST. Empty when the recipe has nothing to say.
+
+    On the generic cadence the prediction is the spine's own `expect`, rendered in this platform's
+    state names — deliberately WIDE, because the fuzzy path genuinely diverges, and a prediction
+    that admits its spread is scoreable where a false-precise one is just wrong."""
+    kind = _generic_kind(platform, state)
+    if kind:
+        return tuple(f"{platform}_{k}" for k in (_generic_entry(kind).get("expect") or ()))
     if _canon(platform) != "indeed_quick_apply":
         return ()
     for entry in INDEED_APPLY_RECIPE:
@@ -1228,6 +1367,29 @@ def describe_for_ats(ats: Optional[str], url: str, page_text: str = "") -> dict[
         return describe_workday_tab(url, page_text)
     if "greenhouse" in a:
         return describe_greenhouse_tab(url, page_text)
+    # AN OFF-ENGINE ATS WITHOUT A RECIPE READS BY SIGNALS, NOT BY THE INDEED READER. This fell
+    # through to `describe_tab`, whose states are indeed_* — so a Cornerstone tab could never be
+    # named, the flow never counted, and the tail dead-ended at "genuinely new territory" on a
+    # page whose SHAPE we know perfectly well. The content axis (apply_landing's vendor-neutral
+    # markers: what the page SAYS — apply controls, sign-in walls, required fields, review
+    # summaries, thank-you lines) names the KIND; the platform came from the URL; the state is
+    # their join, `<platform>_<kind>` — the same synthesis the observer has used since 07-26,
+    # now speaking the generic cadence's vocabulary so the ladder can count along it.
+    if _generic_kind(a, f"{a}_job_posting"):
+        import apply_landing as al
+        landing = al.classify_kind(page_text or "")
+        # A NON-ANSWER DOES NOT WEAR A STATE NAME. `landing_state` renders the platform+kind join
+        # even for unknown/unreadable ("company_site_unreadable"), which is honest prose for the
+        # observer — but as THIS function's `state` it walked into the bundle where the contract
+        # is None-degradation for a page that names nothing. Same word describe_tab always used.
+        if landing.kind in (al.UNKNOWN, al.UNREADABLE):
+            return {"url": url, "state": "unknown", "platform": a, "kind": landing.kind,
+                    "evidence": list(landing.evidence), "via": "generic_ats",
+                    "expected_next": []}
+        state = al.landing_state(a, landing.kind)
+        return {"url": url, "state": state, "platform": a, "kind": landing.kind,
+                "evidence": list(landing.evidence), "via": "generic_ats",
+                "expected_next": list(expected_after(a, state))}
     return describe_tab(url, page_text)   # indeed_quick_apply + graceful default
 
 

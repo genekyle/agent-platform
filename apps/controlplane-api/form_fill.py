@@ -22,6 +22,7 @@ Pure: no I/O. `routers/session_control.py` scans the live form and executes what
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, Optional
 
@@ -73,10 +74,19 @@ SRC_WORKING, SRC_STORED, SRC_IDENTITY, SRC_MISSING, SRC_SKIP = (
 
 
 def field_answer_key(field_name: str) -> Optional[str]:
-    """The answer_key a field maps to, or None if it is one we deliberately skip / do not map."""
+    """The answer_key a field maps to, or None if it is one we deliberately skip / do not map.
+
+    Matched on WORD BOUNDARIES, not bare substrings. The bare `in` matched "city" inside
+    "Ethni-CITY", and the first fill plan drawn over a real EEO block mapped the ethnicity
+    dropdown to the operator's home town — "Ethnicity: Concord" one Execute away from being an
+    answer on a federal self-identification form (caught in the plan preview, live 2026-08-11 on
+    Cornerstone). A needle must appear as whole words; "Email Address" still matches "email" and
+    "Address Line 1" still matches "address line 1", but a needle buried inside another word is
+    another word.
+    """
     n = " ".join((field_name or "").lower().split())
     for needle, key in _FIELD_TO_KEY:
-        if needle in n:
+        if re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", n):
             return key
     return None
 
@@ -115,6 +125,10 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
             "value": value, "source": source,
             "fillable": source in (SRC_WORKING, SRC_STORED, SRC_IDENTITY),
             "widget": "select" if role == "combobox" else "text",
+            # Rides along for fields the ACCESSIBLE NAME cannot address — a census-derived row
+            # whose input is anonymous in the AX tree (Cornerstone's contact block). None for
+            # AX-named fields, whose name is the address.
+            "selector": f.get("selector"),
         })
     for r in rows:
         r["ambiguous"] = seen[r["field"]] > 1

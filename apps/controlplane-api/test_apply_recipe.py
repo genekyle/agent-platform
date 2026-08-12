@@ -167,3 +167,94 @@ def test_the_recipe_outranks_the_generic_lexicon_on_a_screen_it_knows():
                             ["button|Save and close"]) == ""
     # Screens the recipe does not name a control for fall through to the lexicon.
     assert ar.named_control("indeed", "indeed_apply_resume_selection", ["button|Continue"]) == ""
+
+
+# --- THE GENERIC ATS CADENCE — the fuzzy spine every unmapped platform shares --------------------
+# Operator, 2026-08-11: unknown third-party applications are "generally the same steps … a fuzzy
+# path that may diverge but the cadence is still somewhat the same." These tests are that sentence
+# made executable: an ATS nobody has scripted still counts along land → gate → form → review →
+# submitted, in its own state names, with the review gate operator-only. Cornerstone (Boston
+# College, bc.csod.com) is the platform that forced it — the drive dead-ended at "genuinely new
+# territory" on a page whose SHAPE we knew perfectly well.
+
+def test_an_unmapped_ats_counts_along_the_shared_cadence():
+    import apply_recipe as ar
+    p = ar.flow_progress("cornerstone_job_posting", platform="cornerstone")
+    assert p["recognised"] is True and p["via"] == "generic_ats"
+    assert p["steps_to_submit"] == 3          # gate → form → review is the upper bound from land
+    review = ar.flow_progress("cornerstone_review", platform="cornerstone")
+    assert review["at_review_gate"] is True and review["steps_to_submit"] == 0
+    assert ar.flow_progress("cornerstone_confirmation", platform="cornerstone")["done"] is True
+    assert ar.gate_state("cornerstone") == "cornerstone_review"
+
+
+def test_the_generic_cadence_does_not_leak_where_it_has_no_business():
+    import apply_recipe as ar
+    # A platform WITH a scripted flow keeps it — graduating out of the generic path.
+    assert ar.flow_progress("workday_review", platform="workday").get("via") is None
+    assert ar.flow_progress("indeed_job_posting", platform="indeed").get("via") is None
+    # An engine's on-page apply never falls through to the ATS cadence.
+    assert ar.flow_progress("linkedin_easy_apply_review",
+                            platform="linkedin_easy_apply")["recognised"] is False
+    # A platform the registry does not know is not a platform — stay unrecognised.
+    assert ar.flow_progress("mystery_review", platform="mystery")["recognised"] is False
+    # A state that does not parse as <platform>_<kind> stays unrecognised too.
+    assert ar.flow_progress("cornerstone_weird", platform="cornerstone")["recognised"] is False
+
+
+def test_the_generic_describer_names_the_state_from_content_signals():
+    """URL names the platform, content names the kind, the state is their join — the same
+    synthesis the observer uses, now in the vocabulary the ladder counts along."""
+    import apply_recipe as ar
+    posting = ("Business Intelligence Analyst/Developer. Job description: reporting and analytics. "
+               "Qualifications: SQL. Apply now.")
+    d = ar.describe_for_ats("cornerstone", "https://bc.csod.com/ux/ats/careersite/2/home", posting)
+    assert d["state"] == "cornerstone_job_posting" and d["via"] == "generic_ats"
+    assert "cornerstone_account_gate" in d["expected_next"]
+    wall = "Sign in to continue. Create an account. Already have an account?"
+    assert ar.describe_for_ats("cornerstone", "https://bc.csod.com/x", wall)["state"] \
+        == "cornerstone_account_gate"
+    review = "Review your application before submitting. Application summary."
+    assert ar.describe_for_ats("cornerstone", "https://bc.csod.com/x", review)["state"] \
+        == "cornerstone_review"
+    # Unreadable content stays honest — no kind, no cadence, no counting. And a non-answer does
+    # not wear a state name: the bundle's contract is None-degradation from the bare "unknown",
+    # and "cornerstone_unreadable" walking into it as a state id is how a blank page started
+    # reading as a recognised screen (caught by test_controller_bundle on the same day).
+    blank = ar.describe_for_ats("cornerstone", "https://bc.csod.com/x", "")
+    assert blank["state"] == "unknown" and blank["kind"] == "unreadable"
+
+
+def test_the_generic_posting_control_is_apply_and_never_an_sso_detour():
+    """The advance lexicon deliberately cannot reach "Apply", so the spine names it — most
+    specific first, with the exclusions keeping the classic wrong buttons unreachable."""
+    import apply_recipe as ar
+    page = ["button|Apply Now", "button|Share", "button| Save Job", "link|Sign In",
+            "link|Create Profile", "link| Back to Search"]
+    assert ar.named_control("cornerstone", "cornerstone_job_posting", page) == "Apply Now"
+    # An SSO detour is not the apply control, even when it is the only apply-ish name left.
+    sso = ["button|Apply with LinkedIn", "button|Share"]
+    assert ar.named_control("cornerstone", "cornerstone_job_posting", sso) == ""
+    # And the wall screen names NO control on purpose — it is the account rung's business.
+    assert ar.named_control("cornerstone", "cornerstone_account_gate",
+                            ["button|Sign In", "button|Create Account"]) == ""
+
+
+def test_the_generic_prediction_is_wide_and_says_so():
+    import apply_recipe as ar
+    spread = ar.expected_after("cornerstone", "cornerstone_job_posting")
+    assert "cornerstone_account_gate" in spread and "cornerstone_application_form" in spread
+    assert ar.expected_after("cornerstone", "cornerstone_review") == ("cornerstone_confirmation",)
+
+
+def test_the_gate_presses_a_button_never_a_heading():
+    """Cornerstone renders a 'Submit Application' SECTION HEADING above the footer's real
+    'Submit' button; longest-match over roleless names clicked the heading and the gate
+    no-oped (live 2026-08-11). Pressable roles only — and roleless identities stay eligible."""
+    import apply_recipe as ar
+    page = ["heading|Submit Application", "button|Submit", "button|Cancel", "button|Save"]
+    assert ar.submit_control(page) == "Submit"
+    # Roleless identities (older scans) still qualify.
+    assert ar.submit_control(["Submit your application"]) == "Submit your application"
+    # A page with only the heading has no pressable gate — the honest answer is none.
+    assert ar.submit_control(["heading|Submit Application"]) == ""

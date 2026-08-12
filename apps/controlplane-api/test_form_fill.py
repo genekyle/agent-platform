@@ -177,3 +177,19 @@ def test_ambiguous_is_not_reported_as_missing_data():
     assert s["ambiguous"] == ["Country"]
     assert s["missing"] == []          # we HAVE a country; it is not missing
     assert s["fillable"] == 0
+
+
+def test_a_needle_inside_another_word_is_another_word():
+    """The Ethnicity/Concord near-miss, live 2026-08-11 on Cornerstone's EEO block: bare substring
+    matching mapped "Ethnicity" -> "city" -> the operator's home town, one Execute away from being
+    an answer on a federal self-identification form. Word boundaries, always."""
+    import form_fill as ff
+    assert ff.field_answer_key("Ethnicity") is None
+    assert ff.field_answer_key("Gender") is None
+    assert ff.field_answer_key("Estate planning experience") is None   # "state" buried in a word
+    # The phrases that SHOULD match still do.
+    assert ff.field_answer_key("City") == "city"
+    assert ff.field_answer_key("Email Address") == "email"
+    assert ff.field_answer_key("Address Line 1") == "street_address"
+    assert ff.field_answer_key("Zip Code") == "postal_code"
+    assert ff.field_answer_key("State") == "state"
