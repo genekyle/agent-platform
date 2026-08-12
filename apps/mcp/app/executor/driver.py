@@ -19,6 +19,32 @@ from typing import Any, Optional
 logger = logging.getLogger("mcp.executor")
 
 
+#: Did the upload land? Asked OF THE UPLOADER, in its own terms — `this` is the file input.
+#: `at_node` is the plain-input witness (the FileList still holds it); `rendered` is the
+#: ingesting-widget witness (the container now prints the filename). The container walk stops
+#: before any ancestor holding a SECOND file input, so a neighbouring uploader's filename can
+#: never confirm this one. `error` catches the uploader that rejected the file outright (size,
+#: type) — a refusal is a real answer and must not be polled over ten times.
+_UPLOAD_WITNESS_JS = r"""
+function(names) {
+  const txt = (n) => ((n && (n.innerText || n.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const files = this.files ? this.files.length : -1;
+  let box = null;
+  for (let n = this.parentElement, d = 0; n && n !== document.body && d < 8; d++, n = n.parentElement) {
+    if (n.querySelectorAll('input[type=file]').length > 1) break;   // n already spans a neighbour
+    box = n;
+  }
+  // No container of this input excludes the others: we cannot tell whose row a filename is, so
+  // we do not claim one. `rendered` stays false and the caller keeps waiting or reports honestly.
+  const scope = box ? txt(box) : '';
+  const rendered = !!scope && (names || []).some(n => n && scope.includes(n));
+  const err = /\b(too large|exceeds|not supported|invalid file|unsupported file|failed to upload)\b/i.exec(scope);
+  return {files, at_node: files > 0, rendered, error: err ? err[0] : '',
+          scope: scope.slice(0, 120)};
+}
+"""
+
+
 @dataclass
 class ActionRequest:
     """Selector → executor handoff. bbox is in SCREENSHOT pixels (as produced by
@@ -188,24 +214,52 @@ class TrajectoryDriver(ABC):
         # UPLOAD: set files directly on a <input type=file> node — no click (the OS file dialog a
         # click opens can't be driven over CDP). Paths must be ABSOLUTE and local to this machine.
         #
-        # CONFIRMED FROM THE NODE, never from the dispatch. `DOM.setFileInputFiles` returning
-        # without raising means the COMMAND was accepted, not that the input holds a file: on
-        # Workday's uploader the call succeeded and `files.length` stayed 0 (the input is remounted
-        # by the widget), and /execute reported a clean `ok` over a page still printing "The field
-        # Upload a file is required" (live 2026-08-11). Same rule as every other act here — the
-        # element's own state is the verdict. Also fires `change`, because a framework that never
-        # hears the event has not been told, whatever the FileList says.
+        # CONFIRMED FROM THE PAGE, never from the dispatch — and `files.length` IS NOT THE PAGE.
+        # Two shapes of file input exist and they disagree about what success looks like:
+        #   * a PLAIN input keeps what you set, so `files.length > 0` is its truth;
+        #   * an INGESTING uploader (Workday, and every widget that POSTs on change) hands the
+        #     file to its own handler and RESETS the input — so `files.length` returns to 0 on
+        #     success, and the widget renders a row instead ("GM_Resume.pdf … Successfully
+        #     Uploaded!").
+        # Measured live 2026-08-12 on SolutionHealth's Workday: three uploads had SUCCEEDED into
+        # the Attachments box — the page showed all three — while every file input on the page read
+        # `files: 0`. A files.length check calls that a failure, and last night's `not_staged`
+        # verdict was exactly that false negative; the night before, the same counter read >0 in the
+        # instant before the handler consumed it and called a wrong-target upload a success. It is
+        # not a lie in one direction, it is the wrong witness.
+        #
+        # So: dispatch, then poll for EITHER witness, and say which one confirmed. The rendered-row
+        # search is bounded to the uploader's own container — the walk stops before any ancestor
+        # that contains a SECOND file input, or a filename in a neighbouring uploader would confirm
+        # this one (which is precisely the confusion that put the resume in the wrong box).
         if request.action_id == "upload":
+            import asyncio
+            files = [str(f) for f in (request.files or [])]
             await cdp.send("DOM.setFileInputFiles",
-                           {"backendNodeId": request.backend_node_id, "files": list(request.files or [])})
-            got = await cdp.send("Runtime.callFunctionOn", {
+                           {"backendNodeId": request.backend_node_id, "files": files})
+            await cdp.send("Runtime.callFunctionOn", {
                 "objectId": object_id, "returnByValue": True,
                 "functionDeclaration": "function(){ if(this.files && this.files.length){"
                                        " this.dispatchEvent(new Event('input',{bubbles:true}));"
                                        " this.dispatchEvent(new Event('change',{bubbles:true})); }"
                                        " return this.files ? this.files.length : -1; }"})
-            n = (got.get("result") or {}).get("value")
-            return "upload" if n and n > 0 else f"upload:not_staged:files={n}"
+            names = [f.rsplit("/", 1)[-1] for f in files]
+            # An ingesting uploader has to round-trip to its own server; a plain one is instant.
+            # Poll rather than sleep-once so the fast path stays fast.
+            for attempt in range(10):
+                got = await cdp.send("Runtime.callFunctionOn", {
+                    "objectId": object_id, "returnByValue": True,
+                    "functionDeclaration": _UPLOAD_WITNESS_JS,
+                    "arguments": [{"value": names}]})
+                w = (got.get("result") or {}).get("value") or {}
+                if w.get("at_node"):
+                    return "upload"                                  # plain input kept the file
+                if w.get("rendered"):
+                    return "upload"                                  # the widget shows it
+                if w.get("error"):
+                    return f"upload:rejected:{str(w.get('error'))[:60]}"
+                await asyncio.sleep(0.8)
+            return f"upload:not_staged:files={w.get('files')} rendered=no"
 
         # Scroll into view + measure the node's own centre (CSS px). A fresh per-node measurement is
         # more accurate than any pre-recorded bbox, so the human motion lands on the real element.

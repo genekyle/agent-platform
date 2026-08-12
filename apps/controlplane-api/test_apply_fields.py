@@ -102,9 +102,32 @@ def test_vocabulary_carries_the_known_aliases_from_the_lessons():
 
 def test_addressing_for_returns_what_a_tier2_endpoint_needs():
     a = addressing_for("greenhouse", "school")
-    assert set(a) == {"addressed_by", "selector", "role", "name", "widget_type", "commit"}
+    assert set(a) == {"addressed_by", "selector", "within", "role", "name", "widget_type",
+                      "commit"}
     # No answer_key/vocabulary: those are the INTENT tier's business, not the protocol's.
     assert "vocabulary" not in a
+
+
+def test_a_scoped_selector_keeps_its_scope_all_the_way_to_execute():
+    """`within` is the difference between "the required uploader" and "whichever file input came
+    first in the DOM". Dropping it at any dispatch site silently restores the bug, so the payload
+    builder — not each call site — owns carrying it."""
+    a = addressing_for("workday", "resume")
+    assert a["within"] == "Resume/CV"
+    assert apply_fields.execute_addressing(a) == {"selector": "input[type=file]",
+                                                 "within": "Resume/CV"}
+    # The two uploaders are the SAME selector and differ only by scope — which is the whole point.
+    b = addressing_for("workday", "attachments")
+    assert b["selector"] == a["selector"] and b["within"] == "Certifications"
+    # role/name addressing needs no scope, and must not grow a null one.
+    n = apply_fields.execute_addressing(addressing_for("workday", "create_account_submit"))
+    assert set(n) == {"target_role", "target_name"}
+
+
+def test_a_scope_without_a_selector_is_a_construction_error():
+    with pytest.raises(ValueError, match="scopes a selector"):
+        apply_fields._f(ats="workday", role="button", name="Apply",
+                        within="Resume/CV", widget_type=WidgetType.UNKNOWN)
 
 
 # --- password policies -----------------------------------------------------------------

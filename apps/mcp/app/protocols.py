@@ -401,7 +401,9 @@ SCAN_REQUIRED_JS = r"""
       if (via !== 'disabled' && label && label !== '(unlabeled)' && optional.length < 40) {
         const t0 = __valueTruth(el);
         if ((el.type || '').toLowerCase() === 'password') t0.preview = t0.answered ? '••••' : '';
+        const q0 = __questionOf(el);
         optional.push({field: label.slice(0, 90), selector: __idSel(el) || __cssPath(el),
+                       within: (q0.section || '').slice(0, 90), question_source: q0.source,
                        kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
                        required_via: 'none', value_read_at: t0.read_at,
                        answered: t0.answered, valid: true, value_preview: t0.preview,
@@ -426,7 +428,14 @@ SCAN_REQUIRED_JS = r"""
     const id = el.id || label;
     if (seen.has(id)) continue;          // a hidden required TWIN is not a second question
     seen.add(id);
+    // The correlation, on every row: which question this control answers as the PAGE names it,
+    // and how strong that identity is. `field` above is our best name for the question; `within`
+    // and `question_source` are what let a caller (or a human) tell two same-named controls apart
+    // and judge how much to trust the match. Required or not is a separate axis entirely — an
+    // optional control filled with the wrong answer is the same error as a required one.
+    const q = __questionOf(el);
     const row = {field: label.slice(0, 90), selector: __idSel(el) || __cssPath(el),
+                 within: (q.section || '').slice(0, 90), question_source: q.source,
                  kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
                  required_via: via, value_read_at: truth.read_at,
                  // `answered` is NOT always false on the unanswered list: a FILLED-but-INVALID
@@ -582,6 +591,159 @@ SCAN_REQUIRED_JS = r"""
               answered: t.answered, valid: false, value_preview: t.preview,
               options: selectOptions(el)});
     if (sel) seenSel.add(sel);
+  }
+
+  // FILE UPLOADERS, which no clause above can see. `singles` filters on __isUserField, and a
+  // file input is NEVER keyboard-reachable by design — the widget draws a button and a drop zone
+  // over a display:none input, so the one required control on the screen was invisible to the
+  // whole census (live 2026-08-12: "all required fields answered" over a page printing "The field
+  // Upload a file (5MB max) is required"). Requiredness comes from the label, exactly as
+  // elsewhere; the ANSWER comes from the widget, because `files.length` is not the truth for an
+  // uploader that POSTs on change and resets the input (see _UPLOAD_WITNESS_JS).
+  //
+  // `within` is the row's own addressing hint: two identical uploaders are told apart by the
+  // section they sit in, and nothing else. It travels on the row so the teach seam and the fill
+  // can name the one they mean.
+  const uploaders = [];
+  for (const el of document.querySelectorAll('input[type=file]')) {
+    const sel = __idSel(el) || __cssPath(el);
+    if (sel && seenSel.has(sel)) continue;
+    // The section that NAMES this uploader: the nearest heading above it. On Workday that is
+    // "Resume/CV" vs the "Attachments" block — the only signal that distinguishes the two, and the
+    // one the act-time resolver scopes on. Same shared definition, so the address book the census
+    // publishes and the target the resolver picks are the same correlation.
+    const qUp = __questionOf(el);
+    const within = qUp.section || '';
+    // labelFor's data-automation-id fallback is WRONG for an uploader: Workday gives every file
+    // input the same `file-upload-input-ref`, so both uploaders would answer to one name and the
+    // asterisk that makes one of them required ("Upload a file (5MB max)*", a sibling node) would
+    // never be read. `__questionOf` knows how to read a composite widget's label — climb to the
+    // widget, skip its furniture, refuse a neighbour's label — so ASK IT rather than repeating the
+    // walk here. A second copy of this reasoning is what let the census and the act-time check
+    // disagree about the same uploader (live 2026-08-12).
+    let label = labelFor(el);
+    if (label === attr(el, 'data-automation-id') || label === '(unlabeled)' ||
+        /drop files|select files|drag|browse/i.test(label)) {
+      // …and an uploader the page never labelled at all is named by its SECTION, which is what a
+      // human would call it ("the Attachments box"), never by a neighbour's label.
+      label = (qUp.source === 'proximity' ? qUp.question : '') || within || label;
+    }
+    // The uploader's own container — the walk that stops before a neighbouring file input, so
+    // one uploader's rendered row never answers for another.
+    let box = null;
+    for (let n = el.parentElement, d = 0; n && n !== document.body && d < 8; d++, n = n.parentElement) {
+      if (n.querySelectorAll('input[type=file]').length > 1) break;
+      box = n;
+    }
+    const scope = box ? txt(box) : '';
+    // A rendered filename is the widget saying it holds a file. Bare "Drop files here / Select
+    // files" is the empty state and says nothing. Take the FILENAME, not the row that contains it:
+    // the row's full text is the widget's furniture plus the name ("Drop files here or Select files
+    // GM_Resume.pdf 111.32 KB Successfully Uploaded!"), and a preview is supposed to answer "which
+    // file" in a glance.
+    // NO SPACES in the name part, deliberately. With spaces allowed the class is greedy across the
+    // widget's whole furniture and "GM_Resume.pdf" came back as "YYYY Attachments Drop files here
+    // or Sele…" — a preview that names a sentence instead of a file. A file whose real name has
+    // spaces previews as its last word plus extension, which is still recognisably the file.
+    const FILENAME = /[\w.()\-]{1,60}\.(pdf|docx?|rtf|txt|odt|png|jpe?g)\b/i;
+    const named = ((box ? FILENAME.exec(txt(box)) : null) || FILENAME.exec(scope) || [''])[0].trim();
+    const answered = !!named || !!(el.files && el.files.length);
+    let required = false, via = 'none';
+    if (el.required) { required = true; via = 'required-attr'; }
+    else if (attr(el, 'aria-required') === 'true') { required = true; via = 'aria-required'; }
+    else if (/\*/.test(label) || /\*/.test(within)) { required = true; via = 'label-asterisk'; }
+    else if (/\b(required)\s*$/i.test(label)) { required = true; via = 'label-required'; }
+    const row = {field: (label && label !== '(unlabeled)' ? label : (within || 'file upload')).slice(0, 90),
+                 selector: sel, within: within.slice(0, 90), question_source: qUp.source,
+                 kind: 'file', required_via: required ? via : 'none',
+                 value_read_at: named ? 'rendered_file_row' : 'files.length',
+                 answered, valid: true, value_preview: (named || '').slice(0, 40)};
+    if (!required) { if (optional.length < 40) optional.push(row); }
+    else (answered ? done : out).push(row);
+    // Remembered for THE JOIN below, and deliberately not published on the row: the container's
+    // text is how we recognise which uploader the page is complaining about, but it is page
+    // content, and a census row carries names and addresses — not transcripts.
+    uploaders.push({row, scope});
+    if (sel) seenSel.add(sel);
+  }
+
+  // THE PAGE'S OWN ERROR SUMMARY — the last word, and the cheapest one. Workday prints
+  // "Errors Found · Error-Upload a file (5MB max) · The field Upload a file (5MB max) is required
+  // and must have a value" in a plain <div data-automation-id=errorHeading> with no role=alert, no
+  // aria-live and no link to the control. So every ARIA-shaped rule above misses it, and the
+  // census reported a COMPLETE form over a page that had just refused to advance (live 2026-08-12).
+  //
+  // This clause reads the sentence, not the markup: whatever the page NAMES as unsatisfied is
+  // unsatisfied, whether or not we found a control for it. A row with no selector is deliberate —
+  // it says "the page rejects this field and we cannot address it", which is the honest state and
+  // the one that stops a submit. Matching an already-reported field by name keeps it from
+  // double-filing.
+  const complained = new Set();
+  const errText = [];
+  for (const el of document.querySelectorAll(
+        '[data-automation-id*=rror], [role=alert], [aria-live=assertive], [class*=rror]')) {
+    if (!__vis(el)) continue;
+    const t = txt(el);
+    if (t && t.length <= 400) errText.push(t);
+  }
+  const namedField = /(?:the field|field)\s+(.+?)\s+is required(?: and must have a value)?/gi;
+  for (const t of errText) {
+    let m;
+    while ((m = namedField.exec(t)) !== null) {
+      const name = (m[1] || '').trim().slice(0, 90);
+      if (!name || complained.has(name.toLowerCase())) continue;
+      complained.add(name.toLowerCase());
+    }
+  }
+  // THE JOIN. A complaint with no control is unactionable; a control with a bad name is
+  // unaddressable. The census produced exactly those two half-rows for the same field — "upload a
+  // file (5mb max)" with `selector: null` beside an uploader named "Drop files here or Select
+  // files" — and neither half could have driven the fix (live 2026-08-12).
+  //
+  // They are joined the way a person joins them: the page prints its complaint NEXT TO the control
+  // it is complaining about, so the field the page names is the one whose own container repeats
+  // that name. The merged row carries the PAGE's name (authoritative — it is the string the page
+  // will keep refusing on) and OUR selector (actionable). Provenance says it was joined, because a
+  // join is an inference and inferences travel labelled.
+  const norm = (s) => (s || '').toLowerCase().replace(/[*:]+/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  const sameName = (a, b) => {
+    const x = norm(a), y = norm(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const short = x.length <= y.length ? x : y, long = x.length <= y.length ? y : x;
+    return short.length >= 4 && long.includes(short);
+  };
+  const contains = (hay, needle) => {
+    const h = norm(hay), n2 = norm(needle);
+    return !!h && !!n2 && n2.length >= 4 && h.includes(n2);
+  };
+  for (const name of complained) {
+    // Already on the unanswered list under this name? Then the walk found it and nothing to add.
+    if (out.some(r => sameName(r.field, name))) continue;
+    // Reported as ANSWERED (or merely OPTIONAL) while the page says required-and-empty? The page
+    // wins in both cases — it is the one refusing to advance.
+    let joined = null;
+    // The uploader whose OWN CONTAINER prints the complained name is the control the page means.
+    const up = uploaders.find(u => contains(u.scope, name) || sameName(u.row.field, name));
+    for (const list of [done, optional, out]) {
+      const i2 = up ? list.indexOf(up.row) : -1;
+      if (i2 >= 0) { joined = list.splice(i2, 1)[0]; break; }
+    }
+    if (!joined) {
+      for (const list of [done, optional]) {
+        const idx = list.findIndex(r => sameName(r.field, name));
+        if (idx >= 0) { joined = list.splice(idx, 1)[0]; break; }
+      }
+    }
+    if (joined) {
+      out.push({...joined, field: name, required_via: 'page-error',
+                question_source: 'page-error+' + (joined.question_source || 'scan'),
+                answered: false, valid: false});
+      continue;
+    }
+    out.push({field: name, selector: null, kind: 'unknown', required_via: 'page-error',
+              question_source: 'page-error', value_read_at: 'page_error_summary',
+              answered: false, valid: false, value_preview: ''});
   }
 
   return {unanswered: out, answered: done, optional,

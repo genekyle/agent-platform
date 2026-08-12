@@ -19,6 +19,7 @@ from interaction.contract import Intent, Outcome, WidgetType, intent_for_action
 from app.artifacts import ARTIFACTS_DIR, SCREENSHOTS_DIR, write_observation_artifact
 from app.event_log import log_event as _log_event
 from app.intent_api import journaled
+from app.js_common import WIDGET_TELLS_JS
 from app.main import observe_live_capture
 from app.observer.ax_proposer import MODEL_VERSION as AX_MODEL_VERSION
 from app.observer.ax_proposer import AXProposerStats, propose_ax_candidates
@@ -170,6 +171,15 @@ class ExecuteRequest(BaseModel):
     # <input type=file> behind an "Add photos" button, the upload target). Resolved fresh via
     # DOM.querySelector. Used when target_name isn't given.
     selector: Optional[str] = None
+    # The SECTION the selector is scoped to, when the attributes alone do not identify one node
+    # (two identical Workday uploaders — see _resolve_node_by_selector). Text, matched against the
+    # candidate's ancestor headings/labels.
+    within: Optional[str] = None
+    # THE QUESTION THE CALLER MEANS TO ANSWER. Confirmed against the question the resolved control
+    # actually answers; a disagreement refuses the act rather than answering the wrong one. Always
+    # optional — an act with no stated expectation still REPORTS the target's question, so the
+    # correlation is journaled either way.
+    expect_question: Optional[str] = None
 
 
 async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
@@ -195,27 +205,144 @@ async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Opt
 
 
 async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
-                                    selector: str) -> Optional[int]:
+                                    selector: str, within: Optional[str] = None,
+                                    expect_question: Optional[str] = None,
+                                    ) -> tuple[Optional[int], str, dict]:
     """FRESH backend_node_id for a CSS selector, at act time — for elements with no accessible name
-    (a hidden file input). Uses DOM.querySelector; returns None if not present."""
+    (a hidden file input). Returns `(backend_node_id, detail)`; node is None when unresolved.
+
+    AMBIGUITY IS A REFUSAL, NOT A COIN FLIP. This used to be `DOM.querySelector` — first match
+    wins, silently. Workday's applyManually renders TWO file inputs that are byte-for-byte
+    indistinguishable by attribute: same `data-automation-id=file-upload-input-ref`, same
+    `attachments-FileUpload` ancestor, both hidden, both empty. One is the OPTIONAL Attachments
+    box; the other is the REQUIRED Resume/CV. `input[type=file]` picked the first, so the resume
+    landed in Attachments — three times over three attempts, each reported `ok` — while the page
+    kept printing "The field Upload a file (5MB max) is required" (measured live 2026-08-12,
+    SolutionHealth JR11587). Picking one of two identical controls is how you fill the wrong
+    field on a real application, so a multi-match now REFUSES and says how many it saw.
+
+    `within` is the human's own address for such a control: not an attribute, but the SECTION
+    IT SITS IN ("the uploader under Resume/CV"). Matched against each candidate's ancestor
+    headings/labels — the one signal that did distinguish them. Same family as the census
+    naming anonymous fields by proximity: when the DOM gives a control no identity of its own,
+    the identity is the question it answers.
+
+    `expect_question` is the CONFIRMATION half: the caller says which question it means, the page
+    says which question the control answers, and a disagreement stops the act. Without it, an
+    address is an unchecked prediction — which is how three uploads reported success into the wrong
+    box. The third return value carries the target's own question either way, so the correlation
+    lands in the journal even when nobody asserted on it.
+    """
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
         target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
+            await cdp.send("Runtime.enable")
+            cfg = {"selector": selector, "within": within or "",
+                   "expect_question": expect_question or ""}
+            r = await cdp.send("Runtime.evaluate", {
+                "expression": f"({_RESOLVE_SCOPED_JS})({json.dumps(cfg)})",
+                "returnByValue": True})
+            out = (r.get("result") or {}).get("value") or {}
+            n = int(out.get("matched") or 0)
+            where = f" within {within!r}" if within else ""
+            if n != 1:
+                if n == 0:
+                    return None, f"no node matching {selector!r}{where}", {}
+                seen = ", ".join(f"{c.get('question')!r}" for c in (out.get("candidates") or []))
+                return None, (f"{selector!r}{where} matched {n} nodes — ambiguous, refusing to "
+                              f"guess. They answer: {seen}"), {}
+            tgt = out.get("target") or {}
+            if out.get("mismatch"):
+                return None, (f"TARGET MISMATCH: {selector!r}{where} resolves to a control for "
+                              f"{tgt.get('question')!r} (by {tgt.get('source')}), but the caller "
+                              f"means {out.get('expected')!r}. Refusing to answer the wrong "
+                              f"question."), tgt
+            # A path minted page-side and verified page-side to resolve back to the same node.
+            path = out.get("path")
             await cdp.send("DOM.enable")
             doc = await cdp.send("DOM.getDocument", {"depth": 0})
             root = (doc.get("root") or {}).get("nodeId")
-            found = await cdp.send("DOM.querySelector", {"nodeId": root, "selector": selector})
+            found = await cdp.send("DOM.querySelector", {"nodeId": root, "selector": path})
             node_id = found.get("nodeId")
             if not node_id:
-                return None
+                return None, f"scoped path did not re-resolve: {path!r}", tgt
             desc = await cdp.send("DOM.describeNode", {"nodeId": node_id})
-            return (desc.get("node") or {}).get("backendNodeId")
+            bnid = (desc.get("node") or {}).get("backendNodeId")
+            q = tgt.get("question") or ""
+            return bnid, (f"re-resolved {selector!r}" + (f" -> {q!r}" if q else "")), tgt
     except Exception as exc:  # noqa: BLE001
         logger.warning("selector resolve failed for %r: %s", selector, exc)
-        return None
+        return None, f"selector resolve failed: {exc}", {}
+
+
+#: Resolve a selector to AT MOST ONE node — scoped to the section that names it when `within` is
+#: given, and CONFIRMED against the question the caller means when `expect_question` is. Hands back
+#: a structural path that resolves to exactly that node, plus the question the target itself answers
+#: (which travels into the journal whether or not anyone asserted on it).
+#:
+#: When the match is ambiguous it returns every candidate's question, so the refusal tells the
+#: caller what to say next instead of just saying no.
+_RESOLVE_SCOPED_JS = r"""
+(cfg) => {
+  __WIDGET_TELLS__
+  const txt = __txt;
+  const idSel = (n) => (n.id && document.querySelectorAll('#' + CSS.escape(n.id)).length === 1)
+                       ? '#' + CSS.escape(n.id) : null;
+  const cssPath = (el) => {
+    try {
+      const steps = [];
+      let n = el;
+      while (n && n !== document.body) {
+        const anchor = idSel(n);
+        if (anchor) { steps.unshift(anchor); break; }
+        const p = n.parentElement;
+        if (!p) break;
+        steps.unshift(n.tagName.toLowerCase() + ':nth-child(' + ([...p.children].indexOf(n) + 1) + ')');
+        n = p;
+      }
+      if (!steps.length) return null;
+      if (!steps[0].startsWith('#')) steps.unshift('body');
+      const sel = steps.join(' > ');
+      return document.querySelector(sel) === el ? sel : null;
+    } catch (e) { return null; }
+  };
+  let cands;
+  try { cands = [...document.querySelectorAll(cfg.selector)]; }
+  catch (e) { return {matched: 0, error: 'bad selector: ' + e}; }
+  const want = (cfg.within || '').trim().toLowerCase();
+  const scoped = cands.map(el => ({el, q: __questionOf(el)}));
+  const keep = want
+    ? scoped.filter(c => (c.q.section || '').toLowerCase().includes(want) ||
+                         (c.q.question || '').toLowerCase().includes(want))
+    : scoped;
+  const identify = (c) => ({question: c.q.question || '(unnamed)', source: c.q.source,
+                            section: c.q.section});
+  if (keep.length !== 1)
+    return {matched: keep.length, candidates: scoped.map(identify).slice(0, 6)};
+  const hit = keep[0];
+  // TARGET vs INTENT. The caller's expectation is checked against the control's OWN question, and
+  // a mismatch is a refusal — this is the check whose absence let a resume be uploaded into the
+  // Attachments box. `automation-id` and `section-only` identities are too weak to CONFIRM on
+  // their own, but they are not too weak to CONTRADICT: they only refuse when they positively
+  // disagree, so a control the page names badly stays actionable while a wrong target does not.
+  if ((cfg.expect_question || '').trim()) {
+    const agree = __sameQuestion(cfg.expect_question, hit.q.question) ||
+                  __sameQuestion(cfg.expect_question, hit.q.section);
+    if (!agree && hit.q.source !== 'none')
+      return {matched: 1, mismatch: true, target: identify(hit), expected: cfg.expect_question};
+  }
+  return {matched: 1, path: cssPath(hit.el), section: hit.q.section || '',
+          target: identify(hit)};
+}
+"""
+
+# The shared tells (__questionOf / __sameQuestion / __txt) — one definition for the census and the
+# resolver, so the address book and the act cannot disagree about what a control is for.
+_RESOLVE_SCOPED_JS = _RESOLVE_SCOPED_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
+assert "__WIDGET_TELLS__" not in _RESOLVE_SCOPED_JS, "the tells placeholder did not substitute"
 
 
 @app.post("/execute")
@@ -241,6 +368,7 @@ async def execute_action(body: ExecuteRequest):
 
     node_id = body.backend_node_id
     note = ""
+    target_q: dict = {}
     addressed_by = "backend_node_id" if node_id is not None else "bbox"
     if body.target_name:
         addressed_by = "role_name"
@@ -259,14 +387,20 @@ async def execute_action(body: ExecuteRequest):
                     "detail": f"target not found by name: {body.target_name!r} (role={body.target_role})"}
     elif body.selector:
         addressed_by = "selector"
-        fresh = await _resolve_node_by_selector(body.browser_url, body.tab_id, body.tab_url, body.selector)
+        fresh, why, target_q = await _resolve_node_by_selector(
+            body.browser_url, body.tab_id, body.tab_url, body.selector,
+            within=body.within, expect_question=body.expect_question)
         if fresh is not None:
-            node_id, note = fresh, f"re-resolved {body.selector!r} -> node {fresh}"
-        elif node_id is None:
+            node_id, note = fresh, f"{why} -> node {fresh}"
+        else:
+            # An AMBIGUOUS or MISMATCHED selector must not fall through to a stale
+            # `backend_node_id` the caller happened to pass: that is the coin flip wearing a
+            # different hat.
             return {"outcome": Outcome.NOT_FOUND, "addressed_by": addressed_by,
                     "target": body.selector, "driver": body.driver or "humanized",
                     "action_id": body.action_id, "css_point": None,
-                    "detail": f"target not found by selector: {body.selector!r}"}
+                    "target_question": target_q or None,
+                    "detail": f"target not resolved by selector: {why}"}
 
     driver = get_driver(body.driver)
     req = ActionRequest(
@@ -289,6 +423,10 @@ async def execute_action(body: ExecuteRequest):
         "outcome": (Outcome.NOT_STAGED if _upload_failed
                     else Outcome.OK if result.ok else Outcome.ERROR),
         "addressed_by": addressed_by, "target": _tgt or None,
+        # WHICH QUESTION THIS ACT ANSWERED, as the page names it — reported whether or not the
+        # caller asserted an expectation, because a correlation nobody recorded is a correlation
+        # the system cannot learn from.
+        "target_question": target_q or None,
         "actions": [result.action_id],
         # record_only returns ok=True while executing nothing (record_only.py:54). Without
         # this the corpus cannot tell a rehearsal from a performance — the event log can't.
@@ -398,16 +536,18 @@ async def select_prompt(body: SelectPromptRequest):
               "widget_type": WidgetType.PROMPT_HIERARCHICAL.value}
     steps: list[dict] = []
 
+    resolve_why = ""
     if body.selector:
-        node_id = await _resolve_node_by_selector(body.browser_url, body.tab_id, body.tab_url,
-                                                  body.selector)
+        node_id, resolve_why = await _resolve_node_by_selector(
+            body.browser_url, body.tab_id, body.tab_url, body.selector)
     else:
         node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
                                          body.field_role, body.field_name)
     steps.append({"step": "resolve", "field": common["target"], "node": node_id})
     if node_id is None:
         return {**common, "outcome": Outcome.NOT_FOUND, "steps": steps,
-                "detail": f"prompt field not found: {common['target']!r}"}
+                "detail": f"prompt field not found: {common['target']!r}"
+                          + (f" — {resolve_why}" if resolve_why else "")}
 
     # 1. OPEN the prompt via the proven driver node-click (same path /execute uses) — a
     # trusted-mouse-at-box-center did NOT reliably open Workday prompt popups.

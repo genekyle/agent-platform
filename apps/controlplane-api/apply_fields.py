@@ -60,6 +60,7 @@ def _f(
     selector: Optional[str] = None,
     role: Optional[str] = None,
     name: Optional[str] = None,
+    within: Optional[str] = None,
     answer_key: Optional[str] = None,
     vocabulary: Optional[dict[str, str]] = None,
     commit: Optional[str] = None,
@@ -67,15 +68,23 @@ def _f(
     optional: bool = False,
 ) -> dict[str, Any]:
     """One field entry. `addressed_by` is DERIVED, never hand-written — a hand-written
-    discriminator is a thing that can disagree with the data it discriminates."""
+    discriminator is a thing that can disagree with the data it discriminates.
+
+    `within` SCOPES a selector to the section that names its control, for the case where the
+    attributes genuinely do not identify one node (two identical Workday uploaders). It is a
+    qualifier on `selector`, not a third addressing mode: role+name still addresses by what the
+    AX tree calls the thing."""
     if selector and (role or name):
         raise ValueError(f"{ats}: a field is addressed one way — got both selector and role/name")
     if not selector and not name:
         raise ValueError(f"{ats}: a field needs a selector or an accessible name")
+    if within and not selector:
+        raise ValueError(f"{ats}: `within` scopes a selector — role/name needs no scope")
     return {
         "ats": ats,
         "addressed_by": ADDRESSED_BY_SELECTOR if selector else ADDRESSED_BY_ROLE_NAME,
         "selector": selector,
+        "within": within,
         "role": role,
         "name": name,
         "widget_type": widget_type.value,
@@ -185,7 +194,24 @@ WORKDAY_FIELDS: dict[str, dict[str, Any]] = {
                             note="applies on select — no footer commit"),
     "previous_worker": _f(ats="workday", selector="[data-automation-id=candidateIsPreviousWorker]",
                           widget_type=WidgetType.RADIO_GROUP),
-    "resume": _f(ats="workday", selector="input[type=file]", widget_type=WidgetType.FILE),
+    # SCOPED, because the attributes do not distinguish the two uploaders on this screen: the
+    # optional Attachments box and the REQUIRED Resume/CV one are both a hidden
+    # `[data-automation-id=file-upload-input-ref]` inside an `attachments-FileUpload`. A bare
+    # `input[type=file]` took the first, so the resume landed in Attachments three times while the
+    # page kept demanding "Upload a file (5MB max)" (live 2026-08-12, SolutionHealth JR11587).
+    # `within` names the section a human would point at; an ambiguous match now refuses.
+    "resume": _f(ats="workday", selector="input[type=file]", within="Resume/CV",
+                 widget_type=WidgetType.FILE,
+                 note="two identical uploaders on applyManually — scope or refuse. The widget "
+                      "INGESTS and resets the input, so files.length is not the verdict; the "
+                      "rendered file row is."),
+    # "Certifications", not "Attachments" — MEASURED, not guessed. The word "Attachments" labels
+    # this box on screen but is not a heading element, so the section a control reports is the one
+    # above it ("Certifications 1"). The scope has to match what the page yields, not what the
+    # screenshot reads.
+    "attachments": _f(ats="workday", selector="input[type=file]", within="Certifications",
+                      widget_type=WidgetType.FILE, optional=True,
+                      note="the optional box in the Certifications section — NOT the resume target"),
     "next": _f(ats="workday", selector="button[data-automation-id=bottom-navigation-next-button]",
                widget_type=WidgetType.UNKNOWN),
     "sign_in_submit": _f(ats="workday", selector="[data-automation-id=signInSubmitButton]",
@@ -735,5 +761,23 @@ def addressing_for(ats: str, field: str) -> dict[str, Any]:
     """
     e = resolve(ats, field)
     return {"addressed_by": e["addressed_by"], "selector": e["selector"],
+            "within": e.get("within"),
             "role": e["role"], "name": e["name"], "widget_type": e["widget_type"],
             "commit": e["commit"]}
+
+
+def execute_addressing(addr: dict[str, Any]) -> dict[str, Any]:
+    """The `/execute` payload fragment for one resolved address — selector (+ its scope) or
+    role/name.
+
+    This existed as the same four-line if/else at every dispatch site, which is one site per
+    chance to drop a qualifier. `within` is exactly the kind of qualifier that gets dropped:
+    without it a scoped selector silently widens back to "first match wins", which is the bug
+    it was added to fix. One function, so a new qualifier reaches every caller at once.
+    """
+    if addr["addressed_by"] == ADDRESSED_BY_SELECTOR:
+        out = {"selector": addr["selector"]}
+        if addr.get("within"):
+            out["within"] = addr["within"]
+        return out
+    return {"target_role": addr["role"], "target_name": addr["name"]}

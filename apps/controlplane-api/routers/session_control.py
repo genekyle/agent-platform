@@ -2816,11 +2816,8 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
     async def _fill(field: str, value: str) -> dict:
         addr = apply_fields.addressing_for(ats, field)
         payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "type",
-                   "target_bbox": {}, "value": value, "driver": "humanized"}
-        if addr["addressed_by"] == apply_fields.ADDRESSED_BY_SELECTOR:
-            payload["selector"] = addr["selector"]
-        else:
-            payload["target_role"], payload["target_name"] = addr["role"], addr["name"]
+                   "target_bbox": {}, "value": value, "driver": "humanized",
+                   **apply_fields.execute_addressing(addr)}
         res = await _capture_post("/execute", payload)
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         return res
@@ -2936,12 +2933,8 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
         staged = True
         open_addr = apply_fields.addressing_for(ats, opener)
         open_payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
-                        "target_bbox": {}, "driver": "humanized"}
-        if open_addr["addressed_by"] == apply_fields.ADDRESSED_BY_SELECTOR:
-            open_payload["selector"] = open_addr["selector"]
-        else:
-            open_payload["target_role"], open_payload["target_name"] = (open_addr["role"],
-                                                                       open_addr["name"])
+                        "target_bbox": {}, "driver": "humanized",
+                        **apply_fields.execute_addressing(open_addr)}
         res = await _capture_post("/execute", open_payload)
         if res.get("outcome") not in ("ok", "committed_unconfirmed"):
             return {"ok": False, "reason": "confirm_failed", "staged": staged,
@@ -3014,12 +3007,8 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
                 "detail": f"Filled the create-account form. Confirm to click {button!r}."}
 
     click_payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
-                     "target_bbox": {}, "driver": "humanized"}
-    if submit_addr["addressed_by"] == apply_fields.ADDRESSED_BY_SELECTOR:
-        click_payload["selector"] = submit_addr["selector"]
-    else:
-        click_payload["target_role"] = submit_addr["role"]
-        click_payload["target_name"] = submit_addr["name"]
+                     "target_bbox": {}, "driver": "humanized",
+                     **apply_fields.execute_addressing(submit_addr)}
     click = await _capture_post("/execute", click_payload)
     await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
     if click.get("outcome") not in ("ok", "committed_unconfirmed"):

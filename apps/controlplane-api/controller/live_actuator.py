@@ -464,7 +464,8 @@ class LiveActuator:
 
         if intent == Intent.SET_TEXT.value:
             exe: dict[str, Any] = {**self._addr(), "action_id": "type", "target_bbox": {},
-                                   "value": p.get("value", ""), "driver": self._driver}
+                                   "value": p.get("value", ""), "driver": self._driver,
+                                   **self._question_check(field, addr)}
             if addr.get("selector"):
                 exe["selector"] = addr["selector"]
             else:
@@ -510,18 +511,96 @@ class LiveActuator:
                 "ats": self._ats, "field": field})
             return self._field_result(res)
 
-        # SCROLL / UPLOAD / anything else: no dispatch yet — escalate honestly, don't guess.
+        if intent == Intent.UPLOAD.value:
+            # UPLOAD had no dispatch here, and a required resume upload is on the critical path of
+            # every Workday and Greenhouse application — so the one action that cannot be skipped
+            # was the one the controller could not perform. It got hand-curled to /execute instead,
+            # off the journal: three attempts against a bare `input[type=file]` put the resume in
+            # the wrong uploader and taught the system nothing, because nothing was recorded
+            # (live 2026-08-12). An action worth taking on a real application is worth journaling.
+            if not addr.get("selector"):
+                return self._out(Outcome.NOT_FOUND.value, self._last_state,
+                                 detail=f"upload: cannot address {field!r} by selector — a file "
+                                        f"input has no accessible name to click")
+            path = self._upload_path(p)
+            if not path:
+                asked = p.get("path") or p.get("files") or "(nothing)"
+                return self._out(Outcome.NOT_FOUND.value, self._last_state,
+                                 detail=f"upload: no such file for {asked!r}. Uploads take an "
+                                        f"asset key ('documents/GM_Resume.pdf') or 'resume' for "
+                                        f"the canonical one — never an invented path.")
+            exe: dict[str, Any] = {**self._addr(), "action_id": "upload", "target_bbox": {},
+                                   "selector": addr["selector"], "files": [path],
+                                   "driver": self._driver,
+                                   # The SCOPE and the EXPECTED QUESTION travel with the selector,
+                                   # or two identical uploaders collapse back into "first match
+                                   # wins" — the bug this dispatch exists to stop repeating.
+                                   **self._question_check(field, addr)}
+            return self._field_result(self._post("/execute", exe))
+
+        # SCROLL / anything else: no dispatch yet — escalate honestly, don't guess.
         return self._out(Outcome.NOT_FOUND.value, self._last_state,
                          detail=f"LiveActuator has no dispatch for intent {intent!r} yet")
 
     # --- helpers ---------------------------------------------------------------------
+    def _question_check(self, field: str, addr: dict) -> dict:
+        """The addressing QUALIFIERS that let /execute confirm it is answering the right question:
+        the section the control sits in, and the question we believe it asks.
+
+        The expectation is the census's own name for the field when the live scan knows it, and the
+        recipe's accessible name otherwise — never the internal field KEY, which is our vocabulary
+        rather than the page's ('resume' would mismatch "Upload a file (5MB max)" and refuse a
+        correct act). When we have no page-side name for the field we send none: an assertion we
+        cannot state honestly is worse than no assertion, and /execute still reports what the
+        target answers.
+        """
+        out: dict[str, Any] = {}
+        if addr.get("within"):
+            out["within"] = addr["within"]
+        expect = addr.get("name") or ""
+        if not expect:
+            row = next((u for u in (self._last_scan or []) if self._same_field(u.get("field"), field)), None)
+            expect = (row or {}).get("field") or ""
+            if not expect and (row or {}).get("within"):
+                expect = row["within"]
+        if expect:
+            out["expect_question"] = expect
+        return out
+
+    @staticmethod
+    def _upload_path(p: dict) -> Optional[str]:
+        """The local file an upload will send — resolved through the ASSET STORE, never taken as a
+        raw path from a caller.
+
+        A model that can name any path can name one that is not the applicant's resume; the asset
+        keys are the vocabulary, and `resume` resolves to whichever file is canonical today (one
+        pointer, reused across every ATS). An absolute path is accepted ONLY when it names a file
+        already inside the asset root, which is the same containment rule assets.abs_path enforces.
+        """
+        import assets
+        want = str(p.get("path") or p.get("files") or "").strip()
+        if isinstance(p.get("files"), (list, tuple)) and p["files"]:
+            want = str(p["files"][0]).strip()
+        if not want or want.lower() in ("resume", "cv", "resume.pdf"):
+            return assets.resume_path()
+        hit = assets.abs_path(want)
+        if hit:
+            return hit
+        # A name rather than a key ("GM_Resume.pdf") — match the store's own listing.
+        base = want.rsplit("/", 1)[-1].lower()
+        for doc in assets.list_documents():
+            if doc["name"].lower() == base:
+                return assets.abs_path(doc["key"])
+        return None
+
     def _address(self, field: str) -> Optional[dict]:
         """(ats, field) -> addressing. The static recipe (apply_fields.resolve) FIRST — Workday /
         Greenhouse fields whose selectors are stable — then the LIVE scan, for Indeed's dynamic
         questions whose selectors only exist at runtime. None -> NOT_FOUND (never a guess)."""
         try:
             e = apply_fields.resolve(self._ats, field)
-            return {"selector": e["selector"], "role": e["role"], "name": e["name"],
+            return {"selector": e["selector"], "within": e.get("within"),
+                    "role": e["role"], "name": e["name"],
                     "widget_type": e["widget_type"], "commit": e["commit"]}
         except apply_fields.FieldNotFound:
             # Match the live scan by field. Do NOT require a selector: a native radio group is
