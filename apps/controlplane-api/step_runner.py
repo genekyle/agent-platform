@@ -420,8 +420,28 @@ def verify(expect: Expectation, d: Optional[dict[str, Any]],
         if hits:
             where = hits[0].get("url") or hits[0].get("to") or ""
             return CONFIRMED, f"the window gained/navigated to {where[:80]}"
+        # AN EMPLOYER'S OWN CAREERS DOMAIN CONFIRMS TOO. The hint list can only ever name the
+        # REGISTRY's hosts, and a company-site apply lands by definition on a host no registry
+        # will ever list (careers.solutionhealth.org, measured live 2026-08-11 — a correct
+        # Apply click demoted to mismatch minutes after the registry-derived hint shipped).
+        # Leaving the ENGINE is the prediction's real content: an apply that moved the window
+        # to any non-engine host entered *something*, and naming which something is `classify`'s
+        # job, not this verifier's. Staying ON the engine (a card click, a serp reload) remains
+        # the real failure.
+        def _host(u: str) -> str:
+            from urllib.parse import urlparse
+            return (urlparse(u or "").hostname or "").lower()
+        engine_hosts = ("indeed.com", "linkedin.com")
+        external = [m for m in moved
+                    if _host(m.get("url") or m.get("to") or "")
+                    and not any(_host(m.get("url") or m.get("to") or "").endswith(e)
+                                for e in engine_hosts)]
+        if external:
+            where = external[0].get("url") or external[0].get("to") or ""
+            return CONFIRMED, (f"the window left the engine for {where[:80]} — an unlisted "
+                               f"host; classify names it")
         if moved:
-            return MISMATCH, ("something moved, but not to an application host: "
+            return MISMATCH, ("something moved, but only on the engine's own pages: "
                               + "; ".join((m.get("url") or m.get("to") or "")[:60] for m in moved[:3]))
         return MISMATCH, "no tab opened and none navigated — the click left the window unchanged"
     return UNOBSERVED, f"unknown expectation kind {expect.kind!r}"

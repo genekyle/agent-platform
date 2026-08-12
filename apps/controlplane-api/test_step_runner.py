@@ -410,3 +410,22 @@ def test_a_tail_advance_is_verified_not_waved_through_as_read_only():
     # And the two measured prefix predictions are unchanged.
     assert sr.expectation_for("open_pane", external_id="abc").kind == "url_param"
     assert sr.expectation_for("enter_apply").kind == "new_tab_or_nav"
+
+
+def test_a_company_careers_domain_confirms_the_hand_off():
+    """The hint list can only name REGISTRY hosts, and a company-site apply lands by definition
+    on a host no registry lists — careers.solutionhealth.org demoted a correct Apply click
+    minutes after the registry-derived hint shipped (live 2026-08-11). Leaving the ENGINE is the
+    prediction's real content; staying on it remains the failure."""
+    before = _obs(url="https://www.indeed.com/jobs", tabs=[("t1", "https://www.indeed.com/jobs")])
+    after = _obs(url="https://www.indeed.com/jobs",
+                 tabs=[("t1", "https://www.indeed.com/jobs"),
+                       ("t2", "https://careers.solutionhealth.org/job/-/-/47438/94787225296")])
+    verdict, why = sr.verify(sr.expectation_for("enter_apply"), sr.diff(before, after), after)
+    assert verdict == sr.CONFIRMED and "solutionhealth" in why
+    # …and a click that only shuffled engine pages still mismatches.
+    engine_only = _obs(url="https://www.indeed.com/jobs",
+                       tabs=[("t1", "https://www.indeed.com/jobs?vjk=abc")])
+    verdict2, why2 = sr.verify(sr.expectation_for("enter_apply"),
+                               sr.diff(before, engine_only), engine_only)
+    assert verdict2 == sr.MISMATCH and "engine" in why2
