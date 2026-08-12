@@ -678,11 +678,19 @@ SCAN_REQUIRED_JS = r"""
   // it says "the page rejects this field and we cannot address it", which is the honest state and
   // the one that stops a submit. Matching an already-reported field by name keeps it from
   // double-filing.
+  // A COLLAPSED banner is still a verdict. Workday's error summary starts expanded and collapses
+  // itself; once collapsed the item list is display:none, so a visibility-gated read saw an empty
+  // "Errors Found" and the census went back to reporting a COMPLETE form over a page that was
+  // refusing to advance (live 2026-08-12). What matters is whether the page is ASSERTING errors
+  // right now — the banner's own header is on screen — not whether the operator has the details
+  // unfolded. So: the header gates, the items are read either way.
+  const asserting = [...document.querySelectorAll('*')].some(
+    el => __vis(el) && /^errors? found\b/i.test(txt(el)) && txt(el).length < 400);
   const complained = new Set();
   const errText = [];
   for (const el of document.querySelectorAll(
         '[data-automation-id*=rror], [role=alert], [aria-live=assertive], [class*=rror]')) {
-    if (!__vis(el)) continue;
+    if (!__vis(el) && !asserting) continue;
     const t = txt(el);
     if (t && t.length <= 400) errText.push(t);
   }
@@ -746,7 +754,30 @@ SCAN_REQUIRED_JS = r"""
               answered: false, valid: false, value_preview: ''});
   }
 
+  // A REFUSAL THAT NAMES NO FIELD. Workday answered two Save-and-Continue presses with
+  //     "Errors Found · Error-Page Error · Error Code: VPS|7909b5a0-…"
+  // and nothing else: no field, no control, fresh codes on every attempt. The census had all
+  // required fields answered and said so, which is TRUE and completely misleading — the page was
+  // refusing for a reason it declined to attribute (live 2026-08-12, SolutionHealth JR11587).
+  //
+  // Reported as its own kind of fact, never as a field row: there is no control to fill, so a
+  // field-shaped row would send the crank hunting for one. A page-level refusal is a state for a
+  // HUMAN to judge — the same class as a captcha, and the same response: name it, don't guess at
+  // it. `page_errors` is empty on every healthy page, so nothing downstream changes shape.
+  const pageErrors = [];
+  if (asserting) {
+    for (const t of errText) {
+      // Strip the parts already attributed to a field; what remains is the unattributed refusal.
+      let rest = t.replace(/(?:the field|field)\s+.+?\s+is required(?: and must have a value)?\.?/gi, '').trim();
+      if (!rest || rest.length < 6) continue;
+      if (/^errors? found$/i.test(rest)) continue;               // the header itself
+      if (!/error|unable|failed|problem|try again/i.test(rest)) continue;
+      if (!pageErrors.includes(rest)) pageErrors.push(rest.slice(0, 200));
+    }
+  }
+
   return {unanswered: out, answered: done, optional,
+          page_errors: pageErrors.slice(0, 6),
           url: (location.href || '').slice(0, 140)};
 }
 """

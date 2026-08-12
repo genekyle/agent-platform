@@ -2952,16 +2952,28 @@ async def scan_required(body: ScanRequiredRequest):
     # field is not a done field when the answer is wrong (the near-self-withdrawal of
     # 2026-08-10 was an ANSWERED one). `unanswered` keeps its gate semantics untouched.
     answered = out.get("answered") or []
+    # A REFUSAL THAT NAMES NO FIELD is not "all required fields answered". Both statements were
+    # true at once on Workday — every field satisfied, and the page rejecting Save and Continue with
+    # an unattributed "Page Error" — and reporting only the first would tell the crank to advance
+    # into a wall it had already hit twice (live 2026-08-12). There is no field to fill here, so
+    # this is a state for a human to judge, like a captcha: named, never guessed at.
+    page_errors = out.get("page_errors") or []
+    detail = (f"{len(unanswered)} required field(s) unanswered: "
+              f"{[u['field'] for u in unanswered][:6]}" if unanswered
+              else "all required fields answered")
+    if page_errors:
+        detail += (f" — but the page is REFUSING with an error it attributes to no field: "
+                   f"{page_errors[:2]}")
     return {"outcome": Outcome.OK, "unanswered": unanswered, "count": len(unanswered),
             "answered": answered,
             # Optional-but-visible controls, for ADDRESSING only — the gate above reads
             # `unanswered` and nothing else, exactly as before.
             "optional": out.get("optional") or [],
-            "detail": (f"{len(unanswered)} required field(s) unanswered: "
-                       f"{[u['field'] for u in unanswered][:6]}" if unanswered
-                       else "all required fields answered"),
+            "page_errors": page_errors,
+            "detail": detail,
             "steps": [{"step": "scan", "unanswered": len(unanswered),
-                       "answered": len(answered), "url": out.get("url")}]}
+                       "answered": len(answered), "page_errors": len(page_errors),
+                       "url": out.get("url")}]}
 
 
 class SetDateRequest(BaseModel):

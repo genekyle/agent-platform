@@ -6350,3 +6350,103 @@ uploader as a widget PROTOCOL (trusted drag-drop / the widget's own commit), not
 field — compare with the required marker stripped), and `apply_fields` correctly refuses a field
 addressed two ways, which is why the prompt's accessible name became the endpoint's problem to
 solve rather than the table's.
+
+## 2026-08-12 — Which question does this control answer? (and: a live page whose server forgot us)
+
+Operator, on the resume that had gone into the wrong Workday uploader three times: *"we need to do
+some sort of confirmation of target versus what is required check as well to make sure we know our
+targets and which inputs align with which questions … that idea of not being able to correlate what
+question correlates with what (regardless of whether it's required or not) is pivotal in making a
+system not become lost."* That is the session, and the code is `__questionOf` + the refusals.
+
+**The park's diagnosis was wrong twice, and measuring took ten minutes.** Last night closed on
+"Workday's uploader ingests through its own handler, so `setFileInputFiles` stages
+`files.length > 0` and the page still demands the upload — next drive builds a drag-drop protocol."
+The page said otherwise. `/page_content` showed **GM_Resume.pdf uploaded THREE TIMES, "Successfully
+Uploaded!", in the optional Attachments box**, while the required Resume/CV uploader sat empty. The
+mechanism was never broken:
+* **The two uploaders are indistinguishable by attribute** — same `data-automation-id=
+  file-upload-input-ref`, same `attachments-FileUpload` ancestor, both hidden, both `files: 0`. The
+  ONLY difference is the heading above them. `DOM.querySelector` took the first, silently, three
+  times, and each attempt reported `ok`.
+* **`files.length` is not an uploader's truth in EITHER direction.** An ingesting widget POSTs the
+  file and RESETS the input, so 0 also describes success — which is why last night's brand-new
+  "confirmed at the node" rule produced a false `not_staged` over three uploads the page had
+  visibly accepted. The witness is the widget's own rendered row (and Workday additionally
+  ANNOUNCES it in a `role=alert` live region: "GM_Resume.pdf successfully uploaded").
+* A predicted protocol build (trusted drag-drop, `Page.setInterceptFileChooserDialog`) evaporated
+  on contact with a measurement. **Measure before building the thing the park predicted.**
+
+**AN ADDRESS IS A PREDICTION.** Selector, role+name, node id — each asserts *which question this
+control answers*, and nothing was reading the control's own answer back, so nothing could
+contradict a wrong one. Now `__questionOf(el)` returns `{question, source, section}` for ANY
+control (requiredness is a different axis entirely — an optional field filled with the wrong answer
+is the same error), and:
+* **Ambiguity is a refusal, not a coin flip.** Two matches → refuse and name what they answer.
+* `within` scopes a selector to the section that names its control ("the uploader under
+  Resume/CV") — carried by `apply_fields.execute_addressing()` so no dispatch site can drop it; it
+  was the same four-line if/else at five call sites, i.e. five chances to silently re-widen.
+* `expect_question` CONFIRMS: the caller says what it means, the page says what the control asks,
+  and a disagreement stops the act. Weak identities (`automation-id`, `section-only`) may
+  contradict but never confirm alone.
+* Every act reports `target_question` whether or not anyone asserted — a correlation nobody
+  records is one the system cannot learn from.
+
+**ONE definition is not one definition unless it is the only copy.** The census had the
+composite-widget label walk as a LOCAL fix; the shared `__questionOf` did not — so the act-time
+check refused a CORRECT upload ("resolves to a control for 'Drop files here or Select files'").
+Fixing it needed three measured passes, each a general lesson: a widget's label sits **before the
+widget**, not before its innards (start the walk at the widget, not the control); the label of a
+composite field is a **sibling of the widget inside the field wrapper**, reachable only by
+subtracting the part you came from (`div[formField-] > "Upload a file (5MB max)*" + div[FileUpload]`
+— a previous-sibling walk climbs past it into the PREVIOUS SECTION); and a section is the nearest
+**preceding** heading, never `ancestor.querySelector('h1..h5')`, which returns a SIBLING field's
+heading and filed an uploader under "Issued Date". A `<legend>` is demoted below a real heading —
+Workday wraps every date in one.
+
+**THE PAGE'S OWN VERDICT, fifth and sixth shapes.** The census reported *"all required fields
+answered"* over a page printing "The field Upload a file (5MB max) is required":
+* File uploaders were invisible to the WHOLE census — `singles` filters on `__isUserField`, and a
+  file input is never keyboard-reachable by design. The one required control on screen had no row.
+* The error summary is a plain `div[data-automation-id=errorHeading]` — no `role=alert`, no
+  `aria-live`, no link to a control — so every ARIA-shaped rule missed it. Read the SENTENCE.
+* **The join.** A complaint with no control is unactionable; a control named "Drop files here or
+  Select files" is unaddressable. Both halves existed and neither could act. They join the way a
+  person joins them: the page prints its complaint NEXT TO the control it means, so the field the
+  page names is the one whose own container repeats that name. Merged row = the page's name
+  (authoritative) + our selector (actionable), provenance `page-error+proximity`.
+* With the uploader visible, the census now catches that blocker **by its own asterisk, before a
+  failed submit** — which is what the tell was for.
+
+**A LIVE PAGE WHOSE SERVER HAD FORGOTTEN US.** With the upload finally in Resume/CV and the error
+gone, Save and Continue answered with `Errors Found · Error-Page Error · Error Code: VPS|…` — two
+FRESH codes per press, naming no field, over a census reading zero unanswered. Retrying is proven
+useless when the codes change every time. A **reload** told the truth: the flow reset to *"step 1
+of 7 — Create Account/Sign In"*. **The session had been signed out server-side hours earlier and
+nothing local knew.** The screenshot was pristine, the AX tree intact, `/page_content` rich, every
+field readable, the upload accepted — and every write was unauthenticated. `/auth_state` was never
+asked, because the page was RIGHT THERE. So:
+* **A page-level refusal that names no field is its own state class**, not a field problem and not
+  a click problem — `page_errors` on the census, and the endpoint no longer says "all required
+  fields answered" without adding "…but the page is REFUSING with an error it attributes to no
+  field". Same response as a captcha: name it, never guess at it.
+* **A COLLAPSED banner is still a verdict.** Workday's summary collapses itself after a press;
+  once collapsed the items are `display:none` and a visibility-gated read saw an empty "Errors
+  Found" and went back to reporting a complete form. The header being on screen is the page
+  asserting errors NOW; whether the operator has the details unfolded is not our business.
+* This is [[feedback_state_is_context_bound]] with the polarity reversed: we knew stale DATA is
+  invalid, and learned that a stale SESSION is invisible from the page. A freshness re-verify on a
+  long-idle apply tab has to include the server's opinion, not just ours.
+
+*Also:* three "Delete GM_Resume.pdf" buttons in the AX tree were ONE row's button described three
+times — one click cleared all three strays (verified at the page, not at the click). `upload` had
+no dispatch in `LiveActuator` at all, which is why three attempts on the critical path of every
+Workday application were hand-curled and taught nothing; it now resolves paths through the ASSET
+STORE, never a raw caller path. And the harness cwd trap bit again in a new shape: absolute
+`/Users/geno/Projects/agent-platform/...` paths from a WORKTREE session edit MAIN — caught by a
+test run that passed against unmodified files. The servers were moved to serve main (where the work
+and the commit live), never via `make dev-stop`, which `pkill`s the session Chrome.
+
+*Where it stands:* SolutionHealth JR11587 is at the sign-in wall with the resume server-side and
+the operator's account already created on this tenant (last night). Tests: mcp 91 → 98,
+apply_fields 23 → 26.
