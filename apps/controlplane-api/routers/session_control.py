@@ -2813,6 +2813,45 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
 
     style = xs.pick_style()
 
+    # REVEAL THIS LEG'S FORM FIRST, when the page serves both from one url. Conditional on a
+    # MEASUREMENT — the submit control's own presence — because pressing the toggle on a page that
+    # is already showing the right form would switch it to the wrong one. Workday's SolutionHealth
+    # tenant defaults to Create Account, so the sign-in leg filled the create form's shared
+    # Email/Password boxes and died looking for a submit that was one click away (live 2026-08-12).
+    toggle = form.get("toggle")
+    if toggle:
+        toggle_field, showing_field = toggle
+        probe = apply_fields.addressing_for(ats, showing_field)
+        seen = await _capture_post("/locate", {"browser_url": browser_url, "tab_id": tab_id,
+                                               "css": probe.get("selector") or "",
+                                               "text": probe.get("name") or ""})
+        # ONLY A REAL MEASUREMENT MAY TRIGGER THE TOGGLE. A missing `found` is not "the form is
+        # absent", it is "we did not look" — and toggling a page that already shows the right form
+        # switches it to the wrong one. So the verdict must be EXPLICIT: `found` present and false.
+        # An unmeasured condition falls through to the behaviour that came before this step existed.
+        measured_absent = seen.get("ok") and seen.get("found") is False
+        if measured_absent:
+            addr = apply_fields.addressing_for(ats, toggle_field)
+            res = await _capture_post("/execute", {
+                "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
+                "target_bbox": {}, "driver": "humanized",
+                **apply_fields.execute_addressing(addr)})
+            if res.get("outcome") not in ("ok", "committed_unconfirmed"):
+                return {"ok": False, "reason": "toggle_failed", "staged": staged,
+                        "detail": f"This page shows the other form and {toggle_field!r} would not "
+                                  f"switch it ({res.get('outcome') or res.get('detail')}). Nothing "
+                                  f"was typed."}
+            await asyncio.sleep(xs.pause_for(xs.pick_style(), xs.NAVIGATION))
+            # VERIFIED, not assumed: a toggle that clicked and changed nothing would send every
+            # credential below into the wrong form.
+            again = await _capture_post("/locate", {"browser_url": browser_url, "tab_id": tab_id,
+                                                   "css": probe.get("selector") or "",
+                                                   "text": probe.get("name") or ""})
+            if again.get("found") is not True:
+                return {"ok": False, "reason": "toggle_unconfirmed", "staged": staged,
+                        "detail": f"Pressed {toggle_field!r} but {showing_field!r} still is not on "
+                                  f"the page, so the {leg} form never appeared. Nothing was typed."}
+
     async def _fill(field: str, value: str) -> dict:
         addr = apply_fields.addressing_for(ats, field)
         payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "type",

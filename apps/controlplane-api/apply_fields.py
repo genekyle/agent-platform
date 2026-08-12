@@ -216,6 +216,14 @@ WORKDAY_FIELDS: dict[str, dict[str, Any]] = {
                widget_type=WidgetType.UNKNOWN),
     "sign_in_submit": _f(ats="workday", selector="[data-automation-id=signInSubmitButton]",
                          widget_type=WidgetType.UNKNOWN),
+    # The toggle that REVEALS the sign-in form on a tenant whose Create Account/Sign In page defaults
+    # to Create Account. Addressed by SELECTOR on purpose: the page carries TWO buttons whose
+    # accessible name is exactly "Sign In" — `utilityButtonSignIn` in the nav bar and `signInLink`
+    # beside the form — and role+name resolution takes the first, which is the nav one. That click
+    # leaves the application. Same lesson as the two identical uploaders, with a worse blast radius.
+    "sign_in_toggle": _f(ats="workday", selector="[data-automation-id=signInLink]",
+                         widget_type=WidgetType.UNKNOWN,
+                         note="reveals the sign-in form; NOT the nav's utilityButtonSignIn"),
     "create_account_submit": _f(ats="workday", role="button", name="Create Account",
                                 widget_type=WidgetType.UNKNOWN),
 }

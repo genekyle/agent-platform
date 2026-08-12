@@ -104,6 +104,19 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
     },
     "sign_in": {
         "workday": {
+            # THE FORM HAS TO BE ON SCREEN BEFORE IT CAN BE FILLED. Workday serves Create Account
+            # and Sign In from ONE url, showing whichever the tenant defaults to, with a button to
+            # switch. SolutionHealth defaults to Create Account — so the sign-in leg typed the
+            # credential into the CREATE form's shared Email/Password boxes and then could not find
+            # its submit: "Filled the form but could not click '[data-automation-id=
+            # signInSubmitButton]' (not_found)" (live 2026-08-12). Third instance of the same
+            # pattern in two days: the recipe has described `toggle_to_sign_in` since 07-12, and
+            # nothing executed it — like the consent checkbox before it.
+            #
+            # CONDITIONAL, and conditional on a MEASUREMENT: the submit control's own presence says
+            # whether this leg's form is already showing. Pressing a toggle that is not needed would
+            # switch a correct page to the wrong form.
+            "toggle": ("sign_in_toggle", "sign_in_submit"),
             "fields": (("email", "username"), ("password", "password")),
             "submit": "sign_in_submit",
         },
@@ -149,6 +162,12 @@ def program_steps(ats: str, leg: str) -> list[dict[str, Any]]:
     if form is None:
         return []
     steps: list[dict[str, Any]] = []
+    toggle = form.get("toggle")
+    if toggle:
+        # Conditional like an interstitial — it fires only when this leg's form is not already the
+        # one on screen — but it belongs in the program, because a sequence that starts at the fills
+        # describes a leg that types into whichever form the tenant happened to default to.
+        steps.append({"intent": "click", "params": {"field": toggle[0]}})
     for field, source in form.get("fields", ()):
         params = {"field": field}
         ref = _VALUE_REF.get(source)

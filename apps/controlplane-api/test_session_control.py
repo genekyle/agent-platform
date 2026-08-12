@@ -3530,6 +3530,87 @@ def test_the_sign_in_leg_is_driven_too_not_handed_back(monkeypatch):
     assert _settled(step) >= {"account"}
 
 
+def test_the_sign_in_form_is_revealed_before_a_credential_is_typed(monkeypatch):
+    """Workday serves Create Account and Sign In from ONE url and shows whichever the tenant
+    defaults to. SolutionHealth defaults to Create Account, whose Email/Password boxes have the SAME
+    accessible names — so the sign-in leg typed the credential into the create form and then died
+    looking for a submit that was one click away: "Filled the form but could not click
+    '[data-automation-id=signInSubmitButton]' (not_found)" (live 2026-08-12).
+
+    The toggle is conditional on a MEASUREMENT (is this leg's submit on the page?) and verified
+    after pressing, because a toggle that clicks and changes nothing would send the credential into
+    the wrong form anyway.
+    """
+    order = []
+    present = {"submit": False}          # the create form is showing
+
+    def _locate(payload):
+        order.append(("locate", payload.get("css")))
+        return {"ok": True, "found": present["submit"]}
+
+    def _execute(payload):
+        if payload.get("action_id") == "click" and "signInLink" in (payload.get("selector") or ""):
+            present["submit"] = True     # the toggle reveals the sign-in form
+            order.append(("toggle", payload.get("selector")))
+        elif payload.get("action_id") == "type":
+            order.append(("type", payload.get("target_name") or payload.get("selector")))
+        return {"outcome": "ok"}
+
+    import accounts, ats_accounts
+    ats_accounts.ensure_account("MFS", "workday", login_url="https://mfs.wd1.myworkdayjobs.com/x")
+    ats_accounts.mark_created("MFS", "workday")
+    accounts.put_account(ats_accounts.ats_account_id("MFS", "workday"), {"status": "active"})
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://solutionhealth.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/locate": _locate,
+         "/execute": _execute,
+         "/ax_scan": {"ok": True, "page_text": "My Information", "candidates": []}},
+        blackboard=_wd_at_wall())
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "auto"})
+    finally:
+        _teardown()
+
+    kinds = [k for k, _ in order]
+    assert kinds[0] == "locate", "the page is measured before anything is pressed"
+    assert "toggle" in kinds, "a create-form page must be switched to the sign-in form"
+    assert kinds.index("toggle") < kinds.index("type"), "…and switched BEFORE a credential is typed"
+
+
+def test_a_page_already_showing_the_sign_in_form_is_not_toggled(monkeypatch):
+    """The other half: pressing the toggle on a page that already shows the right form switches it
+    to the WRONG one. So the toggle fires on a measured absence, never on a hunch."""
+    toggles = []
+
+    def _execute(payload):
+        if payload.get("action_id") == "click" and "signInLink" in (payload.get("selector") or ""):
+            toggles.append(payload)
+        return {"outcome": "ok"}
+
+    import accounts, ats_accounts
+    ats_accounts.ensure_account("MFS", "workday", login_url="https://mfs.wd1.myworkdayjobs.com/x")
+    ats_accounts.mark_created("MFS", "workday")
+    accounts.put_account(ats_accounts.ats_account_id("MFS", "workday"), {"status": "active"})
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs2.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/locate": {"ok": True, "found": True},          # the sign-in form is already up
+         "/execute": _execute,
+         "/ax_scan": {"ok": True, "page_text": "My Information", "candidates": []}},
+        blackboard=_wd_at_wall())
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "auto"})
+    finally:
+        _teardown()
+
+    assert toggles == []
+
+
 def test_the_cleanup_closes_the_doorways_the_step_opened(monkeypatch):
     """An apply HOPS — Indeed -> the employer's careers page -> the ATS — and each hop strands the
     one before it. The window manager will not close the middle one: an employer careers site is

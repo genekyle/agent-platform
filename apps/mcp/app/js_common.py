@@ -126,28 +126,52 @@ WIDGET_TELLS_JS = r"""
       }
     }
     section = section || legend;
-    const strong = (q, src) => ({question: (q || '').slice(0, 120), source: src, section});
+    // Every named candidate is filtered through __isBoilerplate BEFORE it is returned. An
+    // association is only worth having if it identifies the QUESTION: Workday's option dropdowns
+    // carry `aria-label="Select One Required"`, a perfectly valid ARIA label that says nothing about
+    // what is being asked, and taking it made three different required questions one indistinct row
+    // (live 2026-08-12). A worthless name must not outrank a real one further down the chain.
+    const strong = (q, src) => ({question: (q || '').slice(0, 240), source: src, section});
+    const named = [];
     if (el.id) {
       try { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-            if (l && __txt(l)) return strong(__txt(l), 'label-for'); } catch (e) { /* bad id */ }
+            if (l) named.push([__txt(l), 'label-for']); } catch (e) { /* bad id */ }
     }
-    const al = __attr(el, 'aria-label');
-    if (al) return strong(al, 'aria-label');
+    named.push([__attr(el, 'aria-label'), 'aria-label']);
     const ref = __attr(el, 'aria-labelledby');
     if (ref) {
       const parts = ref.split(/\s+/).map(id => { const n = document.getElementById(id); return n ? __txt(n) : ''; })
                        .filter(Boolean);
-      if (parts.length) return strong(parts.join(' '), 'aria-labelledby');
+      if (parts.length) named.push([parts.join(' '), 'aria-labelledby']);
     }
     const own = el.closest && el.closest('label');
-    if (own && __txt(own)) return strong(__txt(own), 'own-label');
+    if (own) named.push([__txt(own), 'own-label']);
+    // A candidate that merely repeats the control's CURRENT VALUE is not an identity. An option
+    // opener's accessible name BECOMES the chosen value ("No Required" after answering No), so a
+    // valid aria-label described the answer and outranked the real question — three different
+    // questions all identified as their own answers (live 2026-08-12). No page labels a field with
+    // its own contents, so name == value is decisive.
+    const __valNorm = (s) => (s || '').toLowerCase().replace(/\s*required\s*$/i, '')
+                                      .replace(/[^a-z0-9]+/g, ' ').trim();
+    const nowValue = __valNorm((__valueTruth(el) || {}).preview);
+    for (const [text, src] of named) {
+      if (!text || __isBoilerplate(text)) continue;
+      if (nowValue && __valNorm(text) === nowValue) continue;      // that is the answer, not the ask
+      return strong(text, src);
+    }
     // PROXIMITY — the nearest preceding short text, which is how a sighted user reads a box with
     // no association: by looking just above it. A paragraph is not a label, so prose ends the walk.
     //
     // Text that belongs to the widget itself, or to a NEIGHBOURING field, is not this control's
     // question. Workday's date sub-fields announce themselves ("Expiration Date current value is
     // MM/DD/YYYY") and were duly adopted as an uploader's label by an earlier cut of this walk.
-    const FURNITURE = /^(or|drop files here|select files?|browse|drag and drop|choose file)/i;
+    // A widget's own PLACEHOLDER is not a question. Workday renders every option dropdown with the
+    // accessible name "Select One Required", so three different yes/no questions on one screen —
+    // "have you worked here before", "are you legally permitted to work", "have you been convicted
+    // of a crime" — arrived as three identical rows the census could not tell apart, which is the
+    // wrong-target bug in its most dangerous form (live 2026-08-12). Boilerplate is furniture: skip
+    // it and read the question the field actually asks.
+    const FURNITURE = /^(or|drop files here|select files?|browse|drag and drop|choose file|select one|please select|choose one|select\.\.\.|select…|select an option|-- ?select)/i;
     const NEIGHBOUR = /current value is|^MM$|^DD$|^YYYY$/i;
 
     // WHAT DOES THIS FIELD SAY, APART FROM THE WIDGET ITSELF? For a composite widget the label is
@@ -159,14 +183,39 @@ WIDGET_TELLS_JS = r"""
     // walk that starts at the input reads the widget's own furniture ("Drop files here or Select
     // files"). Subtracting the part we came from leaves exactly the field's own words, which is
     // what a person reads.
+    // The length ceiling here is deliberately GENEROUS (a question is long — "Have you previously
+    // worked for SolutionHealth, Elliot Health, Southern New Hampshire Health, or Home, Health and
+    // Hospice?" is 118 characters) because what remains after the subtraction is the field's own
+    // words BY CONSTRUCTION, not a guess that might have wandered into prose. The 60-character cap
+    // belongs to the sibling walk below, which has no such guarantee.
+    // STOP AT THIS FIELD'S OWN WRAPPER. The subtraction is only "the field's own words" while the
+    // ancestor holds ONE control; one level higher it holds the NEIGHBOUR too, and what is left over
+    // is the neighbour's question. Measured live 2026-08-12: the "family members employed here"
+    // textarea reported the SALARY question above it, and every answered dropdown reported its own
+    // answer ("No Required") because the walk had already left the field. Same rule as the
+    // uploader's container walk, generalised from "a second file input" to "a second control" —
+    // a form field is the largest box around this control that contains no other.
+    const CONTROLS = 'input:not([type=hidden]), select, textarea, [role=combobox],' +
+                     '[role=listbox], [aria-haspopup=listbox], [role=radiogroup], button';
+    // A SIBLING QUESTION, not a sibling NODE. Composite widgets ship their own private controls —
+    // Workday pairs each opener with an off-screen proxy input — and counting those as neighbours
+    // stopped the walk at level 0, one level below the question text (measured live 2026-08-12).
+    // `__isUserField` is the same distinction the census uses for the hidden-required-twin trap: a
+    // control a human cannot reach is part of a widget, not a question of its own.
     let start = el;
     for (let n = el.parentElement, d = 0; n && n !== document.body && d < 6; d++, n = n.parentElement) {
       const whole = __txt(n);
-      if (whole.length > 200) break;             // n now spans the section, not the field
+      if (whole.length > 400) break;             // n now spans the section, not the field
+      let others = 0;
+      for (const c of n.querySelectorAll(CONTROLS)) {
+        if (c === el || el.contains(c) || c.contains(el)) continue;
+        if (__isUserField(c)) others++;
+      }
+      if (others) break;                         // n has reached a sibling field — do not read it
       const inner = __txt(start);
       const own = (inner && whole.startsWith(inner) ? whole.slice(inner.length)
                                                     : whole.replace(inner, '')).trim();
-      if (own && own.length >= 2 && own.length <= 60 && !FURNITURE.test(own) && !NEIGHBOUR.test(own))
+      if (own && own.length >= 2 && own.length <= 240 && !FURNITURE.test(own) && !NEIGHBOUR.test(own))
         return strong(own, 'proximity');
       start = n;
     }
@@ -189,6 +238,18 @@ WIDGET_TELLS_JS = r"""
     // questions. Flagged as such so a caller can refuse to act on it.
     if (aid) return {question: aid.slice(0, 120), source: 'automation-id', section};
     return {question: '', source: 'none', section};
+  };
+
+  //: Is this "name" just the widget's own placeholder? A control called "Select One Required" or
+  //: "Drop files here" has told us what KIND of widget it is and nothing about what it asks — and a
+  //: name that identifies nothing is worse than no name, because it looks like an identity and
+  //: collides with every sibling that shares it. Exported so the census and the resolver agree on
+  //: which names are worthless.
+  const __isBoilerplate = (s) => {
+    const t = (s || '').trim();
+    if (!t || t === '(unlabeled)') return true;
+    return /^(select one|please select|choose one|select\.\.\.|select…|select an option|--? ?select|drop files here|select files?|browse|choose file)\b/i
+             .test(t.replace(/\s*required\s*$/i, '').trim());
   };
 
   //: Do these two names refer to the same question? Compared the way a person would: ignore the

@@ -434,7 +434,23 @@ SCAN_REQUIRED_JS = r"""
     // and judge how much to trust the match. Required or not is a separate axis entirely — an
     // optional control filled with the wrong answer is the same error as a required one.
     const q = __questionOf(el);
-    const row = {field: label.slice(0, 90), selector: __idSel(el) || __cssPath(el),
+    // A NAME THAT IS THE WIDGET'S PLACEHOLDER IDENTIFIES NOTHING. Workday names every option
+    // dropdown "Select One Required", so three distinct required questions filed as three rows
+    // called " Select One Required" — indistinguishable, and therefore unaddressable and
+    // unanswerable (live 2026-08-12). Same rule as the uploader's "Drop files here": when our label
+    // chain lands on boilerplate, the question is what the FIELD asks, which __questionOf reads.
+    //
+    // AND A NAME THAT IS THE CONTROL'S OWN ANSWER IS NOT A QUESTION EITHER. An option opener's
+    // accessible name becomes the chosen value once it is answered, so the three questions above
+    // filed as "No Required", "Yes Required", "No Required" the moment they were answered — leaving
+    // the ANSWERED census unable to say which question got which answer, which is exactly what the
+    // operator reads at the Submit gate. Name == value is the tell, and it is self-evidently not an
+    // identity: no page labels a field with its own contents.
+    const __norm = (s) => (s || '').toLowerCase().replace(/\s*required\s*$/i, '')
+                                   .replace(/[^a-z0-9]+/g, ' ').trim();
+    const nameIsValue = !!truth.preview && __norm(label) === __norm(truth.preview);
+    const named = ((__isBoilerplate(label) || nameIsValue) && q.question) ? q.question : label;
+    const row = {field: named.slice(0, 90), selector: __idSel(el) || __cssPath(el),
                  within: (q.section || '').slice(0, 90), question_source: q.source,
                  kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
                  required_via: via, value_read_at: truth.read_at,

@@ -2947,6 +2947,19 @@ async def scan_required(body: ScanRequiredRequest):
         r = await cdp.send("Runtime.evaluate", {"expression": f"({SCAN_REQUIRED_JS})()",
                                                 "returnByValue": True})
     out = (r.get("result") or {}).get("value") or {}
+    # A SCAN THAT DID NOT RUN IS NOT A CLEAN FORM. A page-side exception anywhere in the census
+    # (today: an assignment to a `const` label) returns an empty value, which every field below
+    # reads as zero unanswered — so a crashed scan announced "all required fields answered" over a
+    # screen with six required questions, and the invariant gate would have believed it (2026-08-12).
+    # `url` is the census's proof of life: it is set on every completed scan and cannot be faked by
+    # an empty object.
+    if not out.get("url"):
+        return {"outcome": Outcome.ERROR, "unanswered": [], "count": 0, "answered": [],
+                "optional": [], "page_errors": [],
+                "detail": "the census did not complete — no scan result came back from the page, so "
+                          "NOTHING is known about this form (this is not 'no required fields'). "
+                          "Check the capture server log for a page-side exception.",
+                "steps": [{"step": "scan", "completed": False}]}
     unanswered = out.get("unanswered") or []
     # The satisfied rows ride along so a cockpit can show the form AS IT STANDS — an answered
     # field is not a done field when the answer is wrong (the near-self-withdrawal of
