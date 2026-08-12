@@ -43,7 +43,11 @@ DESCRIBE_WIDGET_JS = r"""
   __WIDGET_TELLS__
   const vis = __vis, txt = __txt, attr = __attr;
 
-  const el = document.querySelector(cfg.selector);
+  // FRAME-AWARE TARGET LOOKUP. A page is not its top document: iCIMS renders its whole apply flow
+  // inside `icims_content_iframe`, and every layer here had to learn this separately — the act-time
+  // resolver, the census, the captcha rail, the native-select protocol, and now the classifier and
+  // the popup protocols. `__findAll` is the one definition (app/js_common.py).
+  const el = __findAll(cfg.selector)[0] || null;
   if (!el) return {found: false, detail: 'no node matching ' + cfg.selector};
 
   // The field's WRAPPER — react-select and Workday both render the real control as a

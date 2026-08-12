@@ -33,7 +33,12 @@ from app.js_common import WIDGET_TELLS_JS
 # dead. focus() THEN click().
 _FOCUS_AND_OPEN_JS = r"""
 (sel) => {
-  const el = document.querySelector(sel);
+  __WIDGET_TELLS__
+  // FRAME-AWARE TARGET LOOKUP. A page is not its top document: iCIMS renders its whole apply flow
+  // inside `icims_content_iframe`, and every layer here had to learn this separately — the act-time
+  // resolver, the census, the captcha rail, the native-select protocol, and now the classifier and
+  // the popup protocols. `__findAll` is the one definition (app/js_common.py).
+  const el = __findAll(sel)[0] || null;
   if (!el) return {ok: false, detail: 'no node matching ' + sel};
   el.scrollIntoView({block: 'center'});
   el.focus();
@@ -68,7 +73,8 @@ def _read_single_value_js(selector: str) -> str:
     s = json.dumps(selector)
     return (
         "(() => {"
-        f"  const el = document.querySelector({s});"
+        "  " + WIDGET_TELLS_JS +
+        f"  const el = __findAll({s})[0] || null;"
         "   if (!el) return null;"
         "   const wrap = el.closest('[class*=select__control], .select, [class*=field], div');"
         "   const sv = wrap && wrap.querySelector('[class*=singleValue]');"
@@ -204,7 +210,11 @@ CHECK_GROUP_JS = r"""
   const txt = e => ((e && (e.innerText || e.textContent)) || '').replace(/\s+/g, ' ').trim();
   const label = c => txt(c.closest('label')) || c.getAttribute('aria-label') || c.value || '';
 
-  const anchor = document.querySelector(cfg.selector);
+  // FRAME-AWARE TARGET LOOKUP. A page is not its top document: iCIMS renders its whole apply flow
+  // inside `icims_content_iframe`, and every layer here had to learn this separately — the act-time
+  // resolver, the census, the captcha rail, the native-select protocol, and now the classifier and
+  // the popup protocols. `__findAll` is the one definition (app/js_common.py).
+  const anchor = __findAll(cfg.selector)[0] || null;
   if (!anchor) return {ok: false, code: 'not_found', detail: 'no node matching ' + cfg.selector};
   const wrap = anchor.closest('fieldset, [role=group], [class*=field], li, div') || anchor.parentElement;
   const boxes = [...wrap.querySelectorAll('input[type=checkbox]')].filter(vis);
@@ -813,3 +823,9 @@ SCAN_REQUIRED_JS = r"""
 # doubled.
 SCAN_REQUIRED_JS = SCAN_REQUIRED_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
 assert "__WIDGET_TELLS__" not in SCAN_REQUIRED_JS, "the tells placeholder did not substitute"
+
+# The shared tells go into every blob that resolves a TARGET, so `__findAll` reaches frames from all
+# of them. One placeholder per blob, asserted — an unsubstituted blob is a page-side SyntaxError that
+# surfaces as "no node matching", i.e. as a stale recipe.
+_FOCUS_AND_OPEN_JS = _FOCUS_AND_OPEN_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
+assert "__WIDGET_TELLS__" not in _FOCUS_AND_OPEN_JS

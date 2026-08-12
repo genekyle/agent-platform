@@ -431,6 +431,7 @@ _SCAN_EVERY_DOCUMENT_JS = _SCAN_EVERY_DOCUMENT_JS.replace("__SCAN_REQUIRED__", S
 assert "__SCAN_REQUIRED__" not in _SCAN_EVERY_DOCUMENT_JS, "the census placeholder did not substitute"
 
 
+
 @app.post("/execute")
 @journaled(lambda body: intent_for_action(body.action_id))
 async def execute_action(body: ExecuteRequest):
@@ -2446,6 +2447,7 @@ class SetDistanceRequest(BaseModel):
 # confirm every step.
 _POPUP_SELECT_JS = r"""
 (async (cfg) => {
+  __WIDGET_TELLS__
   const log = [];
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const until = async (fn, tries = 25, ms = 200) => {
@@ -2454,8 +2456,14 @@ _POPUP_SELECT_JS = r"""
   };
   const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
 
-  const opener = document.querySelector(cfg.opener_selector);
+  // FRAME-AWARE. iCIMS fronts each hidden native select with an `<a role=combobox>` INSIDE
+  // `icims_content_iframe`, so a top-document lookup answered "no opener matching
+  // #rcf2043_icimsDropdown" for a control on screen (live 2026-08-12). Sixth layer to learn that a
+  // page is not its top document; `__findAll` is the one definition.
+  const opener = __findAll(cfg.opener_selector)[0] || null;
   if (!opener) return {ok: false, log, detail: `no opener matching ${cfg.opener_selector}`};
+  // The popup and its options live in the OPENER'S document, not necessarily the top one.
+  const doc = opener.ownerDocument || document;
 
   // SCOPE: the widget tells us which popup it owns via aria-controls/aria-owns. Without this we
   // search options document-wide and can click ANOTHER widget's identically-named option (a Workday
@@ -2463,8 +2471,10 @@ _POPUP_SELECT_JS = r"""
   // widget declares no relationship (Indeed's distance pill doesn't).
   const scope = () => {
     const ref = opener.getAttribute('aria-controls') || opener.getAttribute('aria-owns');
-    const el = ref ? document.getElementById(ref) : null;
-    return el || document;
+    const el = ref ? doc.getElementById(ref) : null;
+    // Falling back to the OPENER'S document, not the top one: an undeclared popup renders beside
+    // its widget, and for a framed form that is inside the frame.
+    return el || doc;
   };
   const OPTS = () => [...scope().querySelectorAll(cfg.option_selector)].filter(visible);
 
@@ -2551,7 +2561,7 @@ _POPUP_SELECT_JS = r"""
   if (!staged) return {ok: false, log, detail: 'option would not stage (no aria-selected, opener label unchanged)'};
 
   // COMMIT — the popup's own footer button. Absent = applies on select (the Workday case).
-  const commit = cfg.commit_names.length ? [...document.querySelectorAll('button')]
+  const commit = cfg.commit_names.length ? [...doc.querySelectorAll('button')]
     .find(b => cfg.commit_names.some(n => new RegExp(`^${n}$`, 'i').test((b.innerText || '').trim()))) : null;
   if (!commit) { log.push({step: 'commit', found: false, note: 'no footer button — applies on select'});
                  return {ok: true, log, detail: 'selected (applies on select)'}; }
@@ -2633,10 +2643,14 @@ class WidgetSelectRequest(BaseModel):
 #     now. No navigation, so the same evaluation can confirm.
 _NATIVE_SELECT_JS = r"""
 ((cfg) => {
+  __WIDGET_TELLS__
   // PREFER THE MATCH THAT IS A SELECT. Cornerstone puts the SAME id on the label and its
   // control (invalid HTML, shipped anyway), so querySelector returns the LABEL. All matches
   // are consulted, a label's own .control is followed, and only then do we give up.
-  const matches = [...document.querySelectorAll(cfg.selector)];
+  //
+  // Searched across FRAMES: iCIMS's whole form lives in one, and a top-document query answered
+  // `not_found` for eight dropdowns that were on screen (live 2026-08-12).
+  const matches = __findAll(cfg.selector);
   if (!matches.length) return {ok: false, detail: `no node matching ${cfg.selector}`};
   let el = matches.find(m => m.tagName === 'SELECT') || matches[0];
   if (el.tagName === 'LABEL' && el.control && el.control.tagName === 'SELECT') el = el.control;
@@ -2654,7 +2668,11 @@ _NATIVE_SELECT_JS = r"""
   }
   if (idx < 0) return {ok: false, options, detail: `no option matching ${cfg.value}`};
   el.focus();
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+  // THE ELEMENT'S OWN REALM. A select inside a frame is built from THAT frame's constructors, so
+  // the top window's HTMLSelectElement setter is not on its prototype chain and calling it throws
+  // "Illegal invocation". Reach for the setter through the node's own view.
+  const view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+  const setter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value').set;
   setter.call(el, el.options[idx].value);
   el.dispatchEvent(new Event('input', {bubbles: true}));
   el.dispatchEvent(new Event('change', {bubbles: true}));
@@ -2663,6 +2681,14 @@ _NATIVE_SELECT_JS = r"""
           detail: now === options[idx] ? `selected ${now}` : `set did not hold (reads ${now})`};
 })
 """
+
+# The shared tells, injected AFTER the blob is defined — __findAll (frame-aware matching) is the
+# one this protocol needs.
+_NATIVE_SELECT_JS = _NATIVE_SELECT_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
+assert "__WIDGET_TELLS__" not in _NATIVE_SELECT_JS, "the tells placeholder did not substitute"
+
+_POPUP_SELECT_JS = _POPUP_SELECT_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
+assert "__WIDGET_TELLS__" not in _POPUP_SELECT_JS, "the tells placeholder did not substitute"
 
 
 @app.post("/widget_select")

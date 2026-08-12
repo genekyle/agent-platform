@@ -45,6 +45,30 @@ WIDGET_TELLS_JS = r"""
   const __txt = (n) => ((n && (n.innerText || n.textContent)) || '').replace(/\s+/g, ' ').trim();
   const __attr = (n, a) => (n && n.getAttribute ? n.getAttribute(a) : null);
 
+  // EVERY MATCH FOR A SELECTOR, ACROSS THE TOP DOCUMENT AND EVERY SAME-ORIGIN FRAME.
+  //
+  // The one definition, because this keeps being rediscovered per layer: the act-time resolver
+  // learned to descend frames, then the census, then the captcha rail — and each tier-2 protocol
+  // still queried the top document alone, so `/select_option` answered `not_found` for eight
+  // dropdowns that were on screen and already filled by their neighbours (live 2026-08-12, iCIMS).
+  // A page is not its top document.
+  //
+  // Cross-origin frames throw on contentDocument and are skipped: a real boundary, not an obstacle.
+  const __findAll = (sel, root) => {
+    const out = [];
+    const walk = (d, depth) => {
+      if (!d || depth > 2) return;
+      try { for (const el of d.querySelectorAll(sel)) out.push(el); } catch (e) { return; }
+      for (const f of d.querySelectorAll('iframe')) {
+        let inner = null;
+        try { inner = f.contentDocument; } catch (e) { inner = null; }
+        if (inner) walk(inner, depth + 1);
+      }
+    };
+    walk(root || document, 0);
+    return out;
+  };
+
   // A control a HUMAN could actually fill: on screen AND keyboard-reachable.
   //
   // `tabIndex === -1` is the tell, and it is doing real work: Greenhouse's react-select
@@ -257,7 +281,7 @@ WIDGET_TELLS_JS = r"""
   const __isBoilerplate = (s) => {
     const t = (s || '').trim();
     if (!t || t === '(unlabeled)') return true;
-    return /^(select one|please select|choose one|select\.\.\.|select…|select an option|--? ?select|drop files here|select files?|browse|choose file)\b/i
+    return /^(select one|please select|choose one|select\.\.\.|select…|select an option|--? ?select|make a selection|drop files here|select files?|browse|choose file)\b/i
              .test(t.replace(/\s*required\s*$/i, '').trim());
   };
 
@@ -300,9 +324,19 @@ WIDGET_TELLS_JS = r"""
       const t = sv ? __txt(sv) : (multi && multi.length ? __txt(ctl) : '');
       return {read_at: '[class*=singleValue]', answered: !!t, preview: t.slice(0, 40)};
     }
-    if (el.tagName === 'SELECT')
-      return {read_at: '.value', answered: el.selectedIndex > 0 && el.value !== '',
-              preview: (el.value || '').slice(0, 40)};
+    // A SELECT'S ANSWER IS ITS SELECTED OPTION'S WORDS, NOT ITS INDEX. `selectedIndex > 0` assumes
+    // option 0 is always a placeholder, and on iCIMS it is routinely the real answer: the currency
+    // dropdowns open on "USD $" at index 0 (value 11990) and Country has exactly ONE option,
+    // "United States". Both read as UNANSWERED and became false blockers on a complete form, while
+    // a select genuinely sitting on "— Make a Selection —" read as ANSWERED because its value was
+    // non-empty (live 2026-08-12). Asking the option what it says settles both directions at once.
+    if (el.tagName === 'SELECT') {
+      const t = (el.selectedOptions && el.selectedOptions[0] ? el.selectedOptions[0].text : '').trim();
+      const placeholder = !t || __isBoilerplate(t) || /^[—–-]{1,2}\s*.*\s*[—–-]{1,2}$/.test(t);
+      return {read_at: 'selected_option_text',
+              answered: !placeholder && (el.value || '') !== '',
+              preview: t.slice(0, 40)};
+    }
     // WORKDAY'S MULTISELECT — the third shape of the `.value` lie, same family as react-select.
     // The node the scan holds is a SEARCH box inside `multiselectInputContainer`; the answer is
     // the selected-item pill beside it, and the container's own aria-label states it outright
