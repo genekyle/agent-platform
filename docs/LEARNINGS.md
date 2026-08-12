@@ -6253,3 +6253,37 @@ Pricing Ops — the last lands on SuccessFactors, scripted). The cornerstone cor
 labeled form capture + every teach row; the WindowStrip/claims cleanup ran on the confirmation.
 The generic cadence's next test is a DIFFERENT unmapped ATS arriving cold — and LinkedIn's
 hand-offs land on these same platforms, which is the point.
+
+## 2026-08-11 (late) — Interaction dialects: the first widget teaches the rest
+
+Operator, on the Cornerstone drive's cost: *"once we honed in the best way to interact with the
+page, it then becomes that 'way' throughout the rest of the interaction … narrow down the
+interaction and 'classify' it by giving different options … without having to act like each
+action is truly novel."* Built as `apps/mcp/app/dialect.py` + the `/select_option` cycle:
+
+* **(platform, widget family) → the protocol that VERIFIED there** — learned on first success,
+  offered first ever after, displaced on the record when a different protocol wins. GET
+  /dialects shows what each site speaks.
+* **The cycle**: learned dialect → classifier's verdict → remaining candidates cheapest-first,
+  with structurally-impossible protocols dropped by the node's raw tag (a <select> can never be
+  a react-select). Every attempt verifies at the widget's own truth; only NON-ENGAGEMENT cycles
+  (not_opened/not_found/error) — a protocol that engaged and half-acted stops loud, because a
+  second protocol on a half-staged widget risks acting twice on a real application.
+* The old "unknown → refuse to guess" rule is SUPERSEDED by the cycle and its test rewritten to
+  keep the spirit: no unverified claims, every attempt reported in `tried`.
+* Caught the day it was born: a test's verified win leaked into the LIVE dialect store (4
+  phantom greenhouse wins) — MCP tests now isolate MCP_OUTPUT_DIR. And the harness cwd resets
+  between bash calls: a `cat >>` intended for a test file minted a stray at the worktree root.
+
+**And the hand-off verifier met its own limit within minutes**: the registry-derived hosts_hint
+demoted a correct Apply on `careers.solutionhealth.org` — an employer's own domain, which no
+registry will ever list. The prediction's real content is LEAVING THE ENGINE; any non-engine
+landing confirms and classify names it. Fixed + pinned both directions.
+
+**Live state at close**: the SolutionHealth pick classified through its branded front to
+**Workday** (the apply-href tell), identity confirmed by the page's own words (JR11587 renders
+the Indeed title; the URL slug "Data-Analyst-III" is Workday's internal req name — the near-miss
+guard asked and the page answered). The application stands at `workday_job_posting`, "at most 9
+from Submit" on the SCRIPTED spine — the generic cadence handed over to the recipe exactly as
+designed. Next chapter: the Workday account leg (measured auth=account; credentials generated,
+gates = captcha/email-code) → form → gate. 3/7 submitted, 4 open.
