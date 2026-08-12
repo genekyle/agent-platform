@@ -6156,3 +6156,100 @@ overwritten to "No" when the gate flipped — watch these on review).
 Analyst, Sig Sauer BA, Teradyne Pricing Ops) run this exact cadence — several will exit Indeed
 (the ATS taxonomy's ground); the WindowStrip and claims were built for precisely those. TeacherParks
 remains built-but-unexercised (no controller-run park has opened yet).
+
+## 2026-08-11 (evening) — The generic ATS cadence: Cornerstone went land-to-submitted on a spine nobody scripted, and the layer met plain HTML for the first time
+
+The operator's refocus, verbatim thesis: *"when you step through a lot of these unknown
+third-party applications it's generally the same steps … a fuzzy path that may diverge but the
+cadence is still somewhat the same"* — and generalization/shareability named as **the most
+important property of the system** (LinkedIn is the next engine; the ATS side must carry over
+unchanged). This session made that executable and then proved it live: **Boston College's
+Cornerstone (bc.csod.com) — a platform with no registry row, no recipe, no drive history — went
+posting → guest form → census → fill/teach → review gate → SUBMITTED through the cockpit's own
+seams**, confirmed by the platform's thank-you page, recorded, tabs tidied. 3/7 picks submitted.
+
+**The cadence is apply_landing's KIND axis, promoted.** States were already `<platform>_<kind>`;
+the missing piece was a GENERIC_ATS_SPINE keyed by kind (posting → account_gate → form → review →
+confirmation) that `tail_rung_for`/`flow_progress`/`advance_action`/`expected_after`/
+`describe_for_ats` fall back to for any off-engine registry platform without a scripted flow.
+The platform prefix keeps training provenance; the SHAPE is shared — a screen Cornerstone
+teaches, Ashby already knows. A platform graduates out of the generic path the day its recipe
+lands in `_FLOW_ORDERS`. Fuzziness is declared, never hidden: `via: "generic_ats"` travels on
+every readout, expect-lists are wide on purpose, and every generic advance still runs the same
+rails (census guard, negation/exit lexicon, StepRunner verify, operator-only Submit).
+
+**Three drifted host lists, one day.** The window's tab roles, the StepRunner's `hosts_hint`, and
+the registry had each grown a private copy of "which hosts are an application" — nine mapped
+platforms rendered as nameless `unknown` tabs, and a CORRECT enter_apply was demoted to mismatch
+by a six-host prediction ("something moved, but not to an application host: https://bc.csod.com").
+A stale prediction does not abstain, it CONTRADICTS — and a mismatch hard-stops the irreversible
+rungs, so the stale list would have blocked Submit too. One authority now
+(`ats_registry.off_engine_apply_hosts()`), with anti-drift tests that sweep every registry row.
+
+**Reconcile could not end the stall it exists to end.** The ladder counts a rung walked by its
+LATEST verdict; `reconcile_step` counted any-OK-ever — so a rung recorded ok then demoted read as
+"already proven" and reconcile reported "nothing new" while the ladder re-offered the same rung
+forever. One question, one answer: `settled_rungs()` is public and both ask it. And the recovery
+got its cockpit press — **"Catch up to the window"** — offered only when an apply tab is open
+(an affordance that can only refuse is a lie-shaped one).
+
+**Predictions do not preempt measurements — the account wall edition.** Naming an ATS whose
+registry row said `auth: "account"` flipped the whole surface to "Create Account automatically"
+while the ladder stood on `classify` and the page's own Apply had never been pressed. Wall-before-
+apply is a Workday/SAP shape, not a law: Cornerstone measured NO wall (straight to a guest form),
+which is exactly why its row now says `auth: "unknown"` — the rung engages when the registry
+holds a MEASURED "account" or the wall is SEEN (`*_account_gate` on screen). Same class of bug,
+same day, in the orient: with no rung to check, the premise DEFAULTED to "submit" and
+manufactured the false mismatch its own comment warns about. No rung means no premise.
+
+**The plain-HTML humiliation (the widget layer's first vanilla site).** Everything the
+interaction layer learned first was React-shaped, and Cornerstone is bare HTML:
+* A native `<select>`'s dropdown is drawn by the OS — every popup-protocol signal is
+  unfalsifiable. New native protocol: prototype-setter + input/change + read the selection back.
+  (And csod ships DUPLICATE ids on label and control — prefer the match that IS a select.)
+* `/autofill_form` had `tab_url="smartapply"` baked in and IGNORED `tab_id` — every non-Indeed
+  form was unreachable by the one mechanism that drives native radios. Third Indeed-ism found in
+  that single path in one day (container classes `.ia-Questions-item` was the second; the affirm
+  regex missing "I agree" the third-and-a-half).
+* The vendor-neutral radio fallback is the PLATFORM's own structure: group by `name=`, label from
+  `label[for]`/`.labels`, question = nearest ancestor whose text says more than the options.
+* **The spray-match**: token-overlap floor of 2 let one probe answer ("authorized to work…Yes")
+  also click YES on the SPONSORSHIP question ({work, us} = 2 tokens). With a single answer there
+  is no best-match competition — the floor has to do the work. Now 3; the wrong Yes was corrected
+  through the teach seam with both sides journaled.
+* **Ethni-CITY**: the fill matcher's bare-substring table mapped "Ethnicity" → "city" → the
+  operator's home town, planned into a federal EEO dropdown and caught in the PREVIEW (the
+  execute=false plan is not a formality). Word boundaries everywhere; EEO selects route through
+  teach with explicit declines, never the address book.
+* **Anonymous inputs**: csod's whole contact block has no id/name/label/aria/placeholder. The
+  census now names such fields by PROXIMITY (nearest preceding short text — proximity BEFORE the
+  wrap heuristic, nearest wins) and mints structural css paths so the teach seam and the fill can
+  act on what the AX tree cannot even see. Optional-but-visible controls file under a census
+  `optional` key for ADDRESSING only — requiredness gates the submit, not the reach.
+* The site's resume parse WIPED fields we had filled (address, phone) and invented a Major
+  ("Education" — the section heading). The census caught the wipe, the operator supplied the
+  truth ("Science", the resume's own word). An extractor's output is a CLAIM like any autofill's.
+
+**Single-page forms have no review screen, and the gate must still arrive.** The generic cadence
+put Submit at `<platform>_review`; Cornerstone's whole application is one form with Submit at the
+bottom. A complete census + the page's own submit control IS the review moment: the crank flips
+the state to `<platform>_review` and the operator-only consequential gate renders — one state
+change, every surface follows. Two more gate lessons the same hour: `submit_control` matched the
+longest NAME with no role check and pressed the "Submit Application" SECTION HEADING (pressable
+roles only now), and the crank re-chooses a generic-cadence rung from a FRESH look every press —
+a stale landing_state was offering "press Apply" deep inside the form. The scripted flows keep
+their cheaper path; the fuzzy cadence's premise is that the page decides.
+
+*Also fixed on the way in:* servers were serving the PREVIOUS session's worktree (moved, with
+`ASSETS_DIR` joining the env-relocatable roots — the resume lives in main's assets, invisible
+from a worktree without it); origin/main was 10 commits behind local (the "why do I still see
+notifications" mystery — merged ≠ pushed; pushed now); and `_read_apply_page` fed its classifier
+AX names alone because `/ax_scan` has no page_text — the crank's own fresh look could not see the
+page it was standing on, while the classify rung one branch over read `/page_content` rich.
+Two looks at one page must read the same page.
+
+*Owed:* four picks remain (EPIC Report Writer, Data Business Analyst, Sig Sauer BA, Teradyne
+Pricing Ops — the last lands on SuccessFactors, scripted). The cornerstone corpus now holds the
+labeled form capture + every teach row; the WindowStrip/claims cleanup ran on the confirmation.
+The generic cadence's next test is a DIFFERENT unmapped ATS arriving cold — and LinkedIn's
+hand-offs land on these same platforms, which is the point.
