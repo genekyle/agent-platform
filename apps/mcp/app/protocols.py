@@ -349,8 +349,17 @@ SCAN_REQUIRED_JS = r"""
   // __isUserField, not __vis: a required control the user cannot TAB to is a validation
   // proxy, not a question. react-select mounts exactly such a proxy (opacity:0, tabIndex=-1)
   // which a rect-based visibility check happily reports as a phantom required field.
+  // `[aria-haspopup=listbox]` catches the OPTION WIDGET THAT IS A BARE BUTTON. Workday renders
+  // its State and Degree pickers as <button> with no role, no automation-id and no
+  // aria-required — invisible to every clause above, so the census read a form COMPLETE while
+  // the page refused Continue over it (live 2026-08-11). aria-haspopup is the ARIA contract for
+  // "this control opens a popup", which is precisely what an option widget is; it is the
+  // vendor-neutral tell, not a Workday special case. Requiredness is then read the usual way —
+  // and Workday states it in the accessible name ("Degree Select One Required"), which the
+  // label-asterisk rule below is widened to accept.
   const singles = [...document.querySelectorAll(
-    'input:not([type=checkbox]):not([type=radio]):not([type=hidden]), select, textarea, [role=combobox]'
+    'input:not([type=checkbox]):not([type=radio]):not([type=hidden]), select, textarea, ' +
+    '[role=combobox], [aria-haspopup=listbox]'
   )].filter(__isUserField);
 
   const out = [];
@@ -384,6 +393,10 @@ SCAN_REQUIRED_JS = r"""
     else if (el.required) { required = true; via = 'required-attr'; }
     else if (attr(el, 'aria-required') === 'true') { required = true; via = 'aria-required'; }
     else if (/\*/.test(label)) { required = true; via = 'label-asterisk'; }
+    // Some widgets state requiredness in WORDS rather than a star, in the accessible name the
+    // screen reader would announce: Workday's "Degree Select One Required". Anchored to the end
+    // so a field merely ABOUT requirements ("Required certifications") is not swept in.
+    else if (/\brequired\s*$/i.test(label)) { required = true; via = 'label-required'; }
     if (!required) {
       if (via !== 'disabled' && label && label !== '(unlabeled)' && optional.length < 40) {
         const t0 = __valueTruth(el);

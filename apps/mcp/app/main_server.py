@@ -278,10 +278,16 @@ async def execute_action(body: ExecuteRequest):
     _tgt = body.target_name or body.selector or (f"node {node_id}" if node_id else "")
     _log_event("drive", f"{body.action_id} {_tgt}".strip()[:90],
                detail=(f"{'ok' if result.ok else 'FAIL'} · {body.tab_url or ''}"), domain=body.tab_url)
+    # An upload that the NODE did not accept is `not_staged`, not ok. The driver confirms from
+    # `files.length` and says so in its mode; collapsing that into OK is how a required upload
+    # read as done over a page still demanding the file (live 2026-08-11, Workday).
+    _mode = str(result.action_id or "")
+    _upload_failed = _mode.startswith("upload:not_staged")
     return {
         # A driver ok=False got here by catching an exception (driver.py:245), so it is a
         # mechanism failure — ERROR, not a protocol outcome.
-        "outcome": Outcome.OK if result.ok else Outcome.ERROR,
+        "outcome": (Outcome.NOT_STAGED if _upload_failed
+                    else Outcome.OK if result.ok else Outcome.ERROR),
         "addressed_by": addressed_by, "target": _tgt or None,
         "actions": [result.action_id],
         # record_only returns ok=True while executing nothing (record_only.py:54). Without

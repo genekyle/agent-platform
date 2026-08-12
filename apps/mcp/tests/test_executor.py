@@ -113,6 +113,11 @@ def test_element_act_upload_sets_files():
             sent.append((method, params or {}))
             if method == "DOM.resolveNode":
                 return {"object": {"objectId": "obj-1"}}
+            # The post-set confirmation reads files.length off the node — the upload is only
+            # `ok` when the input actually holds the files (Workday accepted the command and
+            # kept an empty FileList, 2026-08-11).
+            if method == "Runtime.callFunctionOn":
+                return {"result": {"value": 2}}
             return {"result": {"value": {}}}
 
     req = ActionRequest(action_id="upload", target_bbox={}, backend_node_id=42,
@@ -200,3 +205,23 @@ def test_a_dropdown_that_cannot_find_its_option_says_so_rather_than_setting_noth
     got = _run_native_select(["Canada", "Mexico"], "United States")
     assert got["verdict"] == "native_notfound"
     assert got["chosen"] is None
+
+
+def test_upload_that_the_node_did_not_accept_is_not_staged():
+    """`DOM.setFileInputFiles` not raising means the COMMAND was accepted, not that the input
+    holds a file: Workday's uploader took the call and left files.length at 0 while /execute
+    reported a clean ok over a page still demanding the upload (live 2026-08-11)."""
+    from app.executor.driver import ActionRequest, DirectDriver
+
+    class FakeCDP:
+        async def send(self, method, params=None):
+            if method == "DOM.resolveNode":
+                return {"object": {"objectId": "obj-1"}}
+            if method == "Runtime.callFunctionOn":
+                return {"result": {"value": 0}}      # the input stayed empty
+            return {"result": {"value": {}}}
+
+    req = ActionRequest(action_id="upload", target_bbox={}, backend_node_id=42,
+                        files=["/abs/a.pdf"])
+    mode = asyncio.run(DirectDriver()._element_act(FakeCDP(), req))
+    assert mode == "upload:not_staged:files=0"

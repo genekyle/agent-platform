@@ -187,10 +187,25 @@ class TrajectoryDriver(ABC):
 
         # UPLOAD: set files directly on a <input type=file> node — no click (the OS file dialog a
         # click opens can't be driven over CDP). Paths must be ABSOLUTE and local to this machine.
+        #
+        # CONFIRMED FROM THE NODE, never from the dispatch. `DOM.setFileInputFiles` returning
+        # without raising means the COMMAND was accepted, not that the input holds a file: on
+        # Workday's uploader the call succeeded and `files.length` stayed 0 (the input is remounted
+        # by the widget), and /execute reported a clean `ok` over a page still printing "The field
+        # Upload a file is required" (live 2026-08-11). Same rule as every other act here — the
+        # element's own state is the verdict. Also fires `change`, because a framework that never
+        # hears the event has not been told, whatever the FileList says.
         if request.action_id == "upload":
             await cdp.send("DOM.setFileInputFiles",
                            {"backendNodeId": request.backend_node_id, "files": list(request.files or [])})
-            return "upload"
+            got = await cdp.send("Runtime.callFunctionOn", {
+                "objectId": object_id, "returnByValue": True,
+                "functionDeclaration": "function(){ if(this.files && this.files.length){"
+                                       " this.dispatchEvent(new Event('input',{bubbles:true}));"
+                                       " this.dispatchEvent(new Event('change',{bubbles:true})); }"
+                                       " return this.files ? this.files.length : -1; }"})
+            n = (got.get("result") or {}).get("value")
+            return "upload" if n and n > 0 else f"upload:not_staged:files={n}"
 
         # Scroll into view + measure the node's own centre (CSS px). A fresh per-node measurement is
         # more accurate than any pre-recorded bbox, so the human motion lands on the real element.
