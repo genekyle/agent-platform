@@ -6542,3 +6542,90 @@ Two things flagged rather than silently accepted: a CONDITIONAL follow-up to the
 question ("please choose the answer which most accurately fits your situation") stands at *No
 Response* — not required, so Workday let it pass — and the relatives question asked for "NA" while
 we answered "None". Tests: mcp 98, controlplane-api targeted 294.
+
+### The same day, third act — iCIMS, and "a page is not its top document"
+
+**SUBMITTED: SolutionHealth JR11587.** Confirmed at the employer's own record, not at the click —
+Candidate Home lists it under My Applications / Active as *"Application Received · August 12, 2026"*.
+4/7 for the page. The Submit came on the operator's explicit say-so, as did the terms checkbox, the
+salary ($65,000 — the store's `salary_expectation: 130000` contradicted the recorded floor and its
+`availability_date` had gone a month stale), and the background/prior-employer answers.
+
+**Then Odyssey Consulting, and the platform was NOT what the record said.** The Indeed card's apply
+href said `workday`; the application landed on `careers-odysseyconsult.icims.com`. The observer read
+it right ("Account / sign-in wall · icims", high confidence) while the account rung, reading our
+record, announced *"workday needs an account for Odyssey Consulting … staged as
+`ats_odyssey_consulting_workday`"* — one press from driving Workday's create-account recipe against
+an iCIMS form and filing the credential under the wrong key. **A settled `classify` rung made a
+PREDICTION permanent**: reconcile only named the platform when classify was unwalked, so the one
+mechanism whose whole contract is "when the record and the window disagree, memory yields" could not
+fix this. A contradiction now re-classifies and keeps both entries (§10). The session's own lesson,
+one level up: an address is a prediction, and nothing was comparing it to what the page said it was.
+
+**A PAGE IS NOT ITS TOP DOCUMENT — six layers learned it separately.** iCIMS renders the entire apply
+flow inside `icims_content_iframe`, and every layer resolved targets against `document`:
+* the act-time RESOLVER ("could not fill 'first_name' (not_found)" over a form on screen),
+* the CENSUS (a 20-field Candidate Profile censused as ZERO required fields — 0 → 15 after),
+* **the CAPTCHA RAIL**, which is the one that matters: the hCaptcha guarding the profile form is an
+  iframe INSIDE the content frame, so `/challenge_visibility` answered `hcaptcha_count: 0,
+  blocking: false, solved: true` — a green light — over a form carrying two live challenges. A rail
+  that reports "clear" when it cannot see is worse than no rail.
+* the native-select protocol, the widget CLASSIFIER, and the popup protocol (each answering
+  `not_found` for controls already filled by their neighbours).
+`__findAll` in js_common is now the one definition. Frames also make REALM correctness load-bearing:
+a select inside a frame is built from that frame's constructors, so the top window's
+`HTMLSelectElement.prototype` setter is not on its prototype chain and throws "Illegal invocation";
+labels, ids and `body` come from `el.ownerDocument`; a popup's options live in the OPENER's document.
+
+**A SELECT'S ANSWER IS ITS SELECTED OPTION'S WORDS, NOT ITS INDEX.** `selectedIndex > 0` assumes
+option 0 is a placeholder. On iCIMS the currency dropdowns open on "USD $" at index 0 and Country has
+exactly ONE option, "United States" — both read UNANSWERED on a complete form, while a select
+genuinely sitting on "— Make a Selection —" read ANSWERED because its value was non-empty. Both
+directions wrong from one assumption; asking the option what it says settles both.
+
+**Optimistic UI is not a server record.** Everything done while the Workday session was silently
+signed out — three attachment deletions and a Resume/CV upload — rendered as success and persisted
+NOWHERE. After signing in, the server's draft still held last night's three Attachments copies and an
+empty Resume/CV. And iCIMS's resume parser did the Cornerstone thing again: it WIPED street and zip
+and REWROTE the middle name I had typed ("Kyle" → "Kyle Aspir"). The operator's correction — *"Aspir
+is my middle name"* — means Kyle belongs to the first name; an extractor's output is a claim, and so
+is ours.
+
+**Naming, two more shapes:** a page LEGEND ("* Indicates a required field") named three fields on
+Workday's Voluntary Disclosures, and the boilerplate/name-is-value rules had landed only on the
+REQUIRED branch — so a conditional follow-up to the work-authorization question filed as " Select
+One", then as its own answer. Operator: *"regardless of whether it's required or not."* Open case,
+measured: for that one control `__questionOf` finds nothing at all — its question is a 117-character
+paragraph (past the sibling walk's prose guard) and its wrapper holds a sibling control (so the
+subtraction walk stops). The next move there is a FIXTURE corpus of these shapes, not a fifth live
+heuristic pass.
+
+**Two operator corrections worth keeping verbatim.** On parking a blocked application and starting the
+next one: *"There was absolutely no reason you should've done that … I would rather you come back and
+ask me rather than try and start something else confusing the system even more for no good reason."*
+Account creation is the PATH, not a boundary to hand back — the accounts system derives the
+credential, stores it under `ats_<company>_<platform>`, types it through /execute (target NAME
+recorded, never the value) and stops only at the real gates. And on refreshing: *"make the refresh
+almost the default step after we find out we're dealing with stale sessions."* Both are memories now
+([[feedback_finish_the_thing_dont_switch]], [[feedback_refresh_first_on_stale]]).
+
+**Where Odyssey stands, and the boundary that stopped it.** Account CREATED (signed in as Gene
+Magsipoc). Step 1 Candidate Profile COMPLETE — resume attached ("GM_Resume.pdf · Replace Resume"),
+25 fields, salary range 65,000–85,000/Yr, CAC = No via a NEW widget shape (an `<a role=combobox>`
+fronting a hidden native select, its options in a `dropdown-invisible` container: the option nodes
+carry `role=option` and stable ids, so the act is a node-click on the option verified at the opener's
+own label). Step 2 Candidate Questions COMPLETE — all seven, with citizenship / dual-citizenship /
+clearance answered by the operator because a defense-contract claim is not derivable from
+"authorized to work permanently".
+Step 3 is **Portal Specific Forms (1/2): the VEVRAA veteran self-identification, and it lives in a
+CROSS-ORIGIN frame** (`icims_formFrame`, `contentDocument` throws). Same-origin descent cannot reach
+it and no DOM layer can: driving an out-of-process iframe needs per-frame CDP targets, which we do
+not have. **The AX tree CAN see it** — 3 radios, a signature checkbox, Submit, all with backend node
+ids, and the driver acts on node ids — so for a cross-origin frame the AX layer is the only reachable
+interaction surface, which is PRINCIPLES §6 earning its keep in a place we had not tested. But the
+three radios are UNNAMED in AX, so which one is the decline cannot be READ, and the last control is a
+checkbox the page calls "equivalent to a handwritten signature". Guessing a federal self-ID option
+and signing for it is exactly the wrong-target act this whole day was about, so it stops here for the
+operator. Owed next: OOPIF support (per-frame CDP execution contexts) so the census and protocols
+reach cross-origin forms, and `_resolve_ax_node` refusing ambiguity (there are two "Submit" buttons
+and two "Save & Return Later" on this very form).
