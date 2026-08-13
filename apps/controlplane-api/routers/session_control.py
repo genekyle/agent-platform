@@ -4372,6 +4372,27 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
                     initiator=body.initiator)
         added.append(f"classify:{was}->{disc.platform}")
 
+    # THE SCREEN MOVES MORE OFTEN THAN THE PLATFORM, and only the platform was being reconciled.
+    # An advance re-reads where it landed from the look it took right after acting — which can
+    # finish before the navigation it is verifying, so the state lags one screen behind the world
+    # (live 2026-08-13: Apply opened `cswg.wd1.myworkdayjobs.com/.../apply`, the observer read
+    # `workday application_form` at HIGH confidence, and the step still said
+    # `workday_job_posting`). Reconcile is the operator's remedy for exactly that, and it could
+    # not fix it: the branch above only fires when the PLATFORM contradicts, so on `workday` ->
+    # `workday` the stale screen survived the one control whose contract is "align the record to
+    # the live window". Pressing the rung again would re-click Apply on a page that has none.
+    #
+    # Same guard the advance path uses: a look that read LESS does not overrule one that read more,
+    # so a non-answer never overwrites a named screen.
+    if (disc.state and disc.state != step.landing_state
+            and not disc.state.endswith((al.UNKNOWN, al.UNREADABLE))):
+        was_state = step.landing_state
+        step.landing_state = disc.state
+        step.record("classify", aps.OK,
+                    f"screen moved: recorded as {was_state!r}, the open tab reads {disc.state!r} "
+                    f"({ats_url[:70]}).", initiator=body.initiator)
+        added.append(f"screen:{was_state}->{disc.state}")
+
     bb.world = dict(bb.world or {})
     bb.world["apply_tab"] = next((t for t in (obs.get("tabs") or [])
                                   if t.get("url") == ats_url), {"url": ats_url})

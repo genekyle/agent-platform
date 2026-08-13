@@ -5391,3 +5391,64 @@ def test_parked_without_a_recorded_page_says_unknown_not_gone():
     q = aps.Queue.from_dict(bb.world["apply_queue"])
     q.steps[0].finish("parked:operator", "parked before tab_url existed")
     assert _parked_all(bb, q, ["https://www.indeed.com/jobs"])[0]["tab_open"] is None
+
+
+def test_reconcile_aligns_a_screen_that_moved_under_the_same_platform(monkeypatch):
+    """The screen moves more often than the platform, and only the platform was reconciled.
+
+    An advance re-reads where it landed from the look taken right after acting, which can finish
+    before the navigation it verifies — so the state lags one screen (live 2026-08-13: Apply opened
+    the Workday tenant, the observer read `workday application_form` at high confidence, the step
+    still said `workday_job_posting`). Reconcile is the remedy and could not apply it: its
+    re-classify fires only on a PLATFORM contradiction, so workday -> workday left the stale screen
+    standing, and pressing the rung again would re-click Apply on a page that has none."""
+    bb = _with_queue(("indeed:s1", "Demand Planning Analyst", "C&S Wholesale Grocers"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK, "already walked")
+    q.steps[0].platform = "workday"
+    q.steps[0].landing_state = "workday_job_posting"
+    bb.world["apply_queue"] = q.as_dict()
+
+    tenant = "https://cswg.wd1.myworkdayjobs.com/CS_Careers/job/Keene-NH/Demand-Planning_R-1/apply"
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, tenant),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/page_content": {"ok": True, "text": "Start Your Application Autofill with Resume",
+                           "frames": [], "apply_hrefs": []}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={}).json()
+    finally:
+        _teardown()
+
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "workday", "the platform was never in doubt"
+    assert step.landing_state != "workday_job_posting", "the stale screen must not survive"
+
+
+def test_reconcile_does_not_let_a_non_answer_overwrite_a_named_screen(monkeypatch):
+    """A look that read LESS does not overrule one that read more — the same guard the advance
+    path carries. An unreadable page must not demote a screen classify already named."""
+    bb = _with_queue(("indeed:s2", "Demand Planning Analyst", "C&S Wholesale Grocers"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK, "already walked")
+    q.steps[0].platform = "workday"
+    q.steps[0].landing_state = "workday_my_information"
+    bb.world["apply_queue"] = q.as_dict()
+
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://cswg.wd1.myworkdayjobs.com/CS_Careers/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/page_content": {"ok": True, "text": "", "frames": [], "apply_hrefs": []}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={}).json()
+    finally:
+        _teardown()
+
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.landing_state == "workday_my_information"
