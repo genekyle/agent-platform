@@ -103,15 +103,20 @@ const NOVELTY_TONE = {
   new_platform: "flowstrip--unknown",
 };
 
+// The verdict's own vocabulary, not a guess at it: `applied` / `likely_applied` / `not_applied`
+// (applied_index.STATUS_*). Matching on the POSITIVE values is the point — treating every status
+// that was not the empty string as a hit turned `not_applied`, the answer meaning "nothing on
+// file", into "Possibly applied before" on the very first job of the drive.
 function AppliedNote({ applied }) {
-  if (!applied || !applied.status || applied.status === "none") {
+  const status = applied?.status;
+  if (status !== "applied" && status !== "likely_applied") {
     return <span className="flowstrip__note">Never applied to this one.</span>;
   }
   const when = applied.applied_at ? ` on ${applied.applied_at.slice(0, 10)}` : "";
   const how = applied.matched_on ? ` (${applied.matched_on})` : "";
   return (
-    <span className={applied.status === "applied" ? "flowstrip__note is-stop" : "flowstrip__note is-warn"}>
-      {applied.status === "applied"
+    <span className={status === "applied" ? "flowstrip__note is-stop" : "flowstrip__note is-warn"}>
+      {status === "applied"
         ? <><strong>Already applied</strong>{when}{how}.</>
         : <><strong>Possibly applied before</strong>{how} — {(applied.evidence || []).join("; ")}.</>}
     </span>
