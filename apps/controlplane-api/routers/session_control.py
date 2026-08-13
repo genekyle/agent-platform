@@ -78,6 +78,9 @@ INDEED_HOME = "https://www.indeed.com/"
 ENGINES: list[dict[str, Any]] = [
     {"id": "indeed_jobs", "platform": "indeed", "host": "indeed.com", "results_path": "/jobs",
      "query_param": "q", "page_size": 10, "home": INDEED_HOME, "search_tab": "indeed.com/jobs",
+     # The other two params a RESULTS page carries, so a spent search can be reopened rather than
+     # re-submitted (`_results_url`). Named per engine for the same reason `query_param` is.
+     "location_param": "l", "radius_param": "radius",
      # HOW THE QUERY IS COMMITTED. Indeed has a real Search button; LinkedIn has none and commits on
      # Enter (measured from the operator's own /observe recording, 2026-07-28). `_run_query` used to
      # require a submit CONTROL on every engine, so on LinkedIn it reported "found submit" — it had
@@ -91,6 +94,7 @@ ENGINES: list[dict[str, Any]] = [
     {"id": "linkedin_jobs", "platform": "linkedin", "host": "linkedin.com", "results_path": "/jobs",
      "query_param": "keywords", "page_size": 25, "home": "https://www.linkedin.com/jobs/",
      "search_tab": "linkedin.com/jobs", "label": "LinkedIn",
+     "location_param": "location", "radius_param": "distance",
      # No submit button exists on the jobs home; Enter on the query box is the commit.
      "commit": "enter",
      "distance_filter": False,
@@ -289,6 +293,32 @@ def _find_search_tab(tabs: list[dict], query: str) -> Optional[dict]:
         if " ".join(got.replace("+", " ").lower().split()) == want:
             return t
     return None
+
+
+def _results_url(engine: dict[str, Any], *, query: str, location: str = "",
+                 radius: Optional[int] = None, page: int = 1) -> str:
+    """The URL of a results page this session ALREADY reached, rebuilt from its own record.
+
+    For REOPENING a spent search, never for running one. `query_entered` is consuming: when its
+    effect is gone (a relaunched browser lands on about:blank) the ladder correctly says RECOVER —
+    "return to the results we already have … never re-submit the same query" — and until this
+    existed there was nothing that could carry that out, so the operator's only reachable move was
+    the one the rung forbids.
+
+    Yes, this is address-forcing, which is normally last-ditch here ([[click links, not URLs]]),
+    and this is the case that earns it: the page was reached by driving, the parameters are the
+    session's own declared facts, and a person reopening their browser lands exactly here. The
+    alternative — re-submitting the query — is precisely what gets a search collapsed by Indeed.
+    """
+    from urllib.parse import urlencode
+    params = {engine["query_param"]: query}
+    if location and engine.get("location_param"):
+        params[engine["location_param"]] = location
+    if radius and engine.get("radius_param"):
+        params[engine["radius_param"]] = str(radius)
+    if page and page > 1:
+        params["start"] = str((page - 1) * engine["page_size"])
+    return f"https://www.{engine['host']}{engine['results_path']}?{urlencode(params)}"
 
 
 def _page_from_url(url: str) -> int:
@@ -6638,6 +6668,26 @@ async def resume(session_id: int, body: ResumeBody,
                     evidence=f"resumed — browser relaunched on the {profile} profile",
                     initiator=body.initiator)
 
+    # REOPEN THE RESULTS, DO NOT RE-RUN THEM. A relaunched Chrome lands on about:blank, so the
+    # consuming rung's EFFECT is gone even though the rung is still held — the ladder says LAPSED,
+    # "recover, never re-run", and correctly refuses to dispatch. Recovering is this endpoint's
+    # job: without it the operator resumes onto an empty browser whose only offered move is the
+    # one the rung forbids, which is how a good search got spent twice.
+    ss = bb.search_state
+    reopened = ""
+    if ledger.holds("query_entered") and (ss.query or "").strip():
+        engine = engine_for(session, obs.get("search_tab"))
+        url = _results_url(engine, query=ss.query, location=ss.location or "",
+                           radius=(bb.world or {}).get("radius_miles"), page=ss.page or 1)
+        nav = await _capture_post("/navigate", {"browser_url": browser_url, "url": url,
+                                                "driver": "humanized"}, timeout=30.0)
+        if nav.get("ok"):
+            reopened = url
+            bb.log("resume", f"reopened the results page without re-running the query ({url[:90]})")
+        else:
+            bb.log("resume", f"could not reopen the results page — {nav.get('detail', '')[:120]}")
+        obs = await _observe(browser_url, ss.query, session_id=session.id)
+
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
     held = [s for s in queue.steps
             if not s.done or (s.terminal or "").startswith("parked:")]
@@ -6647,13 +6697,18 @@ async def resume(session_id: int, body: ResumeBody,
 
     spent = ledger.holds("query_entered")
     return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
-                 last={"ok": True, "action": "resume",
+                 last={"ok": True, "action": "resume", "reopened": reopened,
                        "detail": (f"Resumed session #{session_id} on its own profile. "
                                   + (f"{len(held)} application(s) carried over: "
                                      + ", ".join(s.title or s.job_id for s in held[:4])
                                      + (" …" if len(held) > 4 else "") + ". " if held else "")
-                                  + (f"The search {bb.search_state.query!r} is still spent for this "
-                                     f"session — it was not re-run." if spent else
+                                  + (("The search "
+                                      f"{ss.query!r} is still spent for this session — its results "
+                                      "page was REOPENED, not re-run." if reopened else
+                                      f"The search {ss.query!r} is still spent for this session — "
+                                      "it was not re-run, but its results page could not be "
+                                      "reopened; recover to it before working the queue.")
+                                     if spent else
                                      "No search has been run in this session yet."))})
 
 

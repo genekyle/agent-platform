@@ -5311,3 +5311,54 @@ def test_resume_relaunches_without_respending_the_query(monkeypatch):
     assert after.holds("query_entered"), "resuming must never re-spend the search"
     assert "not re-run" in r["last_step"]["detail"]
     assert "Analyst I, Healthcare Data" in r["last_step"]["detail"], "say what came back with it"
+
+
+def test_results_url_rebuilds_the_page_the_session_already_reached():
+    """Reopening a SPENT search, never running one. The parameters are the session's own declared
+    facts, so this reconstructs the exact page the drive landed on (verified live 2026-08-13:
+    indeed.com/jobs?q=report+analyst&l=Manchester%2C+NH&radius=100)."""
+    from routers.session_control import _ENGINE_BY_ID, _results_url
+    indeed = _ENGINE_BY_ID["indeed_jobs"]
+    assert _results_url(indeed, query="report analyst", location="Manchester, NH", radius=100) == (
+        "https://www.indeed.com/jobs?q=report+analyst&l=Manchester%2C+NH&radius=100")
+    # Page 2+ is an offset in the engine's own page size — 10 on Indeed, 25 on LinkedIn.
+    assert _results_url(indeed, query="x", page=3).endswith("start=20")
+    # Each engine names its own params; guessing Indeed's on LinkedIn would silently drop both.
+    linkedin = _ENGINE_BY_ID["linkedin_jobs"]
+    got = _results_url(linkedin, query="x", location="Boston, MA", radius=50)
+    assert "keywords=x" in got and "location=Boston" in got and "distance=50" in got
+
+
+def test_resume_reopens_the_results_instead_of_re_running_them(monkeypatch):
+    """The relaunched browser lands on about:blank, so the consuming rung's EFFECT is gone while
+    the rung stays held — LAPSED, "recover, never re-run". Recovering is resume's job; without it
+    the operator lands on an empty browser whose only offered move is the one the rung forbids."""
+    bb = _with_queue(("indeed:r2", "Analyst I, Healthcare Data", "Boston Children's Hospital"))
+    ledger = cps.Ledger.from_dict(bb.checkpoints)
+    ledger.mark("query_entered", evidence="ran once", initiator="operator")
+    bb.checkpoints = ledger.as_dict()
+    bb.search_state.query = "report analyst"
+    bb.search_state.location = "Manchester, NH"
+    bb.world["radius_miles"] = 100
+
+    navigated = {}
+
+    def _navigate(payload):
+        navigated.update(payload)
+        return {"ok": True}
+
+    import main as main_mod
+    monkeypatch.setattr(main_mod, "start_training_session",
+                        lambda session_id, db=None: None, raising=False)
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True},
+              "/navigate": _navigate},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/resume", json={}).json()
+    finally:
+        _teardown()
+
+    assert "q=report+analyst" in navigated.get("url", ""), "reopened by address, not re-submitted"
+    assert "radius=100" in navigated["url"], "the distance filter comes back with the page"
+    assert "REOPENED, not re-run" in r["last_step"]["detail"]
