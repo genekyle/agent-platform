@@ -53,6 +53,9 @@ export function CockpitPage({ routeSessionId, routeTab }) {
   // Open teacher parks, globally — each names its session, so the chooser below can say
   // "something is waiting for you HERE" instead of making the operator open cockpits to find out.
   const [parks, setParks] = useState([]);
+  // Whether the start-fresh panel is open over a live session. Collapsed by default: it is a
+  // deliberate verb, not a thing to fall into while operating.
+  const [startingFresh, setStartingFresh] = useState(false);
 
   useEffect(() => {
     const poll = () => {
@@ -140,7 +143,7 @@ export function CockpitPage({ routeSessionId, routeTab }) {
   if (!pinned && !hinted && liveSessions.length === 0) {
     return (
       <div className="cockpit-page">
-        <StartSession onStarted={(id) => navigate(pathFor(id))} />
+        <StartSession sessions={sessions} onStarted={(id) => navigate(pathFor(id))} />
         {sessions.length > 0 && (
           <p className="empty-hint">
             {sessions.length} closed session{sessions.length === 1 ? "" : "s"} on record — pick
@@ -188,7 +191,15 @@ export function CockpitPage({ routeSessionId, routeTab }) {
       </div>
 
       <CockpitSessionBar session={active} siblings={sessions}
-                         onChooseSession={(id) => navigate(pathFor(id))} />
+                         onChooseSession={(id) => navigate(pathFor(id))}
+                         startingFresh={startingFresh}
+                         onStartFresh={() => setStartingFresh((v) => !v)} />
+
+      {startingFresh && (
+        <StartSession
+          sessions={sessions}
+          onStarted={(id) => { setStartingFresh(false); navigate(pathFor(id)); }} />
+      )}
 
       {tab === "trace" ? (
         <SessionTrace key={active.id} sessionId={active.id} />

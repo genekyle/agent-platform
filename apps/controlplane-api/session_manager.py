@@ -93,6 +93,34 @@ def port_owners(sessions: list[Any]) -> dict[int, int]:
     return owners
 
 
+def holdings(world: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """What a session is still HOLDING, read from its own apply queue. Pure.
+
+    The session list could say whether a browser was alive, never what it was carrying — so
+    "which session should I be in?" could only be answered by opening each one and reading its
+    ladder. That asymmetry is what makes a stale session expensive: the operator cannot see, from
+    the outside, that #27 holds four submitted applications and three unfinished ones, so every
+    decision about it starts with an investigation.
+
+    Counts only. The titles are the first few unfinished ones, because a number is enough to
+    decide and a name is what makes the number believable.
+    """
+    steps = ((world or {}).get("apply_queue") or {}).get("steps") or []
+    unfinished = [s for s in steps
+                  if not s.get("done") or str(s.get("terminal") or "").startswith("parked:")]
+    submitted = sum(1 for s in steps if s.get("terminal") == "submitted")
+    # `parked_apps` outlive their queue by design (a parked tab is deliberately kept), so a
+    # session holding only those would otherwise read as empty.
+    parked_only = [p for p in ((world or {}).get("parked_apps") or [])
+                   if p.get("job_id") not in {s.get("job_id") for s in unfinished}]
+    return {
+        "unfinished": len(unfinished) + len(parked_only),
+        "submitted": submitted,
+        "titles": [s.get("title") or s.get("job_id") or "?"
+                   for s in (unfinished + parked_only)][:3],
+    }
+
+
 def view_row(
     session: Any,
     *,
@@ -100,10 +128,12 @@ def view_row(
     account_label: Optional[str] = None,
     tab_count: Optional[int] = None,
     process_alive: Optional[bool] = None,
+    holding: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Assemble one UI-ready row from a TrainingSession + a fresh liveness probe. Pure: the caller
     does the probe and the account lookup, so this stays trivially testable."""
     return {
+        "holding": holding or {"unfinished": 0, "submitted": 0, "titles": []},
         "id": session.id,
         "domain_id": session.domain_id,
         "account_id": getattr(session, "account_id", None),

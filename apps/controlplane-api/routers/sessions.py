@@ -36,6 +36,7 @@ def list_sessions(db: Session = Depends(get_db)):
     """Every browser session, each folded with a LIVE CDP probe, its account label, and whether
     it's protected — the view that makes concurrent/training sessions safe to reason about."""
     import accounts as accounts_mod
+    import apply_state_store as store
     import browser_provisioning
     import channel_browser
     import session_manager
@@ -65,11 +66,16 @@ def list_sessions(db: Session = Depends(get_db)):
                 for p in chrome_processes
             )
         )
+        # What the session still carries. `load` (not `load_or_create`) so listing sessions never
+        # mints a blackboard for one that never had work, and reads a file rather than the browser
+        # — the list stays cheap enough to poll.
+        bb = store.load(s.id)
         rows.append(session_manager.view_row(
             s, cdp_reachable=live,
             account_label=label_by_id.get(s.account_id),
             tab_count=_session_tab_count(s.chrome_debug_port) if live else None,
             process_alive=process_alive,
+            holding=session_manager.holdings(bb.world if bb else None),
         ))
     return {"sessions": rows}
 

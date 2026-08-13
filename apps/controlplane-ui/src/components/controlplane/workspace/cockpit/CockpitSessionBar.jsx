@@ -28,7 +28,7 @@ function optionLabel(session) {
   return `#${session.id} · ${shortDomain(session.domain_id)} · ${STATE_COPY[state]?.label || state}`;
 }
 
-export function CockpitSessionBar({ session, siblings, onChooseSession }) {
+export function CockpitSessionBar({ session, siblings, onChooseSession, onStartFresh, startingFresh }) {
   const state = stateOf(session);
   const stateCopy = STATE_COPY[state] || { label: state, tone: "muted" };
   const live = siblings.filter((s) => stateOf(s) === "live");
@@ -64,6 +64,20 @@ export function CockpitSessionBar({ session, siblings, onChooseSession }) {
             {history.length > 0 && <optgroup label="History">{options(history)}</optgroup>}
           </select>
         </label>
+      )}
+
+      {/* START FRESH, always. The switcher can only ever offer sessions that already exist, so
+          while one was live the operator's entire menu was "keep working this one" or "open a
+          dead one" — and a session that has drifted is exactly when a new one is the cheap
+          answer. Starting fresh is a first-class verb of the cockpit, not a fallback screen it
+          shows when nothing is running. */}
+      {onStartFresh && (
+        <button type="button" className={`btn btn-sm ${startingFresh ? "" : "btn-ghost"}`}
+                aria-expanded={!!startingFresh} aria-label="Start a fresh session"
+                title="Provision a new browser on a domain's saved sign-in. A live session holding that domain is retired first — its work is kept."
+                onClick={onStartFresh}>
+          {startingFresh ? "Cancel" : "Start fresh"}
+        </button>
       )}
     </div>
   );

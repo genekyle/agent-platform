@@ -106,3 +106,38 @@ def test_view_row_throwaway_profile_kind():
     row = session_manager.view_row(_session(persistent_profile=None), cdp_reachable=False)
     assert row["profile_kind"] == "throwaway"
     assert row["liveness"] == "stale"  # status active but not reachable
+
+
+# --------------------------------------------------------------------------- holdings
+# What a session still CARRIES, so "which session should I be in?" is answerable from the list
+# instead of by opening each one. The list is polled, so this reads the blackboard only.
+def test_holdings_counts_unfinished_and_submitted():
+    h = session_manager.holdings({"apply_queue": {"steps": [
+        {"job_id": "a", "title": "Clinical Reporting Analyst", "done": True, "terminal": "submitted"},
+        {"job_id": "b", "title": "Data Business Analyst", "done": False, "terminal": None},
+    ]}})
+    assert h == {"unfinished": 1, "submitted": 1, "titles": ["Data Business Analyst"]}
+
+
+def test_holdings_counts_parked_as_unfinished():
+    """A parked step is DONE with a terminal flag, but it is not finished work — closing over it
+    is what the close-out confirm exists to prevent, so it must show up here too."""
+    h = session_manager.holdings({"apply_queue": {"steps": [
+        {"job_id": "c", "title": "Walled", "done": True, "terminal": "parked:account_wall"},
+    ]}})
+    assert h["unfinished"] == 1
+
+
+def test_holdings_folds_parked_apps_that_outlived_their_queue_without_double_counting():
+    """`parked_apps` deliberately outlive their queue, so a session holding only those would read
+    as empty — but one that is in BOTH is still one application."""
+    world = {"apply_queue": {"steps": [{"job_id": "b", "title": "Both", "done": False}]},
+             "parked_apps": [{"job_id": "b", "title": "Both"}, {"job_id": "z", "title": "Only"}]}
+    h = session_manager.holdings(world)
+    assert h["unfinished"] == 2
+    assert h["titles"] == ["Both", "Only"]
+
+
+def test_holdings_empty_for_a_session_that_never_worked():
+    assert session_manager.holdings(None) == {"unfinished": 0, "submitted": 0, "titles": []}
+    assert session_manager.holdings({})["unfinished"] == 0
