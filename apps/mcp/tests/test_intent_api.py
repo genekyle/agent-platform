@@ -254,3 +254,61 @@ def test_journaling_never_fails_the_action_it_is_describing():
         pass
 
     assert asyncio.run(intent_api._resolve_url_for_journal(_Bare(), {})) == ""
+
+
+# --- the url a caller with NO tab address never supplied ------------------------------------
+def test_a_backend_node_id_caller_still_journals_where_it_happened(monkeypatch):
+    """The main line, not an edge case. `backend_node_id` addressing survives the navigation a
+    url does not, so recipes drive /execute with `browser_url` + `backend_node_id` and no tab
+    address at all — and this resolver used to require a `tab_id` and hand back "" for exactly
+    those calls. The Odyssey iCIMS drive of 2026-08-12 journaled 400 rows that way: every click
+    that filled and submitted a federal self-identification form, `route:""`, nothing for
+    `compile_from_journal` to file under and nothing for rung 0 to replay.
+
+    Resolution asks the SAME target resolver the endpoint used, so the row names the tab the
+    action actually reached rather than the first plausible page."""
+    import asyncio
+
+    from app import intent_api
+    from app.observer import ax_proposer
+
+    class _Body:
+        browser_url = "http://127.0.0.1:9322"
+        # no tab_id, no tab_url — the way the executor is actually driven
+
+    seen = {}
+
+    async def _fake_discover(browser_url, tab_id=None, tab_url=None):
+        seen.update(browser_url=browser_url, tab_id=tab_id, tab_url=tab_url)
+        return {"url": "https://careers-odysseyconsult.icims.com/jobs/8308/data-business-analyst/form",
+                "webSocketDebuggerUrl": "ws://x"}
+
+    monkeypatch.setattr(ax_proposer, "_discover_target", _fake_discover)
+
+    got = asyncio.run(intent_api._resolve_url_for_journal(_Body(), {}))
+    assert "careers-odysseyconsult.icims.com" in got
+    # it asked the browser the caller named, not the 9222 default
+    assert seen["browser_url"] == "http://127.0.0.1:9322"
+
+
+def test_no_browser_url_resolves_to_empty_rather_than_guessing():
+    """Without a browser to ask there is no honest answer, and inventing one files the row
+    under a page the action never touched."""
+    import asyncio
+
+    from app import intent_api
+
+    class _Body:
+        browser_url = None
+
+    assert asyncio.run(intent_api._resolve_url_for_journal(_Body(), {})) == ""
+
+
+def test_a_route_is_derived_once_the_url_is_recovered():
+    """The point of the url is the route: route+state is the key a program is compiled under."""
+    from interaction.fingerprint import route_template
+
+    got = route_template(
+        "https://careers-odysseyconsult.icims.com/jobs/8308/data-business-analyst/form")
+    assert got, "a recovered url must template to a non-empty route"
+    assert "8308" not in got, "the job id is the part that must be templated away"

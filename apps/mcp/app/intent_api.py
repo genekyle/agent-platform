@@ -61,11 +61,26 @@ def _body_attr(body: Any, *names: str) -> Optional[Any]:
 
 
 async def _resolve_url_for_journal(body: Any, result: dict) -> str:
-    """Where did this action happen, for a caller that addressed the tab by id?
+    """Where did this action happen, when the caller didn't say?
 
-    Two sources, cheapest first. The endpoint may already know — several resolve a CDP target and
-    can hand the url back in their result. Otherwise ask the browser: `/json/list` over a local
-    socket, which costs no bandwidth (it never leaves the machine) and a millisecond or two.
+    Three sources, cheapest first. The endpoint may already know — several resolve a CDP target and
+    can hand the url back in their result. Given a `tab_id`, ask `/json/list` for that tab. Given
+    NEITHER id nor url, ask the same resolver the endpoint itself used to choose a tab, so the row
+    names the tab the action actually reached instead of a guess.
+
+    That last case is not exotic, it is the main line. `backend_node_id` addressing is the MORE
+    robust one — it survives the navigation a url doesn't — so the recipes drive `/execute` with
+    `browser_url` + `backend_node_id` and no tab address at all. This function used to require a
+    `tab_id` and return "" for exactly those calls, which is the failure its own docstring warns
+    about one paragraph later: 400 rows on 2026-08-12 (the Odyssey iCIMS drive, every click that
+    filled and submitted a federal self-identification form) journaled correctly, completely, and
+    with `route:""` — so `compile_from_journal` has no (task, state) to file them under and rung 0
+    has nothing to replay. Correct, complete, and unusable as training data, again.
+
+    One honest caveat, inherited rather than introduced: the url is read AFTER the action, so for
+    an act that navigates (a Submit) the row names the DESTINATION, not the page the click was
+    made on. True of the `tab_id` branch since it was written. Better than nothing, and worth
+    fixing at the seam that knows it navigated, not here.
 
     Best-effort by construction. Journaling must never be the reason an action fails, so every
     error here resolves to "" — a row with no url is worth less, and a request that raised while
@@ -75,16 +90,22 @@ async def _resolve_url_for_journal(body: Any, result: dict) -> str:
     if reported:
         return str(reported)
     browser_url = _body_attr(body, "browser_url")
-    tab_id = _body_attr(body, "tab_id")
-    if not browser_url or not tab_id:
+    if not browser_url:
         return ""
+    tab_id = _body_attr(body, "tab_id")
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get(f"{str(browser_url).rstrip('/')}/json/list")
-            for t in r.json():
-                if t.get("id") == tab_id:
-                    return str(t.get("url") or "")
+        if tab_id:
+            import httpx
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(f"{str(browser_url).rstrip('/')}/json/list")
+                for t in r.json():
+                    if t.get("id") == tab_id:
+                        return str(t.get("url") or "")
+            return ""
+        from app.observer.ax_proposer import _discover_target
+        target = await _discover_target(str(browser_url), tab_id=None,
+                                        tab_url=_body_attr(body, "tab_url"))
+        return str((target or {}).get("url") or "")
     except Exception:  # noqa: BLE001 — see the docstring: never fail an action to enrich a log
         return ""
     return ""
