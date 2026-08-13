@@ -5220,3 +5220,58 @@ def test_reconcile_reads_the_page_not_just_the_address(monkeypatch):
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert step.platform == "brassring", "the signpost outranks the employer's own host"
     assert step.landing_state != "company_site_job_posting", "the stale state must not survive"
+
+
+# ------------------------------------------------------------- close-out: two jobs, two exits
+# Shutting a session down and deciding its applications are over were one press, so the routine
+# end-of-sitting tidy-up was also the press that discards a week of half-finished work — too
+# dangerous to make a habit of, which is why the tidy-up stopped happening (operator, 2026-08-13).
+def _session_with_unfinished():
+    bb = _with_queue(("indeed:c1", "Analyst I, Healthcare Data", "Boston Children's Hospital"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].finish("parked:operator", "driven to the form, resumable")
+    bb.world["apply_queue"] = q.as_dict()
+    return bb
+
+
+def test_close_out_keep_work_shuts_down_without_abandoning_anything(monkeypatch):
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_session_with_unfinished())
+    try:
+        r = client.post("/api/session_control/1/close_out",
+                        json={"keep_work": True, "reason": "end of the sitting"}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.terminal == "parked:operator", "the park must survive a shutdown"
+    assert r["kept_work"] is True
+    assert r["discarded"] == [] and len(r["kept"]) == 1
+    assert "KEPT" in r["detail"]
+
+
+def test_close_out_keep_work_needs_no_discard_confirmation(monkeypatch):
+    """The confirm exists to stop a SILENT discard. Keeping the work discards nothing, so demanding
+    the discard confirmation for it would be asking the operator to consent to something that is
+    not happening."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_session_with_unfinished())
+    try:
+        r = client.post("/api/session_control/1/close_out", json={"keep_work": True})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+
+
+def test_close_out_still_refuses_to_discard_silently(monkeypatch):
+    """The default is unchanged: "I am done with these" stays sayable, and stays deliberate."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_session_with_unfinished())
+    try:
+        r = client.post("/api/session_control/1/close_out", json={})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    assert "keep_work" in r.json()["detail"], "the refusal must name the non-destructive way out"

@@ -6710,3 +6710,99 @@ signature checkbox, name and date prefilled). Sign-and-submit is authorised for 
 not chosen** and will not be guessed — a protected-class self-identification is the operator's
 sentence to write, and the veteran answer already proved the standing preference does not
 generalise across these forms.
+
+### 2026-08-13 — the cockpit's missing exits, and three refusals nobody could read
+
+**A fresh session was the one thing the cockpit could not do.** `StartSession` rendered only when
+ZERO sessions were live (`CockpitPage`), so in the one case that needs it — a session that has
+drifted, still holding its domain — the operator's entire menu was "keep working the stale one" or
+"switch to a dead one". That is the whole of the operator's complaint ("we crash too hard when we
+are trying to fix the stale sessions when those sessions are mainly outliers"): the system made
+*repairing* a stale session cheaper than *replacing* it, so every session began by fighting the last
+one's leftovers. Starting fresh is now a verb in the session bar, always.
+
+A persistent profile dir backs only ONE Chrome, so starting fresh genuinely requires retiring the
+incumbent, and the backend said so with an honest 409. **A truthful refusal the operator cannot act
+on is still a dead end** — so the handoff happens in the panel, and it names what the incumbent
+carries first (`/api/sessions` now reports each session's `holding`: unfinished, submitted, and the
+first few titles, read from the blackboard FILE so the polled list stays cheap). Two exits, kept
+distinct because conflating them loses applications: **RETIRE** stops the browser and leaves the
+ledger whole; **CLOSE OUT** flags unfinished work abandoned with a reason.
+
+**The same two-exit distinction was missing at the other end, and it is why the tidy-up never
+happened.** `close_out` welds two jobs together: shutting the session down (Chrome, drive latch,
+searches) and *deciding its applications are over*. Only the first is what "close down at the end of
+a sitting" means — so the one press an operator needs habitually was also the press that discards a
+week of half-finished applications, and the guaranteed cleanup stopped being run. `keep_work=True`
+now shuts down and leaves in-flight and parked applications resumable. The default is unchanged,
+because "I am done with these" must stay sayable in one press. Its 409 names the safe way out.
+
+**THREE REFUSALS, ALL CORRECT, ALL INVISIBLE — the session's real theme.** Every one of these was
+the system declining to claim something it could not confirm, and in every case the operator saw
+nothing:
+* `run_query` committed the query by Enter, the results page loaded, and the tab list was read one
+  pause later **while the navigation was still in flight**. It saw `moved=False, tab=None` and did
+  exactly the right things with the wrong facts: marked nothing, refused to retry (`query_entered`
+  is CONSUMING — a second submit spends the search twice), said so. *The commit now waits for its
+  own effect.* Re-reading a tab list is a local CDP read: it spends no query, costs no data and
+  dispatches nothing, so the `not moved` retry gate keeps its exact meaning and simply gets a fair
+  look before it fires. **A verification that can finish before the thing it verifies is not a
+  verification.**
+* The cockpit surfaced a message only when the HTTP call THREW — and a deliberate refusal is a 200.
+  So the operator saw an unchanged "Step · Query run" button and nothing else: the surface quietly
+  inviting the double-spend the backend had just refused to risk. Refusals now render with what was
+  done, what was left unmarked, and their recovery.
+* The recovery already existed and had no control anywhere (`adopt_from_window`, which records only
+  what the window PROVES). It resolved this live in one call.
+
+**RECONCILE WAS THE ONE CALLER NOT LOOKING AT THE PAGE.** `classify_landing` has taken three
+witnesses since 2026-07-30 — host, page content, and where the page's own APPLY control points —
+because a branded careers front names no ATS in its host and the signpost is the only tell.
+`reconcile_step` called it with the address ALONE. Boston Children's serves its application from
+`jobs.bostonchildrens.org` (reads as `company_site`) while its apply control points at BrassRing;
+the observer, fusing that same signpost, said `brassring · application_form` and was right. So the
+operator's way OUT of a stale record re-recorded the front and left the step stuck, with the cockpit
+offering "press Apply" over a form that was already open. Asked with the page, it re-classified
+`company_site -> brassring` and the distance to Submit went 3 → 1. **An address is a prediction; a
+page is evidence** — the same rule the re-classify branch already stated, applied one level earlier
+so that branch had a fact to compare. A re-classify now REPLACES the stale state instead of erasing
+it, except when the read failed (`<platform>_unreadable` is the absence of an observation, not one).
+
+**"New territory" was being said about three different things, so it could not be heard about the
+real one.** Operator, driving: *"the ui is always saying this is 'new territory' when technically
+yes we've never opened this job before, but we've opened other job cards before … should be more
+specific and be like 'new job' or 'never applied' and maybe should dig and see if we have actually
+considered/applied to this job or not."* Exactly right. Nothing-classified-yet, an unnamed screen on
+a platform we drive daily, and a platform with no recipe at all rendered as one warning sentence —
+and the phrase belongs only to the last. A warning that fires on the routine case cannot be read on
+the rare one. The first two now render in the neutral register (`platform_known` tells them apart:
+a scripted spine OR a generic-cadence registry entry is ground we can drive). And the job question
+the operator actually asked **was already answered and never shown**: `applied_index` runs on
+landing — same id, same requisition through another door, same employer+role — and halts an exact
+match. It now appears beside the word "new".
+
+**A fixture that advances the world on a READ models a browser that navigates because somebody
+looked at it.** The widget-retry test flipped its page on the fifth `/list_tabs`; it passed only
+while the production code happened to read exactly four times, and broke the moment the commit
+started waiting properly. Its own neighbour documents the rule ("A WORLD, not a call script … the
+page flips on the CLICK, never on a read count"). Rewritten as a world.
+
+**Smaller, same session:** `:root` (0,1,0) outranks the theme's `html` (0,0,1) regardless of load
+order, so the root element kept a pre-theme LIGHT background under a dark cockpit — invisible until
+the page overscrolls, then a white band. A page must not report a world older than the action it
+just took: provisioning navigated to the new session against the previous poll's snapshot and fell
+through to "no live sessions — start one" over a browser that had just launched. `flow_order`
+answers only for SCRIPTED spines, so a generic-cadence application drew "at most 3 screens from
+Submit" over an empty list — the cadence knew the shape and had no way to say it. And `not_applied`
+is the answer NO: matching on "any status that is not empty" turned it into "Possibly applied
+before" on the first job of the drive.
+
+*Where it stands:* **session #28, fresh** — `report analyst` / Manchester NH / **100mi** (the radius
+is a distance-filter step, not a URL param; 25 → 75 results). Page 1 read, 15 results, 7 picked by
+the operator in the UI. **Boston Children's "Analyst I, Healthcare Data" parked at
+`brassring_application_form`, one screen from Submit**, name/email/phone/zip filled from the profile
+and verified by re-census (unanswered 9 → 4). The four left are the operator's own: the resume
+upload, Country, Current/Last Job Title, and Area of Interest — the last routes the application
+internally and is not guessable. Nothing was sent. Session #27 was retired, not closed out, so
+Odyssey's iCIMS CC-305 (still one operator answer from a 5th submission) stays resumable on its
+ledger. Tests: controlplane-api 1485 → **1559**.

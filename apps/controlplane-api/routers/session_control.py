@@ -6449,6 +6449,18 @@ class CloseOutBody(BaseModel):
     #: dies silently.
     confirm_discards_work: bool = False
     reason: str = ""
+    #: TIDY THE MACHINE, KEEP THE WORK. This protocol welds together two jobs: shutting the session
+    #: down (Chrome stopped, drive latch released, searches closed) and DECIDING that its
+    #: unfinished applications are over. Only the first is what "close down at the end of a
+    #: sitting" means, and welding the second to it made the protocol too destructive to run
+    #: habitually — so it did not get run, which is the opposite of its intent (operator,
+    #: 2026-08-13: "make sure that always gets done when closing").
+    #:
+    #: With `keep_work` the session shuts down and its in-flight and parked applications survive
+    #: on the ledger, resumable — the same distinction the start-fresh handoff draws between
+    #: RETIRE and CLOSE OUT. The default stays the full close-out, because "I am done with these"
+    #: must remain sayable in one press.
+    keep_work: bool = False
 
 
 @router.post("/api/session_control/{session_id}/close_out")
@@ -6469,12 +6481,21 @@ async def close_out(session_id: int, body: CloseOutBody,
       3. Flags every unfinished application `abandoned:operator` with the close-out reason —
          parked means "not now", and closing the session is the operator saying "not ever, not
          here"; the detail string keeps the truth distinguishable from a seen-and-rejected.
+         SKIPPED under `keep_work` — see below.
       4. Closes the session's ACTIVE Search rows (`abandoned`) — findings keep their provenance.
       5. Releases the drive latch when this session holds it.
       6. Stops the session's Chrome through the training-session stop (protected sessions still
          refuse without force there).
       7. KEEPS the persistent profile — the sign-in is the session's whole savings account, and
          cleanup must never log us out.
+
+    TWO JOBS, AND ONLY ONE OF THEM IS "CLOSING DOWN" (2026-08-13). Steps 4–7 shut the session
+    down; step 3 decides its applications are over. Welding them together made the one press an
+    operator needs at the end of every sitting also the press that discards a week of half-finished
+    applications — so it was too dangerous to make a habit of, and the tidy-up it exists to
+    guarantee stopped happening. `keep_work=True` performs the shutdown and leaves in-flight and
+    parked applications on the ledger, resumable: the same distinction the start-fresh handoff
+    draws between RETIRE and CLOSE OUT. The default is unchanged.
     """
     from models import Search as SearchRow
     from sqlalchemy import select
@@ -6496,21 +6517,23 @@ async def close_out(session_id: int, body: CloseOutBody,
             dying.append({"job_id": p["job_id"], "title": p.get("title"),
                           "company": p.get("company"), "state": p.get("terminal") or "parked"})
 
-    if dying and not body.confirm_discards_work:
+    if dying and not body.confirm_discards_work and not body.keep_work:
         raise HTTPException(
             status_code=409,
             detail=("Closing this session discards "
                     + ", ".join(f"{d['title'] or d['job_id']} ({d['state']})" for d in dying)
                     + ". Say so explicitly (confirm_discards_work) — half-finished applications "
-                      "do not die silently."))
+                      "do not die silently. Or pass keep_work to shut the session down and leave "
+                      "them resumable."))
 
     why = body.reason.strip() or "session closed out"
-    for s in queue.steps:
-        if not s.done or (s.terminal or "").startswith("parked:"):
-            s.finish(aps.ABANDONED_OPERATOR, f"closed out with the session — {why}")
     world = dict(bb.world or {})
-    world["apply_queue"] = queue.as_dict()
-    world.pop("parked_apps", None)
+    if not body.keep_work:
+        for s in queue.steps:
+            if not s.done or (s.terminal or "").startswith("parked:"):
+                s.finish(aps.ABANDONED_OPERATOR, f"closed out with the session — {why}")
+        world["apply_queue"] = queue.as_dict()
+        world.pop("parked_apps", None)
     bb.world = world
 
     searches_closed = 0
@@ -6527,7 +6550,9 @@ async def close_out(session_id: int, body: CloseOutBody,
         lock_released = True
 
     bb.log("close_out", f"session closed out by {body.initiator} — {why}; "
-                        f"{len(dying)} application(s) discarded, {searches_closed} search(es) closed")
+                        + (f"{len(dying)} application(s) KEPT (resumable)" if body.keep_work
+                           else f"{len(dying)} application(s) discarded")
+                        + f", {searches_closed} search(es) closed")
     _persist(bb, ledger)
     db.commit()
 
@@ -6541,16 +6566,31 @@ async def close_out(session_id: int, body: CloseOutBody,
         chrome = {"stopped": True, "detail": "session Chrome stopped"}
     except HTTPException as exc:
         chrome = {"stopped": False, "detail": str(exc.detail)}
+    except Exception as exc:  # noqa: BLE001
+        # A REPORT IS THE POINT OF A CLEANUP. Everything above is already committed by here, so
+        # letting an unexpected failure in the stop seam raise turns a partial cleanup into a 500
+        # with no account of what did happen — the operator cannot tell whether their applications
+        # were kept, whether the searches closed, or whether the browser is still up. A refused
+        # stop was already a reportable outcome; an unexpected one is too.
+        chrome = {"stopped": False, "detail": f"{type(exc).__name__}: {exc}"}
 
     return {"ok": True, "closed": True, "session_id": session_id,
-            "discarded": dying, "searches_closed": searches_closed,
+            "kept_work": bool(body.keep_work),
+            # Named by what actually happened to them, so a report can never read as a discard that
+            # did not occur (or, worse, a keep that did not).
+            "discarded": [] if body.keep_work else dying,
+            "kept": dying if body.keep_work else [],
+            "searches_closed": searches_closed,
             "lock_released": lock_released, "chrome": chrome,
             "profile_kept": getattr(session, "persistent_profile", None),
             "tabs_at_close": [(t.get("url") or "")[:120] for t in (obs.get("tabs") or [])],
-            "detail": (f"Closed out. {len(dying)} application(s) discarded on the record, "
-                       f"{searches_closed} search(es) closed, Chrome "
-                       + ("stopped" if chrome["stopped"] else f"NOT stopped — {chrome['detail']}")
-                       + ". The signed-in profile is kept.")}
+            "detail": (("Closed down. " + (f"{len(dying)} application(s) KEPT on the ledger, "
+                                           f"resumable. " if dying else "Nothing was half-finished. "))
+                       if body.keep_work else
+                       f"Closed out. {len(dying)} application(s) discarded on the record, ")
+                      + f"{searches_closed} search(es) closed, Chrome "
+                      + ("stopped" if chrome["stopped"] else f"NOT stopped — {chrome['detail']}")
+                      + ". The signed-in profile is kept."}
 
 
 # --- the clean start: provisioning through the tab manager ------------------------------------

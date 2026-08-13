@@ -25,12 +25,19 @@ export default function CloseOut({ sessionId, panel, onClosed }) {
       .map((p) => ({ job_id: p.job_id, title: p.title, state: p.terminal || "parked" })),
   ];
 
-  const close = async () => {
+  // TWO EXITS, because they mean opposite things about the work. Shutting the session down at the
+  // end of a sitting is routine; deciding its half-finished applications are over is not, and
+  // welding them together made the routine press the dangerous one — so it stopped being pressed
+  // (operator, 2026-08-13: "make sure that always gets done when closing"). `keepWork` shuts the
+  // session down and leaves the applications resumable, exactly as RETIRE does on the start-fresh
+  // side; the discard stays one press away for when it is what the operator means.
+  const close = async (keepWork) => {
     setBusy(true);
     setErr("");
     try {
       const d = await postJSON(`/api/session_control/${sessionId}/close_out`, {
-        confirm_discards_work: dying.length > 0,
+        keep_work: !!keepWork,
+        confirm_discards_work: !keepWork && dying.length > 0,
         reason: reason.trim() || "closed out from the cockpit",
         initiator: "operator",
       });
@@ -56,6 +63,20 @@ export default function CloseOut({ sessionId, panel, onClosed }) {
             {report.discarded.map((d) => d.title || d.job_id).join(" · ")}
           </p>
         )}
+        {(report.kept || []).length > 0 && (
+          <p className="rung__meta">
+            Kept, resumable: {report.kept.map((d) => d.title || d.job_id).join(" · ")}
+          </p>
+        )}
+        {/* What the shutdown closed, named. A window can hold tabs nobody logged — the operator's
+            own browsing included — and a tidy-up that lists nothing looks identical to one that
+            quietly threw something away. */}
+        {(report.tabs_at_close || []).length > 0 && (
+          <details className="rung__meta">
+            <summary>{report.tabs_at_close.length} tab(s) were open at close</summary>
+            <ul>{report.tabs_at_close.map((u) => <li key={u}><code>{u}</code></li>)}</ul>
+          </details>
+        )}
       </div>
     );
   }
@@ -78,10 +99,11 @@ export default function CloseOut({ sessionId, panel, onClosed }) {
         <AppIcon name="alert" size={13} /> Close out session #{sessionId}
       </div>
       {dying.length > 0 ? (
-        <p className="cv-blocked">
-          This discards {dying.length} half-finished application{dying.length === 1 ? "" : "s"}:{" "}
-          {dying.map((d) => `${d.title || d.job_id} (${d.state})`).join(" · ")} — each is flagged
-          abandoned with your reason, never dropped silently.
+        <p className="rung__meta">
+          {dying.length} application{dying.length === 1 ? " is" : "s are"} half-finished:{" "}
+          {dying.map((d) => `${d.title || d.job_id} (${d.state})`).join(" · ")}. Shutting down
+          keeps {dying.length === 1 ? "it" : "them"} on the ledger, resumable. Discarding flags
+          {dying.length === 1 ? " it" : " each"} abandoned with your reason — never silently.
         </p>
       ) : (
         <p className="rung__meta">
@@ -90,13 +112,24 @@ export default function CloseOut({ sessionId, panel, onClosed }) {
       )}
       {err && <div className="coaching-error">{err}</div>}
       <textarea className="work-note" rows={2} value={reason} disabled={busy}
-                placeholder="Why this session is ending — rides into every discarded application's record."
+                placeholder="Why this session is ending — rides into the record either way."
                 onChange={(e) => setReason(e.target.value)} />
       <div className="work__actions">
-        <button className="btn btn-sm btn-primary" disabled={busy} aria-label="Close it out"
-                onClick={close}>
-          {busy ? "…" : dying.length ? `Discard ${dying.length} and close` : "Close it out"}
+        {/* The routine end-of-sitting press is the SAFE one, and it is the primary. */}
+        <button className="btn btn-sm btn-primary" disabled={busy}
+                aria-label="Shut the session down and keep the work"
+                title="Stops the Chrome, closes this session's searches, releases the drive latch. Half-finished applications stay on the ledger, resumable. The sign-in is kept."
+                onClick={() => close(true)}>
+          {busy ? "…" : dying.length ? `Shut down · keep ${dying.length}` : "Shut it down"}
         </button>
+        {dying.length > 0 && (
+          <button className="btn btn-sm btn-consequential" disabled={busy}
+                  aria-label={`Discard ${dying.length} and close out`}
+                  title="Ends the session AND flags every half-finished application abandoned with your reason. Not reversible."
+                  onClick={() => close(false)}>
+            Discard {dying.length} and close out
+          </button>
+        )}
         <button className="btn btn-sm" disabled={busy} onClick={() => setArming(false)}>
           Cancel
         </button>
