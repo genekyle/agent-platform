@@ -976,3 +976,16 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 
 .work__refusal .cv-blocked { margin: 0 0 8px; line-height: 1.5; }
 .work__refusal .cv-blocked:last-child { margin-bottom: 0; }
+
+/* A parked application whose page is gone. Quiet, not alarming — the work is still resumable,
+   it just starts that screen over, and the operator should learn that before pressing. */
+.cockpit-parked__gone {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid rgba(216, 166, 87, 0.32);
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warning, #d8a657);
+}

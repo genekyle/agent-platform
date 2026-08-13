@@ -586,10 +586,19 @@ def _resolve_next_action(step: Optional[Any],
                              "the observer's way out, offered with no disagreement to resolve."))
 
 
-def _parked_all(bb: Any, queue: aps.Queue) -> list[dict[str, Any]]:
+def _parked_all(bb: Any, queue: aps.Queue,
+                live_urls: Optional[list[str]] = None) -> list[dict[str, Any]]:
     """Every parked application the session still owes, slim rows for the panel: the current
     queue's parked steps plus the survivors of finished searches (`world["parked_apps"]`).
-    Deduped by job_id with the current queue's record winning — it is the fresher fact."""
+    Deduped by job_id with the current queue's record winning — it is the fresher fact.
+
+    `tab_open` is the honest half of what PARKED means. Parking says "coming back to this page",
+    and the cockpit offers "Step back in" on that promise — but a shutdown closes the tab, and
+    anything typed into it that was never saved server-side goes with it. Judged against the LIVE
+    window rather than remembered, because the whole point is that the world can take it away
+    while the record still says parked (2026-08-13: Boston Children's parked one screen from
+    Submit, its tab closed by the close-down, the strip still offering to step back in).
+    """
     rows: dict[str, dict[str, Any]] = {}
     for p in ((bb.world or {}).get("parked_apps") or []):
         if p.get("job_id"):
@@ -598,10 +607,21 @@ def _parked_all(bb: Any, queue: aps.Queue) -> list[dict[str, Any]]:
         if (s.terminal or "").startswith("parked:"):
             rows[s.job_id] = {"job_id": s.job_id, "title": s.title, "company": s.company,
                               "platform": s.platform, "terminal": s.terminal,
-                              "terminal_detail": s.terminal_detail, "in_current_queue": True}
+                              "terminal_detail": s.terminal_detail,
+                              "tab_url": getattr(s, "tab_url", "") or "",
+                              "in_current_queue": True}
+
+    def _open(url: str) -> Optional[bool]:
+        # None, not False, when we never recorded a page: "we do not know" and "it is gone" are
+        # different answers, and only one of them should warn the operator.
+        if not url:
+            return None
+        return any((u or "").split("#")[0] == url.split("#")[0] for u in (live_urls or []))
+
     return [{"job_id": r.get("job_id"), "title": r.get("title"), "company": r.get("company"),
              "platform": r.get("platform"), "terminal": r.get("terminal"),
              "terminal_detail": r.get("terminal_detail"),
+             "tab_url": r.get("tab_url") or "", "tab_open": _open(r.get("tab_url") or ""),
              "from_search": r.get("from_search"), "from_page": r.get("from_page"),
              "in_current_queue": bool(r.get("in_current_queue"))}
             for r in rows.values()]
@@ -701,7 +721,8 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # plus the ones harvested when their search ended (`_reset_for_new_search`). Parked is
         # attention for the whole session, not just for the search it happened in: the half-done
         # application holds a real tab whichever query the ladder is walking now.
-        "parked": _parked_all(bb, queue),
+        "parked": _parked_all(bb, queue,
+                              [t.get("url") or "" for t in (obs.get("tabs") or [])]),
         "awaiting": awaiting,
         # WHICH ATSes hide their form behind section bars. The panel needs this to know whether to
         # offer the section reader at all, and the declaration lives in apply_fields — so it is
@@ -6089,6 +6110,12 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
                             detail=f"{body.job_id} already ended as {step.terminal!r}. A finished "
                                    f"application is not re-opened by flagging it again.")
 
+    # WHERE IT WAS STANDING. `parked` promises the operator is coming back to this page, and a
+    # promise about a tab is only true while the tab exists — a session shutdown closes it and
+    # takes anything typed-but-not-saved with it. Recorded for every terminal (an abandoned step's
+    # last page is just as much a fact) and read back by `_parked_all`, which compares it to the
+    # live window so the cockpit can say whether stepping back in resumes or starts over.
+    step.tab_url = (((bb.world or {}).get("apply_tab") or {}).get("url") or "")
     step.finish(body.flag, body.detail)
     bb.world = dict(bb.world or {})
     bb.world["apply_queue"] = queue.as_dict()

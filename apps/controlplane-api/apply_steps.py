@@ -330,6 +330,13 @@ class ApplyStep:
     landing_state: Optional[str] = None
     terminal: Optional[str] = None      # one of TERMINAL_FLAGS once done
     terminal_detail: str = ""
+    #: The ATS page this step was standing on when it reached its terminal flag. Recorded because
+    #: PARKED makes a promise about it — "coming back to this" — and a promise about a tab is only
+    #: true while the tab exists. A session shutdown closes it; whatever was typed into that page
+    #: and never saved server-side goes with it. Without this the cockpit offered "Step back in"
+    #: for an application whose page was gone and could not tell the operator that stepping back in
+    #: means starting that screen over (2026-08-13, Boston Children's after a close-down).
+    tab_url: str = ""
     minis: list[MiniStep] = field(default_factory=list)
     #: Previous attempts, moved aside by `reopen`. A parked step that comes back re-walks the
     #: ladder, and the run that parked it is kept here rather than deleted — the first attempt is

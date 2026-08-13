@@ -241,12 +241,23 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
                     title={`${pk.terminal || "parked"}${pk.terminal_detail ? ` — ${pk.terminal_detail}` : ""}${pk.from_search ? ` · from search ${pk.from_search}` : ""}`}>
                 {pk.title || pk.job_id}
                 {pk.company ? <em> · {pk.company}</em> : null}
+                {/* PARKED PROMISES A PAGE, and a promise about a tab is only true while the tab
+                    exists. A shutdown closes it and takes anything typed-but-unsaved with it, so
+                    "Step back in" would silently mean "start that screen over". Say which — and
+                    only when we actually recorded a page (`tab_open === false`, never a missing
+                    value, because "we did not record one" is not "it is gone"). */}
+                {pk.tab_open === false && (
+                  <span className="cockpit-parked__gone"
+                        title={`Its page (${pk.tab_url}) is no longer open. Anything filled in there and not saved by the site is gone; stepping back in starts that screen again.`}>
+                    page closed
+                  </span>
+                )}
                 <button className="btn btn-sm btn-ghost" disabled={busy}
                         onClick={() => call("/apply_reopen", {
                           job_id: pk.job_id,
                           reason: "operator stepped back in from the parked strip",
                         })}>
-                  Step back in
+                  {pk.tab_open === false ? "Start it again" : "Step back in"}
                 </button>
               </span>
             ))}

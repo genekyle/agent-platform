@@ -5362,3 +5362,32 @@ def test_resume_reopens_the_results_instead_of_re_running_them(monkeypatch):
     assert "q=report+analyst" in navigated.get("url", ""), "reopened by address, not re-submitted"
     assert "radius=100" in navigated["url"], "the distance filter comes back with the page"
     assert "REOPENED, not re-run" in r["last_step"]["detail"]
+
+
+# ------------------------------------------------- parked promises a page; check it still exists
+def test_parked_says_when_its_page_is_gone():
+    """PARKED means "coming back to this", and the cockpit offers "Step back in" on that promise.
+    A shutdown closes the tab and takes anything typed-but-unsaved with it, so the promise goes
+    stale silently (2026-08-13: Boston Children's parked one screen from Submit, its page closed by
+    the close-down, the strip still offering to step back in)."""
+    from routers.session_control import _parked_all
+    bb = _with_queue(("indeed:p1", "Analyst I, Healthcare Data", "Boston Children's Hospital"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].tab_url = "https://jobs.bostonchildrens.org/apply/join/?job=23397520"
+    q.steps[0].finish("parked:operator", "one screen from Submit")
+
+    gone = _parked_all(bb, q, ["https://www.indeed.com/jobs?q=report+analyst"])
+    assert gone[0]["tab_open"] is False
+
+    still = _parked_all(bb, q, ["https://jobs.bostonchildrens.org/apply/join/?job=23397520"])
+    assert still[0]["tab_open"] is True
+
+
+def test_parked_without_a_recorded_page_says_unknown_not_gone():
+    """"We never recorded a page" and "the page is gone" are different answers, and only one of
+    them should warn. A step parked before this field existed must not read as closed."""
+    from routers.session_control import _parked_all
+    bb = _with_queue(("indeed:p2", "Older Park", "Somewhere"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].finish("parked:operator", "parked before tab_url existed")
+    assert _parked_all(bb, q, ["https://www.indeed.com/jobs"])[0]["tab_open"] is None
