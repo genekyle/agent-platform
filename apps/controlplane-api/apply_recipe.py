@@ -1008,7 +1008,44 @@ GENERIC_ATS_ORDER: list[str] = [str(e["kind"]) for e in GENERIC_ATS_SPINE]
 #: Names an apply-ish substring match must never press: SSO detours and the posting's furniture.
 GENERIC_CONTROL_EXCLUSIONS: tuple[str, ...] = (
     "linkedin", "indeed", "with ", "save", "share", "back to", "sign in", "create",
+    # THE INTERNAL APPLY PATH IS NOT OUR PATH. Employer careers sites routinely show two Apply
+    # controls side by side — the candidate one and a "Current employees apply here" that routes
+    # into the employer's internal ATS behind employee SSO. Both contain "apply", and the internal
+    # one is reliably the LONGER name, so the "longest match is the most specific" rule below
+    # picked it every time. Measured live 2026-08-13 on C&S Wholesale Grocers: five apply-named
+    # controls, and the drive clicked "CURRENT C&S EMPLOYEES APPLY HERE" over "APPLY NOW".
+    # Not a detour like "Apply with LinkedIn" — a door we can never walk through.
+    "employee", "employees", "internal candidate", "current associates",
 )
+
+
+def _named_control(names: list[str], wanted_list: list[str]) -> str:
+    """The rendered control matching one of `wanted_list`, or "" — one rule for every recipe.
+
+    Tried most-specific wanted token first, and within a token:
+
+      1. a name that STARTS with the token wins. A button whose label begins with the verb is the
+         primary action; one where the verb is buried mid-phrase is almost always qualified —
+         "current employees apply here", "if you are an internal candidate apply here".
+      2. otherwise the longest match, which is the older rule and still the right default when
+         nothing leads with the verb ("Review your application" over "Review").
+
+    The tiebreak exists because "longest is most specific" is only true within one destination.
+    Live 2026-08-13 on C&S Wholesale Grocers, the posting carried FIVE apply-named controls and
+    the two that mattered were "APPLY NOW" (9 chars, the candidate path) and "CURRENT C&S
+    EMPLOYEES APPLY HERE" (32 chars, employee SSO). Longest picked the door we can never walk
+    through. The exclusion list now refuses that name outright; this rule is what would have got
+    it right anyway, and generalises to the next site that words it differently.
+    """
+    for wanted in wanted_list:
+        matches = [n for n in names
+                   if n and wanted in n.lower()
+                   and not any(x in n.lower() for x in GENERIC_CONTROL_EXCLUSIONS)]
+        if not matches:
+            continue
+        leading = [n for n in matches if n.lower().lstrip().startswith(wanted)]
+        return max(leading or matches, key=len)
+    return ""
 
 
 def _generic_kind(platform: Optional[str], state: Optional[str]) -> str:
@@ -1290,24 +1327,12 @@ def named_control(platform: str, state: Optional[str], ax_identities) -> str:
     # furniture — a substring lexicon's classic wrong buttons.
     kind = _generic_kind(platform, state)
     if kind:
-        for wanted in (_generic_entry(kind).get("controls") or []):
-            matches = [n for n in names
-                       if n and wanted in n.lower()
-                       and not any(x in n.lower() for x in GENERIC_CONTROL_EXCLUSIONS)]
-            if matches:
-                return max(matches, key=len)
-        return ""
+        return _named_control(names, _generic_entry(kind).get("controls") or [])
 
     # The Workday tail's named controls, same match rules and the same exclusions — "Apply with
     # LinkedIn"-shaped detours are wrong on every platform.
     if _canon(platform) == "workday" and state in _WORKDAY_TAIL:
-        for wanted in _WORKDAY_TAIL[state]["controls"]:
-            matches = [n for n in names
-                       if n and wanted in n.lower()
-                       and not any(x in n.lower() for x in GENERIC_CONTROL_EXCLUSIONS)]
-            if matches:
-                return max(matches, key=len)
-        return ""
+        return _named_control(names, _WORKDAY_TAIL[state]["controls"])
 
     if _canon(platform) != "indeed_quick_apply":
         return ""

@@ -277,3 +277,37 @@ def test_platform_known_is_false_only_for_ground_nothing_can_drive():
     assert ar.platform_known("") is False
     assert ar.platform_known(None) is False
     assert ar.platform_known("an_ats_nobody_has_ever_driven") is False
+
+
+# --------------------------------------------------------------- the two apply doors
+# Employer careers sites routinely show the candidate Apply and a "current employees apply here"
+# side by side. Both contain "apply", the internal one is reliably LONGER, and "longest is most
+# specific" picked the door we can never walk through (live 2026-08-13, C&S Wholesale Grocers:
+# the drive clicked "CURRENT C&S EMPLOYEES APPLY HERE" over "APPLY NOW" and nothing moved).
+def test_the_employee_apply_door_is_never_the_candidate_one():
+    import apply_recipe as ar
+    names = ["APPLY NOW", "CURRENT C&S EMPLOYEES APPLY HERE",
+             "SEND ME SIMILAR JOBS", "C&S Employees Apply Here "]
+    assert ar._named_control(names, ["apply"]) == "APPLY NOW"
+
+
+def test_a_name_that_leads_with_the_verb_beats_a_longer_one_that_buries_it():
+    """The tiebreak that would have got C&S right without knowing the word "employee": a button
+    whose label BEGINS with the verb is the primary action; a longer name burying it mid-phrase is
+    almost always qualified."""
+    import apply_recipe as ar
+    assert ar._named_control(
+        ["Apply now", "If you are an internal candidate please apply through this link"],
+        ["apply"]) == "Apply now"
+
+
+def test_longest_still_wins_when_nothing_leads_with_the_verb():
+    """The older rule stays the default — it is right when the choice is within one destination."""
+    import apply_recipe as ar
+    assert ar._named_control(["Review", "Review your application"],
+                             ["review"]) == "Review your application"
+
+
+def test_a_control_the_page_does_not_have_is_still_refused():
+    import apply_recipe as ar
+    assert ar._named_control(["Save", "Share"], ["apply"]) == ""
