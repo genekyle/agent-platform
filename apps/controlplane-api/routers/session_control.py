@@ -6593,6 +6593,70 @@ async def close_out(session_id: int, body: CloseOutBody,
                       + ". The signed-in profile is kept."}
 
 
+class ResumeBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/resume")
+async def resume(session_id: int, body: ResumeBody,
+                 db: Session = Depends(get_db)) -> dict[str, Any]:
+    """PICK THE WORK BACK UP — relaunch a shut-down session's browser and carry on.
+
+    `close_out(keep_work=True)` made "shut down and keep the work" the normal way to end a sitting
+    (2026-08-13), which makes "pick it back up" the normal way to start one — and there was nothing
+    to press. The session's ledger survives the shutdown intact: the query stays SPENT, the page's
+    results stay cached, the queue keeps its picks in order. Only `provisioned` regresses, because
+    only the browser actually went away.
+
+    That asymmetry was costing real work. A stopped session still holding a queue rendered its
+    apply step as the current moment and offered "Work this" over a browser that did not exist,
+    while the only reachable alternative — starting fresh — would spend a SECOND query against
+    Indeed for a search that had already been run and picked from. The operator's words for it:
+    "we wasted a good search and actual candidates."
+
+    So this is deliberately NOT a new session. Same row, same persistent profile (the sign-in comes
+    back with it), same blackboard; `_launch_training_chrome` attaches if the browser is somehow
+    still alive and relaunches otherwise, and refuses honestly if another live Chrome holds the
+    profile. What it restores is reported, so the operator can see the search was not re-spent.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+
+    import main as main_mod
+    # Raises HTTPException on a real conflict (another live Chrome holding this profile), which is
+    # the honest answer and should reach the operator unchanged. It commits and refreshes the very
+    # session object `_load` handed us — same identity map — so nothing needs re-reading here.
+    main_mod.start_training_session(session_id, db=db)
+
+    # The browser is back, so the rung that regressed with it is re-established on EVIDENCE, not
+    # on the launch call returning: `_observe` is the same probe every other rung is judged by.
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb.search_state.query, session_id=session.id)
+    if obs.get("observed", {}).get("provisioned"):
+        profile = getattr(session, "persistent_profile", None) or "throwaway"
+        ledger.mark("provisioned",
+                    evidence=f"resumed — browser relaunched on the {profile} profile",
+                    initiator=body.initiator)
+
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    held = [s for s in queue.steps
+            if not s.done or (s.terminal or "").startswith("parked:")]
+    bb.log("resume", f"session resumed by {body.initiator}; {len(held)} application(s) carried over")
+    _persist(bb, ledger)
+    db.commit()
+
+    spent = ledger.holds("query_entered")
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                 last={"ok": True, "action": "resume",
+                       "detail": (f"Resumed session #{session_id} on its own profile. "
+                                  + (f"{len(held)} application(s) carried over: "
+                                     + ", ".join(s.title or s.job_id for s in held[:4])
+                                     + (" …" if len(held) > 4 else "") + ". " if held else "")
+                                  + (f"The search {bb.search_state.query!r} is still spent for this "
+                                     f"session — it was not re-run." if spent else
+                                     "No search has been run in this session yet."))})
+
+
 # --- the clean start: provisioning through the tab manager ------------------------------------
 def _fresh_start_plan(obs: dict[str, Any]) -> dict[str, Any]:
     """What this window would have to close to be a clean start, via `controller.window` — the

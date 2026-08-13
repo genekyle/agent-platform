@@ -5275,3 +5275,39 @@ def test_close_out_still_refuses_to_discard_silently(monkeypatch):
         _teardown()
     assert r.status_code == 409
     assert "keep_work" in r.json()["detail"], "the refusal must name the non-destructive way out"
+
+
+# --------------------------------------------------------------- resume: the partner of keep_work
+# `close_out(keep_work=True)` makes "shut down and keep the work" the normal way to end a sitting,
+# which makes "pick it back up" the normal way to start one. Without this the only way back into a
+# stopped session holding a queue was to start FRESH — spending a second query against Indeed for a
+# page already run and picked from ("we wasted a good search and actual candidates", 2026-08-13).
+def test_resume_relaunches_without_respending_the_query(monkeypatch):
+    bb = _with_queue(("indeed:r1", "Analyst I, Healthcare Data", "Boston Children's Hospital"))
+    ledger = cps.Ledger.from_dict(bb.checkpoints)
+    ledger.mark("query_entered", evidence="ran once", initiator="operator")
+    bb.checkpoints = ledger.as_dict()
+    bb.search_state.query = "report analyst"
+    bb.world["apply_queue"] = aps.Queue.from_dict(bb.world["apply_queue"]).as_dict()
+
+    launched = {"n": 0}
+
+    def _fake_start(session_id, db=None):
+        launched["n"] += 1
+        return None
+
+    import main as main_mod
+    monkeypatch.setattr(main_mod, "start_training_session", _fake_start, raising=False)
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/resume", json={}).json()
+    finally:
+        _teardown()
+
+    assert launched["n"] == 1, "resume relaunches the session's own Chrome"
+    after = cps.Ledger.from_dict(saved["bb"].checkpoints)
+    assert after.holds("query_entered"), "resuming must never re-spend the search"
+    assert "not re-run" in r["last_step"]["detail"]
+    assert "Analyst I, Healthcare Data" in r["last_step"]["detail"], "say what came back with it"

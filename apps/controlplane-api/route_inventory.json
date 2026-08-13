@@ -215,6 +215,7 @@
   "POST /api/session_control/{session_id}/orient_now",
   "POST /api/session_control/{session_id}/rebuild_queue",
   "POST /api/session_control/{session_id}/reconcile_step",
+  "POST /api/session_control/{session_id}/resume",
   "POST /api/session_control/{session_id}/sso_step",
   "POST /api/session_control/{session_id}/step",
   "POST /api/sessions/{session_id}/protect",

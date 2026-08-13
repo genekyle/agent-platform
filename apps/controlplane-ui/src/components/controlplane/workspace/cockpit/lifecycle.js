@@ -436,6 +436,45 @@ function endFocus(qs) {
 }
 
 /**
+ * THE BROWSER IS GONE, and that outranks everything the session still wants to do.
+ *
+ * A shut-down session keeps its whole ledger — the query stays SPENT, the page's results stay
+ * cached, the queue keeps its picks in order. Only `provisioned` regresses, because only the
+ * browser actually went away. But the focus resolution below reads "an application in flight" as
+ * the truest fact available, so a stopped session rendered its apply step and offered "Work this ·
+ * Open the posting" over a Chrome that did not exist.
+ *
+ * That is a lie-shaped affordance, and an expensive one: the only reachable alternative was
+ * starting FRESH, which spends a second query against Indeed for a search already run and picked
+ * from. Operator, after exactly that happened: "we wasted a good search and actual candidates."
+ * The resume is what makes `close_out(keep_work)` honest — putting work down is only safe if
+ * picking it back up is one press.
+ */
+function resumeFocus(p) {
+  const steps = p.queue?.steps || [];
+  const held = steps.filter((s) => !s.done || (s.terminal || "").startsWith("parked:"));
+  const names = held.slice(0, 3).map((s) => s.title).filter(Boolean).join(" · ");
+  return {
+    kind: "resume",
+    title: "This session is shut down",
+    subtitle: p.query ? `“${p.query}”${p.location ? ` · ${p.location}` : ""}` : "",
+    why: held.length
+      ? `Its browser stopped, but nothing else did: ${held.length} application`
+        + `${held.length === 1 ? "" : "s"} still on the ledger${names ? ` (${names}${held.length > 3 ? " …" : ""})` : ""}, `
+        + `and the search is already spent for this session. Resuming relaunches the browser on the `
+        + `same signed-in profile and picks the queue back up — starting fresh would run a second `
+        + `query for a page you have already chosen from.`
+      : "Its browser stopped. Resuming relaunches it on the same signed-in profile; the session's "
+        + "ledger is untouched.",
+    primary: { label: held.length ? `Resume · carry ${held.length} over` : "Resume this session",
+      endpoint: "/resume", body: {},
+      why: "Relaunches this session's Chrome on its own profile. The sign-in comes back with it "
+         + "and the search is not re-run." },
+    alternates: [],
+  };
+}
+
+/**
  * Declaring the NEXT search in this session — the second legitimate detour.
  *
  * Reuses the `declare` focus so there is one setup form, not two. What changes is the framing:
@@ -505,6 +544,9 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
 
   // WHERE THE SESSION ACTUALLY IS — one resolution, in priority order, every branch a fact about
   // the world rather than a preference about layout:
+  //   0. THE BROWSER IS GONE. Truer than any of the below, because every one of them describes
+  //      work that needs a browser to do. A shut-down session keeps its ledger, so branch 2 used
+  //      to win and offer "Work this" over a Chrome that did not exist (2026-08-13).
   //   1. a session/end blocker — the truest thing available: the session is stopped, and where.
   //   2. an application in flight — it holds the page open, so it IS the work. This is the branch
   //      that resolves the 2026-08-05 screenshot: the ladder said "page 1 reviewed, next" while an
@@ -512,8 +554,15 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   //   3. results on screen — the page's decision (first time or choosing again).
   //   4. at the start line with nothing read yet — read the page.
   //   5. still climbing — the preamble.
+  //
+  // `regressed` and not "anything but held": a rung that has never been walked is the ordinary
+  // start of a session and belongs to the preamble at branch 5, which knows how to climb it.
+  // Regressed means it WAS held and the world took it away — which is exactly a shutdown.
+  const browserGone = ladder.some((r) => r.id === "provisioned" && r.status === "regressed");
+
   let focus;
-  if (blocker?.stage === "session") focus = setupFocus(p, p.last_step);
+  if (browserGone) focus = resumeFocus(p);
+  else if (blocker?.stage === "session") focus = setupFocus(p, p.last_step);
   else if (blocker?.stage === "end") focus = endFocus(qs);
   else if (attentionStep) focus = executeFocus(p, attentionStep, p.next_action);
   else if (results.length > 0) focus = decideFocus(p, results, picks, qs);
