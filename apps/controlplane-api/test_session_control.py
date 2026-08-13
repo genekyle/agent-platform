@@ -5147,3 +5147,39 @@ def test_lost_mid_application_offers_orient_not_the_rewalk_rung(monkeypatch):
     assert na["source"] == "orient" and na["lost"] is True
     assert na["label"].startswith("Orient")
     assert na["secondary"]["source"] == "rung"
+
+
+# --------------------------------------------------------- what "new" means, said precisely
+# Every unplaced screen rendered as "New territory" — a phrase this system reserves for an ATS
+# nobody has driven, go by hand. The operator hit it on an ordinary job on ground we know well
+# (2026-08-13): "technically yes we've never opened this job before, but we've opened other job
+# cards before". A warning that fires on the routine case cannot be read on the real one.
+def _flow_for(platform: str, state: str):
+    from routers.session_control import _apply_flow
+    step = aps.ApplyStep(job_id="indeed:x", title="Analyst", company="Acme")
+    step.platform = platform
+    step.landing_state = state
+    return _apply_flow(step)
+
+
+def test_an_unnamed_screen_on_ground_we_drive_is_not_new_territory():
+    """The operator's case. We drive Workday constantly; a screen its spine cannot place is an
+    unnamed SCREEN, not an unknown platform, and must not borrow the platform warning."""
+    flow = _flow_for("workday", "workday_some_screen_nobody_named")
+    assert flow["recognised"] is False
+    assert flow["novelty"] == "unplaced_screen"
+    assert flow["platform_known"] is True
+    assert "Familiar platform" in flow["headline"]
+
+
+def test_a_platform_with_no_recipe_is_the_one_that_keeps_the_warning():
+    flow = _flow_for("an_ats_nobody_has_ever_driven", "something_odd")
+    assert flow["novelty"] == "new_platform"
+    assert flow["platform_known"] is False
+
+
+def test_nothing_classified_yet_is_not_novelty_at_all():
+    """A freshly-queued step has neither platform nor state. That is 'we have not looked', which
+    is the most common way this banner appeared and the least like new territory."""
+    assert _flow_for("", "")["novelty"] == "unread"
+    assert _flow_for("", "some_state")["novelty"] == "unclassified"

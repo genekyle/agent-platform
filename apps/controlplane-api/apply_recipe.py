@@ -1117,6 +1117,30 @@ def flow_order(platform: Optional[str]) -> list[str]:
     return list(_FLOW_ORDERS.get(_canon(platform), []))
 
 
+def platform_known(platform: Optional[str]) -> bool:
+    """Have we driven this ATS before — i.e. does anything here know its shape?
+
+    Two ways to qualify, and they are the two ways an application gets driven: a SCRIPTED spine in
+    `_FLOW_ORDERS`, or the generic ATS cadence, which serves any real off-engine registry entry by
+    counting along the shared shape. Only a platform that is neither is the "drive it by hand"
+    case the tail means by genuinely new territory.
+
+    This exists because "we cannot place this SCREEN" and "we have never seen this PLATFORM" were
+    being reported with the same words (operator, 2026-08-13). The first is routine — an unnamed
+    step on ground we know well. The second is the one worth a warning.
+    """
+    if not platform:
+        return False
+    if _canon(platform) in _FLOW_ORDERS:
+        return True
+    # The generic cadence's own entry test, asked WITHOUT a state — `_generic_kind`'s first two
+    # conditions. (Its third, that the state parses as `<platform>_<kind>`, is a fact about the
+    # SCREEN, which is exactly the thing we are refusing to conflate with the platform here.)
+    import ats_registry
+    entry = ats_registry._BY_ID.get(platform)
+    return entry is not None and platform not in ats_registry._ON_ENGINE_APPLY
+
+
 def _wall_index(order: list[str]) -> Optional[int]:
     """The position of the first auth-ish state in a flow order, or None if the flow has none."""
     for i, s in enumerate(order):

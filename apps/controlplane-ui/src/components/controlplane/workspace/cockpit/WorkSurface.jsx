@@ -83,13 +83,51 @@ function Actions({ focus, busy, call, onNewSearch }) {
 //
 // The count is an UPPER BOUND and says so: platforms skip screens whose answers the profile
 // already holds, and skipping only ever shortens the path.
-function FlowStrip({ flow }) {
+// WHAT "NEW" MEANS HERE, SAID PRECISELY.
+//
+// Every unplaced screen used to render as "New territory", a phrase this system reserves for
+// something strong and rare: an ATS nobody has driven, go by hand. The operator read it on an
+// ordinary job on ground we know well (2026-08-13) — "technically yes we've never opened this job
+// before, but we've opened other job cards before". A warning that fires on the routine case
+// cannot be read on the real one.
+//
+// So the platform question and the JOB question are separated. `flow.novelty` says which kind of
+// unplaced we are looking at; `applied` answers the one the operator actually asked — have we
+// been here before? That check already runs on landing (`applied_index`, three tiers: same id,
+// same requisition through another door, same employer+role) and already halts an exact match.
+// It was simply never shown next to the word "new".
+const NOVELTY_TONE = {
+  unread: "flowstrip--quiet",
+  unclassified: "flowstrip--quiet",
+  unplaced_screen: "flowstrip--quiet",
+  new_platform: "flowstrip--unknown",
+};
+
+function AppliedNote({ applied }) {
+  if (!applied || !applied.status || applied.status === "none") {
+    return <span className="flowstrip__note">Never applied to this one.</span>;
+  }
+  const when = applied.applied_at ? ` on ${applied.applied_at.slice(0, 10)}` : "";
+  const how = applied.matched_on ? ` (${applied.matched_on})` : "";
+  return (
+    <span className={applied.status === "applied" ? "flowstrip__note is-stop" : "flowstrip__note is-warn"}>
+      {applied.status === "applied"
+        ? <><strong>Already applied</strong>{when}{how}.</>
+        : <><strong>Possibly applied before</strong>{how} — {(applied.evidence || []).join("; ")}.</>}
+    </span>
+  );
+}
+
+function FlowStrip({ flow, applied }) {
   if (!flow) return null;
   if (!flow.recognised) {
     return (
-      <div className="flowstrip flowstrip--unknown">
+      <div className={`flowstrip ${NOVELTY_TONE[flow.novelty] || "flowstrip--unknown"}`}>
         <AppIcon name="eye" size={12} />
-        <span>New territory — {flow.why}.</span>
+        <span>
+          <strong>{flow.headline || "New territory"}</strong> — {flow.why}.
+        </span>
+        <AppliedNote applied={applied} />
       </div>
     );
   }
@@ -596,7 +634,7 @@ export function WorkSurface({
         {focus.subtitle && <p className="work__subtitle">{focus.subtitle}</p>}
         {/* The walk BEFORE the reasoning: "where am I in this application" is the question the
             operator asks first, and it was the one the surface could not answer at all. */}
-        <FlowStrip flow={focus.flow} />
+        <FlowStrip flow={focus.flow} applied={panel.applied_check} />
         {focus.why && <p className="work__why">{focus.why}</p>}
 
         {error && <div className="coaching-error">{error}</div>}

@@ -697,10 +697,22 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .flowstrip__step.is-gate { border-color: var(--danger); color: var(--danger); }
 .flowstrip__step.is-gate.is-current { background: var(--danger-soft); color: var(--danger); }
 .flowstrip--unknown {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   font-size: 12px; color: var(--warning);
   background: var(--warning-soft); border-color: var(--warning);
 }
+
+/* An unnamed screen on ground we drive is ROUTINE. It gets the neutral register, so the warning
+   colour is left to mean the one thing worth alarming about: a platform with no recipe. */
+.flowstrip--quiet {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-muted);
+  background: transparent; border-color: var(--border);
+}
+
+.flowstrip__note { color: var(--text-muted); }
+.flowstrip__note.is-warn { color: var(--warning, #d8a657); }
+.flowstrip__note.is-stop { color: var(--danger, #e06c75); }
 
 /* --- the gate: the one irreversible press ---------------------------------------------------- */
 .gatecard { border-color: var(--danger); background: var(--danger-soft); }

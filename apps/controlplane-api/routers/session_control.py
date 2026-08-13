@@ -733,9 +733,38 @@ def _apply_flow(step: Optional[Any]) -> Optional[dict[str, Any]]:
     state = step.landing_state or ""
     progress = ar.flow_progress(state, platform=step.platform or "")
     if not progress.get("recognised"):
-        return {"recognised": False, "state": state, "platform": step.platform or "",
-                "parked": parked,
-                "why": "the recipe does not place this screen on a flow it can count along"}
+        # WHY IT IS UNPLACED, SPECIFICALLY. All three of these used to render as one sentence —
+        # "New territory" — which in this system means something strong and rare: an ATS nobody
+        # has driven, go by hand. The operator read it on an ordinary job on ground we know well
+        # (2026-08-13): "technically yes we've never opened this job before, but we've opened
+        # other job cards before". Conflating "we have not looked yet" and "a job we have not
+        # applied to" with "a platform we cannot drive" makes the real warning unreadable, because
+        # it fires constantly.
+        #
+        # The novelty that matters to the OPERATOR is about the job (have we been here before?),
+        # and it is already answered elsewhere — `applied_check` runs on landing and halts an
+        # exact match. The novelty that matters to the DRIVE is about the platform. So say which.
+        platform = step.platform or ""
+        known = ar.platform_known(platform)
+        if not platform and not state:
+            novelty, headline, why = ("unread", "Not read yet",
+                                      "nothing has been classified on this step — open the job "
+                                      "and the screen names itself")
+        elif not platform:
+            novelty, headline, why = ("unclassified", "Not classified yet",
+                                      "this screen has no platform yet, so there is no spine to "
+                                      "count along — classify it first")
+        elif known:
+            novelty, headline, why = ("unplaced_screen", f"Familiar platform · unnamed screen",
+                                      f"we drive {platform}, but this particular screen is not on "
+                                      f"its spine — name it and the walk resumes")
+        else:
+            novelty, headline, why = ("new_platform", "New platform — no recipe",
+                                      f"nothing here has driven {platform or 'this platform'} "
+                                      f"before; it is hand-driven until a recipe exists")
+        return {"recognised": False, "state": state, "platform": platform,
+                "parked": parked, "novelty": novelty, "headline": headline,
+                "platform_known": known, "why": why}
     order = ar.flow_order(step.platform)
     gate = ar.gate_state(step.platform)
     here = progress.get("position") or 0

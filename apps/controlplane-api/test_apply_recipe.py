@@ -258,3 +258,22 @@ def test_the_gate_presses_a_button_never_a_heading():
     assert ar.submit_control(["Submit your application"]) == "Submit your application"
     # A page with only the heading has no pressable gate — the honest answer is none.
     assert ar.submit_control(["heading|Submit Application"]) == ""
+
+
+# --------------------------------------------------------------------- platform_known
+# "We cannot place this SCREEN" and "we have never seen this PLATFORM" were reported with the same
+# words, so the rare warning fired constantly and stopped being readable (operator, 2026-08-13).
+def test_platform_known_covers_scripted_and_generic_ground():
+    import apply_recipe as ar
+    assert ar.platform_known("workday") is True        # scripted spine
+    assert ar.platform_known("icims") is True
+    # An off-engine registry entry with no scripted flow is still ground the generic ATS cadence
+    # walks — it is not "drive it by hand" territory.
+    assert ar.platform_known("company_site") is True
+
+
+def test_platform_known_is_false_only_for_ground_nothing_can_drive():
+    import apply_recipe as ar
+    assert ar.platform_known("") is False
+    assert ar.platform_known(None) is False
+    assert ar.platform_known("an_ats_nobody_has_ever_driven") is False
