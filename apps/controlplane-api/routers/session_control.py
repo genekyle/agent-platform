@@ -3045,11 +3045,25 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
         res = await _capture_post("/check_group", {
             "browser_url": browser_url, "tab_id": tab_id,
             "selector": addr["selector"], "values": ["*"]})
+        # A BOX THAT IS NOT THERE IS NOT A BOX WE FAILED TO TICK. Tenants of the same ATS differ on
+        # this: SolutionHealth's Workday signup requires a consent checkbox and bounces without it
+        # (which is why this step exists), and C&S's Workday signup has none at all — email,
+        # password, verify, submit (measured live 2026-08-13, AX scan: zero checkboxes on the
+        # form). Treating every consent as mandatory for the whole ATS made a form with nothing to
+        # consent to unsubmittable.
+        #
+        # The distinction is the whole safety property, so it rests on a MEASURED absence —
+        # `not_found` from the protocol, which searches frames — and nothing else. A box that IS
+        # there and will not tick still stops the submit, because a consent we cannot confirm is
+        # not a consent.
+        if str(res.get("outcome") or "") == "not_found":
+            continue
         if not res.get("ok"):
             return {"ok": False, "reason": "check_failed", "staged": staged,
                     "detail": f"Could not check {field!r} "
-                              f"({res.get('code') or res.get('detail')}). The form requires it, "
-                              f"so submitting now would bounce — nothing was submitted."}
+                              f"({res.get('code') or res.get('outcome') or res.get('detail')}). "
+                              f"The form requires it, so submitting now would bounce — nothing "
+                              f"was submitted."}
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
 
     # CONFIRMS — required consents, always a deliberate act against a field somebody wrote down,

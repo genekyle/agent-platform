@@ -203,6 +203,7 @@ async def react_select_pick(cdp, *, selector: str, value: str,
 # unanswered. Match labels EXACTLY: "No" must not match "Yes, non-compete".
 CHECK_GROUP_JS = r"""
 (cfg) => {
+  __WIDGET_TELLS__
   const log = [];
   const vis = e => { try { const r = e.getBoundingClientRect();
                            return e.offsetParent !== null && r.width > 0 && r.height > 0; }
@@ -829,3 +830,13 @@ assert "__WIDGET_TELLS__" not in SCAN_REQUIRED_JS, "the tells placeholder did no
 # surfaces as "no node matching", i.e. as a stale recipe.
 _FOCUS_AND_OPEN_JS = _FOCUS_AND_OPEN_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
 assert "__WIDGET_TELLS__" not in _FOCUS_AND_OPEN_JS
+
+# CHECK_GROUP_JS resolves a target too, and was the blob that never got its tells — so every call
+# threw `ReferenceError: __findAll is not defined`, `Runtime.evaluate` returned no value, and the
+# endpoint reported a bare `outcome: "error"` with an EMPTY detail. Which means the required-consent
+# checkbox step has never actually run on any tenant since it was added (2026-08-11): its recipe
+# said "check the acknowledge box", the call always failed, and the failure was worded as though
+# the page were at fault. Found 2026-08-13 when it blocked a C&S Workday signup — the operator
+# read it as "it couldn't find the Create Account button".
+CHECK_GROUP_JS = CHECK_GROUP_JS.replace("__WIDGET_TELLS__", WIDGET_TELLS_JS)
+assert "__WIDGET_TELLS__" not in CHECK_GROUP_JS
