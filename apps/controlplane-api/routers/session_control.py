@@ -4384,14 +4384,30 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     #
     # Same guard the advance path uses: a look that read LESS does not overrule one that read more,
     # so a non-answer never overwrites a named screen.
-    if (disc.state and disc.state != step.landing_state
-            and not disc.state.endswith((al.UNKNOWN, al.UNREADABLE))):
+    # NAMED IN THE PLATFORM'S OWN VOCABULARY. `classify_landing` answers in the GENERIC kinds
+    # (`workday_application_form`), and a platform with a scripted recipe walks its own spine
+    # (`workday_apply_method`, `workday_apply_auth`, …). Naming the screen generically therefore
+    # replaced a stale-but-placeable state with a fresh-but-unplaceable one: the walk lost its
+    # position and `steps_to_submit` went to None. `describe_for_ats` is the namer the advance
+    # path already uses, and it routes to the platform's own mapper.
+    import apply_recipe as _ar
+    _text = _content.get("text") or ""
+    _named = _ar.describe_for_ats(step.platform, ats_url, _text).get("state") or ""
+    new_state = _named or disc.state or ""
+    # ONLY WHEN THE PAGE WAS ACTUALLY READ. With no text a platform mapper falls back to its
+    # URL-only default — Workday answers `workday_job_posting` for any tenant URL "with no step
+    # marker yet" — and that is a guess about the address, not an observation of the screen.
+    # Letting it through demoted a `workday_my_information` that had been read from real content.
+    # The suffix check cannot catch it, because the default wears an ordinary state's name.
+    if (new_state and _text.strip() and new_state != step.landing_state
+            and not new_state.endswith((al.UNKNOWN, al.UNREADABLE))):
         was_state = step.landing_state
-        step.landing_state = disc.state
-        step.record("classify", aps.OK,
-                    f"screen moved: recorded as {was_state!r}, the open tab reads {disc.state!r} "
-                    f"({ats_url[:70]}).", initiator=body.initiator)
-        added.append(f"screen:{was_state}->{disc.state}")
+        step.landing_state = new_state
+        # NOT a `classify` mini. That rung's history is about naming the PLATFORM, and a screen
+        # refresh is a different fact — filing it there would make every reconcile look like a
+        # re-classification and bury the real ones. The move still lands on the record, in the
+        # reconcile log line and in this call's own report.
+        added.append(f"screen:{was_state}->{new_state}")
 
     bb.world = dict(bb.world or {})
     bb.world["apply_tab"] = next((t for t in (obs.get("tabs") or [])
