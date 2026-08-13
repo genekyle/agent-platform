@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getJSON } from "../api";
 import { AppIcon } from "../../../../ui/Icon";
@@ -57,11 +57,20 @@ export function CockpitPage({ routeSessionId, routeTab }) {
   // deliberate verb, not a thing to fall into while operating.
   const [startingFresh, setStartingFresh] = useState(false);
 
+  // One fetch, callable on the timer AND the moment we know the list changed. Provisioning a
+  // session is the one event this page causes itself: without an immediate re-read, navigating to
+  // the brand-new session found it missing from the last poll's snapshot and fell through to
+  // "no live sessions — start one", over a browser that had just launched. A page must not
+  // report a world older than the action it just took.
+  const refreshSessions = useCallback(() => (
+    getJSON("/api/sessions")
+      .then((d) => { setSessions(d.sessions || []); return d.sessions || []; })
+      .catch(() => { setSessions((prev) => prev ?? []); return []; })
+  ), []);
+
   useEffect(() => {
     const poll = () => {
-      getJSON("/api/sessions")
-        .then((d) => setSessions(d.sessions || []))
-        .catch(() => setSessions((prev) => prev ?? []));
+      refreshSessions();
       getJSON("/api/controller/teacher/pending")
         .then((d) => setParks(d.pending || []))
         .catch(() => {});
@@ -69,7 +78,7 @@ export function CockpitPage({ routeSessionId, routeTab }) {
     poll();
     const t = setInterval(poll, SESSIONS_MS);
     return () => clearInterval(t);
-  }, []);
+  }, [refreshSessions]);
 
   const requestedTab = TAB_ALIASES[routeTab] || routeTab;
   const tab = COCKPIT_TABS.some((t) => t.id === requestedTab) ? requestedTab : "now";
@@ -143,7 +152,8 @@ export function CockpitPage({ routeSessionId, routeTab }) {
   if (!pinned && !hinted && liveSessions.length === 0) {
     return (
       <div className="cockpit-page">
-        <StartSession sessions={sessions} onStarted={(id) => navigate(pathFor(id))} />
+        <StartSession sessions={sessions}
+                      onStarted={async (id) => { await refreshSessions(); navigate(pathFor(id)); }} />
         {sessions.length > 0 && (
           <p className="empty-hint">
             {sessions.length} closed session{sessions.length === 1 ? "" : "s"} on record — pick
@@ -198,7 +208,11 @@ export function CockpitPage({ routeSessionId, routeTab }) {
       {startingFresh && (
         <StartSession
           sessions={sessions}
-          onStarted={(id) => { setStartingFresh(false); navigate(pathFor(id)); }} />
+          onStarted={async (id) => {
+            setStartingFresh(false);
+            await refreshSessions();   // the new session must exist here before we route to it
+            navigate(pathFor(id));
+          }} />
       )}
 
       {tab === "trace" ? (
