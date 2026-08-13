@@ -276,19 +276,31 @@ class TrajectoryDriver(ABC):
         #
         # Walking `frameElement` up the chain also lets each ancestor scroll the frame itself into
         # view, which is what makes the final coordinates land inside the viewport at all.
-        center = await cdp.send("Runtime.callFunctionOn", {
+        #
+        # BUT THE WALK CANNOT MEASURE, ONLY SCROLL. It translates frame-local coordinates into page
+        # space just as long as `frameElement` is reachable — and from inside a CROSS-ORIGIN frame
+        # `window.frameElement` is NULL, not an error. So the loop never runs, `framed` reports
+        # false, and the function hands back FRAME-LOCAL coordinates wearing page coordinates'
+        # clothes: the same silent no-op described above, one origin further out, and invisible
+        # because nothing throws. Measured live on iCIMS (2026-08-12): the VEVRAA self-ID radio sat
+        # at (25.5, 574) inside `icims_formFrame` and at (45.5, 392) in the page; the trusted click
+        # went to (25.5, 574), landed on nothing, and /execute returned ok with the radio still
+        # unchecked. Trusted input DOES reach that frame — the coordinates were simply wrong.
+        #
+        # `DOM.getBoxModel` performs the frame translation in the browser, so it is right at every
+        # frame depth and for both origins, and it is the same measurement the AX proposer's bboxes
+        # come from — selector and executor now agree by construction. The in-page call keeps only
+        # the job it can still do everywhere: scrolling.
+        await cdp.send("Runtime.callFunctionOn", {
             "objectId": object_id, "returnByValue": True,
             "functionDeclaration": ("function(){ this.scrollIntoView({block:'center',inline:'center'});"
-                                    " const r=this.getBoundingClientRect();"
-                                    " let x=r.x+r.width/2, y=r.y+r.height/2;"
                                     " let win=this.ownerDocument.defaultView, hops=0;"
                                     " while(win && win.frameElement && hops++ < 5){"
                                     "   const fe=win.frameElement;"
                                     "   fe.scrollIntoView({block:'center',inline:'center'});"
-                                    "   const fr=fe.getBoundingClientRect();"
-                                    "   x+=fr.x; y+=fr.y; win=fe.ownerDocument.defaultView; }"
-                                    " return {x:x, y:y, framed:hops>0}; }")})
-        pt = (center.get("result") or {}).get("value") or {}
+                                    "   win=fe.ownerDocument.defaultView; }"
+                                    " return {framesScrolled:hops}; }")})
+        pt = await self._node_centre(cdp, request.backend_node_id)
         if "x" in pt and "y" in pt:
             await self._approach(cdp, float(pt["x"]), float(pt["y"]), start)
 
@@ -324,6 +336,29 @@ class TrajectoryDriver(ABC):
         else:  # click / default
             await self._element_click(cdp, object_id, pt)
         return "element"
+
+    async def _node_centre(self, cdp, backend_node_id: Optional[int]) -> dict[str, float]:
+        """The node's centre in TOP-LEVEL PAGE coordinates, measured by the browser.
+
+        `DOM.getBoxModel` reports the content quad already translated out of whatever frame the node
+        lives in — the one measurement an in-page `getBoundingClientRect` cannot make across a
+        cross-origin boundary, where `frameElement` reads null and the arithmetic silently stops.
+
+        Returns {} when the node has no box (display:none, detached, collapsed) so the caller falls
+        back honestly to the native click instead of pressing a made-up point.
+        """
+        if backend_node_id is None:
+            return {}
+        try:
+            box = await cdp.send("DOM.getBoxModel", {"backendNodeId": backend_node_id})
+        except Exception as exc:  # noqa: BLE001 — a node with no box is a verdict, not a crash
+            logger.debug("getBoxModel found no box for node %s: %s", backend_node_id, exc)
+            return {}
+        quad = ((box.get("model") or {}).get("content")) or []
+        if len(quad) < 6:
+            return {}
+        return {"x": (float(quad[0]) + float(quad[4])) / 2.0,
+                "y": (float(quad[1]) + float(quad[5])) / 2.0}
 
     async def _element_click(self, cdp, object_id: str, pt: dict) -> None:
         """The click portion of a node-based action. Base = the native synthetic `this.click()` —

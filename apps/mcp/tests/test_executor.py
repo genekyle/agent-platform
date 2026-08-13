@@ -242,3 +242,63 @@ def test_upload_that_no_witness_confirms_is_not_staged():
     mode = asyncio.run(DirectDriver()._element_act(FakeCDP(), req))
     assert mode.startswith("upload:not_staged")
     assert "rendered=no" in mode
+
+
+# --- cross-origin frames: the centre comes from CDP, never from the in-page frameElement walk ---
+#
+# Regression for the iCIMS VEVRAA form (live 2026-08-12). Inside a cross-origin frame
+# `window.frameElement` is NULL rather than an error, so the in-page walk returned FRAME-LOCAL
+# coordinates and reported `framed:false`. The trusted click went 182px wide of the radio, hit
+# nothing, and /execute answered ok. The page's own arithmetic cannot cross that boundary;
+# `DOM.getBoxModel` can, because the browser does the translation.
+def _framed_cdp(box_quad, record):
+    class FakeCDP:
+        async def send(self, method, params=None):
+            record.append((method, params or {}))
+            if method == "DOM.resolveNode":
+                return {"object": {"objectId": "obj-1"}}
+            if method == "DOM.getBoxModel":
+                if box_quad is None:
+                    raise RuntimeError("DOM.getBoxModel: Could not compute box model")
+                return {"model": {"content": box_quad}}
+            return {"result": {"value": {"framesScrolled": 0}}}
+    return FakeCDP()
+
+
+def test_element_act_measures_centre_with_box_model_not_page_arithmetic():
+    from app.executor.driver import ActionRequest, DirectDriver
+
+    sent = []
+    # The live numbers: frame-local centre (25.5, 574) vs the true page centre (45.5, 392).
+    quad = [39.0, 385.5, 52.0, 385.5, 52.0, 398.5, 39.0, 398.5]
+    req = ActionRequest(action_id="click", target_bbox={"x": 0, "y": 0, "width": 0, "height": 0},
+                        backend_node_id=3782)
+    asyncio.run(DirectDriver()._element_act(_framed_cdp(quad, sent), req))
+
+    # The scroll walk must no longer be asked for coordinates — only for scrolling.
+    walks = [p for m, p in sent if m == "Runtime.callFunctionOn"
+             and "scrollIntoView" in p.get("functionDeclaration", "")]
+    assert walks, "the element must still be scrolled into view"
+    assert "getBoundingClientRect" not in walks[0]["functionDeclaration"], \
+        "measuring in-page is exactly what breaks across a cross-origin frame"
+
+    # And the centre used is the browser's, in page space.
+    assert ("DOM.getBoxModel", {"backendNodeId": 3782}) in sent
+
+
+def test_node_centre_is_the_box_model_quad_centre():
+    from app.executor.driver import DirectDriver
+
+    quad = [39.0, 385.5, 52.0, 385.5, 52.0, 398.5, 39.0, 398.5]
+    pt = asyncio.run(DirectDriver()._node_centre(_framed_cdp(quad, []), 3782))
+    assert pt == {"x": 45.5, "y": 392.0}
+
+
+def test_node_centre_returns_empty_when_the_node_has_no_box():
+    """No box → no point. The caller falls back to the native click, which is honest;
+    inventing a coordinate is how a click lands on nothing and still reports ok."""
+    from app.executor.driver import DirectDriver
+
+    assert asyncio.run(DirectDriver()._node_centre(_framed_cdp(None, []), 99)) == {}
+    assert asyncio.run(DirectDriver()._node_centre(_framed_cdp([1.0, 2.0], []), 99)) == {}
+    assert asyncio.run(DirectDriver()._node_centre(_framed_cdp([1.0], []), None)) == {}
