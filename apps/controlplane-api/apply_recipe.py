@@ -1117,6 +1117,19 @@ def flow_order(platform: Optional[str]) -> list[str]:
     return list(_FLOW_ORDERS.get(_canon(platform), []))
 
 
+def generic_flow_order(platform: Optional[str]) -> list[str]:
+    """The SHARED ATS spine in this platform's own state names — `cornerstone_review`, and so on.
+
+    `flow_order` answers only for platforms with a scripted recipe, so an application the generic
+    cadence was happily counting ("at most 3 screens from Submit") rendered its walk as an empty
+    list: a progress bar with a number and no steps. The cadence knows the shape; it just had no
+    way to say it. Live 2026-08-13 on `company_site` (Boston Children's own portal).
+    """
+    if not platform:
+        return []
+    return [f"{platform}_{k}" for k in GENERIC_ATS_ORDER]
+
+
 def platform_known(platform: Optional[str]) -> bool:
     """Have we driven this ATS before — i.e. does anything here know its shape?
 

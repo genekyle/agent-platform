@@ -765,8 +765,13 @@ def _apply_flow(step: Optional[Any]) -> Optional[dict[str, Any]]:
         return {"recognised": False, "state": state, "platform": platform,
                 "parked": parked, "novelty": novelty, "headline": headline,
                 "platform_known": known, "why": why}
-    order = ar.flow_order(step.platform)
-    gate = ar.gate_state(step.platform)
+    # A platform without a scripted recipe is still WALKED — by the generic ATS cadence, which
+    # counted this one to "at most 3 screens from Submit" while `flow_order` (scripted spines
+    # only) returned nothing, so the strip drew a number with no steps under it.
+    order = ar.flow_order(step.platform) or (
+        ar.generic_flow_order(step.platform) if progress.get("via") == "generic_ats" else [])
+    gate = ar.gate_state(step.platform) or (
+        f"{step.platform}_review" if progress.get("via") == "generic_ats" else None)
     here = progress.get("position") or 0
     return {
         "recognised": True, "platform": progress.get("platform"), "state": state,
