@@ -902,19 +902,28 @@ def test_a_submit_swallowed_by_the_location_widget_is_clicked_again(monkeypatch)
     hit-test target at its own centre, the trusted click dispatched — and the page did not move.
     Typing into the location combobox stages a suggestion popup, and the first click is spent
     dismissing it. The second one submits."""
-    calls = {"n": 0}
+    # A WORLD, not a call script — the same fixture lesson its neighbour below spells out. This
+    # test used to flip the page on the FIFTH `/list_tabs`, which modelled a browser that
+    # navigates because somebody looked at it. It passed only while the production code happened
+    # to read exactly four times; when the commit began WAITING for its navigation instead of
+    # racing it (2026-08-13), the extra reads "navigated" the page with no second click and the
+    # retry this test exists to prove never fired. Reads are free and side-effect-free; the page
+    # moves on the second CLICK, because the first is spent dismissing the location widget.
+    world = {"clicks": 0}
+
+    def _execute(payload):
+        if payload.get("action_id") == "click":
+            world["clicks"] += 1
+        return {"outcome": "ok"}
 
     def _list_tabs(_payload):
-        calls["n"] += 1
-        # 1 observe, 2 pre-click, 3 post-click (STILL the home page — the click was swallowed by
-        # the location widget, nothing moved), 4 pre-retry, 5 post-retry: results at last.
-        return _tabs(SEARCH_URL) if calls["n"] >= 5 else _tabs("https://www.indeed.com/")
+        return _tabs(SEARCH_URL) if world["clicks"] >= 2 else _tabs("https://www.indeed.com/")
 
     harness, saved = _install(monkeypatch,
                               {"/list_tabs": _list_tabs,
                                "/auth_state": {"ok": True, "logged_in": True},
                                "/ax_scan": _SEARCH_PAGE_AX,
-                               "/execute": {"outcome": "ok"}},
+                               "/execute": _execute},
                               blackboard=_ready_for_query())
     try:
         r = client.post("/api/session_control/1/step", json={}).json()
@@ -925,6 +934,51 @@ def test_a_submit_swallowed_by_the_location_widget_is_clicked_again(monkeypatch)
     clicks = [p for path, p in harness.calls
               if path == "/execute" and p["action_id"] == "click"]
     assert len(clicks) == 2, "one click to commit the widget, one to submit"
+
+
+def test_a_commit_whose_results_land_late_is_still_marked(monkeypatch):
+    """THE OTHER HALF OF THE RACE, measured live 2026-08-13 (session #28, "report analyst").
+
+    The commit submitted and the results page loaded — but the tab list was read once, one pause
+    later, while the navigation was still in flight. `run_query` saw `moved=False, tab=None`, and
+    then did exactly the right things with the wrong facts: refused to mark the CONSUMING rung,
+    refused to retry, told the operator to check the browser. The session stalled one observation
+    short of a search that had worked, on a rung that may not be re-run.
+
+    So the commit now WAITS for its own navigation. The page moves because of the CLICK; it just
+    takes a moment. Reads never cause it — they only let time pass, and re-reading a tab list
+    spends nothing.
+    """
+    world = {"clicked": False, "looks": 0}
+
+    def _execute(payload):
+        if payload.get("action_id") in ("click", "submit"):
+            world["clicked"] = True
+        return {"outcome": "ok"}
+
+    def _list_tabs(_payload):
+        if not world["clicked"]:
+            return _tabs("https://www.indeed.com/")
+        world["looks"] += 1
+        # In flight for the first two looks after the commit, then it has landed.
+        return _tabs(SEARCH_URL) if world["looks"] > 2 else _tabs("https://www.indeed.com/")
+
+    harness, saved = _install(monkeypatch,
+                              {"/list_tabs": _list_tabs,
+                               "/auth_state": {"ok": True, "logged_in": True},
+                               "/ax_scan": _SEARCH_PAGE_AX,
+                               "/execute": _execute},
+                              blackboard=_ready_for_query())
+    try:
+        r = client.post("/api/session_control/1/step", json={}).json()
+    finally:
+        _teardown()
+
+    assert r["last_step"]["ok"] is True, "the search landed; waiting for it is not a failure"
+    assert cps.Ledger.from_dict(saved["bb"].checkpoints).holds("query_entered")
+    commits = [p for path, p in harness.calls
+               if path == "/execute" and p["action_id"] in ("click", "submit")]
+    assert len(commits) == 1, "waiting for the navigation must never become a second submit"
 
 
 def test_a_submit_whose_confirmation_raced_the_navigation_is_never_clicked_twice(monkeypatch):

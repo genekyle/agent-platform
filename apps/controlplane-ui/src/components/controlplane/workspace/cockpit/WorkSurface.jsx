@@ -342,6 +342,44 @@ function DecideBody({ panel, picks, armed, onPick, onClear, note, setNote, busy 
   );
 }
 
+// A STEP THAT REFUSED, SAID OUT LOUD.
+//
+// These endpoints are careful in exactly the way that matters: when a rung's effect cannot be
+// CONFIRMED they mark nothing, refuse to retry, and return 200 with `ok:false` plus a detail
+// naming what was done, what was left unmarked, and why repeating it would be worse than
+// stopping. The cockpit rendered none of it — `call` only shows a message when the HTTP call
+// THROWS, and a deliberate refusal is a success at the transport layer.
+//
+// Live 2026-08-13, session #28: `run_query` committed the query by Enter, then read the tab list
+// before the results page had landed, so it could not confirm its own effect and left
+// `query_entered` unmarked — correctly, since that rung is CONSUMING and a second submit spends
+// the query twice. The operator saw an unchanged "Step · Query run" button and nothing else: the
+// surface silently invited the exact double-spend the backend had just refused to risk. A
+// refusal nobody can read is indistinguishable from a stall, and the recovery it points at
+// (`adopt_from_window`, which records only what the window PROVES) had no control anywhere.
+function Refusal({ panel, busy, call }) {
+  const last = panel.last_step;
+  if (!last || last.ok !== false || !last.detail) return null;
+  return (
+    <div className="work__refusal">
+      <p className="cv-blocked">
+        <AppIcon name="alert" size={13} />{" "}
+        <strong>Nothing was marked{last.action ? ` — ${last.action}` : ""}.</strong> {last.detail}
+      </p>
+      {/* The window may already show the effect this step could not confirm in time. Adopting is
+          a RECOVERY, not a re-run: it records only what the page proves, and refuses the rest. */}
+      {panel.awaiting === "operator_verify" && (
+        <button className="btn btn-sm" disabled={busy}
+                aria-label="Adopt what the window proves"
+                title="Reads the live window and marks only what it can prove — never re-runs the step."
+                onClick={() => call("/adopt_from_window", {})}>
+          Check the browser — adopt what it proves
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ExecuteBody({ focus, panel, busy, call, decide }) {
   const last = panel.last_step;
   const account = focus.account || focus.handoff;
@@ -562,6 +600,10 @@ export function WorkSurface({
         {focus.why && <p className="work__why">{focus.why}</p>}
 
         {error && <div className="coaching-error">{error}</div>}
+
+        {/* A refusal is not an error and not a success — it is the system declining to claim
+            something it could not confirm, and the operator is the only one who can settle it. */}
+        <Refusal panel={panel} busy={busy} call={call} />
 
         {/* What is about to leave, stated before the button that sends it. */}
         {focus.kind === "gate" && <GateBody focus={focus} />}

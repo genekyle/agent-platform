@@ -1677,6 +1677,13 @@ async def _dispatch(nxt: cps.NextStep, *, session: TrainingSession, bb: Any, led
 #: transport error, an empty dict — is NOT a result and must never be read as one.
 _ACTED_OK = {"ok", "committed_unconfirmed"}
 
+#: How long a committed search gets to SHOW ITS RESULTS before we conclude it did not take, and
+#: how often we look while waiting. This budget buys re-READS only — a local CDP tab list, which
+#: spends no query and dispatches nothing — so it is generous on purpose: the alternative is
+#: concluding "nothing happened" about a search that worked, on a rung that may not be re-run.
+_SUBMIT_SETTLE_S = 12.0
+_SUBMIT_POLL_S = 0.75
+
 
 async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, browser_url: str,
                      obs: dict[str, Any],
@@ -1802,11 +1809,30 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
             ok, detail = await _act("click", controls["submit"])
         if not ok:
             return False, None, False, detail
+        # WAIT FOR THE NAVIGATION; DO NOT RACE IT. This used to sleep one navigation pause and
+        # read the tab list ONCE — a verification that can finish before the thing it verifies.
+        # Measured live 2026-08-13 (session #28, "report analyst"): the Enter commit DID submit and
+        # the results page DID load, but the single read happened while it was still in flight, so
+        # this returned `moved=False, tab=None`. The caller then did exactly the right thing with
+        # the wrong facts — refused to mark the CONSUMING rung, refused to retry — and the run
+        # stalled one observation short of a search that had worked.
+        #
+        # Polling is safe in the way that matters here: `/list_tabs` is a READ over a local CDP
+        # socket, so it spends no query, costs no data, and cannot dispatch anything. Only the
+        # commit above can act, and it has already happened. The `not moved` retry gate upstream
+        # keeps its exact meaning — it just gets a fair look before it fires.
+        # The first wait is the engine's own navigation pace (this drive stays human-paced); every
+        # look after that is just re-reading what is already there.
         await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
-        res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
-        tabs_after = res.get("tabs") or []
-        moved = [t.get("url", "") for t in tabs_after] != before
-        return True, _find_search_tab(tabs_after, query), moved, ""
+        deadline = time.monotonic() + _SUBMIT_SETTLE_S
+        while True:
+            res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+            tabs_after = res.get("tabs") or []
+            moved = [t.get("url", "") for t in tabs_after] != before
+            tab_after = _find_search_tab(tabs_after, query)
+            if tab_after is not None or time.monotonic() >= deadline:
+                return True, tab_after, moved, ""
+            await asyncio.sleep(_SUBMIT_POLL_S)
 
     clicked, tab, moved, why = await _submit_and_confirm()
     if not clicked:

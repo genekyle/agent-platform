@@ -950,3 +950,17 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .window-strip__note { color: var(--text-subtle); font-size: 11px; }
 .window-strip__confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .window-strip__confirm em { color: var(--warn, #b58a3c); font-size: 11px; }
+
+/* A step that refused. Set apart from the surrounding prose because it describes something that
+   did NOT happen — and it carries the one control that can settle it. */
+.work__refusal {
+  margin: 10px 0 2px;
+  padding: 9px 11px;
+  border: 1px solid rgba(216, 166, 87, 0.32);
+  border-left: 3px solid var(--warning, #d8a657);
+  border-radius: 8px;
+  background: rgba(216, 166, 87, 0.06);
+}
+
+.work__refusal .cv-blocked { margin: 0 0 8px; line-height: 1.5; }
+.work__refusal .cv-blocked:last-child { margin-bottom: 0; }
