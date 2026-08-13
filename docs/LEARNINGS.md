@@ -6629,3 +6629,84 @@ and signing for it is exactly the wrong-target act this whole day was about, so 
 operator. Owed next: OOPIF support (per-frame CDP execution contexts) so the census and protocols
 reach cross-origin forms, and `_resolve_ax_node` refusing ambiguity (there are two "Submit" buttons
 and two "Save & Return Later" on this very form).
+
+### The same day, fourth act — the frame the page cannot measure, and two failures that were not failures
+
+**The VEVRAA form is DONE and the blocker that stopped the third act was a reading problem, not a
+reach problem.** Last act ended at three radios "UNNAMED in AX", unwilling to guess which one was
+the decline. Four witnesses now name them, and they agree:
+* **AX in document order.** `Accessibility.getFullAXTree({frameId})` per frame (which the proposer
+  already walks) returns the radios *and* the StaticText that follows each one. A control whose own
+  name is empty is still sitting next to its label — `radio 3780 → 'I IDENTIFY AS…'`,
+  `3782 → 'I AM NOT A PROTECTED VETERAN'`, `3784 → "I DON'T WISH TO ANSWER"`.
+* **Consecutive backendDOMNodeIds** (3780/3781, 3782/3783, 3784/3785): the label is the node next
+  to its input.
+* **Geometry** (y 647.1 / 685.6 / 724.1, even spacing) matched the screenshot's three rows.
+* **The frame's own DOM**, which is decisive and was reachable all along: `Runtime.evaluate` with
+  the frame's `contextId` reads `id=icims_f_Veteran_optout`, `value='optout'`. **The element names
+  its own answer.** Cross-origin blocks *the page's* JS, not CDP's — enumerate
+  `Runtime.executionContextCreated` and evaluate in the frame directly. That one call is the whole
+  "OOPIF support" the last act filed as owed, for reading at least.
+
+**The bug this uncovered: a cross-origin frame returns NO frameElement, so the page cannot measure
+itself.** `_element_act` translated frame-local coordinates into page space by walking
+`frameElement` up the chain. From inside a cross-origin frame that property is **null, not an
+error** — so the loop never ran, the function returned `framed:false`, and the FRAME-LOCAL
+coordinates went out dressed as page coordinates. Nothing threw. The trusted click was dispatched
+into empty page, and `/execute` answered **ok** over a radio that stayed unchecked. Same silent
+no-op the same-origin fix of 07-26 was written to kill, one origin further out, invisible for
+exactly the same reason. Fixed: the centre now comes from **`DOM.getBoxModel`**, which does the
+translation in the browser and is right at every frame depth and for both origins — and is where
+the AX proposer's bboxes already come from, so selector and executor agree by construction. The
+in-page call keeps only the job it can still do everywhere: scrolling. Verified after the fix by
+driving the signature checkbox and Submit **with a zero bbox passed in**, so the coordinates could
+only have come from getBoxModel. (mcp 103.)
+
+**TWICE I concluded a capability was missing when the act had simply been aimed or blocked wrong.
+Both times an `ok` and a null result were enough to convince me.**
+1. *"Trusted input cannot reach a cross-origin frame."* Two clean tests said so — a click that
+   didn't focus, a raw CDP click that did nothing. Both used coordinates that a `scrollIntoView`
+   had silently invalidated 27px earlier. Measured atomically (measure and click in one pass, no
+   scroll between), the trusted click lands **and works**. The rule: a coordinate measured before
+   anything that can scroll is not a coordinate, and *re-measure* belongs between them, not hope.
+2. *"The fixed executor still doesn't work."* Click #1 flipped the checkbox, click #2 did nothing —
+   because between them the **session keep-alive modal** ("Keep me logged in") had greyed the page
+   and was swallowing every click. The DOM read `checked:false` and told me nothing about why. The
+   SCREENSHOT showed it instantly. [[feedback_confirm_state_with_screenshot]] earns its keep again:
+   the state witness says WHAT, only the picture says WHY.
+
+**Three more layers that are still frame-blind, all the same shape.** The census answered
+`ok:true, unanswered:0` over a 20-field form because it can only see documents it can enter — with
+`url:''`, the very proof-of-life the 08-12 fix added. `/auth_state` answered
+`logged_in:false, has_sign_in:false, has_account:false` on a signed-in session: it found no
+evidence and reported the absence as a negative. **A scan that could not enter is not a clean form,
+and a probe that found nothing has not found "no".** Both want the census's own remedy: name the
+documents you could not enter, and let "unknown" be a value.
+
+**A wheel inside that frame does nothing at all — it does not scroll-chain out.** `scroll down 420`
+with the cursor over the form: scrollY unchanged. The same wheel at `y=105`, outside the frame's
+rect: scrollY 473.5 → 773.5, exactly +300. So [[feedback_scroll_is_a_wheel_over_the_target]] gains
+a corollary: over a cross-origin frame the wheel is *swallowed*, not chained, and the cursor must
+be put on a part of the scroller the frame does not cover.
+
+**Do not reload a page you arrived at by driving — and `/dismiss_native_dialog` presses the wrong
+button for this.** `Page.reload` raised Chrome's **"Reload site? / Changes you made may not be
+saved"**, which **freezes the renderer**: CDP went blind, `/screenshot` returned `None`, and every
+call hung until timeout. `/native_dialog` diagnosed it correctly (`renderer_responsive:false`). But
+`/dismiss_native_dialog` sends **Return** on the documented assumption that "an alert() has a
+single button, so Return can only press it" — a beforeunload has **two** (Cancel / Reload), and
+Return takes the default, which is the navigation you were trying not to make. Read the buttons
+first (AX exposes them by name) and press the one you mean; cleared it with Cancel and lost
+nothing. The endpoint should choose, not assume, and its docstring names the assumption that makes
+it wrong — a good place to start.
+
+*Where it stands:* **Odyssey Step 3 (VEVRAA veteran self-identification) SUBMITTED** — the operator
+chose "I AM NOT A PROTECTED VETERAN" over the recorded decline-demographics default, signed, and
+submitted on explicit say-so. The server answered by issuing the **next form in the packet with a
+new token** (`forms?token=c8cee9d1…`), which a client cannot mint, so the transition is server-side
+and not optimistic UI. Standing at **Portal Specific Forms 2/2, the CC-305 disability
+self-identification** — same shape (`icims_f_Disability`: `Yes` / `No` / `OptOut`, its own
+signature checkbox, name and date prefilled). Sign-and-submit is authorised for it; **the answer is
+not chosen** and will not be guessed — a protected-class self-identification is the operator's
+sentence to write, and the veteran answer already proved the standing preference does not
+generalise across these forms.
