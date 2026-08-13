@@ -475,6 +475,35 @@ function resumeFocus(p) {
 }
 
 /**
+ * THE RESULTS PAGE IS GONE, and the queue is worked ON that page.
+ *
+ * A consuming rung whose effect has lapsed (the results tab closed, the browser relaunched) is
+ * reported by the ladder as RECOVER — "return to the results we already have, never re-submit".
+ * `step` honours it and refuses to dispatch. But the focus below reads "an application in flight"
+ * as the truest fact, so the cockpit offered "Work this · Open the posting" over a browser sitting
+ * on about:blank: the next queued job is opened by CLICKING ITS CARD, and there is no card.
+ *
+ * Only when nothing is mid-flight on an ATS tab. A parked application whose own tab is open is
+ * genuinely the work and does not need the results page — that step is worked where it stands.
+ */
+function recoverResultsFocus(p) {
+  const held = (p.queue?.steps || []).filter((s) => !s.done).length;
+  return {
+    kind: "recover_results",
+    title: "The results page is gone",
+    subtitle: p.query ? `“${p.query}”${p.location ? ` · ${p.location}` : ""}` : "",
+    why: (p.next?.recovery
+      || "Return to the results we already have — never re-submit the same query.")
+      + (held ? ` ${held} queued application${held === 1 ? " is" : "s are"} opened by clicking `
+        + `${held === 1 ? "its card" : "their cards"} on that page.` : ""),
+    primary: { label: "Reopen the results", endpoint: "/resume", body: {},
+      why: "Reopens the page this search already reached, from the session's own query, location "
+         + "and radius. The search is NOT re-run — re-submitting is what gets it collapsed." },
+    alternates: [],
+  };
+}
+
+/**
  * Declaring the NEXT search in this session — the second legitimate detour.
  *
  * Reuses the `declare` focus so there is one setup form, not two. What changes is the framing:
@@ -559,9 +588,15 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   // start of a session and belongs to the preamble at branch 5, which knows how to climb it.
   // Regressed means it WAS held and the world took it away — which is exactly a shutdown.
   const browserGone = ladder.some((r) => r.id === "provisioned" && r.status === "regressed");
+  // 0b. The results page is gone and nothing is mid-flight elsewhere. Same shape as 0: the queue
+  //     is worked ON that page, so offering its next step is offering a click with no card. An
+  //     open ATS tab is the exception — that application is the work wherever the results went.
+  const resultsGone = p.next?.kind === "recover"
+    && !(p.tabs || []).some((t) => t.is_apply || t.role === "apply");
 
   let focus;
   if (browserGone) focus = resumeFocus(p);
+  else if (resultsGone) focus = recoverResultsFocus(p);
   else if (blocker?.stage === "session") focus = setupFocus(p, p.last_step);
   else if (blocker?.stage === "end") focus = endFocus(qs);
   else if (attentionStep) focus = executeFocus(p, attentionStep, p.next_action);
