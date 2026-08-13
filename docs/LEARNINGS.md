@@ -6806,3 +6806,49 @@ upload, Country, Current/Last Job Title, and Area of Interest — the last route
 internally and is not guessable. Nothing was sent. Session #27 was retired, not closed out, so
 Odyssey's iCIMS CC-305 (still one operator answer from a 5th submission) stays resumable on its
 ledger. Tests: controlplane-api 1485 → **1559**.
+
+### 2026-08-13, later — putting work down is only safe if picking it up is one press
+
+**`close_out(keep_work=True)` shipped without its partner, and the gap cost a search within the
+hour.** A shut-down session keeps its entire ledger — the query stays SPENT, the page's results
+stay cached, the queue keeps its picks in order — and only `provisioned` regresses, because only
+the browser went away. But nothing could bring it back. Worse, `deriveCockpit` reads "an
+application in flight" as the truest fact available, so a stopped session rendered its apply step
+and offered **"Work this · Open the posting" over a Chrome that did not exist**. The only reachable
+alternative was starting FRESH, which spends a second query against Indeed for a page already run
+and picked from. Operator: *"we wasted a good search and actual candidates."*
+
+So a regressed `provisioned` now outranks every other branch — every one of them describes work
+that needs a browser to do — and `POST /resume` relaunches the SAME session (same row, same
+profile, same blackboard), re-marking the rung on the same `/observe` evidence every other rung is
+judged by. `regressed`, not "anything but held": a rung never walked is the ordinary start of a
+session and belongs to the preamble, which knows how to climb it.
+
+**Then the same shape one rung along.** The relaunched Chrome lands on `about:blank`, so
+`query_entered`'s EFFECT is gone while the rung stays held — the ladder says **LAPSED** ("recover,
+never re-run") and `step` correctly returns before the dispatch, so the query can never be
+double-spent. But *nothing could carry the recovery out*: the recovery text says "refocus the
+existing search tab" and a fresh browser has no such tab. Meanwhile the cockpit again offered
+"Work this · Open the posting" — and **a queued job is opened by CLICKING ITS CARD, on a page that
+was not open**. Two correct mechanisms, no way to act on either.
+
+Resume now REOPENS the results page, rebuilt from the session's own declared facts (query,
+location, radius, page) using the engine's own param names — the same table that reads them back.
+Live: `indeed.com/jobs?q=report+analyst&l=Manchester%2C+NH&radius=100` came back with all 75
+results and the whole ladder held, **without re-running the query**. This is address-forcing, which
+is normally last-ditch here, and it is the case that earns it: the page was reached by driving, the
+parameters are ours, a person reopening their browser lands exactly here — and the alternative,
+re-submitting, is precisely what gets a search collapsed. Scoped honestly: an application mid-flight
+on its own ATS tab keeps the execute focus, because that tab is the work wherever the results went.
+
+**The pattern behind all three fixes this session** (start-fresh handoff, close-out modes, resume):
+*a state the system can enter must have a way out that the operator can press.* Every one of these
+was a correct backend refusal with no corresponding affordance — the system knew exactly what was
+wrong and said so, and the seat had no button. `close_out` had no partner; `LAPSED` had no
+recovery action; the 409 on a locked profile had no handoff.
+
+*Where it stands:* session #28 **resumed and recovered** — search not re-spent, 75 results back, 7
+picks intact. Boston Children's still parked one screen from Submit. **Demand Planning Analyst
+(C&S Wholesale Grocers) entered and classified: `workday`, 9 screens from Submit** — the signpost
+witness read the apply control through a Radancy-style careers front (`careers.cswg.com`), the same
+mechanism the reconcile fix now uses. Tests: **1562**.
