@@ -4223,7 +4223,23 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
             detail="No ATS application tab is open, so there is nothing the window can prove about "
                    "this step. Work it forward instead.")
 
-    disc = aps.classify_landing(ats_url)
+    # ASK WITH EVERYTHING WE HOLD, exactly as the classify rung does. This called
+    # `classify_landing(ats_url)` — the address ALONE — while the function's whole design is three
+    # witnesses: the host, the page's content, and where the page's own APPLY control points. The
+    # third is the one that reads a branded careers front: measured live 2026-08-13 on Boston
+    # Children's, whose application is served from `jobs.bostonchildrens.org` (reads as
+    # `company_site`) while its apply control points at BrassRing. The observer, fusing the same
+    # signpost, named `brassring · application_form` correctly — and reconcile, the operator's way
+    # OUT of a stale record, re-recorded the front and left the step exactly where it was stuck.
+    #
+    # An address is a prediction; a page is evidence. This is the same rule the re-classify branch
+    # below already states, applied one level earlier so that branch gets a fact to compare.
+    _content = await _capture_post("/page_content",
+                                   {"browser_url": browser_url, "tab_url": ats_url}, timeout=15.0)
+    disc = aps.classify_landing(ats_url,
+                                page_text=_content.get("text") or "",
+                                frames=_content.get("frames") or [],
+                                apply_hrefs=_content.get("apply_hrefs") or [])
     # ONE RULE FOR "WALKED", THE LADDER'S. This asked its own way — any OK ever recorded — and the
     # two answers diverge exactly where reconcile is most needed: a rung recorded OK and then
     # DEMOTED by its own verification. The ladder re-offers it (latest verdict wins, by design)
@@ -4287,7 +4303,17 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     elif disc.platform and step.platform and disc.platform != step.platform:
         was = step.platform
         step.platform = disc.platform
-        step.landing_state = None        # a state named for the OTHER platform describes nothing
+        # A state named for the OTHER platform describes nothing, so it cannot stand. It used to be
+        # blanked unconditionally, which was right while `disc` came from the address alone and had
+        # no state worth trusting — but an unplaced step renders as "not classified yet" and the
+        # operator is back to driving blind. Now that classify_landing is asked with the page, a
+        # state it read is an OBSERVATION and replaces the wrong one.
+        #
+        # `<platform>_unreadable` is not an observation — it is the absence of one (apply_landing:
+        # "nothing to read — not the same as nothing there"). Recording it would dress a failed
+        # read as a placement, so that case still erases.
+        replacement = (disc.state or "")
+        step.landing_state = None if replacement.endswith(f"_{al.UNREADABLE}") else (replacement or None)
         step.record("classify", disc.outcome,
                     f"RE-CLASSIFIED from the live window: recorded as {was!r}, the open tab is "
                     f"{disc.platform!r} ({ats_url[:70]}). The earlier name came from the Indeed "

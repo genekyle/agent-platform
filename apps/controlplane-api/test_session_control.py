@@ -5183,3 +5183,40 @@ def test_nothing_classified_yet_is_not_novelty_at_all():
     is the most common way this banner appeared and the least like new territory."""
     assert _flow_for("", "")["novelty"] == "unread"
     assert _flow_for("", "some_state")["novelty"] == "unclassified"
+
+
+def test_reconcile_reads_the_page_not_just_the_address(monkeypatch):
+    """A BRANDED CAREERS FRONT names no ATS in its host — the only tell is where its own APPLY
+    control points, which `classify_landing` has taken as a third witness since 2026-07-30.
+
+    Reconcile asked with the ADDRESS ALONE, so on Boston Children's (live 2026-08-13) it read
+    `jobs.bostonchildrens.org` as `company_site` and re-recorded the front, while the observer —
+    fusing the same signpost — had correctly named `brassring`. The operator's way OUT of a stale
+    record was the one caller not looking at the page.
+    """
+    bb = _with_queue(("indeed:b1", "Analyst I, Healthcare Data", "Boston Children's Hospital"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK, "from the Indeed card")
+    q.steps[0].platform = "company_site"
+    q.steps[0].landing_state = "company_site_job_posting"
+    bb.world["apply_queue"] = q.as_dict()
+
+    front = "https://jobs.bostonchildrens.org/apply/join/?job=23397520"
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, front),
+         "/auth_state": {"ok": True, "logged_in": True},
+         # The host says nothing; the page's own apply control names the ATS.
+         "/page_content": {"ok": True, "text": "Thanks for your interest in a career",
+                           "frames": [],
+                           "apply_hrefs": ["https://sjobs.brassring.com/TGnewUI/Search/Apply"]}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={}).json()
+    finally:
+        _teardown()
+
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.platform == "brassring", "the signpost outranks the employer's own host"
+    assert step.landing_state != "company_site_job_posting", "the stale state must not survive"
