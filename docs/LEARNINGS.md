@@ -6852,3 +6852,76 @@ picks intact. Boston Children's still parked one screen from Submit. **Demand Pl
 (C&S Wholesale Grocers) entered and classified: `workday`, 9 screens from Submit** — the signpost
 witness read the apply control through a Radancy-style careers front (`careers.cswg.com`), the same
 mechanism the reconcile fix now uses. Tests: **1562**.
+
+### 2026-08-13, fourth act — the wrong Apply door, and a verification racing its own act (×3)
+
+**The operator pressed Apply from the cockpit — right intention, wrong control.** On C&S Wholesale
+Grocers the drive clicked **"CURRENT C&S EMPLOYEES APPLY HERE"** instead of **"APPLY NOW"**. The
+verifier caught it (`mismatch: nothing observable changed`), so nothing advanced and nothing was
+claimed — the refusal machinery worked. The aiming did not.
+
+The cause is a TIEBREAK, not a bad match: the control matcher returned `max(matches, key=len)` —
+longest name is most specific. That is true within one destination ("Review your application" over
+"Review") and **false across two**. The posting carried FIVE apply-named controls; the candidate
+path was "APPLY NOW" (9 chars) and the employee path "CURRENT C&S EMPLOYEES APPLY HERE" (32), so
+longest reliably picked the door we can never walk through — employer-internal ATS behind employee
+SSO. Two fixes, each standing alone: the exclusion list now refuses employee/internal apply names
+(not a *detour* like "Apply with LinkedIn" — a door that is never ours), and the matcher prefers a
+name that **starts with the verb**, because a label beginning with the action is the primary
+control and a longer one burying it mid-phrase is almost always qualified. The second generalises
+to the next site that words it differently. Both branches now share one `_named_control`.
+
+**A VERIFICATION THAT CAN FINISH BEFORE THE THING IT VERIFIES — three times in one session, three
+different layers.** This is the session's real theme and it is worth naming as a class:
+1. `run_query` read the tab list one pause after committing, while the navigation was in flight.
+2. `resume` relaunched Chrome and landed on `about:blank`, so a rung that was still *held* had lost
+   its EFFECT — the ladder said LAPSED and nothing could carry out the recovery.
+3. The apply ADVANCE re-reads where it landed from the look it takes right after acting; Apply
+   opened `cswg.wd1.myworkdayjobs.com/.../apply` in a NEW tab, the after-look read the old one, and
+   the step stayed on `workday_job_posting` while the observer read `workday application_form` at
+   HIGH confidence.
+Each time the system was honest about not knowing; each time the operator had no way to act on it.
+
+**And reconcile — the remedy — could not fix #3, because it only reconciled the PLATFORM.**
+`workday -> workday` is agreement, so "Catch up to the window" changed nothing and the next press
+would have re-clicked Apply on a page that has none. The screen moves more often than the platform;
+it is now aligned too. Two guards fell out, both caught by their own tests:
+* A screen refresh is **not a `classify` mini**. That rung's history is about naming the platform;
+  filing screen moves there makes every reconcile look like a re-classification and buries the real
+  ones.
+* It applies **only when the page was actually READ**. A platform mapper with no text falls back to
+  its URL-only default — Workday answers `workday_job_posting` for any tenant URL "with no step
+  marker yet" — which is a guess about the address, not an observation of the screen. It demoted a
+  `workday_my_information` read from real content, and the unknown/unreadable suffix check cannot
+  catch it because **the default wears an ordinary state's name**.
+
+**Name the screen in the PLATFORM'S OWN vocabulary.** Aligning with `classify_landing` traded a
+stale-but-placeable state for a fresh-but-unplaceable one: it answers in generic kinds
+(`workday_application_form`) while a scripted platform walks its own spine (`workday_apply_method`,
+`workday_apply_auth`, …), so the walk lost its position and `steps_to_submit` went to None.
+`describe_for_ats` — the namer the advance path already used — routes to the platform's mapper.
+After it: `screen:workday_application_form->workday_apply_method`, recognised, **8 screens from
+Submit**, twelve-screen walk restored.
+
+**The orient and planner tools, measured on ground neither had seen** (operator-directed test).
+Verdict `workday / job_posting` — CORRECT, at medium confidence, on a Radancy front whose host says
+`company_site`. The **signpost** witness carried it (`rr.jobsyn.org` read off the page's own apply
+control); `context` correctly abstained rather than cite the step's own state as evidence for
+itself. **Both local witnesses abstained with novelty 1.00** — dom:tfidf's nearest known page was
+`indeed_login_email` at similarity **0.0** — and the local belief was WRONG
+(`workday_apply_method`) while reporting uncertainty **0.99**, so it never touched the verdict.
+Calibrated humility doing exactly its job, and a live measurement of the corpus gap. The planner's
+second proposal — *"Re-check where we are: third-party applies land somewhere uncertain by
+definition"* — anticipates precisely the failure this session hit three times.
+
+**A parked application promises a page, and a promise about a tab is only true while the tab
+exists.** Spotted by the operator on the live window ("we don't have the boston children's but we
+do have the indeed search query open"): the strip still offered "Step back in" to a page the
+close-down had closed, taking the five filled fields with it. A step now records the page it was
+standing on at its terminal flag, judged against the LIVE window each render — the chip reads
+"page closed" and the button becomes "Start it again". Three-valued on purpose: only warns when we
+recorded a page AND it is gone, because "we never recorded one" is a different claim.
+
+*Where it stands:* Demand Planning Analyst is on the real C&S Workday tenant
+(`R-268279-1`), at **Apply method, 8 screens from Submit**, with the account rung showing
+`create_account · pending`. Tests: **1570**.
