@@ -423,6 +423,60 @@ function Refusal({ panel, busy, call }) {
   );
 }
 
+// WHAT THE BUTTON ACTUALLY DID — the working log, in the place the button was pressed.
+//
+// Operator, after a "Create Account" press that filled the form and stopped: "the manual should
+// also have a log as well because it needs to show what it did, tried and what it was thinking so
+// we get full context of even what our buttons on the ui are doing behind the scenes."
+//
+// The record already existed and had no surface. Every rung attempt is written to the step as a
+// mini — rung, outcome, detail, when, and who turned the crank — and the details are already
+// written in exactly that explanatory voice ("Could not check 'acknowledge' … so submitting now
+// would bounce — nothing was submitted"). The Trace tab carries the full journal, but a tab away
+// is the wrong distance from the button: the operator read a filled form with an untouched submit
+// and could only conclude the Create Account button had not been found, when the log said plainly
+// it was a checkbox one field earlier.
+//
+// Newest first, every attempt kept — the repeats ARE the story (§10: both sides of a correction),
+// which is how "clicked the employee Apply → mismatch → clicked APPLY NOW" reads as one sentence.
+// Opens by itself when the latest attempt did not succeed, because that is when it is needed.
+const OUTCOME_TONE = { ok: "ready", failed: "danger", mismatch: "warn", blocked: "warn",
+                       human_required: "warn", skipped: "muted", unknown: "muted" };
+
+function ActionLog({ panel }) {
+  const steps = panel.queue?.steps || [];
+  const step = steps.find((s) => !s.done)
+    || [...steps].reverse().find((s) => (s.terminal || "").startsWith("parked"))
+    || null;
+  const minis = [...(step?.minis || [])].reverse();
+  if (!minis.length) return null;
+  const worst = minis[0]?.outcome;
+  return (
+    <details className="action-log" open={worst !== undefined && worst !== "ok"}>
+      <summary>
+        <AppIcon name="listTree" size={12} /> What these buttons did — {minis.length} attempt
+        {minis.length === 1 ? "" : "s"} on {step.title || step.job_id}
+      </summary>
+      <ol className="action-log__rows">
+        {minis.map((m, i) => (
+          <li key={`${m.rung}-${m.at || i}`} className="action-log__row">
+            <span className={`badge badge--${OUTCOME_TONE[m.outcome] || "muted"}`}>
+              {m.outcome || "—"}
+            </span>
+            <code className="action-log__rung">{m.rung}</code>
+            <span className="action-log__detail">{m.detail || "—"}</span>
+            <span className="action-log__meta">
+              {m.at ? new Date(m.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }) : ""}
+              {m.initiator ? ` · ${m.initiator}` : ""}
+              {m.staged ? " · typed into the page" : ""}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
 function ExecuteBody({ focus, panel, busy, call, decide }) {
   const last = panel.last_step;
   const account = focus.account || focus.handoff;
@@ -678,6 +732,9 @@ export function WorkSurface({
           <ExecuteBody focus={focus} panel={panel} busy={busy} call={call} decide={decide} />
         )}
         {focus.kind === "walked_out" && <VerifyBody panel={panel} />}
+
+        {/* The working log, under the controls that wrote it. */}
+        <ActionLog panel={panel} />
 
         {EXECUTE_KINDS.has(focus.kind) && <More focus={focus} busy={busy} onFlag={onFlag} />}
       </div>
