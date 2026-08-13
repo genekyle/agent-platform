@@ -1,7 +1,10 @@
+/* Colour lives in the theme (styles/ai-ops.css), which paints `html, body, #root` from
+   `--canvas`. This rule used to set the pre-theme LIGHT background here too — and because
+   `:root` (0,1,0) outranks that theme's `html` (0,0,1), the root element alone stayed
+   #f3f6fb under a dark cockpit. Invisible until the page overscrolls or the body is shorter
+   than the viewport, and then a white band appears above the app. Font only. */
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #111827;
-  background: #f3f6fb;
 }
 
 * {
