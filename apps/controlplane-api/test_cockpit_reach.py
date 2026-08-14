@@ -792,3 +792,98 @@ def test_the_fill_promises_what_this_pass_will_actually_type():
     assert s["will_type"] == 2         # what this pass will DO — the number on the button
     assert s["deferred_to_widget"] == ["Country*"]
     assert s["missing"] == ["Street*"]
+
+
+# --- step 3: drive until something needs a human ------------------------------------------------
+#
+# The safety argument is that the loop adds no authority — every iteration is the same
+# `apply_step` the button calls, and the one act it may never make is the irreversible one. That
+# is a claim about behaviour, so it is pinned here rather than asserted in a docstring. Driven
+# through the client, which is the path the cockpit uses.
+
+def _run_queue(job_id="indeed:run", title="Run One"):
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": job_id, "title": title}])
+    q.steps[0].platform = "workday"
+    return q
+
+
+def _drive(monkeypatch, *, next_action, apply_step, max_steps=5, queue=None):
+    bb = _at_start_line(query="report analyst")
+    bb.world["apply_queue"] = (queue or _run_queue()).as_dict()
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    monkeypatch.setattr(sc, "_resolve_next_action", next_action)
+    monkeypatch.setattr(sc, "apply_step", apply_step)
+    try:
+        r = client.post("/api/session_control/1/run", json={"max_steps": max_steps})
+    finally:
+        _teardown()
+    assert r.status_code == 200, r.text
+    return r.json()["run"]
+
+
+def _advance(_step, _obs):
+    return {"id": "workday_application_form", "label": "Continue",
+            "consequential": False, "driveable": True}
+
+
+def test_the_loop_stops_at_the_gate_and_never_presses_it(monkeypatch):
+    """The one rung this may never touch, on every platform, always. Checked BEFORE the crank, so
+    the loop does not dispatch the press and hope something downstream refuses it."""
+    pressed = []
+
+    async def never_called(*a, **k):
+        pressed.append(a)
+        raise AssertionError("the loop dispatched a crank at the gate")
+
+    run = _drive(monkeypatch, apply_step=never_called,
+                 next_action=lambda s, o: {"id": "submit", "label": "Submit this application",
+                                           "consequential": True, "driveable": True})
+    assert run["stopped"] == sc.STOP_GATE
+    assert run["count"] == 0 and pressed == []
+    assert "yours" in run["detail"]
+
+
+def test_the_loop_stops_when_a_rung_refuses(monkeypatch):
+    """Steps 2 and 3 meeting: the loop hands back, and what it hands back is pressable."""
+    from interaction import refusal as rf
+    refused = rf.Refusal(
+        what="This screen still wants 1 answer(s) — Zip*.",
+        why="an application must not reach Submit with answers nobody chose to leave out",
+        exit=rf.Exit(label="Fill what the profile knows", endpoint="/apply_fill",
+                     body={"execute": False}))
+
+    async def one_refusal(_sid, _body, _db):
+        return {"last_step": {"ok": False, "detail": str(refused), "refusal": refused.as_dict()}}
+
+    run = _drive(monkeypatch, apply_step=one_refusal, next_action=_advance)
+    assert run["stopped"] == sc.STOP_REFUSED
+    assert run["count"] == 1                     # cranked once, then handed back
+    assert "Zip*" in run["detail"]
+
+
+def test_the_loop_stops_rather_than_spending_its_budget_on_one_control(monkeypatch):
+    """A rung that reports ok and leaves the world where it was is the loop's own version of the
+    mismatch the StepRunner catches per step. Unchecked it is how a drive re-clicks one button
+    twelve times — which is what an operator pressing "continue" fifteen times looks like from
+    the inside."""
+    calls = {"n": 0}
+
+    async def no_op(_sid, _body, _db):
+        calls["n"] += 1
+        return {"last_step": {"ok": True, "detail": "clicked Continue"}}
+
+    run = _drive(monkeypatch, apply_step=no_op, next_action=_advance, max_steps=12)
+    assert run["stopped"] == sc.STOP_NO_PROGRESS
+    assert calls["n"] == 2, "stops on the SECOND identical no-op, not when the budget runs out"
+
+
+def test_an_empty_queue_is_a_named_stop_not_a_crash(monkeypatch):
+    async def never(*a, **k):
+        raise AssertionError("nothing to drive")
+
+    run = _drive(monkeypatch, apply_step=never, next_action=_advance,
+                 queue=aps.Queue(page=1))
+    assert run["stopped"] == sc.STOP_NO_STEP and run["count"] == 0

@@ -451,6 +451,11 @@ function executeFocus(p, step, nextAction) {
 
   return { ...base, kind: "application", flow: p.apply_flow || null,
     searchAgain: true,
+    // ONLY WHERE THERE IS A RUNG TO REPEAT. The ordinary application focus is exactly that: a
+    // driveable next action that is not the irreversible one. The gate, the account wall, the
+    // teacher's proposal and the login are all moments where "do that again" means nothing, and
+    // offering it there would be a button whose only outcome is an immediate hand-back.
+    runnable: !!primary && !primary.consequential,
     why: nextAction?.why || "",
     say: nextAction && !nextAction.driveable ? nextAction.label : "",
     primary,

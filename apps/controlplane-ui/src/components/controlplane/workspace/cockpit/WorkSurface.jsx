@@ -47,6 +47,21 @@ function Actions({ focus, busy, call, onNewSearch }) {
                 aria-label={focus.primary.label}
                 onClick={onNewSearch}>{focus.primary.label}</button>
       )}
+      {/* DRIVE UNTIL SOMETHING NEEDS YOU. An alternate, never the primary: the primary is still
+          one deliberate rung, and this is the same rung repeated until the world asks for a
+          human. It adds no authority — every iteration is the press beside it — and it stops at
+          the gate, at any refusal, at a rung that wants a human, at a terminal flag, and at a
+          rung that ran twice and moved nothing. Offered only where the primary is a rung to
+          crank: there is nothing to repeat at a gate or a login. */}
+      {focus.runnable && (
+        <span className="work__alt">
+          <button className="btn btn-sm" disabled={busy} onClick={() => call("/run", {})}
+                  aria-label="Run until you are needed"
+                  title="Cranks this application's rungs one after another and stops the moment anything wants you — the gate, a refusal, a screen it cannot read. It can reach nothing the button beside it cannot.">
+            Run until you&apos;re needed
+          </button>
+        </span>
+      )}
       {/* Abandoning a search mid-way: same session, same sign-in, only the query changes. An
           alternate rather than a primary, because the expected move here is still the page. */}
       {focus.searchAgain && (

@@ -6377,6 +6377,145 @@ async def _save_queue_and_view(session, bb, ledger, queue: aps.Queue, obs, *, ok
 
 
 
+class RunBody(BaseModel):
+    initiator: str = "operator"
+    #: Hard ceiling on cranks. Not a target — the loop stops the moment anything wants a human,
+    #: and this only bounds the case where nothing does and nothing finishes either.
+    max_steps: int = 12
+    #: Assert which application is being driven, same contract as `apply_step`: name it and we
+    #: check it, omit it and the queue decides.
+    job_id: Optional[str] = None
+
+
+#: Why the drive stopped. Each is a FACT about the world rather than a policy knob, which is what
+#: keeps the loop honest: it does not decide when to hand over, it notices.
+STOP_GATE = "gate"                  # the next act is the irreversible one — always the operator's
+STOP_NEEDS_OPERATOR = "needs_operator"   # a rung recorded blocked/human_required/unknown
+STOP_REFUSED = "refused"            # a rung declined and named what it wants
+STOP_DONE = "done"                  # the step reached a terminal flag
+STOP_NO_PROGRESS = "no_progress"    # two cranks, same rung, nothing moved
+STOP_BUDGET = "budget"              # max_steps reached with work still to do
+STOP_NO_STEP = "no_step"            # nothing in the queue to drive
+
+
+@router.post("/api/session_control/{session_id}/run")
+async def run(session_id: int, body: RunBody,
+              db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Crank until something actually needs a human — the composition, not a new capability.
+
+    WHY THIS EXISTS. Driving one application from the cockpit on 2026-08-14 took about fifteen
+    presses, every one of them "yes, continue", through gates that already exist: each advance
+    runs the required-field census, the StepRunner verify, and the operator-only Submit gate. The
+    rails were built and the composition was missing, so the operator was the loop — and an
+    operator who is the loop is not supervising it, they are executing it.
+
+    IT ADDS NO AUTHORITY. Every iteration is the same `apply_step` the button calls, with the same
+    initiator, the same journalling, the same refusals. Nothing here can reach a control
+    `apply_step` could not, and the Submit gate is unreachable by construction: `advance_control`
+    and `submit_control` are deliberately separate lexicons, and this loop STOPS at a consequential
+    action rather than pressing it. That is the whole safety argument — it is not "we trust the
+    loop", it is "the loop cannot do anything the single press could not".
+
+    IT STOPS ON FACTS, NOT ON A BUDGET. `max_steps` is a backstop for the case where nothing wants
+    a human and nothing finishes; the real stops are the world's: a gate, a refusal, a rung that
+    recorded blocked/human_required/unknown, a terminal flag, or a rung that ran twice and moved
+    nothing. Every stop names itself, so "why did it hand back" is answered before it is asked.
+    """
+    _check_initiator(body.initiator)
+    steps_run: list[dict[str, Any]] = []
+    view: dict[str, Any] = {}
+    stop, stop_detail = STOP_BUDGET, ""
+    last_rung: Optional[str] = None
+    repeats = 0
+
+    for _ in range(max(1, min(int(body.max_steps or 12), 40))):
+        session, bb, ledger = _load(session_id, db)
+        queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+        step = queue.current()
+        if step is None:
+            stop, stop_detail = STOP_NO_STEP, "nothing in the queue is unfinished."
+            break
+
+        # THE GATE, CHECKED BEFORE THE CRANK RATHER THAN AFTER. `_resolve_next_action` already
+        # marks the irreversible act `consequential`; asking it here means the loop never dispatches
+        # the press it is not allowed to make, instead of dispatching and hoping something downstream
+        # refuses. The operator's gate is the one rung this never touches, on every platform, always.
+        obs_now = await _observe(_session_browser_url(session), bb.search_state.query,
+                                 session_id=session.id)
+        nxt = _resolve_next_action(step, await _orient_now(bb, obs_now,
+                                                           _session_browser_url(session)))
+        if (nxt or {}).get("consequential"):
+            stop = STOP_GATE
+            stop_detail = (f"{step.title or step.job_id} is at the gate: "
+                           f"{(nxt or {}).get('label') or 'Submit'}. This one is yours — nothing "
+                           f"here presses it.")
+            view = _view(session, bb, ledger, obs_now, page=_current_page(obs_now, bb),
+                         awaiting="apply")
+            break
+
+        before_flag, before_terminal = step.last_flag, step.terminal
+        rung_id = (nxt or {}).get("id") or ""
+        view = await apply_step(session_id, ApplyStepBody(initiator=body.initiator,
+                                                          job_id=body.job_id), db)
+        last = view.get("last_step") or {}
+        steps_run.append({"rung": rung_id, "ok": last.get("ok"),
+                          "detail": (last.get("detail") or "")[:200]})
+
+        # Re-read rather than trusting the view: the step object above is a copy from before the
+        # crank, and what matters is what the crank RECORDED.
+        _s, bb_after, _l = _load(session_id, db)
+        after = aps.Queue.from_dict((bb_after.world or {}).get("apply_queue")).current()
+
+        if last.get("refusal"):
+            stop, stop_detail = STOP_REFUSED, last.get("detail") or "a rung declined."
+            break
+        if after is None or (after.job_id == step.job_id and after.done):
+            stop, stop_detail = STOP_DONE, f"{step.title or step.job_id} reached a terminal flag."
+            break
+        if (after.last_flag or "") in aps.NEEDS_OPERATOR:
+            stop = STOP_NEEDS_OPERATOR
+            stop_detail = last.get("detail") or f"the {rung_id or 'last'} rung wants a human."
+            break
+
+        # NOTHING MOVED, TWICE. A rung that reports ok and leaves the world where it was is the
+        # loop's own version of the mismatch the StepRunner catches per-step — and left unchecked
+        # it is how a drive spends its whole budget re-clicking one control.
+        if rung_id and rung_id == last_rung and (after.last_flag, after.terminal) == \
+                (before_flag, before_terminal):
+            repeats += 1
+            if repeats >= 1:
+                stop = STOP_NO_PROGRESS
+                stop_detail = (f"the {rung_id} rung ran twice and nothing changed — stopping "
+                               f"rather than spending the budget on it.")
+                break
+        else:
+            repeats = 0
+        last_rung = rung_id
+
+    if not view:
+        session, bb, ledger = _load(session_id, db)
+        obs_now = await _observe(_session_browser_url(session), bb.search_state.query,
+                                 session_id=session.id)
+        view = _view(session, bb, ledger, obs_now, page=_current_page(obs_now, bb), awaiting="apply")
+
+    # THE HANDBACK, ON THE RECORD. A loop that stops without saying why is the same dead end as a
+    # refusal without an exit — and `next_up` is what the operator reads to know whether the stop
+    # was the expected one.
+    session, bb, ledger = _load(session_id, db)
+    bb.log("run", f"{len(steps_run)} rung(s) driven, stopped: {stop}",
+           why=stop_detail,
+           next_up=("The operator's press — nothing here may make it."
+                    if stop in (STOP_GATE, STOP_NEEDS_OPERATOR, STOP_REFUSED)
+                    else "The queue moves on." if stop == STOP_DONE
+                    else "Press again to continue driving."))
+    _persist(bb, ledger)
+
+    view = dict(view)
+    view["run"] = {"steps": steps_run, "count": len(steps_run),
+                   "stopped": stop, "detail": stop_detail}
+    return view
+
+
 class ApplyFlagBody(BaseModel):
     job_id: str
     flag: str                      # a terminal flag from apply_steps
