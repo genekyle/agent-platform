@@ -6997,3 +6997,46 @@ failed. It reads: *"clicked the employee Apply → mismatch → clicked APPLY NO
 from Submit.** My Information complete and verified by screenshot — Concord NH 03301, Country USA,
 prior-employer question answered No by the operator. Account `ats_c_s_wholesale_grocers_workday`
 active with its credential stored. Tests: controlplane-api **1574**, mcp **114**.
+
+### 2026-08-13, sixth act — SUBMITTED to C&S, and the page that stated its own step
+
+**SUBMITTED: Demand Planning Analyst, C&S Wholesale Grocers (Workday `cswg.wd1`, req
+R-268279-1).** Confirmed at the employer's own Candidate Home — *"Application Submitted — Your
+application has successfully been submitted"*, url `/jobTasks/completed/application`, a
+server-issued route a client cannot mint. First submission of this session, and the first driven
+end-to-end from a fresh search: Indeed → Radancy careers front → Workday tenant → account created
+→ six screens → gate. Terms accepted and Submit pressed on the operator's explicit say-so; Work
+Experience and Education left `No Response` on their call (the résumé carries it).
+
+**THE REVIEW PAGE IS NOT MY INFORMATION.** Workday's Review lists every section it is reviewing, so
+`"my information"` matches there too — and it sits ABOVE the review markers in the table. A
+finished application standing at the Submit gate classified as `workday_my_information`, and the
+cockpit offered to fill a form four screens behind the browser. Reconcile could not fix it either,
+because it was asking the same classifier. The stepper states the position outright — *"completed
+step 1 of 6 My Information … current step 6 of 6 Review"* — which is EVIDENCE where substring
+markers are INFERENCE. Read first, markers kept as the fallback for tenants that render no stepper.
+It also settles Self Identify, which the spine folds into the disclosures rung and the markers only
+reached by accident. **A page that says where it is outranks a guess about where it is** — the same
+rule as the signpost witness, one layer up.
+
+**Two more shapes of the same wrong-target lesson, both now enforced:**
+* The CC-305's three disability checkboxes are unnamed by selector and share a bbox row (y 814,
+  814, 830 — two identical). Geometry could not separate them; the **AX tree names them outright**
+  (`node 5941 'Yes, I have a disability…'`, `5942 'No, I do not…'`, `5943 'I do not want to
+  answer'`). Same technique the Odyssey VEVRAA form needed. On a federal self-ID, *identify the
+  option, never infer it* — and the operator's stored `disability_status` supplied the answer.
+* `/check_group` refused the three-option group as **ambiguous** ("selector spans 3 checkbox
+  groups") rather than picking one. The protocol's own refusal, working.
+
+**The CC-305 date is required and the census cannot see it** — it appears only as an error after
+the submit attempt ("The field Date is required"). Its Calendar button names every day uniquely
+(`Selected Today Thursday 13 August 2026`), which is one click, exactly as 08-12 recorded. The
+segmented spinbuttons remain unusable and remain unused.
+
+**The consent-checkbox fix paid off on its first real use:** `terms: ok | checked ["on"]
+(verified)` on C&S's Terms and Conditions — the first time that step has ever actually run.
+
+*Where it stands:* session #28, **1 submitted / 7 picked**, 5 untouched and reachable without
+re-querying (the search is still spent, its 15 results cached). Boston Children's parked one screen
+from Submit. Next: Data and Impact Analyst (HopeWell Inc.). Tests: controlplane-api **1577**,
+mcp **114**.
