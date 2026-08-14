@@ -135,6 +135,20 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
 
   const cockpit = useMemo(() => deriveCockpit(panel, { picks }), [panel, picks]);
 
+  // THE PARKED ROWS THE FOCUS IS NOT ALREADY SHOWING.
+  //
+  // This used to hide every in-queue parked row whenever the focus was application-shaped, on the
+  // assumption that an application focus IS that parked row. True while a parked app could only
+  // become the focus when nothing else was in flight — and false the moment a repick restores a
+  // parked application into a queue that also holds fresh picks (2026-08-14). The operator's own
+  // #1 pick, Boston Children's, sat one screen from Submit with no control anywhere: the focus was
+  // showing the next unopened pick, and the strip had hidden the parked one as a duplicate of a
+  // focus that was not about it. Compare the actual job instead of inferring it from the kind —
+  // `cycle.application` is the attention step, which is precisely the row worth suppressing.
+  const focusedJobId = cockpit.cycle.application?.job_id;
+  const parkedElsewhere = (panel?.parked || []).filter(
+    (pk) => !pk.in_current_queue || pk.job_id !== focusedJobId);
+
   // THE INVARIANT, ASSERTED RATHER THAN INTENDED. "One primary action on screen" is the rule the
   // old panel broke silently and repeatedly — every local fix added a card, and each card brought a
   // button that looked like the thing to press. A rule with no enforcement point is a comment, so
@@ -234,17 +248,12 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
           without this strip it simply vanished from the surface (the orphan half of the
           2026-08-10 audit; the arrest half is fixed in lifecycle.js). Chips only: the one
           action is stepping back in, and the strip hides rows the focus is already showing. */}
-      {(p.parked || []).filter((pk) => !pk.in_current_queue
-        || !["application", "orient", "gate", "proposal", "account", "account_handoff"]
-          .includes(cockpit.focus.kind)).length > 0 && (
+      {parkedElsewhere.length > 0 && (
         <div className="cockpit-parked">
           <span className="cockpit-parked__label">
             Parked — waiting on you, whichever search is running
           </span>
-          {(p.parked || [])
-            .filter((pk) => !pk.in_current_queue
-              || !["application", "orient", "gate", "proposal", "account", "account_handoff"]
-                .includes(cockpit.focus.kind))
+          {parkedElsewhere
             .map((pk) => (
               <span key={pk.job_id} className="cockpit-parked__chip"
                     title={`${pk.terminal || "parked"}${pk.terminal_detail ? ` — ${pk.terminal_detail}` : ""}${pk.from_search ? ` · from search ${pk.from_search}` : ""}`}>
