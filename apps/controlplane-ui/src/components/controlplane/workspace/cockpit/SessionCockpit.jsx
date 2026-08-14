@@ -306,14 +306,20 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
           error={error}
           call={(path, body) => (path === "/choose" ? callChoose(path, body) : call(path, body))}
           decide={(body) => call("/apply_decide", body)}
-          onFlag={(flag, detail) => call("/apply_flag", {
-            job_id: cockpit.cycle.application?.job_id, flag, detail,
+          // The job defaults to the ATTENTION step (the focus's own More menu), but any caller
+          // may name one — which is what lets a queued step further down the list be ended
+          // without touching the application in flight.
+          onFlag={(flag, detail, jobId) => call("/apply_flag", {
+            job_id: jobId || cockpit.cycle.application?.job_id, flag, detail,
           })}
           picks={picks} armed={armed} onPick={pick} onClear={clearPicks}
           note={note} setNote={setNote}
           form={form} setForm={setForm}
         />
-        <NowContext panel={p} cockpit={cockpit} selection={selection}
+        <NowContext panel={p} cockpit={cockpit} selection={selection} busy={busy}
+                    onFlag={(flag, detail, jobId) => call("/apply_flag", {
+                      job_id: jobId || cockpit.cycle.application?.job_id, flag, detail,
+                    })}
                     onOpenLens={onOpenLens} onOpenTrace={onOpenTrace} />
       </div>
 

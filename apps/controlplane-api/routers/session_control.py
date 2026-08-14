@@ -54,9 +54,10 @@ from controller import window as _win
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
-# A reading knows whether it was taken. Imported at module level rather than in-function because
-# it is a TYPE in signatures here, not an optional dependency.
+# A reading knows whether it was taken; a refusal carries the way out. Imported at module level
+# rather than in-function because both are TYPES in signatures here, not optional dependencies.
 from interaction.measured import Reading
+from interaction import refusal
 from models import ObservedJob, TrainingSession
 from settings import settings
 
@@ -5951,6 +5952,20 @@ async def _unanswered_required(browser_url: str, tab_id: str,
                  f"{len(census.get('field_errors') or [])} complained about")
 
 
+def _refuse(out: Optional[dict[str, Any]], r: "refusal.Refusal") -> str:
+    """Record a refusal so the cockpit can render its EXIT, and return the prose the caller
+    already returned.
+
+    The whole migration in one function: a rung handler still `return`s a sentence and nothing
+    downstream changes shape, while `out` — which `_save_queue_and_view` folds into `last` —
+    gains the structured way out. That is what lets the surface put a button under the sentence
+    instead of leaving the operator to work out which endpoint the prose was pointing at.
+    """
+    if out is not None:
+        out["refusal"] = r.as_dict()
+    return str(r)
+
+
 async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
                              browser_url: str, style: Any, *, initiator: str,
                              acted: Optional[dict[str, Any]] = None,
@@ -5973,7 +5988,18 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
     read = await _read_apply_page(bb, obs, browser_url)
     if read is None:
         step.record(rung.id, aps.UNKNOWN, "no application tab to advance", initiator=initiator)
-        return "There is no application tab open to advance. Reopen the application first."
+        # THE EXIT EXISTED AND HAD NO BUTTON. "Reopen the application first" named the remedy in
+        # prose and left the operator to find it — and on 2026-08-14 the step whose tab had been
+        # closed by another step's cleanup sat here with the cockpit still offering "Continue".
+        return _refuse(out, refusal.Refusal(
+            what="There is no application tab open to advance.",
+            why="this step's page is gone — it was closed, or the browser was relaunched.",
+            exit=refusal.Exit(
+                label="Start it again", endpoint="/apply_reopen",
+                body={"job_id": step.job_id,
+                      "reason": "its page was gone when the ladder tried to advance it"},
+                why="Re-walks this application from the posting; the rungs already walked are "
+                    "archived on the step, not lost.")))
 
     scan, tab = read["scan"], read["tab"]
     tab_id = tab.get("tab_id", "")
@@ -5994,8 +6020,12 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
         step.record(rung.id, aps.UNKNOWN,
                     f"could not scan the form for required fields — {reading.why}",
                     initiator=initiator)
-        return ("I could not read this form's required fields. Not clicking Continue blind — "
-                "look at the page, or fill it and step again.")
+        return _refuse(out, refusal.Refusal(
+            what="I could not read this form's required fields.",
+            why=f"not clicking Continue blind — {reading.why}",
+            exit=refusal.Exit(
+                label="Re-read the form", endpoint="/apply_fill", body={"execute": False},
+                why="Reads the open form again and shows it as it stands. Types nothing.")))
     pending = reading.require("the form census")
     if pending:
         step.record(rung.id, aps.HUMAN_REQUIRED,
@@ -6004,11 +6034,17 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
         # The census this refusal was made FROM rides `out` into the panel (`last.form_scan`),
         # so the cockpit renders the fields as pressable work instead of prose pointing at an
         # endpoint it never shows (the 2026-08-10 audit's core finding).
-        return (f"This screen still wants {len(pending)} answer(s) — "
-                f"{', '.join(pending[:6])}"
-                + ("…" if len(pending) > 6 else "")
-                + ". Fill them first; an application must not reach Submit with answers "
-                  "nobody chose to leave out.")
+        return _refuse(out, refusal.Refusal(
+            what=(f"This screen still wants {len(pending)} answer(s) — "
+                  f"{', '.join(pending[:6])}" + ("…" if len(pending) > 6 else "") + "."),
+            why=("an application must not reach Submit with answers nobody chose to leave out"),
+            # The census this refusal was made FROM is already riding `out` as `form_scan`; the
+            # exit points at the surface that renders it as pressable work.
+            exit=refusal.Exit(
+                label="Fill what the profile knows", endpoint="/apply_fill",
+                body={"execute": False},
+                why="Plans every field we hold an answer for, and shows the rest to answer by "
+                    "hand. Types nothing until you press Fill.")))
 
     # THE FORM MAY BE REFUSING US, not failing us. A Continue that no-ops beside a visible error is
     # a rejected form, and the ladder's own message for a mismatch — "if it keeps happening the

@@ -162,8 +162,23 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     fillable = [r for r in rows if r["fillable"]]
     missing = [r["field"] for r in rows if r["source"] == SRC_MISSING]
     ambiguous = sorted({r["field"] for r in rows if r.get("ambiguous")})
+    # WHAT THIS PASS WILL ACTUALLY TYPE, counted apart from what it can plan.
+    #
+    # The bunch pass is text-only by design — dropdowns commit through their own widget protocol —
+    # and the surface said so in prose two lines above a button reading "Fill the 6 ready
+    # field(s)". It typed five. Measured live 2026-08-14 on Boston Children's: Country was planned
+    # `fillable: true` with the right stored value, counted in the promise, and skipped by the
+    # executor exactly as documented. The count and the promise disagreed, and the operator is the
+    # one who finds out.
+    #
+    # A promise is what the presser will get, so it is counted from the same predicate the
+    # executor loops on. `deferred` is not a failure and reads as its own line: those fields are
+    # answerable, just through a different door.
+    typed = [r for r in fillable if r.get("widget") == "text"]
+    deferred = [r["field"] for r in fillable if r.get("widget") != "text"]
     return {"total": len(rows), "fillable": len(fillable), "missing": missing,
             "ambiguous": ambiguous,
+            "will_type": len(typed), "deferred_to_widget": deferred,
             "by_source": {s: sum(1 for r in rows if r["source"] == s)
                           for s in (SRC_WORKING, SRC_STORED, SRC_IDENTITY, SRC_MISSING)}}
 

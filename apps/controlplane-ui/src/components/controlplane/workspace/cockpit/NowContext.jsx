@@ -1,4 +1,5 @@
 import { AppIcon } from "../../../../ui/Icon";
+import { TERMINAL_CHOICES } from "./lifecycle";
 import { API } from "../api";
 import { explain } from "./explain";
 
@@ -44,10 +45,16 @@ export function NowPath({ cockpit, selection, onSelect }) {
   );
 }
 
-export function NowContext({ panel, cockpit, selection, onOpenLens, onOpenTrace }) {
+export function NowContext({ panel, cockpit, selection, onOpenLens, onOpenTrace,
+                             onFlag, busy }) {
   const observer = panel.observer;
   const snapshot = panel.perception_snapshot;
   const why = explain(panel, cockpit, selection);
+  // The queue step the operator has pinned in the path, if any — the subject of the outcome
+  // buttons below, which is deliberately NOT the same thing as the focus.
+  const selected = selection?.kind === "application"
+    ? (panel.queue?.steps || []).find((s) => s.job_id === selection.id) || null
+    : null;
   const screenshot = snapshot?.screenshot_filename
     ? `${API}/api/observations/screenshots/${encodeURIComponent(snapshot.screenshot_filename)}`
     : null;
@@ -81,6 +88,36 @@ export function NowContext({ panel, cockpit, selection, onOpenLens, onOpenTrace 
         <p>{why?.rule?.text || cockpit.focus.why || "No reasoning was recorded for this moment."}</p>
         {why?.rule?.source && <small>{why.rule.source}</small>}
       </section>
+
+      {/* ACT ON THE STEP YOU SELECTED, not only on the one the focus is showing.
+          Terminal flags lived on the work surface's More menu, which acts on `cycle.application`
+          — the ATTENTION step. So a queued pick further down the list could not be ended at all:
+          on 2026-08-14 skipping a duplicate Indeed had re-surfaced needed a curl, because the
+          only pressable step was an unrelated application mid-flight. Selecting a queued row in
+          the path now offers the same outcomes, scoped to what it is: a job nobody has opened is
+          ended, never "submitted". */}
+      {selected && (
+        <section className="now-context__card">
+          <div className="now-context__head">
+            <span><AppIcon name="boxes" size={13} /> {selected.title || selected.job_id}</span>
+          </div>
+          <p>{selected.done
+            ? `Already ended — ${selected.terminal}.`
+            : `Queued from this page, ${selected.minis?.length ? "worked" : "never opened"}. End it here without touching the application in flight.`}</p>
+          {!selected.done && (
+            <div className="now-context__badges">
+              {TERMINAL_CHOICES.filter((f) => f.flag !== "parked:operator" || selected.minis?.length)
+                .map((f) => (
+                  <button key={f.flag} className="btn btn-sm btn-ghost" disabled={busy}
+                          aria-label={`${selected.title || selected.job_id}: ${f.label}`}
+                          title={f.why} onClick={() => onFlag(f.flag, f.why, selected.job_id)}>
+                    {f.label}
+                  </button>
+                ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="now-context__card now-context__card--trace">
         <div className="now-context__head">

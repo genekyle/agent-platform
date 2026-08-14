@@ -488,6 +488,23 @@ function Refusal({ panel, busy, call }) {
         <AppIcon name="alert" size={13} />{" "}
         <strong>Nothing was marked{last.action ? ` — ${last.action}` : ""}.</strong> {last.detail}
       </p>
+      {/* THE REFUSAL'S OWN WAY OUT, rendered from the refusal rather than hand-built here.
+          This one branch replaces the per-site work that never kept up: the backend now says
+          which press resolves what it declined (`interaction.refusal`), so a refusal added
+          tomorrow arrives with its button already attached. A refusal that legitimately has NO
+          exit — a captcha, a credential — says WHO acts instead, which is the honest version of
+          the same answer and is rendered as words rather than as a control we may not offer. */}
+      {last.refusal?.exit && (
+        <button className={`btn btn-sm${last.refusal.exit.consequential ? " btn-consequential" : ""}`}
+                disabled={busy} aria-label={last.refusal.exit.label}
+                title={last.refusal.exit.why || last.refusal.exit.label}
+                onClick={() => call(last.refusal.exit.endpoint, last.refusal.exit.body || {})}>
+          {last.refusal.exit.label}
+        </button>
+      )}
+      {last.refusal && !last.refusal.exit && last.refusal.no_exit_because && (
+        <p className="rung__meta">Nothing here can do this for you — {last.refusal.no_exit_because}.</p>
+      )}
       {/* The window may already show the effect this step could not confirm in time. Adopting is
           a RECOVERY, not a re-run: it records only what the page proves, and refuses the rest. */}
       {panel.awaiting === "operator_verify" && (

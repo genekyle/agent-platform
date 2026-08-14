@@ -71,13 +71,31 @@ PARKED_OPERATOR = "parked:operator"              # the operator's own call, reas
 ABANDONED_GONE = "abandoned:ats_unavailable"     # the posting outlived its requisition
 ABANDONED_OPERATOR = "abandoned:operator"        # the operator does not want it after seeing it
 
+#: ALREADY APPLIED — we have sent one for this requisition before, so a second is a duplicate.
+#:
+#: A real outcome that had no name until 2026-08-14, when Indeed re-surfaced C&S Wholesale Grocers
+#: as the top result the day after it was submitted, the operator picked it again, and skipping it
+#: had to borrow `ABANDONED_OPERATOR`. That flag means *"you looked and do not want it"* — a
+#: judgement about the JOB — and filing a duplicate under it teaches the triage corpus that the
+#: operator rejected a role they had in fact applied for. The decision ledger is the thing being
+#: trained; a mislabelled negative there is worse than a missing one.
+#:
+#: Abandoned rather than parked, because it is "not ever" for THIS application: the work is done,
+#: it just happened earlier. `applied_index` is the witness that makes it checkable.
+ABANDONED_ALREADY_APPLIED = "abandoned:already_applied"
+
 TERMINAL_FLAGS = frozenset({
     SUBMITTED, PARKED_ACCOUNT_WALL, PARKED_AI_RECRUITER, PARKED_ASSESSMENT,
     PARKED_UNKNOWN_ATS, PARKED_OPERATOR, ABANDONED_GONE, ABANDONED_OPERATOR,
+    ABANDONED_ALREADY_APPLIED,
 })
 
 #: Terminal flags the operator must choose deliberately. `ABANDONED_GONE` is absent because a 404
 #: requisition is an observed fact, not a judgement call — asking about it would be theatre.
+#:
+#: `ABANDONED_ALREADY_APPLIED` IS here, and the difference is worth stating: `applied_index`
+#: raises the duplicate on landing, but the call to SKIP rather than send a second application is
+#: the operator's, and on 2026-08-14 they made exactly that call from the cockpit.
 OPERATOR_FLAGS = frozenset(TERMINAL_FLAGS - {SUBMITTED, ABANDONED_GONE})
 
 

@@ -692,3 +692,103 @@ def test_flagging_one_step_does_not_close_another_steps_live_application_tab(mon
     assert "t-bch" not in closed_ids, "closed a live application's tab from another step's cleanup"
     # And the claim is untouched, because the tab it names is still doing its job.
     assert bb.world["tab_claims"].get("t-bch", {}).get("job_id") == "indeed:bch"
+
+
+# --- step 2: a refusal carries the way out ------------------------------------------------------
+
+def test_a_refusal_reaches_the_read_model_with_a_pressable_exit(monkeypatch):
+    """THE CLASS THAT KEPT REGENERATING. Three correct-but-unactionable refusals were fixed by
+    hand on 2026-08-13 and four more appeared on 08-14, because a refusal is a string and its exit
+    is built somewhere else with nothing binding them.
+
+    `_refuse` binds them: the handler still returns its sentence, and `out` — which
+    `_save_queue_and_view` folds into `last` — gains the structured exit the cockpit renders.
+    """
+    from interaction import refusal as rf
+
+    out = {}
+    prose = sc._refuse(out, rf.Refusal(
+        what="There is no application tab open to advance.",
+        why="this step's page is gone.",
+        exit=rf.Exit(label="Start it again", endpoint="/apply_reopen",
+                     body={"job_id": "indeed:bch", "reason": "its page was gone"},
+                     why="Re-walks this application from the posting.")))
+
+    # The words the operator already read are unchanged — the button is additive.
+    assert prose.startswith("There is no application tab open to advance.")
+    assert out["refusal"]["exit"]["endpoint"] == "/apply_reopen"
+    assert out["refusal"]["exit"]["body"]["job_id"] == "indeed:bch"
+    assert out["refusal"]["detail"] == prose
+
+
+def test_a_refusal_without_an_exit_cannot_be_written_at_all():
+    """The enforcement, asserted at the seam this codebase actually uses. Not noticing is a
+    crash, which is the only reason it will not regenerate a fifth time."""
+    from interaction import refusal as rf
+    with pytest.raises(ValueError, match="no way out"):
+        sc._refuse({}, rf.Refusal(what="Cannot advance.", why="reasons."))
+
+
+def test_the_advance_rung_refuses_unanswered_fields_with_its_exit(monkeypatch):
+    """End to end on the refusal that fires most: the census gate. It carried `form_scan` already
+    (2026-08-10) and pointed at the fix in prose; now it names the press."""
+    import asyncio
+    from interaction import refusal as rf
+
+    census = {"unanswered": [{"field": "Zip*", "required_via": "required-attr"}],
+              "answered": [], "optional": [], "page_errors": [], "field_errors": [],
+              "url": "https://x/form"}
+
+    async def fake_census(_url, _tab):
+        return census
+    monkeypatch.setattr(sc, "_form_census", fake_census)
+
+    out = {}
+    reading = asyncio.run(sc._unanswered_required("http://x", "t1", census_out=out))
+    assert reading.require() == ["Zip*"]
+
+    # The rung's own refusal, built the same way the handler builds it.
+    prose = sc._refuse(out, rf.Refusal(
+        what="This screen still wants 1 answer(s) — Zip*.",
+        why="an application must not reach Submit with answers nobody chose to leave out",
+        exit=rf.Exit(label="Fill what the profile knows", endpoint="/apply_fill",
+                     body={"execute": False}, why="Plans every field we hold an answer for.")))
+    assert "Zip*" in prose
+    assert out["refusal"]["exit"]["endpoint"] == "/apply_fill"
+    # And the form it refused OVER still rides with it — prose pointing at an endpoint the
+    # cockpit never shows was the 2026-08-10 audit's core finding.
+    assert out["form_scan"]["unanswered"][0]["field"] == "Zip*"
+
+
+# --- step 4: the vocabulary gaps the drive found ------------------------------------------------
+
+def test_already_applied_is_its_own_outcome_not_a_rejection():
+    """Indeed re-surfaced C&S the day after it was submitted, it was picked again, and skipping it
+    had to borrow `abandoned:operator` — which means "you looked and do not want it", a judgement
+    about the JOB. Filing a duplicate there teaches the decision ledger that the operator rejected
+    a role they had in fact applied for, and the ledger is the thing being trained."""
+    assert aps.ABANDONED_ALREADY_APPLIED in aps.TERMINAL_FLAGS
+    assert aps.ABANDONED_ALREADY_APPLIED != aps.ABANDONED_OPERATOR
+    # Pressable: applied_index raises the duplicate, the call to skip is the operator's.
+    assert aps.ABANDONED_ALREADY_APPLIED in aps.OPERATOR_FLAGS
+    step = aps.ApplyStep(job_id="indeed:dup", title="Demand Planning Analyst")
+    step.finish(aps.ABANDONED_ALREADY_APPLIED, "submitted 2026-08-13, req R-268279-1")
+    assert step.done and step.terminal == "abandoned:already_applied"
+
+
+def test_the_fill_promises_what_this_pass_will_actually_type():
+    """"Fill the 6 ready field(s)" typed five. `fillable` counts dropdowns; the bunch pass is
+    text-only by design and said so in prose two lines above the button. The count and the promise
+    disagreed, and the operator is the one who found out."""
+    import form_fill
+    rows = [
+        {"field": "Zip*", "widget": "text", "fillable": True, "source": form_fill.SRC_STORED},
+        {"field": "First*", "widget": "text", "fillable": True, "source": form_fill.SRC_IDENTITY},
+        {"field": "Country*", "widget": "select", "fillable": True, "source": form_fill.SRC_STORED},
+        {"field": "Street*", "widget": "text", "fillable": False, "source": form_fill.SRC_MISSING},
+    ]
+    s = form_fill.summarise(rows)
+    assert s["fillable"] == 3          # what we can PLAN
+    assert s["will_type"] == 2         # what this pass will DO — the number on the button
+    assert s["deferred_to_widget"] == ["Country*"]
+    assert s["missing"] == ["Street*"]

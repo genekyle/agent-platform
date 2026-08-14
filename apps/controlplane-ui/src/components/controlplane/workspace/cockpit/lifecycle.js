@@ -110,6 +110,12 @@ export const TERMINAL_CHOICES = [
     why: "The requisition outlived the listing. Not ever, rather than not now." },
   { flag: "abandoned:operator", label: "Not a fit",
     why: "You looked and do not want it. Closed for good." },
+  // A DUPLICATE IS NOT A REJECTION. Indeed re-surfaced C&S the day after it was submitted, it was
+  // picked again, and skipping it had to borrow "Not a fit" — which tells the decision ledger the
+  // operator rejected a role they had in fact applied for. The ledger is the thing being trained.
+  { flag: "abandoned:already_applied", label: "Already applied",
+    why: "We have sent one for this requisition before. Not a judgement about the job — the work "
+       + "is done, it just happened earlier." },
 ];
 
 //: Server rung status -> rail status. `regressed` and `lapsed` become `attention` because both mean

@@ -40,6 +40,9 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
   // Text fields are what the bunch pass actually types; dropdowns need the widget protocol and are
   // left for a targeted rung. Saying so here stops "it filled 9 of 13" reading as a failure.
   const selects = plan.filter((r) => r.widget === "select" && r.fillable);
+  // Named on the button's own tooltip, so "it filled 5 of 6" is answered before it happens
+  // rather than discovered after.
+  const deferred = summary?.deferred_to_widget || [];
 
   return (
     <div className="sc-login">
@@ -129,11 +132,20 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
                 title="Re-read the form and re-plan — types nothing">
           Re-plan
         </button>
-        <button className="btn btn-sm btn-primary" disabled={busy || !summary?.fillable}
-                aria-label="Fill the ready fields"
-                title="Types the ready text fields at a human pace. Does NOT submit anything."
+        {/* PROMISE WHAT THIS PASS DOES. `fillable` counts dropdowns, which the bunch pass skips
+            by design (they commit through their own widget protocol) — so the button read "Fill
+            the 6 ready field(s)" and typed five, on a form where the sixth was Country with the
+            right value already planned. `will_type` is counted from the same predicate the
+            executor loops on, so the count and the promise cannot drift apart again. */}
+        <button className="btn btn-sm btn-primary"
+                disabled={busy || !(summary?.will_type ?? summary?.fillable)}
+                aria-label="Fill the ready text fields"
+                title={"Types the ready TEXT fields at a human pace. Does NOT submit anything."
+                  + (deferred.length
+                    ? ` ${deferred.join(", ")} ${deferred.length === 1 ? "is a dropdown and commits" : "are dropdowns and commit"} through their own step — answer them from the census above.`
+                    : "")}
                 onClick={onFill}>
-          Fill the {summary?.fillable ?? 0} ready field(s)
+          Fill the {summary?.will_type ?? summary?.fillable ?? 0} text field(s)
         </button>
       </div>
     </div>
