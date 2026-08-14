@@ -887,3 +887,50 @@ def test_an_empty_queue_is_a_named_stop_not_a_crash(monkeypatch):
     run = _drive(monkeypatch, apply_step=never, next_action=_advance,
                  queue=aps.Queue(page=1))
     assert run["stopped"] == sc.STOP_NO_STEP and run["count"] == 0
+
+
+def test_the_census_projection_carries_everything_the_gate_and_the_surface_read(monkeypatch):
+    """AN ALLOW-LIST PROJECTION DROPS WHAT IT WAS NOT TOLD ABOUT, SILENTLY — and it dropped a fix
+    made the same day.
+
+    `_form_census` rebuilds each row from a fixed key list and rebuilt the envelope from three
+    keys. So `field_errors` (added that morning so a page complaining about an OPTIONAL field
+    blocks the advance) never reached `_unanswered_required`: the gate was inert in production
+    while its own test, which supplies a census directly, passed. A fix that cannot fail its test
+    and cannot fire in the world is worse than none — it closes the ticket.
+
+    Same hole took `options_truncated` (so a 24-of-249 country list reached the cockpit looking
+    complete) and `page_errors`. And `url` — the census's proof of life — was read from
+    `steps[0]` while the scanner returns it at the top level, which is why a scan that plainly ran
+    reported `url: None`.
+    """
+    import asyncio
+
+    async def fake_post(path, payload, **_kw):
+        assert path == "/scan_required"
+        return {
+            "ok": True,
+            "url": "https://jobs.bostonchildrens.org/apply/join/",
+            "unanswered": [{"field": "Country*", "kind": "select", "selector": "#country",
+                            "options": ["Aruba"], "option_count": 249,
+                            "options_truncated": True, "required_via": "required-attr"}],
+            "answered": [],
+            "optional": [{"field": "Job Description", "kind": "textarea",
+                          "selector": "#description", "answered": True, "valid": True}],
+            "field_errors": [{"field": "Job Description", "selector": "#description",
+                              "required": False, "message": "is too long, maximum {500 chars}."}],
+            "page_errors": ["Error Code: VPS|7909b5a0"],
+        }
+    monkeypatch.setattr(sc, "_capture_post", fake_post)
+
+    census = asyncio.run(sc._form_census("http://x", "t1"))
+    assert census["url"].endswith("/apply/join/")            # top level, not steps[0]
+    assert census["field_errors"][0]["field"] == "Job Description"
+    assert census["page_errors"] == ["Error Code: VPS|7909b5a0"]
+    assert census["optional"][0]["field"] == "Job Description"
+    row = census["unanswered"][0]
+    assert row["option_count"] == 249 and row["options_truncated"] is True
+
+    # AND THE GATE ACTUALLY FIRES NOW — the assertion that was passing over an inert path.
+    pending = asyncio.run(sc._unanswered_required("http://x", "t1"))
+    assert "Job Description" in pending.require()

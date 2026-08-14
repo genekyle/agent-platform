@@ -5872,11 +5872,37 @@ async def _form_census(browser_url: str, tab_id: str) -> Optional[dict[str, Any]
                         # address (structural css path), and what lets the fill and the teach
                         # seam act on a row the AX tree cannot name. An address is not a secret.
                         "selector": row.get("selector") or None,
-                        "options": list(row.get("options") or []) or None})
+                        "options": list(row.get("options") or []) or None,
+                        # HOW MUCH OF THE OPTION LIST THIS IS. The scanner caps at 24 and says so;
+                        # this projection dropped the saying-so, so a ~250-entry Country list
+                        # arrived at the cockpit indistinguishable from a complete one. A tell
+                        # that exists at the mcp boundary and is erased before the surface is no
+                        # tell at all — the seam is exactly where a measurement gets turned back
+                        # into a bare value (see `interaction.measured`).
+                        "option_count": row.get("option_count"),
+                        "options_truncated": bool(row.get("options_truncated"))})
         return out
 
+    # AN ALLOW-LIST PROJECTION DROPS WHAT IT WAS NOT TOLD ABOUT, SILENTLY.
+    #
+    # `field_errors` was added to the scanner on 2026-08-14 so a page complaining about an
+    # OPTIONAL field could block the advance, and `_unanswered_required` reads it — but this
+    # function never carried it, so the gate was inert in production while its test (which
+    # supplies a census directly) passed. A fix that cannot fail its own test and cannot fire in
+    # the world is worse than no fix: it closes the ticket.
+    #
+    # `page_errors` had the same hole. `optional` too — the census's own "filed for ADDRESSING,
+    # never for the gate" rows, which the teach seam needs to reach a field the required walk
+    # skipped.
+    #
+    # And `url` — the census's PROOF OF LIFE, which 2026-08-12 made an error when absent — was
+    # read from `steps[0].url` while the scanner returns it at the top level. That is why a scan
+    # that plainly ran reported `url: None` on 08-14. Top level first, the old path as fallback.
     return {"unanswered": _rows("unanswered"), "answered": _rows("answered"),
-            "url": (scan.get("steps") or [{}])[0].get("url") or ""}
+            "optional": _rows("optional"),
+            "field_errors": list(scan.get("field_errors") or []),
+            "page_errors": list(scan.get("page_errors") or []),
+            "url": scan.get("url") or (scan.get("steps") or [{}])[0].get("url") or ""}
 
 
 def _census_story(census: Optional[dict[str, Any]]) -> str:
