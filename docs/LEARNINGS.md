@@ -8479,3 +8479,57 @@ form, unfilled. **Nothing submitted, nothing sent, no account created.** Tests: 
 every future LinkedIn search and need the same judgement again; the durable answer is merging the
 sighting into the canonical Job (`/api/career_search/duplicates`), and the operator deferred it. And
 `how_did_you_hear` is stored as **`Indeed`**, which is wrong on every LinkedIn-sourced application.
+
+### 2026-08-14, eighth act — one field, two answers, depending on who asked
+
+**THE SAME NODE READ ANSWERED AND UNANSWERED AT THE SAME INSTANT.** On BrassRing's Questions step
+(Boston Children's, `#custom_10112_465_fname_slt_0_10112-input`), `/scan_required` reported the
+field ANSWERED `"LinkedIn"` at `companion_select` while `/describe_widget` reported
+`answered: false`, `value_preview: ""` at `[class*=singleValue]`. Both were looking at the same
+element on the same page. The census had learned that morning to resolve the hidden native twin a
+react-select fronts (`id="X-input"` over `<select id="X">`); the classifier had never learned it,
+**because the classifier kept its own hand-rolled copy of "where does this widget's truth live"**.
+
+*This is the exact failure `js_common.py` was created to prevent, and it had simply grown back.*
+That module's own docstring opens with `DESCRIBE_WIDGET_JS` and `SCAN_REQUIRED_JS` disagreeing
+about what a react-select IS, written an hour apart in one session. The tell was hoisted into
+`__valueTruth` and shared; the *value read beside it* was left duplicated in the classifier, so the
+next lesson learned in one place could not reach the other. **Extracting the tell but not the
+decision it feeds leaves the drift intact — one function shared inside two hand-rolled blocks is
+still two answers.**
+
+**WHY A FALSE "UNANSWERED" IS THE DANGEROUS DIRECTION.** It invites a retry, and a retry on a
+react-select is not idempotent — the 08-13 entry above records a retry that reopened the widget and
+set the WRONG question. So a false negative here does not cost a wasted call; it corrupts an answer
+that was already correct.
+
+*The fix.* `__companionSelect(el)` is now a named export of the tells, with the control scope
+(`__ctlOf`) derived inside it rather than passed in — two callers scoping the fallback differently
+would find different `<select>`s and be right back to two answers. `/describe_widget` no longer
+decides `answered` for any single control: it asks `__valueTruth` and reports whatever `read_at` it
+names, keeping local logic only for the GROUP shapes (checkbox, radio, Workday's linked date
+sections) that a single-control function does not model. Three stale reads fell out with it — the
+`selectedIndex > 0` select rule the iCIMS currency dropdowns disproved, an ARIA opener counted as
+answered while showing its placeholder, and a value preview that reported an option's `value`
+(`"ILIN_Self"`) instead of its words (`"LinkedIn"`).
+
+**AND THE VERIFY PATH HAD THE SAME HOLE, where it costs the most.** `react_select_pick` confirmed
+only at `singleValue`, so a *successful* pick on BrassRing would have returned `not_staged` — the
+protocol manufacturing precisely the false negative that triggers the non-idempotent retry. It now
+reads the same twin, and returns `{text, read_at}` so the commit step journals WHICH witness saw
+the value: a step that always claims `singleValue` for a value read off the native select teaches
+the corpus a location the value was never at.
+
+*On testing JS with no DOM.* `test_describe_widget.py` argues jsdom would validate a fiction here,
+and for the classifier that holds — it needs a real selector engine and real layout. It does NOT
+hold for `__valueTruth`, which touches no layout at all, so the value decision is **executed** in
+node against the measured BrassRing shape on a ~40-line DOM that stubs nothing the function
+consults. The half that cannot run offline — "and the classifier asks that same function" — is
+enforced the way this repo already enforces the tells: by scanning the blobs as text. Both halves
+were checked by mutation (revert the fix, watch the test fail) before being believed. Note the
+trap found while writing them: `"__valueTruth(el)" in DESCRIBE_WIDGET_JS` is **vacuous**, because
+`__questionOf` calls it from inside the injected tells — the assertion has to read the endpoint's
+own source, before injection.
+
+*Where it stands:* no live drive this act. Tests: mcp **124** (5 new), controlplane-api 1612
+passed / 1 skipped.

@@ -33,6 +33,10 @@ from __future__ import annotations
 #:   __vis(el)        — is it really on screen (offsetParent + a non-zero rect)
 #:   __txt(el)        — normalized visible text
 #:   __isReactSelect(el)
+#:   __companionSelect(el) — {node, text}: the hidden native <select> a react-select fronts,
+#:                      found by the `id="X-input"` over `id="X"` convention. The one definition,
+#:                      because two of them made one field read ANSWERED to /scan_required and
+#:                      UNANSWERED to /describe_widget on the same page.
 #:   __valueTruth(el) — {read_at, answered, preview}: WHERE this widget's truth lives and
 #:                      what it currently says. The one function that owns the `.value` lie.
 #:   __questionOf(el) — {question, source, section}: WHICH QUESTION this control answers, and how
@@ -307,6 +311,49 @@ WIDGET_TELLS_JS = r"""
     return __attr(el, 'aria-autocomplete') === 'list' && __attr(el, 'role') === 'combobox';
   };
 
+  // THE HIDDEN NATIVE SELECT BEHIND A REACT-SELECT — the fourth shape of the `.value` lie, and
+  // the first where the truth is in a DIFFERENT ELEMENT rather than a different property.
+  //
+  // BrassRing renders `id="X-input"` (the react combobox every scan picks up) over `id="X"` (a
+  // real <select> holding the choice) — react-select's own `inputId` convention. Measured live
+  // 2026-08-14 on Boston Children's: State and Country were VISIBLY set to New Hampshire and
+  // United States, the page rendered both and its own validators were happy, and the census
+  // called them unanswered because `[class*=singleValue]` had never mounted. A false blocker on
+  // a complete form — the same damage as the iCIMS currency dropdowns, from the opposite
+  // direction.
+  //
+  // ONE definition, because a second one is how this bug came back. `/scan_required` resolved
+  // the companion and `/describe_widget` did not, so the SAME field on the SAME page read
+  // ANSWERED to the census and UNANSWERED to the classifier (live 2026-08-14, BrassRing
+  // Questions step, `#custom_10112_465_fname_slt_0_10112-input`). A false "unanswered" invites a
+  // retry, and a retry on a stateful widget is not idempotent — that is the react-select retry
+  // that set the WRONG question on 2026-08-13. `answered` must not depend on who asked.
+  //
+  // The companion is found by the id convention first and by a <select> inside the widget's OWN
+  // control second, because a wrapper that holds two fields would otherwise lend one field's
+  // answer to another. Returns {node, text} — `text` is the empty string when the mate exists
+  // but holds no real selection, so a caller can tell "no companion" from "companion, unset".
+  //
+  // The control scope is derived HERE rather than taken from the caller, for the same reason the
+  // lookup is: two callers scoping the fallback differently would find different <select>s and
+  // be right back to two answers for one field.
+  const __ctlOf = (el) => el.closest('[class*=select__control]') ||
+                          el.closest('[class*=field], div') || el.parentElement;
+  const __companionSelect = (el) => {
+    if (!el) return null;
+    const ctl = __ctlOf(el);
+    const id = el.id || '';
+    let mate = null;
+    if (id.slice(-6) === '-input') {
+      try { mate = (el.ownerDocument || document).getElementById(id.slice(0, -6)); } catch (e) { mate = null; }
+    }
+    if (!mate && ctl) mate = ctl.querySelector('select');
+    if (!mate || mate.tagName !== 'SELECT') return null;
+    const t = ((mate.selectedOptions && mate.selectedOptions[0]) ? mate.selectedOptions[0].text : '').trim();
+    const real = !!t && !__isBoilerplate(t) && (mate.value || '') !== '';
+    return {node: mate, text: real ? t : ''};
+  };
+
   // WHERE this widget's truth lives, and what it says right now.
   // NEVER read a react-select at .value: that holds the transient search text, empties on
   // blur, and reports a half-typed field as answered.
@@ -317,37 +364,16 @@ WIDGET_TELLS_JS = r"""
               preview: (el.files && el.files.length) ? el.files[0].name : ''};
     if (__isReactSelect(el)) {
       // Scope to the widget's OWN control, not an ancestor that may wrap several fields.
-      const ctl = el.closest('[class*=select__control]') ||
-                  el.closest('[class*=field], div') || el.parentElement;
+      const ctl = __ctlOf(el);
       const sv = ctl && ctl.querySelector('[class*=singleValue]');
       const multi = ctl && ctl.querySelectorAll('[class*=multiValue]');
       const t = sv ? __txt(sv) : (multi && multi.length ? __txt(ctl) : '');
-      // A REACT-SELECT FRONTING A HIDDEN NATIVE SELECT — the fourth shape of the `.value` lie, and
-      // the first where the truth is in a DIFFERENT ELEMENT rather than a different property.
-      //
-      // BrassRing renders `id="X-input"` (the react combobox the census picks up) over `id="X"`
-      // (a real <select> holding the choice) — react-select's own `inputId` convention. Measured
-      // live 2026-08-14 on Boston Children's: State and Country were VISIBLY set to New Hampshire
-      // and United States, the page rendered both, and the census called them unanswered because
-      // `singleValue` had never mounted. That is a false blocker on a complete form — the same
-      // damage as the iCIMS currency dropdowns, from the opposite direction.
-      //
-      // Only consulted when singleValue is empty, so nothing already working changes: a mounted
-      // singleValue is still the answer. The companion is found by the id convention first and by
-      // a <select> inside the widget's own control second, because a wrapper that holds two fields
-      // would otherwise lend one field's answer to another.
+      // The hidden native twin is consulted ONLY when singleValue is empty, so nothing already
+      // working changes: a mounted singleValue is still the answer. See __companionSelect.
       if (!t) {
-        const id = el.id || '';
-        let mate = null;
-        if (id.slice(-6) === '-input') {
-          try { mate = (el.ownerDocument || document).getElementById(id.slice(0, -6)); } catch (e) { mate = null; }
-        }
-        if (!mate && ctl) mate = ctl.querySelector('select');
-        if (mate && mate.tagName === 'SELECT') {
-          const mt = ((mate.selectedOptions && mate.selectedOptions[0]) ? mate.selectedOptions[0].text : '').trim();
-          if (mt && !__isBoilerplate(mt) && (mate.value || '') !== '')
-            return {read_at: 'companion_select', answered: true, preview: mt.slice(0, 40)};
-        }
+        const comp = __companionSelect(el);
+        if (comp && comp.text)
+          return {read_at: 'companion_select', answered: true, preview: comp.text.slice(0, 40)};
       }
       return {read_at: '[class*=singleValue]', answered: !!t, preview: t.slice(0, 40)};
     }

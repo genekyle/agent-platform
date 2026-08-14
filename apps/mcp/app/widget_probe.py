@@ -110,42 +110,41 @@ DESCRIBE_WIDGET_JS = r"""
   else if (el.tagName === 'TEXTAREA' ||
            (el.tagName === 'INPUT' && ['text','email','tel',''].includes(el.type))) type = 'text';
 
-  // ---- WHERE THE TRUTH LIVES ---------------------------------------------------------
-  // The single most valuable field. `.value` on a react-select holds TRANSIENT search text
-  // and empties on blur — verifying there "confirmed" an empty field twice. Workday dates
-  // DISPLAY while the model stays empty. The widget knows; nothing else has to.
-  const VALUE_READ_AT = {
-    aria_listbox: 'opener_label', react_select: '[class*=singleValue]',
-    prompt_hierarchical: 'opener_label', native_select: '.value',
-    radio_group: 'aria-checked', checkbox_group: 'checked',
-    segmented_date: 'aria-valuenow', month_year: '[class*=singleValue]',
-    text: '.value', number: '.value', file: 'files.length', unknown: '',
-  };
-  const readAt = VALUE_READ_AT[type] || '';
-
-  // ---- ANSWERED? read at the truth location, never at .value by default ---------------
-  let answered = false, valuePreview = '';
+  // ---- ANSWERED, AND WHERE THE TRUTH LIVES -------------------------------------------
+  // ASK THE SHARED TELL, never a local copy. `__valueTruth` (app/js_common.py) is the one
+  // function that owns the `.value` lie, and every shape of it that has cost us a live drive
+  // is already answered in there: react-select's transient search text, iCIMS selects whose
+  // real answer sits at option 0, Workday's multiselect pills, an ARIA opener showing its
+  // placeholder, and the hidden native <select> a react-select fronts.
+  //
+  // This block used to hand-roll all of that, and it drifted — which is the whole reason
+  // js_common.py exists. Measured live 2026-08-14 on BrassRing (Boston Children's, Questions
+  // step, `#custom_10112_465_fname_slt_0_10112-input`): `/scan_required` read the field
+  // ANSWERED "LinkedIn" at `companion_select`, and `/describe_widget` read the SAME node
+  // `answered: false` at `[class*=singleValue]`, because only the census resolved the hidden
+  // native twin. A false "unanswered" invites a retry, and a retry on a stateful widget is not
+  // idempotent — see docs/LEARNINGS.md 2026-08-13, the react-select retry that set the wrong
+  // question. `answered` must not depend on which endpoint asked.
+  //
+  // The GROUP shapes stay here because __valueTruth models a single control and these are
+  // several: a checkbox group, a radio group, and Workday's linked date sections are answered
+  // by their members, not by the node the caller handed us.
+  const GROUP_READ_AT = {radio_group: 'aria-checked', checkbox_group: 'checked',
+                         segmented_date: 'aria-valuenow'};
+  let answered = false, valuePreview = '', readAt = GROUP_READ_AT[type] || '';
   try {
-    if (type === 'react_select' || type === 'month_year') {
-      const sv = wrap.querySelector('[class*=singleValue]');
-      valuePreview = txt(sv); answered = !!valuePreview;
-    } else if (type === 'aria_listbox' || type === 'prompt_hierarchical') {
-      valuePreview = txt(el) || (el.value || ''); answered = !!valuePreview.trim();
-    } else if (type === 'native_select') {
-      answered = el.selectedIndex > 0 && el.value !== ''; valuePreview = el.value || '';
-    } else if (type === 'checkbox_group') {
+    if (type === 'checkbox_group') {
       const n = cbs.filter(c => c.checked).length; answered = n > 0; valuePreview = n + ' checked';
     } else if (type === 'radio_group') {
       const c = radios.find(r => r.checked || attr(r, 'aria-checked') === 'true');
       answered = !!c; valuePreview = c ? txt(c.closest('label')) : '';
-    } else if (type === 'file') {
-      answered = !!(el.files && el.files.length); valuePreview = answered ? el.files[0].name : '';
     } else if (type === 'segmented_date') {
       const secs = [...wrap.querySelectorAll('[data-automation-id*=dateSection]')];
       const vals = secs.map(s => attr(s, 'aria-valuenow') || s.value || '').filter(Boolean);
       answered = vals.length > 0 && vals.length === secs.length; valuePreview = vals.join('/');
     } else {
-      answered = !!(el.value && String(el.value).trim()); valuePreview = String(el.value || '');
+      const truth = __valueTruth(el);
+      answered = truth.answered; valuePreview = truth.preview; readAt = truth.read_at;
     }
   } catch (e) { valuePreview = 'read-error:' + e.message; }
 
@@ -202,6 +201,20 @@ DESCRIBE_WIDGET_JS = r"""
     if (b) { commitKind = 'footer_button'; commitLabel = txt(b); }
   }
 
+  // The SECOND NODE, when this widget is really two. Two unrelated shapes wear that name and
+  // both are worth handing over: the year input of a month/year pair, and the hidden native
+  // <select> a react-select fronts. Named by the SHARED resolver, so the node reported here is
+  // the same node `answered` was read from — a companion_selector found by a second lookup
+  // could point somewhere the value never came from.
+  let companionSel = null;
+  if (monthYear && yearNode) companionSel = '#' + yearNode.id;
+  else if (reactSelect) {
+    const comp = __companionSelect(el);
+    if (comp && comp.node && comp.node.id) {
+      try { companionSel = '#' + CSS.escape(comp.node.id); } catch (e) { companionSel = null; }
+    }
+  }
+
   return {
     found: true,
     widget_type: type,
@@ -227,7 +240,7 @@ DESCRIBE_WIDGET_JS = r"""
     answered: answered,
     value_preview: String(valuePreview || '').slice(0, 60),
     // Secondary node for the two-widget shapes, so the caller doesn't re-derive it.
-    companion_selector: monthYear && yearNode ? ('#' + yearNode.id) : null,
+    companion_selector: companionSel,
   };
 }
 """

@@ -69,16 +69,31 @@ def _read_single_value_js(selector: str) -> str:
     After a pick the input's own `.value` goes EMPTY — the choice renders in a sibling
     [class*=singleValue]. Verifying at `.value` "confirmed" an empty field twice on
     2026-07-15. This is /describe_widget's `value_read_at` applied.
+
+    And where singleValue never mounts, the hidden native twin holds the choice — the SAME
+    `__companionSelect` the census and the classifier read. This path is the one where a false
+    negative does real damage: `react_select_pick` returns NOT_STAGED, the caller retries, and a
+    retry on a react-select is not idempotent (docs/LEARNINGS.md 2026-08-13 — the retry that set
+    the wrong question). Read untruncated, unlike `__valueTruth`'s 40-char preview, because the
+    caller substring-matches the option it asked for and long option labels must still match.
+
+    Returns `{text, read_at}` rather than a bare string, because WHICH witness answered is what
+    the journal has to record: a commit step that always claims `[class*=singleValue]` while the
+    value actually came from the native twin teaches the corpus a location the value was never at.
     """
     s = json.dumps(selector)
     return (
         "(() => {"
         "  " + WIDGET_TELLS_JS +
         f"  const el = __findAll({s})[0] || null;"
-        "   if (!el) return null;"
+        "   if (!el) return {text: null, read_at: null};"
         "   const wrap = el.closest('[class*=select__control], .select, [class*=field], div');"
         "   const sv = wrap && wrap.querySelector('[class*=singleValue]');"
-        "   return sv ? (sv.innerText || sv.textContent || '').trim() : null;"
+        "   const t = sv ? (sv.innerText || sv.textContent || '').trim() : '';"
+        "   if (t) return {text: t, read_at: '[class*=singleValue]'};"
+        "   const comp = __companionSelect(el);"
+        "   return (comp && comp.text) ? {text: comp.text, read_at: 'companion_select'}"
+        "                              : {text: null, read_at: '[class*=singleValue]'};"
         "})()"
     )
 
@@ -182,18 +197,21 @@ async def react_select_pick(cdp, *, selector: str, value: str,
                 f"sample: {hit.get('sample')}. Vocabulary miss -> /resolve_answer.")
 
     # CONFIRM AT THE LAYER THAT COMMITS. .value is empty by now and would report failure;
-    # singleValue is where the choice actually lives.
+    # singleValue is where the choice actually lives — or, where it never mounts, the hidden
+    # native twin beside it.
     await asyncio.sleep(0.35)
-    got = await _eval(cdp, _read_single_value_js(selector))
-    steps.append({"step": "commit", "kind": "on_select", "value_read_at": "[class*=singleValue]",
+    read = await _eval(cdp, _read_single_value_js(selector)) or {}
+    got, read_at = read.get("text"), read.get("read_at") or "[class*=singleValue]"
+    steps.append({"step": "commit", "kind": "on_select", "value_read_at": read_at,
                   "observed": got})
     if not got:
         return (Outcome.NOT_STAGED, steps,
-                f"clicked {value!r} but singleValue is empty — the pick did not take")
+                f"clicked {value!r} but neither singleValue nor a companion select holds a "
+                f"choice — the pick did not take")
     if value.strip().lower() not in str(got).strip().lower():
         return (Outcome.NOT_STAGED, steps,
-                f"clicked {value!r} but singleValue reads {got!r} — wrong option took")
-    return Outcome.OK, steps, f"selected {got!r} (verified at singleValue)"
+                f"clicked {value!r} but {read_at} reads {got!r} — wrong option took")
+    return Outcome.OK, steps, f"selected {got!r} (verified at {read_at})"
 
 
 # --- the text-menu protocol ---------------------------------------------------------

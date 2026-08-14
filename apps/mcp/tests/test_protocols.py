@@ -41,12 +41,17 @@ def route(*, describe=None, focus=None, option=None, single_value=None, year=Non
 
     Naive substring matching does not work here and the reason is worth recording: the
     classifier JS (widget_probe.DESCRIBE_WIDGET_JS) itself CONTAINS the string
-    "singleValue" — it is in its own VALUE_READ_AT table — so a responder keyed on
+    "singleValue" — it reads the shared tells, which name it — so a responder keyed on
     "singleValue" answers the classify call with a value-read result. Each marker below is
     chosen to appear in exactly one of the expressions under test.
+
+    Prefer a marker from a blob's OUTPUT CONTRACT over one from its internals. This dispatch
+    silently mis-routed once already: it keyed the classifier on `VALUE_READ_AT`, an internal
+    lookup table, and when that table was folded into the shared `__valueTruth` the classify
+    call fell through to the option-enumerator's branch instead.
     """
     def responder(expr: str):
-        if "VALUE_READ_AT" in expr:                 # only the classifier defines this table
+        if "options_enumerable_by" in expr:         # only the classifier reports this field
             return describe
         if "HTMLSelectElement.prototype" in expr:   # only the native-select protocol sets via it
             return default
@@ -55,7 +60,11 @@ def route(*, describe=None, focus=None, option=None, single_value=None, year=Non
         if "role=option" in expr:                   # only _find_option_js enumerates options
             return option
         if "closest('[class*=select__control]" in expr:   # only _read_single_value_js
-            return single_value
+            # The reader answers {text, read_at} — WHICH witness saw the value is journaled, so
+            # a commit step cannot claim singleValue for a value read off the native twin. Tests
+            # that only care about the text may still say so; pass a dict to pin `read_at`.
+            return (single_value if single_value is None or isinstance(single_value, dict)
+                    else {"text": single_value, "read_at": "[class*=singleValue]"})
         if "HTMLInputElement.prototype" in expr and "dispatchEvent" in expr:
             return year                             # the set_year expression
         return default
@@ -139,7 +148,9 @@ def test_react_select_verifies_at_singlevalue_not_at_dot_value(corpus, monkeypat
         selector="#country", value="United States", widget_type="react_select")))
     assert out["ok"] is False
     assert out["outcome"] == "not_staged"
-    assert "singleValue is empty" in out["detail"]
+    # Both witnesses came back empty, and the detail has to say so — "singleValue is empty" alone
+    # would read as though the native twin had never been asked.
+    assert "neither singleValue nor a companion select" in out["detail"]
     assert out["steps"][-1]["value_read_at"] == "[class*=singleValue]"
 
 
