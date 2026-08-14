@@ -322,6 +322,33 @@ WIDGET_TELLS_JS = r"""
       const sv = ctl && ctl.querySelector('[class*=singleValue]');
       const multi = ctl && ctl.querySelectorAll('[class*=multiValue]');
       const t = sv ? __txt(sv) : (multi && multi.length ? __txt(ctl) : '');
+      // A REACT-SELECT FRONTING A HIDDEN NATIVE SELECT — the fourth shape of the `.value` lie, and
+      // the first where the truth is in a DIFFERENT ELEMENT rather than a different property.
+      //
+      // BrassRing renders `id="X-input"` (the react combobox the census picks up) over `id="X"`
+      // (a real <select> holding the choice) — react-select's own `inputId` convention. Measured
+      // live 2026-08-14 on Boston Children's: State and Country were VISIBLY set to New Hampshire
+      // and United States, the page rendered both, and the census called them unanswered because
+      // `singleValue` had never mounted. That is a false blocker on a complete form — the same
+      // damage as the iCIMS currency dropdowns, from the opposite direction.
+      //
+      // Only consulted when singleValue is empty, so nothing already working changes: a mounted
+      // singleValue is still the answer. The companion is found by the id convention first and by
+      // a <select> inside the widget's own control second, because a wrapper that holds two fields
+      // would otherwise lend one field's answer to another.
+      if (!t) {
+        const id = el.id || '';
+        let mate = null;
+        if (id.slice(-6) === '-input') {
+          try { mate = (el.ownerDocument || document).getElementById(id.slice(0, -6)); } catch (e) { mate = null; }
+        }
+        if (!mate && ctl) mate = ctl.querySelector('select');
+        if (mate && mate.tagName === 'SELECT') {
+          const mt = ((mate.selectedOptions && mate.selectedOptions[0]) ? mate.selectedOptions[0].text : '').trim();
+          if (mt && !__isBoilerplate(mt) && (mate.value || '') !== '')
+            return {read_at: 'companion_select', answered: true, preview: mt.slice(0, 40)};
+        }
+      }
       return {read_at: '[class*=singleValue]', answered: !!t, preview: t.slice(0, 40)};
     }
     // A SELECT'S ANSWER IS ITS SELECTED OPTION'S WORDS, NOT ITS INDEX. `selectedIndex > 0` assumes
