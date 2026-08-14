@@ -7712,3 +7712,88 @@ operator deliberately** — 08-13 records that `/dismiss_native_dialog` presses 
 a beforeunload takes the DEFAULT, which is the navigation you are trying not to make. Read the
 buttons, press the one you mean. Session #28: **2 submitted, 1 skipped, 5 untouched.** Tests:
 controlplane-api 1632, mcp **121**, interaction 275.
+
+### 2026-08-14, the LinkedIn thread — the first concurrent drive, and the page the operator had to name for us
+
+Session #29 (`linkedin_jobs`, port 9323, `linkedin` persistent profile) driven alongside a
+PROTECTED session #28 (`indeed_jobs`, 9322) — two Chromes, two profiles, two blackboards, one API.
+Isolation held by construction and needed no new code. What the drive found is below, and the most
+important item is one the system could not have found for itself.
+
+**THE OPERATOR NAMED A STATE WE HAD DEMOTED TO A BRANCH.** Watching the run sit on
+`/search/results/all/`: *"it was basically a page of 'general search' results that is just making
+sure you didn't mean to search a company or a person named 'reporting analyst' … I simply pressed
+the 'show all results' on that in-between state where it shows only 3 job opportunities."* We had
+this page in the codebase already — as "Route B", a branch inside `_run_query`. That is not the same
+thing as knowing it. Because it had no state id, the classifier called it `unknown`, the transition
+corpus banked it as `unknown`, and a drive standing on it had nothing to reason from, so its only
+move was to re-submit a query it had already spent. It is now `linkedin_blended_search`, a step of
+the spine, with the home step declaring BOTH landings so the ordinary one stops reading as a fault.
+**A screen a person can describe in one sentence is a screen the system should be able to name.**
+
+**A DESTINATION IS NOT A TARGET.** The way off that page cost three wrong answers in a row, each
+righter than the last and still wrong. Five links share the name "Show all" → address by href
+instead. But `a[href^="/jobs/search-results/"]` matches **12** anchors, ten of them job CARDS, so
+the prefix was as ambiguous as the name; cards carry `currentJobId` and whole-set links never do →
+exclude those. That leaves two, both pointing at the right place, and an earlier draft of this fix
+argued the choice had therefore stopped mattering. **It had not, for a reason no amount of reading
+hrefs could reveal**: hit-testing the first survivor's own centre returns a `LABEL` overlaying it —
+the "Jobs" vertical pill is a filter control wearing an anchor's href, so a trusted click at its
+centre toggles a radio and navigates nowhere. That is precisely what two drives reported: a click
+that landed, on a page that never moved. The address, the destination, and **what is on top at the
+press point** are three different questions. (Same family as the react-select fronting a hidden
+native select, and `.click()` not focusing.)
+
+**A RULE FIXED AT THREE CALL SITES IS FIXED AT THREE CALL SITES — the fourth was the state layer.**
+`linkedin_recipe.classify`/`map_url_to_state` were measured 2026-07-30 and called by NOTHING; the
+live classifier `apply_recipe.map_url_to_state` had no LinkedIn patterns, so every LinkedIn tab read
+`unknown`/`other` and each consumer fell through to Indeed's default: a search spine whose ids could
+never match (every subtask `pending` forever), an empty `search_tab` that armed three literal
+`"indeed.com/jobs"` fallbacks (closing a LinkedIn apply tab would refocus **Indeed**), a stray-click
+guard blind to its own engine, and `task="indeed_apply"` filing every LinkedIn correction in Indeed's
+bucket. Fixed by DELEGATION, host-gated — `linkedin_recipe`'s `/login|/checkpoint` pattern is right
+within linkedin.com and would otherwise claim Workday's and smartapply's sign-in pages.
+
+**`None` IS THE LOAD-BEARING ANSWER.** `engine_of_state` returns None for a state no spine claims.
+Defaulting would mean every login wall, captcha and between-navigations blank reads as *Indeed*, and
+a LinkedIn session's spine would be rebuilt as Indeed's on its own sign-in page, discarding the
+progress it had walked. The spine already held wins over the default.
+
+**THE RADIUS NEVER EXISTED, and a test was holding the belief in place.** The operator asked whether
+we still had to set one. The page answered: no distance pill on the topical filter row, ZERO DOM hits
+for distance/radius/mile/within, and the location popup — the last place it could hide, since these
+popups do not render until opened — holds only a text field with the place name. LinkedIn takes a
+PLACE and decides the area itself. `STAGE_RADIUS` had declared "a slider on the results page" with
+`control: "distance"`: Indeed's shape written into LinkedIn's recipe, **asserted by a green test**,
+which is how an unmeasured claim survives three weeks — the test was true about the code and false
+about the page. Retracted in place rather than deleted, because a stage that silently disappears is
+indistinguishable from one nobody got round to. The engine registry (`has_distance_filter`) had been
+right all along; the ladder was right too (it marks the rung skipped-with-a-reason, never "set to
+50mi"); the disagreement lived only in the recipe.
+
+**WHAT THE DRIVE PROVED, END TO END.** Preamble held on real evidence — `authenticated` off
+`/auth_state`, `query_entered` off a results URL carrying the query, `radius_set` skipped as
+not-applicable — then page 1 read **25/25 results** off the virtualised list (not the ~7 in the
+viewport), and stopped at `awaiting: choose`, the human gate. The blackboard now reads
+`linkedin_home:done → linkedin_blended_search:done → linkedin_job_search:ACTIVE`, where before this
+session it would have read Indeed's three states, all `pending`, forever.
+
+**AND THE SHARING WORKED ON ITS FIRST LINKEDIN RUN**, which was the point of the exercise: of 25
+LinkedIn results, **19 were already seen and 2 possibly already applied** — recognised through the
+canonical job table and `applied_index`, populated entirely by Indeed and ATS drives. Nothing had to
+be taught twice. `ats_registry` needed no change at all: a Workday reached from LinkedIn is the same
+`workday` id, recipe and training bucket as one reached from Indeed.
+
+*Process notes worth keeping.* **A `--reload` server is not a provenance guarantee** — `make dev`
+found 8081 already bound, its new process died, and the surviving one had started five minutes
+BEFORE the merge; the whole first drive ran on pre-merge code and its 500 was diagnosed twice before
+the timestamps were checked. Compare the serving process's start time against HEAD's commit time
+before believing any live result. **Another session was committing to `main` throughout** (it
+submitted the Boston Children's BrassRing application mid-session, which is why that tab vanished),
+so `--ff-only` refused three times and each merge needed a rebase — the isolation worked exactly as
+`PLAN_main-split` intends. And restarting the shared API interrupts the other session's drive: the
+API is a shared resource even when the browsers are not.
+
+*Where it stands:* session #29 at the start line, page 1 read, 6 new prospects, **nothing picked and
+nothing applied to** — waiting on the operator. Session #28 protected and untouched. Tests:
+controlplane-api 1612 → **1636**.
