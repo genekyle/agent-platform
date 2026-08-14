@@ -136,10 +136,37 @@ WEIGHED = (REVIEW, APPLICATION_FORM, ACCOUNT_GATE, JOB_POSTING, JOB_LIST)
 
 ORDER = DECISIVE + WEIGHED
 
-#: "Percent of application completed 0%", "25% complete", "Step 2 of 6". A page that reports how
-#: far through itself you are is a page you are still inside.
-_PROGRESS_METER = re.compile(
-    r"(percent of .{0,24}complet|\b\d{1,3}\s?%\s*(complete|completed|done)|\bstep\s+\d+\s+of\s+\d+)")
+#: A page that reports how far through itself you are is a page you are still inside — UNLESS the
+#: meter says you are all the way through. The first cut of this guard blocked on the PRESENCE of a
+#: meter and broke the very page it was written beside: BrassRing's real confirmation reads
+#: "Application Complete / Percent of application completed / 100% / Your application has been
+#: submitted", so a genuinely sent application classified `unknown` (measured 2026-08-14, minutes
+#: after the guard shipped). A meter is evidence in BOTH directions and has to be read, not just
+#: detected.
+_METERS = (
+    re.compile(r"percent of [a-z ]{0,24}complet\w*\s*(\d{1,3})\s?%"),
+    re.compile(r"\b(\d{1,3})\s?%\s*(?:complete|completed|done)"),
+)
+_STEPPER = re.compile(r"\bstep\s+(\d+)\s+of\s+(\d+)")
+
+
+def _reports_unfinished(body: str) -> bool:
+    """Does this page's own progress readout say it is NOT done? Only that answer blocks a
+    confirmation — "100%" and "step 6 of 6" are a page agreeing it has finished."""
+    for rx in _METERS:
+        for m in rx.finditer(body):
+            try:
+                if int(m.group(1)) < 100:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    for m in _STEPPER.finditer(body):
+        try:
+            if int(m.group(1)) < int(m.group(2)):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 #: Phrases that are worth TWO ordinary markers because they are unambiguous on their own. A page
 #: saying "Enter your information" above an email box is an identity step and nothing else — but
@@ -235,7 +262,7 @@ def classify_kind(text: str, *, source: str = "top") -> Landing:
     # A progress meter is the tell, and it is unambiguous in the other direction — no confirmation
     # page reports what percentage of itself is done. Belt and braces with the marker fix, because
     # this failure is not one to catch only once.
-    progressing = bool(_PROGRESS_METER.search(body))
+    progressing = _reports_unfinished(body)
 
     # Decisive first: one unambiguous phrase is enough.
     for kind in DECISIVE:

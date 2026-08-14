@@ -240,7 +240,33 @@ def test_a_real_confirmation_is_still_decisive():
 
 
 def test_a_confirmation_that_also_shows_a_step_counter_still_defers():
-    """The guard is deliberately broad — "Step 2 of 6" is the same claim as a percentage. A page
-    still walking its own stepper has not finished, whatever else it says."""
+    """"Step 2 of 6" is the same claim as a percentage. A page still walking its own stepper has
+    not finished, whatever else it says."""
     mid = "Step 2 of 6  Application submitted successfully for the previous section"
     assert al.classify_kind(mid).kind != al.CONFIRMATION
+
+
+#: BrassRing's REAL confirmation, captured live 2026-08-14 minutes after the guard above shipped.
+BRASSRING_SUBMITTED = """Application Complete
+Percent of application completed
+100%
+Analyst I, Healthcare Data
+Your application has been submitted. Thank you for your interest.
+View your applications
+Start a new search
+"""
+
+
+def test_a_meter_at_100_percent_is_a_page_agreeing_it_has_finished():
+    """THE GUARD'S OWN FIRST CUT BROKE THE PAGE IT WAS WRITTEN BESIDE.
+
+    Blocking on the PRESENCE of a progress meter made a genuinely submitted application classify
+    `unknown` — BrassRing's confirmation carries "Percent of application completed / 100%" right
+    above "Your application has been submitted". A meter is evidence in BOTH directions and has to
+    be READ, not merely detected. Same mistake in miniature as the marker it was fixing: a
+    substring noticed rather than a sentence understood.
+    """
+    assert al.classify_kind(BRASSRING_SUBMITTED).kind == al.CONFIRMATION
+    # And the finished stepper, for the same reason.
+    assert al.classify_kind("Step 6 of 6  Your application has been submitted.").kind \
+        == al.CONFIRMATION
