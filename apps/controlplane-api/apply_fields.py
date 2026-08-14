@@ -665,14 +665,34 @@ BRASSRING_FIELDS: dict[str, dict[str, Any]] = {
     "create_account_submit": _f(ats="brassring", role="button", name="Continue",
                                 widget_type=WidgetType.UNKNOWN,
                                 note="the create form commits with Continue, not 'Create Account'"),
-    # The SIGN-IN leg, from the wall this form is reached through.
-    "sign_in_username": _f(ats="brassring", selector="#username", widget_type=WidgetType.TEXT,
-                           answer_key="email"),
-    "sign_in_password": _f(ats="brassring", selector="#password", widget_type=WidgetType.TEXT),
-    "sign_in_submit": _f(ats="brassring", role="button", name="Sign in",
+    # THE SIGN-IN LEG, AND BRASSRING SERVES TWO DIFFERENT ONES. The dedicated wall reached from a
+    # job (`.../HomeWithPreLoad?PageType=JobDetails`) uses `#username`; the panel that drops out of
+    # the careers-home nav uses `#loginField`. Measured live 2026-08-14 when an idle session
+    # expired, bounced the tab to the careers home, and the leg answered `not_found` for a form
+    # that was plainly on screen — the map had one surface and the site has two.
+    #
+    # A selector LIST rather than a second field: they never co-exist (they are different pages),
+    # so the ambiguity refusal cannot fire, and one name for "the username box on whichever
+    # sign-in BrassRing served us" is the honest abstraction. It also steps around the hidden
+    # `#loginFieldMobile` / `#passwordMobile` twins the responsive layout ships beside them.
+    "sign_in_username": _f(ats="brassring", selector="#username, #loginField",
+                           widget_type=WidgetType.TEXT, answer_key="email",
+                           note="two surfaces: the job-reached wall and the careers-home panel"),
+    "sign_in_password": _f(ats="brassring", selector="#password", widget_type=WidgetType.TEXT,
+                           note="shared by both surfaces; the mobile twin is #passwordMobile"),
+    # ADDRESSED BY SELECTOR, because role+name cannot separate the twins. The responsive layout
+    # ships a hidden MOBILE duplicate of the whole panel, so "Sign in" names two buttons and
+    # `_resolve_ax_node` refuses the ambiguity — correctly. `#signInLink` is a THIRD control with
+    # nearly the same name: the nav link that OPENS the panel, and pressing it here would close
+    # what we just filled. The same near-twin trap Workday's `utilityButtonSignIn` set on 08-13.
+    "sign_in_submit": _f(ats="brassring", selector="button[type=submit]",
                          widget_type=WidgetType.UNKNOWN,
-                         note="the page carries 'Sign In' as a heading and 'Sign in' as the "
-                              "button — the exact rendered name is the address"),
+                         note="the panel's own submit; NOT #signInLink, which is the nav link "
+                              "that reveals the panel"),
+    # The nav control that reveals the sign-in panel — the `toggle` step this leg needs when it
+    # lands on the careers home rather than on a job's sign-in wall.
+    "sign_in_toggle": _f(ats="brassring", selector="#signInLink", widget_type=WidgetType.UNKNOWN,
+                         note="reveals the sign-in panel on the careers home"),
 }
 
 

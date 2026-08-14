@@ -7500,3 +7500,42 @@ evaporated on measurement. **Measure before building this one too.**
 Country, both phones, email, and education imported by the site — with the résumé the only
 outstanding required field. Nothing submitted. Session #28, **8 picked / 1 skipped / 6 untouched,
 held at the operator's direction.** Tests: interaction 275, controlplane-api **1612**, mcp 119.
+
+### 2026-08-14, seventh act — signed out by inactivity, and one platform with two sign-in surfaces
+
+**THE EXPIRY IS NOW JOURNALED AS AN EXPIRY.** An idle BrassRing session timed out, the tab bounced
+to the careers home, and `reconcile_step` recorded `application_form -> account_gate` — *in exactly
+the same words it uses for forward progress*. Those are opposite facts: one means the drive moved,
+the other means everything filled and unsaved is gone. A reconcile is the system admitting the
+world went somewhere it did not follow, and the CAUSE is the whole content of that admission, so it
+now carries `why` and `next_up`. Falling BACK to an account wall from a form/review/confirmation is
+what an expiry looks like from here. The test asserts the thing that makes this necessary: the
+detail line is identical in both directions, which is precisely why the reason cannot live in it.
+
+**ONE PLATFORM, TWO SIGN-IN SURFACES — and the map had one.** BrassRing's dedicated wall (reached
+from a job, `PageType=JobDetails`) uses `#username`; the panel that drops out of the careers-home
+nav uses `#loginField`. So the sign-in leg answered `not_found` for a form plainly on screen. A
+selector LIST (`#username, #loginField`) rather than a second field: they never co-exist, so the
+ambiguity refusal cannot fire, and one name for "the username box on whichever sign-in BrassRing
+served us" is the honest abstraction. **The lesson is not the ids — it is that a platform's map can
+be complete for the route you first met it by and empty for the route it uses next.**
+
+**AND THE RESPONSIVE LAYOUT SHIPS HIDDEN TWINS OF EVERYTHING.** `#loginFieldMobile`,
+`#passwordMobile`, and a duplicate submit — so "Sign in" names two buttons and the resolver refuses
+the ambiguity. There is also a THIRD near-twin: `#signInLink`, the nav link that OPENS the panel,
+which pressed at the wrong moment closes what was just filled. Exactly the shape of Workday's
+`utilityButtonSignIn` on 08-13, one platform over. The census shows both twins at once and reads
+correctly — the desktop pair ANSWERED, the mobile pair unanswered — which is the clearest evidence
+yet that a form's identity is per-control and never per-name.
+
+*Unfinished, and honestly: the sign-in is one press from done.* The credential is typed into the
+live panel (`Filled the form but could not click…`), the submit is locatable by
+`button[type=submit]`, and the act-time resolver still answers `not_found` for it — the twin is
+almost certainly the cause but I stopped guessing selectors rather than measure a fourth one at the
+end of a long drive. The next move is to scope the submit to the panel that holds `#loginField`
+(`within`, which `apply_fields` already supports) rather than to invent another id.
+
+*Where it stands:* account `ats_boston_children_s_hospital_brassring` **active**, credential vaulted,
+Boston Children's contact step complete behind the wall with only the résumé outstanding, and the
+sign-in panel filled and waiting on one click. Nothing submitted. Session #28, **8 picked / 1
+skipped / 6 untouched.** Tests: controlplane-api **1613**, mcp 119, interaction 275.
