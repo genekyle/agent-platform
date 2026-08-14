@@ -7607,3 +7607,52 @@ it needs the operator's call on whether concurrent driving is wanted at all.
 (BrassRing) and HopeWell are still parked exactly as session #28 left them. Tests: controlplane-api
 1612 → **1629** (+17, every behavioural one falsified against the unfixed code), mcp 119,
 interaction 275.
+
+### 2026-08-14, eighth act — SUBMITTED to Boston Children's, and a guard that broke the page it was written beside
+
+**SUBMITTED: Analyst I, Healthcare Data, Boston Children's Hospital (BrassRing, req 85104BR).**
+Second submission of session #28. Confirmed at the page's own terminal state — *"Application
+Complete / Percent of application completed 100% / Your application has been submitted."* Route:
+Indeed → jobs.bostonchildrens.org → BrassRing tenant, account created on the tenant and its
+credential vaulted. Contact step filled from the profile, education imported by the site, Area of
+Interest chosen by the operator on the posting's own Job Category. The résumé upload and the final
+Submit were the operator's, by hand — the uploader shape is still unsolved (no `input[type=file]`
+anywhere in the DOM).
+
+**THE GUARD BROKE THE VERY PAGE IT WAS WRITTEN BESIDE, AND DRIVING FOUND IT WITHIN HOURS.** The
+morning's fix blocked a decisive `confirmation` whenever a progress meter was PRESENT — written
+against "Percent of application completed 0%". BrassRing's real confirmation carries *"Percent of
+application completed / 100%"* directly above *"Your application has been submitted"*, so a
+genuinely sent application classified `unknown`. Blocking on the presence of a meter is the same
+mistake in miniature as the marker it was fixing: **a substring noticed rather than a sentence
+understood.** "0%" and "100%" are opposite claims and the guard treated them as one signal. It now
+READS the number — only a meter reporting less than complete blocks, and a stepper only while
+N < M. Four directions pinned, all measured live.
+
+*The lesson about the lesson:* a green suite would never have caught this, because the test I wrote
+that morning asserted exactly the behaviour that was wrong. **Finishing an application is what
+found it** — one commit after the commit that caused it.
+
+**THE KEEP-ALIVE MODAL SWALLOWS CLICKS, AGAIN.** "Are you there? You are about to be signed out in
+6 s" greyed the confirmation page, and `View your applications` answered `not_found` — the exact
+2026-08-13 shape ("the DOM read `checked:false` and told me nothing about why; the SCREENSHOT
+showed it instantly"). Dismissing it restored everything. **An idle timer is a live actor on the
+page and belongs in the same class as a captcha overlay: check for it when a control that is
+plainly on screen reports not_found.**
+
+**MAPFRE, AND THE NEAR-TWIN PROBLEM THE DESTINATION TEST DOES NOT YET COVER.** The run loop drove
+four rungs clean (pane → identity → apply → classify) onto `jobs.mapfre.com`, then stopped: the
+posting carries **two "Apply now" controls**, identical role/name/x/width/height at y 482 and 2672
+— the top-and-bottom repeat, same as Boston Children's. But `_same_destination` only rescues
+ANCHORS by href, and AX reports these as `button`; the DOM says they ARE anchors
+(`a[href*=apply]`), so the test's `closest('a')` should have reached them and did not. Worth
+measuring before extending it.
+
+Three selectors offered, three ambiguity refusals — `[id*=apply i]` matched **6** nodes,
+`a[href*=apply i]` matched **4**. Every refusal was correct and the fault was mine each time:
+*a loose selector is a guess wearing a structural costume.* Cookies rejected (privacy-preserving
+option, per the standing rule) which also cleared an overlay.
+
+*Where it stands:* session #28 — **2 submitted** (C&S 08-13, Boston Children's 08-14), 1 skipped as
+already-applied, **5 untouched**. MAPFRE is on its careers site at the apply control, blocked on the
+near-twin. Tests: controlplane-api **1631**, mcp 119, interaction 275.
