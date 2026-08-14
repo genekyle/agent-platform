@@ -2244,13 +2244,44 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
         # 2026-07-26, so it is chosen BY HREF — the jobs one is the only `/jobs/search-results/`.
         # A CSS selector is the honest addressing here: the name cannot distinguish them, and this
         # is the case `/execute`'s `selector` exists for.
+        #
+        # AND THE HREF PREFIX IS AMBIGUOUS TOO — MEASURED live on 2026-08-14 (session #29), where
+        # `a[href^="/jobs/search-results/"]` matched **12** anchors on the blended page:
+        #     /jobs/search-results/?origin=SWITCH_SEARCH_VERTICAL&keywords=…        the Jobs pill
+        #     /jobs/search-results/?currentJobId=4451068100&…BLENDED_SEARCH…CARD    a job CARD ×10
+        #     /jobs/search-results/?keywords=…&origin=…SEE_ALL&…                    "Show all"
+        # So replacing the ambiguous NAME with an ambiguous HREF PREFIX only moved the ambiguity.
+        # Clicking a card would be the 2026-07-26 wrong-company mistake wearing a new coat: it
+        # opens ONE posting, which is not what a query rung means even though it does land on
+        # `/jobs/search-results/`.
+        #
+        # STATED PRECISELY, because the distinction matters: this was a LATENT defect, not the
+        # failure actually observed. Document order put the (correct) vertical pill first that day,
+        # so the old selector would have navigated fine; what stopped Route B was its `moved` gate
+        # above. Ten of twelve matches being wrong is a bug worth fixing on its own terms — but it
+        # is not the cause of what we saw, and recording it as such would be the same confident
+        # wrong attribution as the 08-14 truncated-dropdown note.
+        #
+        # The DISTINGUISHING fact, off the live page rather than from memory: a CARD always carries
+        # `currentJobId`, and a link meaning "show me the whole result set" never does. Excluding
+        # `currentJobId` is therefore the whole fix — and note what that buys: it does not identify
+        # one link, it makes the CHOICE AMONG THE SURVIVORS STOP MATTERING. Both the Jobs pill and
+        # "Show all" go to the full result set for these keywords, and the recipe's success
+        # condition is the PATH, not the `origin=`. So document order is safe here for the first
+        # time — not because we got lucky with it, but because everything it could pick is right.
+        #
+        # (Deliberately NOT a selector list like `…[href*=SEE_ALL], …` to "prefer" one: a CSS list
+        # matches in DOCUMENT order, not list order, so that would read as a preference while doing
+        # nothing. A comment that describes a preference the code does not implement is worse than
+        # no preference at all.)
         landed = ((await _tab_urls()) or [""])[0]
         if "/search/results/" in landed and engine.get("platform") == "linkedin":
-            bb.log("run_query", "landed on the blended search — taking the jobs section's "
-                                "'Show all' (chosen by href, not by document order)")
+            bb.log("run_query", "landed on the blended search — taking the jobs results link "
+                                "(by href, excluding the job cards that share its prefix)")
             res = await _capture_post("/execute", {
                 "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
-                "target_bbox": {}, "selector": 'a[href^="/jobs/search-results/"]',
+                "target_bbox": {},
+                "selector": 'a[href*="/jobs/search-results/"]:not([href*="currentJobId"])',
                 "driver": "humanized"})
             if res.get("outcome") in _ACTED_OK:
                 await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))
