@@ -7215,9 +7215,19 @@ keep the refusal. Deliberately not "same size means same control": iCIMS renders
 different Submits on one packet form and they would pass a geometry test.
 
 **A CAPPED LIST THAT DOES NOT SAY IT IS CAPPED READS AS THE WHOLE LIST.** The Country select
-censused 24 of ~250 options, whose only "United" entry was United Arab Emirates. The fill planner
-held the right answer from the store, matched it against the list it was given, found nothing, and
-Country stayed silently unanswered. The cap is right; the silence is not. `option_count` and
+censused 24 of ~250 options, whose only "United" entry was United Arab Emirates.
+
+*Correcting this entry's first draft, which claimed the cap is what left Country unanswered.* It is
+not: the fill plan held `Country -> "United States", fillable: true`, and the bunch pass simply
+never attempts it — `if not r["fillable"] or r["widget"] != "text": continue`, "this pass does text
+fields only", dropdowns being left for the widget step by design. The cap is a real defect and a
+latent one; it was not that defect. Worth keeping visible because the wrong cause was written down
+confidently in the same session that found the right one, off a plan dump that showed the opposite
+on the same screen. **What the surface then did with it is the operator-facing half and IS
+measured:** the census panel rendered the 24 as the complete set of buttons and offered its
+free-text box only when there were ZERO options, so a truncated dropdown was a wall — 24 choices
+and no way to reach the other 8 (Area of Interest) or the other ~226 (Country). And the fill
+button, counting `summary.fillable` across both widget kinds, promised six fields and typed five. The cap is right; the silence is not. `option_count` and
 `options_truncated` now ride with `options` — and it paid immediately on the very next field, where
 Area of Interest reported **32 options, truncated**, so the 8 hidden ones could be read at the
 widget before the operator chose. Same class as a probe that found nothing being reported as "no".

@@ -14,6 +14,7 @@ each would be to lose again:
 """
 
 import apply_state_store as store
+import pytest
 import apply_steps as aps
 import main
 import session_checkpoints as cps
@@ -343,7 +344,8 @@ def test_unanswered_required_hands_the_census_to_its_caller(monkeypatch):
     out = {}
     pending = asyncio.run(sc._unanswered_required("http://127.0.0.1:9222", "t1",
                                                   census_out=out))
-    assert pending == ["Highest education *"]
+    assert pending.require() == ["Highest education *"]
+    assert pending.is_complete()          # we looked, and this is what the page wants
     assert out["form_scan"]["unanswered"][0]["field"] == "Highest education *"
 
 
@@ -620,13 +622,19 @@ def test_a_field_the_page_is_complaining_about_blocks_the_advance(monkeypatch):
 
     import asyncio
     pending = asyncio.run(sc._unanswered_required("http://x", "t1"))
-    assert pending == ["Job Description (current or recent job responsibilities)"]
+    assert pending.require() == ["Job Description (current or recent job responsibilities)"]
 
     # And the distinction the gate must not lose: "could not look" is still not "complete".
     async def blind(_url, _tab):
         return None
     monkeypatch.setattr(sc, "_form_census", blind)
-    assert asyncio.run(sc._unanswered_required("http://x", "t1")) is None
+    blind = asyncio.run(sc._unanswered_required("http://x", "t1"))
+    assert blind.is_unmeasured()
+    # AND THE SHAPE THAT MATTERS: the branch that promotes a step to the SUBMIT gate reads
+    # `value_or(None) == []`. An unreadable census must never satisfy it.
+    assert blind.value_or(None) != []
+    with pytest.raises(TypeError, match="three states"):
+        bool(blind)                       # `if not pending:` cannot be written
 
 
 def test_a_clean_form_still_advances(monkeypatch):
@@ -637,7 +645,9 @@ def test_a_clean_form_still_advances(monkeypatch):
                 "page_errors": [], "field_errors": [], "url": "https://x/form"}
     monkeypatch.setattr(sc, "_form_census", fake_census)
     import asyncio
-    assert asyncio.run(sc._unanswered_required("http://x", "t1")) == []
+    clean = asyncio.run(sc._unanswered_required("http://x", "t1"))
+    assert clean.require() == [] and clean.is_complete()
+    assert clean.value_or(None) == []     # the gate branch opens, and only here
 
 
 def test_flagging_one_step_does_not_close_another_steps_live_application_tab(monkeypatch):

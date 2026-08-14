@@ -54,6 +54,9 @@ from controller import window as _win
 import execution_style as xs
 import session_checkpoints as cps
 from deps import _session_browser_url, get_db
+# A reading knows whether it was taken. Imported at module level rather than in-function because
+# it is a TYPE in signatures here, not an optional dependency.
+from interaction.measured import Reading
 from models import ObservedJob, TrainingSession
 from settings import settings
 
@@ -5330,7 +5333,11 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         if rung.id == f"{step.platform}_application_form":
             _pending = await _unanswered_required(browser_url,
                                                   (await _observe_tab_now()) or tab_id)
-            if _pending == []:
+            # DEFINITELY NOTHING PENDING — not "nothing pending as far as we could tell". This is
+            # the branch that promotes a step to the SUBMIT gate, so a census we could not take
+            # must never reach it: `value_or(None)` makes unmeasured fall through as None rather
+            # than as the empty list that means "complete".
+            if _pending.value_or(None) == []:
                 _scan_now = await _capture_post("/ax_scan", {
                     "browser_url": browser_url,
                     "tab_id": (await _observe_tab_now()) or tab_id}, timeout=25.0)
@@ -5889,12 +5896,19 @@ def _census_story(census: Optional[dict[str, Any]]) -> str:
 
 
 async def _unanswered_required(browser_url: str, tab_id: str,
-                               census_out: Optional[dict[str, Any]] = None) -> Optional[list[str]]:
-    """Required fields the page still wants, or None if we could not look.
+                               census_out: Optional[dict[str, Any]] = None) -> Reading:
+    """What the page still wants, as a READING — the answer plus whether we managed to take it.
 
-    None and `[]` are different answers and the caller must not merge them: "the form is complete"
-    licenses an advance, "we could not check" does not. Same distinction the challenge pre-gate
-    draws between found-nothing and could-not-look.
+    "The form is complete" licenses an advance and "we could not check" does not, and this
+    function has always known the difference: it returned `None` for the second and `[]` for the
+    first, with a docstring telling every caller not to merge them. That is a hand-rolled
+    tri-state whose correctness lives in each caller's memory — and one of those callers promotes
+    the step to the SUBMIT gate on `_pending == []`, which is the highest-stakes place in the
+    system for somebody to later "simplify" into `if not _pending`.
+
+    So it returns a `Reading` (interaction.measured) instead. `bool()` on one raises, which means
+    the simplification cannot be written; the caller has to say which of the three cases it means.
+    Same distinction as before, now enforced rather than remembered.
 
     `census_out`, when given, receives the full form census from the SAME look — the refusal this
     feeds must carry the form it refused over, not a count of it (a refusal that names the fix in
@@ -5902,7 +5916,9 @@ async def _unanswered_required(browser_url: str, tab_id: str,
     """
     census = await _form_census(browser_url, tab_id)
     if census is None:
-        return None
+        return Reading.unmeasured(
+            "the form census did not come back — we cannot tell a complete form from an "
+            "unreadable one")
     if census_out is not None:
         census_out["form_scan"] = census
     out: list[str] = []
@@ -5929,7 +5945,10 @@ async def _unanswered_required(browser_url: str, tab_id: str,
         label = str(err.get("field") or "")[:60]
         if label and label not in out:
             out.append(label)
-    return out
+    return Reading.measured(
+        out, how=f"census of {census.get('url') or 'the open form'}: "
+                 f"{len(census.get('unanswered') or [])} unanswered, "
+                 f"{len(census.get('field_errors') or [])} complained about")
 
 
 async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
@@ -5970,12 +5989,14 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
     # The cost is one scan per advance; the benefit is that no screen on any platform gets a
     # Continue clicked over an answer nobody chose to leave out. And a screen with nothing required
     # returns `[]` immediately, which is the common case and cheap.
-    pending = await _unanswered_required(browser_url, tab_id, census_out=out)
-    if pending is None:
+    reading = await _unanswered_required(browser_url, tab_id, census_out=out)
+    if reading.is_unmeasured():
         step.record(rung.id, aps.UNKNOWN,
-                    "could not scan the form for required fields", initiator=initiator)
+                    f"could not scan the form for required fields — {reading.why}",
+                    initiator=initiator)
         return ("I could not read this form's required fields. Not clicking Continue blind — "
                 "look at the page, or fill it and step again.")
+    pending = reading.require("the form census")
     if pending:
         step.record(rung.id, aps.HUMAN_REQUIRED,
                     f"{len(pending)} required field(s) unanswered: {', '.join(pending[:6])}",

@@ -50,6 +50,14 @@ function Row({ row, busy, onArm, armed }) {
   const [typed, setTyped] = useState("");
   const kindWord = KIND_COPY[row.kind] || row.kind || "answer";
   const canEnumerate = row.kind === "react_select" && !(row.options || []).length;
+  // A CAPPED LIST OFFERED AS THE WHOLE LIST. The census ships at most 24 options — right, nobody
+  // needs 250 strings in a payload — and this surface rendered them as the complete set of
+  // buttons, with the type-it box appearing ONLY when there were no options at all. So a
+  // truncated dropdown was a wall: 24 choices and no way to reach the rest. Measured live
+  // 2026-08-14 on Boston Children's, where Country ran to ~250 and Area of Interest to 32.
+  // Absence from a sample is not absence (interaction.measured), so the count is stated and the
+  // free-text path stays open whenever the list is short of the page's own total.
+  const truncated = !!row.options_truncated;
   return (
     <li className={`rung rung--${row.answered ? (row.valid ? "held" : "pending") : "pending"}`}>
       <div className="rung__body">
@@ -92,9 +100,18 @@ function Row({ row, busy, onArm, armed }) {
                 List choices
               </button>
             )}
-            {!(row.options || []).length && !canEnumerate && (
+            {truncated && (
+              <span className="badge badge--warn"
+                    title={`This page offers ${row.option_count} choices and the census carries `
+                      + `at most ${(row.options || []).length}. The ones not shown are not absent `
+                      + `— type the exact option instead; the widget is read live when it acts.`}>
+                {(row.options || []).length} of {row.option_count} shown
+              </span>
+            )}
+            {((!(row.options || []).length && !canEnumerate) || truncated) && (
               <span className="form-census__type">
-                <input value={typed} disabled={busy} placeholder="type the answer"
+                <input value={typed} disabled={busy}
+                       placeholder={truncated ? "or type the exact option" : "type the answer"}
                        onChange={(e) => setTyped(e.target.value)} />
                 <button className="btn btn-sm btn-ghost" disabled={busy || !typed.trim()}
                         onClick={() => { onArm(row, typed.trim()); setTyped(""); }}>
