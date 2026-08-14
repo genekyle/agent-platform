@@ -127,7 +127,44 @@ def ensure_account(company: str, ats_id: str, login_url: str = "") -> dict[str, 
         "status": (existing or {}).get("status") or "pending",
     }
     rec = accounts_mod.put_account(aid, patch)
-    return {"ok": True, "account": rec, "credentials": suggested_credentials(company, ats_id)}
+    # DID THIS CALL MINT IT? The row is written on INTENT — the account rung calls this before the
+    # signup form has been touched — so a create leg that never completes leaves a row behind
+    # claiming a login this employer has never heard of. Reporting what we minted is what lets the
+    # caller take it back (`discard_unclaimed`). Operator, 2026-08-13: "make sure the account
+    # details don't stay until the full account creation actually goes through."
+    return {"ok": True, "account": rec, "created": existing is None,
+            "credentials": suggested_credentials(company, ats_id)}
+
+
+def discard_unclaimed(company: str, ats_id: str) -> dict[str, Any]:
+    """Take back an account row whose signup never happened. The mirror of `ensure_account`.
+
+    A PENDING row is working state for an attempt in progress, not a record. `ensure_account`
+    writes it before the form is driven, because the leg needs somewhere to hang the login_url and
+    the derivation key — but when the attempt ends without an account existing, that row outlives
+    its meaning and becomes a claim about another system that nobody made. The residue is real and
+    accumulates: three such rows were sitting in the store on 2026-08-13, one of them
+    (`ats_odyssey_consulting_workday`) minted from a platform PREDICTION that turned out wrong,
+    beside the `_icims` row that was the truth.
+
+    REFUSES anything that could be real, and says which:
+      * `active` — the account exists; that is `reset_account`'s job, deliberately and separately.
+      * has a stored credential — something was written down against this login, and a row we can
+        rebuild for free is never worth destroying a secret we cannot.
+    Nothing is lost either way: the id is derived from company+ats and the password from the
+    company name, so a discarded row is one `ensure_account` away from returning.
+    """
+    aid = ats_account_id(company, ats_id)
+    rec = accounts_mod.get_account(aid)
+    if rec is None:
+        return {"ok": True, "discarded": False, "detail": "nothing to discard"}
+    if rec.get("status") == "active":
+        return {"ok": False, "discarded": False,
+                "detail": f"{aid} is active — the account exists. Use reset_account to un-say it."}
+    if rec.get("has_creds"):
+        return {"ok": False, "discarded": False,
+                "detail": f"{aid} holds a stored credential — not discarding a secret to tidy a row."}
+    return {"ok": True, "discarded": bool(accounts_mod.delete_account(aid)), "account_id": aid}
 
 
 def next_account_action(company: str, ats_id: str) -> dict[str, Any]:

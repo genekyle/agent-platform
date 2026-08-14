@@ -3431,6 +3431,18 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
     ensure = ats_accounts.ensure_account(company, step.platform, login_url=live_url)
     if not ensure.get("ok"):
         raise HTTPException(status_code=409, detail=ensure.get("detail", "could not open account"))
+    # THE ROW IS WORKING STATE UNTIL THE SIGNUP LANDS. `ensure_account` writes it on intent, so
+    # every leg that ends without an account existing has to take back what it minted — otherwise
+    # an abandoned attempt leaves a row claiming a login the employer has never heard of, and those
+    # accumulate (three were in the store on 2026-08-13, one from a platform prediction that turned
+    # out wrong). Only what THIS call minted: a row that was already there is somebody else's
+    # record, and `discard_unclaimed` refuses anything active or holding a secret regardless.
+    _minted_here = bool(ensure.get("created"))
+
+    def _unclaim() -> None:
+        if _minted_here:
+            ats_accounts.discard_unclaimed(company, step.platform)
+
     action = ats_accounts.next_account_action(company, step.platform)
     creds = action.get("credentials") or {}
 
@@ -3445,6 +3457,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                         initiator=body.initiator,
                         # We bail before `_drive_account_form`; not a keystroke was dispatched.
                         staged=False)
+            _unclaim()   # a captcha stopped us before the form — no account was made
             _save_queue(bb, queue); _persist(bb, ledger)
             return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
                          awaiting="operator_challenge",
@@ -3494,6 +3507,7 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                         # means an older driver, so assume it typed — over-protecting the page is
                         # the recoverable mistake.
                         staged=bool(drive.get("staged", True)))
+            _unclaim()   # the drive refused or errored — nothing was submitted, so nothing exists
             _save_queue(bb, queue); _persist(bb, ledger)
             obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
             return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
@@ -6168,6 +6182,20 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     # live window so the cockpit can say whether stepping back in resumes or starts over.
     step.tab_url = (((bb.world or {}).get("apply_tab") or {}).get("url") or "")
     step.finish(body.flag, body.detail)
+
+    # THE ATTEMPT IS OVER — take back an account row whose signup never happened. The account rung
+    # writes the row on intent and it legitimately outlives a single crank (a filled form waiting on
+    # the operator's click is still live work), but a step reaching a TERMINAL flag is the moment
+    # that stops being true. Without this, every abandoned or parked application left a row behind
+    # claiming a login the employer never issued. `discard_unclaimed` refuses anything active or
+    # holding a secret, so a real account is never touched by a tidy-up.
+    if step.company and step.platform:
+        import ats_accounts as _ats_accounts
+        _gone = _ats_accounts.discard_unclaimed(step.company, step.platform)
+        if _gone.get("discarded"):
+            bb.log("account_discard",
+                   f"{step.company} {step.platform}: pending account row taken back — the step "
+                   f"ended {body.flag!r} and no signup ever completed")
     bb.world = dict(bb.world or {})
     bb.world["apply_queue"] = queue.as_dict()
     # A finished step must not leave its handoff or proposal lingering onto the next job.

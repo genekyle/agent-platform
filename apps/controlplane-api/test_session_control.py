@@ -5452,3 +5452,71 @@ def test_reconcile_does_not_let_a_non_answer_overwrite_a_named_screen(monkeypatc
 
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert step.landing_state == "workday_my_information"
+
+
+# ------------------------------------------------ an account row is working state until it lands
+# `ensure_account` writes the row on INTENT — before the signup form is touched — so an attempt
+# that never completes leaves a row claiming a login the employer never issued. Three had
+# accumulated in the store by 2026-08-13, one minted from a platform prediction that turned out
+# wrong. Operator: "make sure the account details don't stay until the full account creation
+# actually goes through."
+def test_discard_unclaimed_takes_back_a_pending_row():
+    import accounts as accounts_mod
+    import ats_accounts as ats
+    company, plat = "Tidy Test Co", "workday"
+    ats.ensure_account(company, plat, login_url="https://x.wd1.myworkdayjobs.com/j")
+    aid = ats.ats_account_id(company, plat)
+    assert accounts_mod.get_account(aid) is not None
+    try:
+        assert ats.discard_unclaimed(company, plat)["discarded"] is True
+        assert accounts_mod.get_account(aid) is None
+    finally:
+        accounts_mod.delete_account(aid)
+
+
+def test_discard_refuses_an_active_account():
+    """An active row says the login EXISTS on the other system. Un-saying that is `reset_account`'s
+    job, deliberately and separately — a tidy-up must never be able to do it."""
+    import accounts as accounts_mod
+    import ats_accounts as ats
+    company, plat = "Tidy Active Co", "workday"
+    ats.ensure_account(company, plat)
+    ats.mark_created(company, plat)
+    aid = ats.ats_account_id(company, plat)
+    try:
+        res = ats.discard_unclaimed(company, plat)
+        assert res["discarded"] is False and "active" in res["detail"]
+        assert accounts_mod.get_account(aid) is not None
+    finally:
+        accounts_mod.delete_account(aid)
+
+
+def test_discard_refuses_a_row_holding_a_credential():
+    """A row we can rebuild for free is never worth destroying a secret we cannot."""
+    import accounts as accounts_mod
+    import ats_accounts as ats
+    company, plat = "Tidy Creds Co", "workday"
+    ats.ensure_account(company, plat)
+    ats.record_credentials(company, plat, "someone@example.com", "not-a-real-password")
+    aid = ats.ats_account_id(company, plat)
+    try:
+        res = ats.discard_unclaimed(company, plat)
+        assert res["discarded"] is False and "credential" in res["detail"]
+        assert accounts_mod.get_account(aid) is not None
+    finally:
+        accounts_mod.clear_credentials(aid)
+        accounts_mod.delete_account(aid)
+
+
+def test_ensure_account_reports_whether_it_minted_the_row():
+    """Only what THIS call minted may be taken back — a row that was already there is somebody
+    else's record."""
+    import accounts as accounts_mod
+    import ats_accounts as ats
+    company, plat = "Tidy Minted Co", "workday"
+    aid = ats.ats_account_id(company, plat)
+    try:
+        assert ats.ensure_account(company, plat)["created"] is True
+        assert ats.ensure_account(company, plat)["created"] is False
+    finally:
+        accounts_mod.delete_account(aid)
