@@ -604,7 +604,80 @@ SUCCESSFACTORS_FIELDS: dict[str, dict[str, Any]] = {
                             "so nothing has needed saving."),
 }
 
+# --- IBM Kenexa BrassRing (sjobs.brassring.com "TGnewUI") ------------------------------------
+#
+# Measured live 2026-08-14 on Boston Children's Hospital (req 85104BR). Two things make this
+# platform's account form unlike the three already mapped:
+#
+#  1. THE PASSWORD RULE IS THE SITE'S, AND IT IS STRICT — 8-25 characters including at least one
+#     of `{}[],.<>;:'"?/|\~ !@#$%^&*()_-+=`. The derived credential satisfies it, but a future
+#     suffix change might not, so the rule is recorded here rather than rediscovered from a
+#     bounced submit.
+#  2. IT ASKS FOR THREE SECURITY QUESTIONS, which is a kind of field none of the mapped ATSs have.
+#     They are ACCOUNT-RECOVERY credentials, not profile data: an invented answer is a fact the
+#     operator does not know about their own account, and some employers verify them with a human.
+#     So the pickers are mapped for ADDRESSING and the answers come from the operator
+#     (`answer_key` deliberately absent — nothing derives these).
+#
+# The three pickers are BUTTONS fronting a list, and two of them share the accessible name
+# "Select question" — only the first is decorated with its section heading. Role+name cannot
+# separate them and `_resolve_ax_node` refuses the ambiguity, correctly: unlike two renderings of
+# one Apply link these are genuinely different controls, and a button's behaviour is not a URL, so
+# the same-destination test cannot rescue them either. They are addressed by SELECTOR for that
+# reason, which is the documented answer to near-twin labels.
+_BRASSRING_PW_RULE = ("8-25 characters, at least one special character from "
+                      "{}[],.<>;:'\"?/|\\~ !@#$%^&*()_-+=")
+
+BRASSRING_FIELDS: dict[str, dict[str, Any]] = {
+    # BrassRing wants a USERNAME rather than an email. Same address in it, per the account
+    # convention: one credential to remember.
+    "username": _f(ats="brassring", selector="#username", widget_type=WidgetType.TEXT,
+                   answer_key="email", note="the account's username; the site does not ask for an "
+                                            "email separately on this form"),
+    "password": _f(ats="brassring", selector="#password", widget_type=WidgetType.TEXT,
+                   note=f"the site states its rule beside the field: {_BRASSRING_PW_RULE}"),
+    "verify_password": _f(ats="brassring", selector="#confirmPassword",
+                          widget_type=WidgetType.TEXT),
+    # PROBED, not guessed: `/describe_widget` reports `aria_listbox` — opener span at
+    # `#selectSecurityQuestionN-button`, popup reached by `aria-owns`, 10 options, commits
+    # `on_select`, truth read at the opener's own label. The first selector written here was
+    # `#securityQuestionN`, invented from the answer field's name, and it matched nothing; the
+    # census's OPTIONAL rows carry the real ones (which only reach the controlplane because the
+    # projection was fixed the same day).
+    "security_question_1": _f(ats="brassring", selector="#selectSecurityQuestion1-button",
+                              widget_type=WidgetType.ARIA_LISTBOX,
+                              note="two of the three pickers share the accessible name 'Select "
+                                   "question' — only the first is decorated with its heading — so "
+                                   "role+name cannot separate them and selector is the address"),
+    "security_question_2": _f(ats="brassring", selector="#selectSecurityQuestion2-button",
+                              widget_type=WidgetType.ARIA_LISTBOX, note="see security_question_1"),
+    "security_question_3": _f(ats="brassring", selector="#selectSecurityQuestion3-button",
+                              widget_type=WidgetType.ARIA_LISTBOX, note="see security_question_1"),
+    # NO `answer_key`, deliberately. These are recovery credentials and nothing here may derive
+    # them — the operator supplies them and the vault stores them.
+    "security_answer_1": _f(ats="brassring", selector="#securityQuestion1Answer",
+                            widget_type=WidgetType.TEXT,
+                            note="operator-supplied; never derived (account recovery)"),
+    "security_answer_2": _f(ats="brassring", selector="#securityQuestion2Answer",
+                            widget_type=WidgetType.TEXT, note="see security_answer_1"),
+    "security_answer_3": _f(ats="brassring", selector="#securityQuestion3Answer",
+                            widget_type=WidgetType.TEXT, note="see security_answer_1"),
+    "create_account_submit": _f(ats="brassring", role="button", name="Continue",
+                                widget_type=WidgetType.UNKNOWN,
+                                note="the create form commits with Continue, not 'Create Account'"),
+    # The SIGN-IN leg, from the wall this form is reached through.
+    "sign_in_username": _f(ats="brassring", selector="#username", widget_type=WidgetType.TEXT,
+                           answer_key="email"),
+    "sign_in_password": _f(ats="brassring", selector="#password", widget_type=WidgetType.TEXT),
+    "sign_in_submit": _f(ats="brassring", role="button", name="Sign in",
+                         widget_type=WidgetType.UNKNOWN,
+                         note="the page carries 'Sign In' as a heading and 'Sign in' as the "
+                              "button — the exact rendered name is the address"),
+}
+
+
 _BY_ATS: dict[str, dict[str, dict[str, Any]]] = {
+    "brassring": BRASSRING_FIELDS,
     "greenhouse": GREENHOUSE_FIELDS,
     "workday": WORKDAY_FIELDS,
     "indeed": INDEED_FIELDS,

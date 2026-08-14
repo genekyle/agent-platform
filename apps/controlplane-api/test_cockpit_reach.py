@@ -934,3 +934,42 @@ def test_the_census_projection_carries_everything_the_gate_and_the_surface_read(
     # AND THE GATE ACTUALLY FIRES NOW — the assertion that was passing over an inert path.
     pending = asyncio.run(sc._unanswered_required("http://x", "t1"))
     assert "Job Description" in pending.require()
+
+
+# --- brassring: the first mapped form that asks for recovery credentials ------------------------
+
+def test_brassring_is_mapped_and_addresses_its_near_twin_pickers_by_selector():
+    """Measured live 2026-08-14 on Boston Children's. Two of the three security-question pickers
+    carry the accessible name "Select question" — only the first is decorated with its heading —
+    so role+name cannot separate them and `_resolve_ax_node` refuses the ambiguity, correctly:
+    unlike two renderings of one Apply link these are genuinely different controls, and a
+    button's behaviour is not a URL so the same-destination test cannot rescue them.
+
+    The widget shape is PROBED, not guessed. The first selector written was `#securityQuestionN`,
+    invented from the answer field's name; it matched nothing. `/describe_widget` said
+    `aria_listbox` at `#selectSecurityQuestionN-button`.
+    """
+    import apply_fields as af
+    assert "brassring" in af.known_ats()
+    for n in (1, 2, 3):
+        q = af.resolve("brassring", f"security_question_{n}")
+        assert q["addressed_by"] == "selector"
+        assert q["selector"] == f"#selectSecurityQuestion{n}-button"
+        assert q["widget_type"] == "aria_listbox"
+
+
+def test_a_recovery_answer_is_never_derived():
+    """The boundary this platform introduced, and it is not mechanical. A generated answer to
+    "your first pet's name" is a fact the operator does not know about their own account, and
+    some employers verify these with a human. The vault can hold them; only the operator can
+    supply them — so the fields are addressable and carry no `answer_key`, which is what stops
+    the fill planner ever speaking to one."""
+    import apply_fields as af
+    import account_forms as acf
+    for n in (1, 2, 3):
+        assert af.resolve("brassring", f"security_answer_{n}").get("answer_key") in (None, "")
+    brass = acf.ACCOUNT_FORMS["create_account"]["brassring"]
+    # Named on the leg so its refusal can be specific rather than "not mapped".
+    assert len(brass["operator_supplied"]) == 3
+    derived = {k for _, k in brass["fields"]}
+    assert not derived & {"security_answer_1", "security_answer_2", "security_answer_3"}

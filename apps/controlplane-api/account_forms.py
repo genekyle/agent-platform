@@ -63,6 +63,27 @@ _VALUE_REF = {"username": "account.username", "password": "account.password"}
 #: the gates that hold are the same ones either way, a captcha or a verification code.
 ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
     "create_account": {
+        "brassring": {
+            "fields": (("username", "username"), ("password", "password"),
+                       ("verify_password", "password")),
+            # THE FIRST MAPPED FORM THAT ASKS FOR ACCOUNT-RECOVERY CREDENTIALS. Three security
+            # questions, each an `aria_listbox` opener with its own answer box. They are named
+            # here so the leg can ADDRESS them and so its refusal can be specific — but they carry
+            # no answer_key and nothing derives them.
+            #
+            # The boundary is not mechanical, it is about what the system may assert on the
+            # operator's behalf. A generated answer to "your first pet's name" is a fact the
+            # operator does not know about their own account, and some employers verify these with
+            # a human; the vault can hold them, but only the operator can supply them. Distinct
+            # from a password, which nobody is ever asked to recall out loud.
+            "operator_supplied": (("security_question_1", "security_answer_1"),
+                                  ("security_question_2", "security_answer_2"),
+                                  ("security_question_3", "security_answer_3")),
+            # The site states its own rule beside the field; recorded so a suffix change is caught
+            # here rather than by a bounced submit.
+            "password_rule": "8-25 characters, at least one special character",
+            "submit": "create_account_submit",
+        },
         "workday": {
             "fields": (("email", "username"), ("password", "password"),
                        ("verify_password", "password")),
@@ -103,6 +124,10 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
     "sign_in": {
+        "brassring": {
+            "fields": (("sign_in_username", "username"), ("sign_in_password", "password")),
+            "submit": "sign_in_submit",
+        },
         "workday": {
             # THE FORM HAS TO BE ON SCREEN BEFORE IT CAN BE FILLED. Workday serves Create Account
             # and Sign In from ONE url, showing whichever the tenant defaults to, with a button to
