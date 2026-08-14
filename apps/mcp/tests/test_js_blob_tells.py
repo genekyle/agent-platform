@@ -108,3 +108,21 @@ def test_an_unambiguous_name_still_resolves_next_to_its_neighbours():
     assert _resolve("Country Phone Code", cands=cands) == 4
     assert _resolve("State", cands=cands + [
         {"role": "button", "name": "State Select One Required", "backend_node_id": 2}]) == 2
+
+
+def test_a_capped_option_list_says_that_it_is_capped():
+    """A CAPPED LIST THAT DOES NOT SAY SO IS READ AS THE WHOLE LIST.
+
+    Live 2026-08-14, Boston Children's: a ~250-entry Country select censused 24 options whose only
+    "United" entry was United Arab Emirates. The planner's stored answer ("United States") matched
+    nothing in the list it was given, so Country silently stayed unanswered on a form one screen
+    from Submit. The cap is right — nobody needs 250 strings in a census payload — but "not an
+    option" and "not shown" have to be distinguishable, so every site that ships `options` ships
+    the page's own total beside it.
+    """
+    import app.protocols as protocols
+    src = protocols.__loader__.get_source("app.protocols")
+    assert "options_truncated" in src and "option_count" in src
+    # Every site that hands over a capped list hands over the tell with it.
+    assert src.count("options: selectOptions(el)") == src.count("...optionMeta(el)")
+    assert "options: selectOptions(el)}" not in src and "options: selectOptions(el)}" not in src

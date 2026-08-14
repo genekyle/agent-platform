@@ -384,9 +384,22 @@ SCAN_REQUIRED_JS = r"""
   // A native <select>'s choices are ON the page — hand them over so a surface offering "pick
   // one" does not have to probe for what the DOM already says. (React listboxes render options
   // only while open; they stay un-enumerated here and honest about it.)
+  // A CAPPED LIST THAT DOES NOT SAY IT IS CAPPED IS READ AS THE WHOLE LIST. Measured live
+  // 2026-08-14 on Boston Children's: a ~250-entry Country select reported 24 options whose only
+  // "United" entry was United Arab Emirates, so the planner's stored answer ("United States")
+  // matched nothing and Country silently stayed unanswered on a form one screen from Submit.
+  // The cap itself is right — nobody needs 250 strings in a census payload — but a caller has to
+  // be able to tell "not an option" from "not shown", which is the same distinction as a probe
+  // that found nothing versus one that found "no". `option_count` is the page's own total.
+  const OPTION_CAP = 24;
   const selectOptions = (el) => {
     if ((el.tagName || '').toLowerCase() !== 'select') return undefined;
-    return [...el.options].map(o => txt(o).slice(0, 60)).filter(Boolean).slice(0, 24);
+    return [...el.options].map(o => txt(o).slice(0, 60)).filter(Boolean).slice(0, OPTION_CAP);
+  };
+  const optionMeta = (el) => {
+    if ((el.tagName || '').toLowerCase() !== 'select') return {};
+    const total = [...el.options].map(o => txt(o)).filter(Boolean).length;
+    return {option_count: total, options_truncated: total > OPTION_CAP};
   };
   const seen = new Set();
   // Optional-but-visible controls, filed for ADDRESSING, never for the gate. The address book
@@ -428,7 +441,7 @@ SCAN_REQUIRED_JS = r"""
                        kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
                        required_via: 'none', value_read_at: t0.read_at,
                        answered: t0.answered, valid: true, value_preview: t0.preview,
-                       options: selectOptions(el)});
+                       options: selectOptions(el), ...optionMeta(el)});
       }
       continue;
     }
@@ -479,7 +492,7 @@ SCAN_REQUIRED_JS = r"""
                  // field is reported there too, and the gate needs the distinction
                  // (reason "invalid" vs "empty").
                  answered: truth.answered, valid: !invalid, value_preview: truth.preview,
-                 options: selectOptions(el)};
+                 options: selectOptions(el), ...optionMeta(el)};
     (truth.answered && !invalid ? done : out).push(row);   // satisfied files, never vanishes
   }
 
@@ -626,7 +639,7 @@ SCAN_REQUIRED_JS = r"""
               kind: (el.tagName || '').toLowerCase(),
               required_via: 'aria-invalid', value_read_at: t.read_at,
               answered: t.answered, valid: false, value_preview: t.preview,
-              options: selectOptions(el)});
+              options: selectOptions(el), ...optionMeta(el)});
     if (sel) seenSel.add(sel);
   }
 
