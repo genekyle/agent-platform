@@ -7272,3 +7272,78 @@ already applied, 6 untouched**. Boston Children's re-walking from the posting af
 — everything it had filled was accepted server-side first (name, email, phone, zip, Country, résumé,
 job title, Area of Interest) and BrassRing issued its own job-details page for req 85104BR. Nothing
 was submitted. Tests: controlplane-api 1577 → **1594**, mcp 114 → **119**.
+
+### 2026-08-14, third act — reliability v1, and the loop that surfaced what only held because a human was the loop
+
+Operator, after the strategic review: *"go with step 2, 3 and 4 and then keep going with the
+remaining picks."* All four steps of `docs/PLAN_reliability_v1.md` are built. What matters more is
+what building them **found**.
+
+**THE TWO TYPES ARE ONE IDEA FROM TWO SIDES.** `interaction.measured` stops the system claiming
+what it did not look at; `interaction.refusal` stops it declining without saying what to do
+instead. Both enforce by making the wrong thing uncompilable — `bool(Reading)` raises,
+`Refusal(...)` without an exit raises. Every lesson this log has repeated five times was recorded
+and unenforced; these are the enforcement points PRINCIPLES asks for.
+
+* **`contains()` returns a Reading, not a bool.** Present is decisive; absent only on a COMPLETE
+  reading. The capped option list as a reusable primitive.
+* **`all_measured` / `any_measured` are named for the QUESTION, not the truth table, because
+  picking the wrong one is itself the bug class** — and the module's own first draft picked wrong.
+  Its test caught it: the captcha rail asks "is ANYTHING blocking?" (an OR, where a gap forbids a
+  NO), and I had modelled it as "is everything clear?" (an AND, where a gap forbids a YES). Same
+  two readings, opposite settling. *Whichever answer you would act on, that is the one that has to
+  be measured.*
+* `no_exit_because` is a REAL answer — a captcha, a credential, a federal self-ID — so it is
+  allowed, must name who acts instead, and is greppable, so "we quietly stopped offering exits"
+  shows up in a diff.
+
+**A FIX THAT PASSES ITS TEST AND CANNOT FIRE IS WORSE THAN NO FIX — it closes the ticket.** The
+`field_errors` gate added that morning never ran in production: `_form_census` rebuilds every row
+from a fixed key list and the envelope from three keys, so anything added to the scanner reaches
+the controlplane and stops. Its test passed because it supplied a census directly. The same
+projection ate `options_truncated` (so a 24-of-**249** country list arrived at the cockpit looking
+complete — the exact bug the tell was added to kill), `page_errors`, and `optional`. And `url`, the
+census's proof of life, was read from `steps[0].url` while the scanner returns it at the top level
+— which is the whole mystery of the 08-14 `url: None` over nine real fields. **An allow-list
+projection drops what it was not told about, silently**, and a measurement erased at the seam is no
+measurement at all.
+
+**A PAGE'S COMPLAINT IS NOT OBLIGED TO WEAR OUR MARKUP.** With that fixed, the census still read
+`field_errors: []` over a form printing its refusal in red. The collector hunts
+`[role=alert] / [class*=rror] / [data-automation-id*=rror]` and then asks which field they name;
+Boston Children's uses none of them. This is the 08-12 lesson one layer over ("no role=alert, no
+aria-live, no link to a control — read the SENTENCE"). Markup is the site's choice; **the FIELD
+LIST is ours and it is enumerable**, so a second pass walks it — each control's own wrapper, read
+for a line carrying a validation cue. The error side is unbounded; the field side is not.
+
+**THE LOOP SURFACES WHAT ONLY HELD BECAUSE A HUMAN WAS THE LOOP.** `POST /run` adds no authority —
+every iteration is the same `apply_step` the button calls, and the gate is checked BEFORE the crank
+so it never dispatches the press it may not make (pinned by a test that fails if it does). It
+stops on facts, not a budget. On its first real drive it did six rungs in one press, which is the
+fifteen presses collapsed. Then:
+* **The no-progress guard fired on its first outing and was right both times** — twice over a Save
+  & Continue the page was silently refusing, once over a genuine transition it should have
+  celebrated.
+* **The record must catch up before the next crank.** Save & Continue crossed from the careers
+  front onto the BrassRing tenant and the step's `landing_state` still named the old screen, so the
+  next iteration resolved the SAME rung and clicked whatever matched on the new page — it found
+  "Save" and pressed it. Harmless there; the wrong-target class in general. `reconcile_step` was
+  already the remedy; the loop's job is to COMPOSE it. **A single press never hit this because a
+  human looks at the screen between presses** — which is the general lesson about composition:
+  automating a sequence surfaces every assumption that was really being held by the operator's eyes.
+
+*Smaller:* a row's identity is not its name — Boston Children's uploader censuses twice, three
+lists keyed on `field`, and React's answer to a duplicate key is that a row **may be omitted**, on
+the one surface built so the operator could see every required field. A finished application
+refuses to be re-flagged ("not re-opened by flagging it again") — correct, and it means a
+mis-filed terminal flag cannot be corrected; `already_applied` arrived one flag too late for C&S,
+whose record keeps `abandoned:operator` with the truth in its detail.
+
+*Where it stands:* session #28, search 2, **8 picked / 1 skipped as already-applied / 6
+untouched**. Boston Children's re-walked from the posting, form completed again (résumé, Country
+via the widget, Area of Interest on the operator's evidence-backed choice), Save & Continue
+accepted, and it now stands at the **BrassRing sign-in wall** with the account rung staged
+`create_account · pending`. The screen classifies as `brassring_unknown` — a real gap, since the
+AX tree plainly shows Sign in / Don't have an account yet / Forgot Username — so the account rung
+is not yet the offered action. Nothing submitted. Tests: interaction **275**, controlplane-api
+**1605**, mcp **119**.
