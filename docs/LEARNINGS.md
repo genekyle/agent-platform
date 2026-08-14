@@ -7347,3 +7347,49 @@ accepted, and it now stands at the **BrassRing sign-in wall** with the account r
 AX tree plainly shows Sign in / Don't have an account yet / Forgot Username — so the account rung
 is not yet the offered action. Nothing submitted. Tests: interaction **275**, controlplane-api
 **1605**, mcp **119**.
+
+### 2026-08-14, fourth act — teaching the account gate, and a create form that asks for recovery credentials
+
+**A BARE CREDENTIAL FORM IS AN ACCOUNT GATE, AND THE TABLE DID NOT KNOW IT.** BrassRing's sign-in
+wall classified `unknown`, so the ladder said "genuinely new territory" and the account rung —
+staged `create_account · pending`, ATS and company already resolved — sat unreachable beside it.
+The page is made of nothing BUT login: *"Sign in using username and password / \*Username /
+\*Password / Show password / Forgot Username or Password? / Don't have an account yet?"*. The
+marker table carried `already have an account` and not its inverse, `sign in to continue` and not a
+sign-in form's own instruction.
+
+Taught in `apply_landing.classify_kind` — the vendor-neutral content reader every unmapped platform
+falls through — so it is one lesson for all of them rather than a BrassRing quirk. *A password
+recovery link exists to recover a password; an invitation to create an account is offered where one
+is required.* STRONG, because a credential form is a five-line page and the flat two-marker minimum
+reads short pages as unknown (the weighting argument the iCIMS email gate earned on 07-26); WEIGHED
+and not decisive, so an application form with a recovery link in its footer stays the form it is —
+pinned in both directions, because otherwise every ATS footer becomes a wall. Live: `screen:unknown
+-> brassring_account_gate`, and the cockpit's next action became **"Get past the account wall"**.
+
+**THEN THE ACCOUNT RUNG REFUSED, CORRECTLY, AND NAMED ITS OWN REMEDY.** *"No create_account form
+mapped for 'brassring' (mapped: icims, successfactors, workday). Scan the form and add it to
+apply_fields + _ACCOUNT_FORMS — do not drive it blind."* This is the refusal working as designed —
+the alternative is typing a credential into a form nobody has read.
+
+**AND THE FORM IS NOT A CREDENTIAL FORM.** Scanned: `#username`, `#password`, `#confirmPassword`,
+then **three security questions** — `#securityQuestion1Answer` … `3` — each preceded by a
+`Select question` picker. Two of those three pickers carry the IDENTICAL accessible name "Select
+question" (the first is decorated with its section heading), so `_resolve_ax_node` refuses them as
+ambiguous, and rightly: unlike the two "Apply" links of the morning these are genuinely different
+controls, and `_same_destination` cannot rescue them because a button's behaviour is not a URL.
+The password rule is its own constraint: **8–25 characters including one special character**, which
+a derived `INITIALS + suffix` may not satisfy.
+
+**The boundary this raises is new and is the operator's, not a mechanism problem.** Security-question
+answers are **account-recovery credentials**. They are not in the operator's list of real gates
+(captcha / email code / 2FA / honeypot), and the accounts vault can store them — but an invented
+answer to "your first pet's name" is a fact the operator does not know about their own account, and
+some employers verify these with a human. Deriving them is a decision about what the system may
+*assert on the operator's behalf*, not about whether it can type into three boxes. Stopped here for
+that answer rather than picking one.
+
+*Where it stands:* Boston Children's is on BrassRing's **create-account form**, mapped and unsaved:
+six text inputs addressed, three question pickers identified and refused as ambiguous, nothing
+typed. Session #28, search 2, **8 picked / 1 skipped / 6 untouched**. Tests: interaction 275,
+controlplane-api **1607**, mcp 119.
