@@ -7118,6 +7118,48 @@ async def choose(session_id: int, body: ChooseBody,
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
     if queue.page != page:
         queue = aps.Queue(page=page)     # a new page starts its own queue
+
+    # PICKING A JOB THAT IS ALREADY PARKED RESURRECTS IT — it does not start a blank one.
+    #
+    # `enqueue` is idempotent by job_id, which protects a job already in THIS queue. A parked
+    # survivor is not in it: `_reset_for_new_search` harvested it to session level precisely so it
+    # would outlive its search. So re-running the same terms and picking the same job — the exact
+    # shape of a repick, and live on 2026-08-14 with Boston Children's sitting one screen from
+    # Submit with five fields filled — would have queued a FRESH step beside the parked one. Two
+    # records for one application, the visible one empty, and the real progress reachable only from
+    # a strip the operator had no reason to look at.
+    #
+    # The saved step is restored INTO the queue instead, still carrying its parked flag and its
+    # walked rungs, so the surface offers "Step back in" (which is what resuming is) rather than
+    # "Open the posting" (which would re-walk it from the top). Reopening stays the operator's
+    # press: this only makes sure they are pressing it on the real step.
+    restored: list[str] = []
+    world = dict(bb.world or {})
+    survivors = list(world.get("parked_apps") or [])
+    known_ids = {s.job_id for s in queue.steps}
+    for job_id in body.picks:
+        held = next((p for p in survivors if p.get("job_id") == job_id), None)
+        if held is None or job_id in known_ids:
+            continue
+        queue.steps.append(aps.ApplyStep.from_dict(
+            {k: v for k, v in held.items()
+             if k not in ("from_search", "from_page", "in_current_queue")}))
+        survivors = [p for p in survivors if p.get("job_id") != job_id]
+        known_ids.add(job_id)
+        restored.append(job_id)
+    if restored:
+        world["parked_apps"] = survivors
+        bb.world = world
+        bb.log("choose_restored",
+               f"page {page}: {len(restored)} pick(s) were already parked in this session and came "
+               f"back with their progress: "
+               + ", ".join((by_id.get(j) or {}).get("title") or j for j in restored),
+               why="A parked application picked again is the same application, not a new one — "
+                   "queueing a blank step beside it would duplicate the record and hide the work "
+                   "already done.",
+               next_up="Step back in to resume where it stopped; its walked rungs are archived on "
+                       "the step, so the retry can be read against the first attempt.")
+
     added = queue.enqueue([by_id.get(j) or {"job_id": j} for j in body.picks])
     bb.world = dict(bb.world or {})
     bb.world["apply_queue"] = queue.as_dict()

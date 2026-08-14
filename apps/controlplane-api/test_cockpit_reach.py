@@ -539,3 +539,50 @@ def test_tab_claims_survive_the_step_and_cleanup_closes_them(monkeypatch):
     assert "T-ats" in closed_calls and "T-search" not in closed_calls
     assert "T-ats" not in bb.world["tab_claims"]
     assert any(c["tab_id"] == "T-ats" for c in report["closed"])
+
+
+def test_picking_a_job_that_is_already_parked_restores_it_instead_of_queueing_a_blank(monkeypatch):
+    """THE REPICK'S OWN TRAP, found live 2026-08-14. Re-running the same terms surfaces the same
+    jobs, and one of them was parked one screen from Submit with five fields filled. `enqueue` is
+    idempotent by job_id, but a parked SURVIVOR lives at session level (that is the whole point of
+    the harvest) — so picking it would have created a fresh empty step beside the real one, and the
+    surface would have offered "Open the posting" over an application already most of the way
+    done."""
+    # The fixture's own query, so `query_entered` observes true against SEARCH_URL and `/choose`
+    # gets past the start-line gate — the thing under test is the pick, not the ladder.
+    bb = _at_start_line()
+    # Real progress on it — the whole point is that a blank duplicate would have HIDDEN this.
+    parked = _parked_queue(job_id="indeed:bch", title="Analyst I, Healthcare Data")
+    parked.steps[0].minis.append(
+        aps.MiniStep(rung="fill_form", outcome="ok", detail="name/email/phone/zip filled"))
+    held = {**parked.steps[0].as_dict(), "from_search": 1, "from_page": 1}
+    bb.world["parked_apps"] = [held]
+    bb.world["apply_queue"] = aps.Queue(page=1).as_dict()
+    bb.world["page_results"] = [{"job_id": "indeed:bch", "title": "Analyst I, Healthcare Data"},
+                                {"job_id": "indeed:fresh", "title": "Someone New"}]
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:bch", "indeed:fresh"], "advance": False})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+
+    queue = aps.Queue.from_dict(saved["bb"].world.get("apply_queue"))
+    assert [s.job_id for s in queue.steps] == ["indeed:bch", "indeed:fresh"]
+    bch = queue.steps[0]
+    # It came back AS the parked step — flag intact, walked rungs intact — not as a blank one.
+    assert bch.terminal == aps.PARKED_OPERATOR
+    assert len(bch.minis) > 0
+    # And it is no longer double-booked at session level.
+    assert saved["bb"].world.get("parked_apps") == []
+    # The genuinely new pick is a fresh step, as it should be.
+    assert queue.steps[1].terminal is None and queue.steps[1].minis == []
+
+    restored = [e for e in saved["bb"].events if e.kind == "choose_restored"]
+    assert len(restored) == 1
+    assert "Analyst I, Healthcare Data" in restored[0].detail
+    assert restored[0].why and restored[0].next_up
