@@ -234,3 +234,82 @@ def test_the_captcha_rail_sees_a_challenge_nested_in_a_frame():
     assert "defaultView" in js
     # Bounded descent — a cycle or a deep tree must not hang the check.
     assert "depth" in js
+
+
+# --- ambiguity: several controls, or one control drawn several times? --------------------------
+#
+# The refusal these exercise was written on 2026-08-13, when "Country" named both the country field
+# and the phone-code field and the first match silently won — changing the operator's country on a
+# live application. It is right about that. It is wrong about page furniture: a job posting repeats
+# its Apply block top and bottom, and on 2026-08-14 that stopped a drive dead on Boston Children's
+# (two `link` nodes named exactly "Apply", identical role/name/x/width/height, y 395 and 2137).
+#
+# The distinction the count cannot make, the page can: a link's identity is where it GOES.
+
+import asyncio
+
+import app.main_server as ms
+
+
+def _resolve(monkeypatch, candidates, destinations, *, role=None, name="Apply"):
+    """Run the resolver against a fixed candidate list and a fixed answer from the page."""
+    async def fake_propose(**_kw):
+        return list(candidates)
+    # `_resolve_ax_node` imports the proposer inside the call, so the module it imports FROM is
+    # the one to patch.
+    monkeypatch.setattr("app.observer.ax_proposer.propose_ax_candidates", fake_propose,
+                        raising=False)
+
+    async def fake_same(_url, _tab, _turl, found):
+        got = {destinations.get(c["backend_node_id"]) for c in found}
+        return len(got) == 1 and "" not in got and None not in got
+    monkeypatch.setattr(ms, "_same_destination", fake_same)
+    return asyncio.run(ms._resolve_ax_node("http://x", None, None, role, name))
+
+
+def test_one_apply_rendered_twice_resolves_to_the_first(monkeypatch):
+    """Same destination = one action, however many times it is drawn. This is the live Boston
+    Children's posting: the block appears above the description and again below it."""
+    cands = [{"role": "link", "name": "Apply", "backend_node_id": 338},
+             {"role": "link", "name": "Apply", "backend_node_id": 458}]
+    got = _resolve(monkeypatch, cands,
+                   {338: "https://jobs.bostonchildrens.org/apply/85104BR",
+                    458: "https://jobs.bostonchildrens.org/apply/85104BR"})
+    assert got == 338
+
+
+def test_two_applies_going_different_places_still_refuse(monkeypatch):
+    """The employee door and the candidate door both say "Apply" on plenty of careers sites. When
+    the destinations disagree the name does not identify a control, and the refusal stands."""
+    cands = [{"role": "link", "name": "Apply", "backend_node_id": 1},
+             {"role": "link", "name": "Apply", "backend_node_id": 2}]
+    got = _resolve(monkeypatch, cands,
+                   {1: "https://careers.example.com/apply/123",
+                    2: "https://internal.example.com/employee/apply/123"})
+    assert got is None
+
+
+def test_a_destination_that_cannot_be_read_refuses(monkeypatch):
+    """Buttons carry their behaviour in a listener, not a URL. An unreadable destination is not
+    evidence of sameness — any doubt keeps the refusal."""
+    cands = [{"role": "button", "name": "Submit", "backend_node_id": 1},
+             {"role": "button", "name": "Submit", "backend_node_id": 2}]
+    got = _resolve(monkeypatch, cands, {1: "", 2: ""}, role="button", name="Submit")
+    assert got is None
+
+
+def test_an_unambiguous_name_never_asks_the_page(monkeypatch):
+    """The common path must not pay for this. One candidate resolves without a CDP round trip."""
+    called = {"n": 0}
+
+    async def boom(*_a, **_k):
+        called["n"] += 1
+        return False
+    monkeypatch.setattr(ms, "_same_destination", boom)
+
+    async def fake_propose(**_kw):
+        return [{"role": "link", "name": "Apply", "backend_node_id": 7}]
+    monkeypatch.setattr("app.observer.ax_proposer.propose_ax_candidates", fake_propose,
+                        raising=False)
+    got = asyncio.run(ms._resolve_ax_node("http://x", None, None, None, "Apply"))
+    assert got == 7 and called["n"] == 0

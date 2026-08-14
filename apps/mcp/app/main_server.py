@@ -227,8 +227,69 @@ async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Opt
         if len(found) == 1:
             return found[0].get("backend_node_id")
         if len(found) > 1:
+            # SEVERAL CONTROLS, OR ONE CONTROL RENDERED SEVERAL TIMES? Those are different facts
+            # and the count cannot tell them apart. The refusal above is right about the first —
+            # "Country" naming both the country field and the phone-code field cost a real
+            # application on 2026-08-13 — and wrong about the second, which is ordinary page
+            # furniture: a job posting repeats its Apply/Save/Share block at the top and bottom of
+            # the description, a checkout repeats its Continue, a long form repeats its Submit.
+            # Measured live 2026-08-14 on Boston Children's: TWO `link` nodes named exactly
+            # "Apply", identical role, name, x, width and height, differing only in y (395 and
+            # 2137). The drive could not press either, on a posting a person applies to by
+            # clicking the first thing they see.
+            #
+            # ASK THE PAGE RATHER THAN GUESS. A link's identity is where it GOES, so candidates
+            # that resolve to one destination are one action however many times it is drawn, and
+            # clicking any of them is the same act. That is evidence, not a heuristic — and when
+            # the destinations differ, or cannot be read at all, the refusal stands exactly as
+            # before. Deliberately NOT "same size means same control": iCIMS renders two genuinely
+            # different Submit buttons on one packet form, and they would pass a geometry test.
+            same = await _same_destination(browser_url, tab_id, tab_url, found)
+            if same:
+                return found[0].get("backend_node_id")
             return None      # named several controls; the caller must say which
     return None
+
+
+async def _same_destination(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
+                            candidates: list[dict]) -> bool:
+    """Do these candidates all lead to the SAME place — i.e. are they one action drawn more than
+    once? Only ever answers True on positive evidence; any doubt returns False and the caller
+    refuses, which is the safe direction for every case this cannot read.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    node_ids = [c.get("backend_node_id") for c in candidates]
+    if not all(isinstance(n, int) for n in node_ids):
+        return False
+    try:
+        target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"],
+                                      max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("DOM.enable")
+            await cdp.send("Runtime.enable")
+            seen: set[str] = set()
+            for node_id in node_ids:
+                resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": node_id})
+                obj = (resolved.get("object") or {}).get("objectId")
+                if not obj:
+                    return False
+                r = await cdp.send("Runtime.callFunctionOn", {
+                    "objectId": obj, "returnByValue": True,
+                    # The nearest anchor, because the accessible node is often a span INSIDE the
+                    # link. An empty answer (no anchor, or a bare "#") is not a destination and
+                    # falls through to the refusal.
+                    "functionDeclaration": "function(){const a=this.closest&&this.closest('a');"
+                                           "const h=a&&a.href;return (h&&h!=='#')?h:'';}"})
+                href = str(((r.get("result") or {}).get("value")) or "")
+                if not href:
+                    return False
+                seen.add(href)
+            return len(seen) == 1
+    except Exception:  # noqa: BLE001 — a failed read is not evidence of sameness
+        logger.debug("could not compare destinations for %s", node_ids, exc_info=True)
+        return False
 
 
 async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
