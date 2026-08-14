@@ -78,7 +78,7 @@ docstring told every caller not to merge the cases — one of those callers prom
 
 ---
 
-## 2. Bind refusal to exit, structurally
+## 2. Bind refusal to exit, structurally — **BUILT** (`interaction.refusal`)
 
 Named on 2026-08-13 after three instances; **four more appeared on 08-14** (the parked strip hid
 the row the focus was not showing; a terminal flag can only be pressed on the *current* step; an
@@ -87,18 +87,30 @@ mean this one"). It is not a bug that keeps getting fixed — it is a class that
 because **a refusal is a string and its exit is hand-built somewhere else, with nothing binding
 them.**
 
-Make reach-parity a type rather than a discipline: a refusal carries its own actionable remedy
-(endpoint + body + label), the cockpit renders refusals uniformly from that, and a refusal that
-cannot name a pressable exit fails a test rather than shipping.
+Made reach-parity a type rather than a discipline. You cannot construct a `Refusal` without an
+exit or a stated reason there is none — the constructor raises, the same violence
+`Reading.__bool__` uses on the other half of the problem. `no_exit_because` is a real answer (a
+captcha, a credential, a federal self-ID) so it is allowed, must name who acts instead, and is
+greppable so it cannot quietly become the default. The cockpit renders exits in ONE branch, so a
+refusal added tomorrow arrives with its button attached.
 
-## 3. A "drive until you need me" loop
+**Migrated:** no application tab (→ Start it again), census unreadable (→ Re-read the form),
+required fields unanswered (→ Fill what the profile knows). **Backlog:** the rest of the ~40
+string refusals in `session_control.py`, and the mcp-side ones. Each is additive and safe to do
+piecemeal — the sentence does not change, the button appears.
 
-The single biggest change to how it feels to use, and **it needs no new safety.** On 08-14 one
-application took ~15 button presses through gates that already exist — every advance runs the
-census, the verify, and the operator-only Submit gate. The rails are built; the *composition* is
-missing. Stop at: a real gate, a genuine ambiguity, an unmeasured reading, or a stop-state.
+## 3. A "drive until you need me" loop — **BUILT** (`POST /run`)
 
-## 4. The gaps the drive found in the vocabulary
+It needed no new safety, and got none. Every iteration is the same `apply_step` the button calls;
+the gate is checked BEFORE the crank so the loop never dispatches the press it may not make, and a
+test fails if it ever does. Stops: gate, refusal, blocked/human_required/unknown, terminal flag,
+empty queue, and a rung that ran twice and moved nothing.
+
+**Not yet wired:** an *unmeasured* `Reading` should also be a stop (step 1's type meeting step 3),
+and the loop drives ONE application — carrying on to the next queued pick is a further step, and
+deliberately so: "work the whole queue unattended" is a bigger promise than "finish this one".
+
+## 4. The gaps the drive found in the vocabulary — **BUILT**
 
 * **`already_applied` is a real outcome with no terminal flag.** Skipping the C&S duplicate had to
   borrow `abandoned:operator`, which means "you looked and do not want it" — a different fact, and
