@@ -209,13 +209,26 @@ async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Opt
     # that clicked "CURRENT C&S EMPLOYEES APPLY HERE" over "APPLY NOW" earlier the same day: a
     # label that LEADS with the wanted words is the control; one that merely contains them is a
     # coincidence.
-    def pick(pred) -> Optional[dict]:
-        return next((c for c in cands if role_ok(c) and pred(nm(c))), None)
+    # AMBIGUITY IS A REFUSAL, NOT A COIN FLIP — the rule `_resolve_node_by_selector` has always
+    # followed, and this function has owed since 2026-08-12 ("there are two Submit buttons and two
+    # Save & Return Later on this very form"). It cost a real application today: "Country" leads
+    # BOTH "Country State of Palestine Required" and "Country Phone Code" on Workday's My
+    # Information, the first match won silently, and the operator's Country was changed out from
+    # under them — which re-rendered the whole form localized. A tier with more than one candidate
+    # means the caller's name does not identify a control, and answering anyway is how you act on
+    # the wrong one.
+    def tier(pred) -> list[dict]:
+        return [c for c in cands if role_ok(c) and pred(nm(c))]
 
-    hit = (pick(lambda n: n == want)
-           or (want and pick(lambda n: n.startswith(want)))
-           or (want and pick(lambda n: want in n)))
-    return hit.get("backend_node_id") if hit else None
+    for pred in ((lambda n: n == want),
+                 (lambda n: bool(want) and n.startswith(want)),
+                 (lambda n: bool(want) and want in n)):
+        found = tier(pred)
+        if len(found) == 1:
+            return found[0].get("backend_node_id")
+        if len(found) > 1:
+            return None      # named several controls; the caller must say which
+    return None
 
 
 async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],

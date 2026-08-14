@@ -88,3 +88,23 @@ def test_an_exact_name_still_wins_outright():
 def test_a_substring_is_still_reachable_when_nothing_leads():
     assert _resolve("State", cands=[
         {"role": "button", "name": "Please choose your State now", "backend_node_id": 5}]) == 5
+
+
+def test_a_name_that_leads_two_controls_is_refused_not_guessed():
+    """The incident this rule is written from: on Workday's My Information "Country" LEADS both
+    'Country State of Palestine Required' and 'Country Phone Code'. The first match won silently
+    and changed the operator's Country out from under them, re-rendering the form localized.
+    A tier with more than one candidate means the name does not identify a control."""
+    assert _resolve("Country", cands=[
+        {"role": "button", "name": "Country United States of America Required", "backend_node_id": 1},
+        {"role": "textbox", "name": "Country Phone Code", "backend_node_id": 4}]) is None
+
+
+def test_an_unambiguous_name_still_resolves_next_to_its_neighbours():
+    """The refusal must not swallow the ordinary case — 'Country Phone Code' names exactly one."""
+    cands = [
+        {"role": "button", "name": "Country United States of America Required", "backend_node_id": 1},
+        {"role": "textbox", "name": "Country Phone Code", "backend_node_id": 4}]
+    assert _resolve("Country Phone Code", cands=cands) == 4
+    assert _resolve("State", cands=cands + [
+        {"role": "button", "name": "State Select One Required", "backend_node_id": 2}]) == 2
