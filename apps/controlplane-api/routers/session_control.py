@@ -2131,7 +2131,20 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
         # COMMIT THE WAY THIS ENGINE COMMITS. `submit` on the query box dispatches Enter to the
         # focused element (the fill just focused it) — which is the only way in on an engine with
         # no submit control, and is what the operator's recording measured LinkedIn doing.
-        if (how or commit_by) == "enter":
+        # A COMMIT METHOD AN ENGINE HAS NO CONTROL FOR IS NOT A FALLBACK, IT IS A CRASH. The
+        # alternating retry below hands us "the other method" on the theory that we do not know
+        # which one an engine needs — true for Indeed, which has both a Search button and Enter.
+        # LinkedIn was MEASURED to have no submit button at all (`SUBMIT_NAME_HINTS = ()`), so
+        # `controls` legitimately carries only `query`, and reaching for `controls["submit"]`
+        # raised KeyError mid-drive (live 2026-08-14, session #29 — the first LinkedIn run of this
+        # rung). Refuse in words rather than by exception: the caller's whole contract is that a
+        # commit either lands or explains itself.
+        method = how or commit_by
+        if method != "enter" and "submit" not in controls:
+            return False, None, False, (
+                f"{engine['label']} has no submit control on this page, so it cannot be committed "
+                f"by button — Enter on the query box is its only commit")
+        if method == "enter":
             ok, detail = await _act("submit", controls["query"])
         else:
             ok, detail = await _act("click", controls["submit"])
@@ -2211,7 +2224,14 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
         await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         clicked, tab, moved, why = await _submit_and_confirm(other)
 
-    if tab is None and moved:
+    # WHERE WE ARE, NOT WHAT CHANGED. This was gated on `moved`, which asks whether the last
+    # commit navigated — a question that answers "no" when we are ALREADY standing on the blended
+    # page from an earlier attempt, and the way on is then never taken (live 2026-08-14, session
+    # #29: the run sat on `/search/results/all/` re-committing the same query into the same URL,
+    # so nothing ever moved and Route B could not fire). Standing on the blended search is a FACT
+    # about the world; it does not stop being true because the last action did not cause it.
+    # Scoped to LinkedIn below, exactly as before, so no other engine's path changes.
+    if tab is None:
         # ROUTE B: THE COMMIT LANDED ON THE BLENDED SEARCH, WHICH IS ONE CLICK SHORT OF RESULTS.
         # Measured 2026-07-28 and again live 2026-07-30: committing from the jobs home can land on
         # `/search/results/all/?...&origin=GLOBAL_SEARCH_HEADER` — LinkedIn's everything-search

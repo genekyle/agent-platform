@@ -5596,3 +5596,23 @@ def test_driven_platforms_is_no_longer_a_second_copy():
     this set is a claim about measurement."""
     assert sc.DRIVEN_PLATFORMS_VIEW is aps.DRIVEN_PLATFORMS
     assert "linkedin" not in sc.DRIVEN_PLATFORMS_VIEW
+
+
+# --- a commit method the engine has no control for is a refusal, not a KeyError ----------------
+# Found live 2026-08-14 on the first LinkedIn run of this rung: `_run_query`'s alternating retry
+# hands `_submit_and_confirm` "the other method" on the theory that we don't know which one an
+# engine needs. True for Indeed (Search button AND Enter). LinkedIn was measured to have NO submit
+# button, so `controls` legitimately carries only `query` — and the retry raised KeyError mid-drive.
+
+def test_an_engine_with_no_submit_button_cannot_be_committed_by_button():
+    """The refusal must be a sentence the caller can render, not an exception. LinkedIn's
+    SUBMIT_NAME_HINTS is empty BY MEASUREMENT — the generic 'search' hint matches `Skip to search`,
+    a skip-link — so 'no submit control' is a finding here, never a scan that came up short."""
+    import linkedin_recipe as lr
+    assert lr.SUBMIT_NAME_HINTS == ()
+    assert lr.search_controls([])["submit"] is None
+    # And the engine declares Enter as its commit, so the button branch is unreachable by design.
+    engine = next(e for e in sc.ENGINES if e["platform"] == "linkedin")
+    assert engine["commit"] == "enter"
+    indeed = next(e for e in sc.ENGINES if e["platform"] == "indeed")
+    assert indeed["commit"] == "button"
