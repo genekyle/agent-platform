@@ -843,16 +843,55 @@ SCAN_REQUIRED_JS = r"""
   // not"*. An optional field filled with the wrong answer is the same error.
   const fieldErrors = [];
   const known = [...out, ...done, ...optional];
+  const seenErr = new Set();
+  const pushErr = (f, message) => {
+    const key = f.field + '|' + message;
+    if (seenErr.has(key)) return;
+    seenErr.add(key);
+    fieldErrors.push({field: f.field, selector: f.selector || null,
+                      required: !!f.required, message: message.slice(0, 200)});
+  };
+  // Pass 1 — the error-styled nodes we already collect, joined to the field they name.
   for (const t of errText) {
     if (/is required(?: and must have a value)?/i.test(t)) continue;   // the empty-field case
     if (/^errors? found$/i.test(t.trim())) continue;
     const hit = known.find((f) => contains(t, f.field));
-    if (!hit) continue;
-    const row = {field: hit.field, selector: hit.selector || null,
-                 required: !!hit.required, message: t.slice(0, 200)};
-    if (!fieldErrors.some((e) => e.field === row.field && e.message === row.message)) {
-      fieldErrors.push(row);
+    if (hit) pushErr(hit, t);
+  }
+  // Pass 2 — FROM THE FIELD SIDE, because a page's complaint is not obliged to wear our markup.
+  //
+  // Pass 1 hunts nodes matching `[role=alert] / [class*=rror] / [data-automation-id*=rror]` and
+  // then asks which field they name. On Boston Children's the complaint is rendered in none of
+  // those, so a form the page was actively refusing censused with `field_errors: []` — the exact
+  // shape of the 2026-08-12 lesson ("no role=alert, no aria-live, no link to a control — read the
+  // SENTENCE"), one layer over. Markup is the site's choice; the FIELD LIST is ours and it is
+  // enumerable, so we walk it instead: for each control, read its own wrapper for a sentence that
+  // names it and complains. Bounded by the census we already have.
+  const CUES = /(too long|too short|must be|must have|cannot exceed|exceeds|maximum|minimum|not valid|invalid|is not a valid|please enter)/i;
+  for (const f of known) {
+    if (!f.selector) continue;
+    let el = null;
+    try { el = __findAll(f.selector)[0] || null; } catch (e) { el = null; }
+    if (!el) continue;
+    // The largest box around this control that holds no OTHER user field — the same wrapper the
+    // question walk uses, so a neighbour's complaint cannot be attributed here.
+    let box = el.parentElement, guard = 0;
+    while (box && guard++ < 6) {
+      const mine = box.querySelectorAll('input, select, textarea');
+      if (mine.length > 1) { box = box.parentElement === null ? box : box; break; }
+      if (!box.parentElement) break;
+      const up = box.parentElement;
+      if (up.querySelectorAll('input, select, textarea').length > 1) break;
+      box = up;
     }
+    if (!box) continue;
+    const text = txt(box);
+    if (!text || text.length > 400) continue;
+    if (/is required(?: and must have a value)?/i.test(text)) continue;
+    if (!CUES.test(text)) continue;
+    // The sentence, not the whole wrapper: take the line that carries the cue.
+    const line = (text.split(/\n+/).find((l) => CUES.test(l)) || text).trim();
+    if (line) pushErr(f, line);
   }
 
   return {unanswered: out, answered: done, optional,
