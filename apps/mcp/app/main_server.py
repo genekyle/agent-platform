@@ -814,7 +814,23 @@ async def select_prompt_path(body: SelectPromptPathRequest):
 
     node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
                                      body.field_role, body.field_name)
-    steps.append({"step": "resolve", "field": body.field_name, "node": node_id})
+    steps.append({"step": "resolve", "field": body.field_name, "node": node_id,
+                  "role": body.field_role})
+    if node_id is None and body.field_role:
+        # THE ROLE IS THE CALLER'S GUESS ABOUT RENDERING, NOT PART OF THE TARGET. `field_role`
+        # defaults to "textbox" because that is how the prompt this was built for ("How Did You
+        # Hear About Us?") renders — and Workday renders the State prompt on the very same form as
+        # a BUTTON ("State Select One Required"). The role gate then rejected every candidate and
+        # the field reported NOT FOUND, as though the page had no State on it (live 2026-08-13).
+        #
+        # So the declared role is tried first and kept as the preference, then dropped — the NAME
+        # is what the caller actually knows. Recorded in `steps` rather than done quietly, because
+        # a resolution that had to widen its own criteria is exactly the thing a recipe should be
+        # told about: it means the role in the recipe is wrong for this tenant.
+        node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
+                                         None, body.field_name)
+        steps.append({"step": "resolve_any_role", "field": body.field_name, "node": node_id,
+                      "note": f"no {body.field_role} named this; matched ignoring role"})
     if node_id is None:
         return {**common, "outcome": Outcome.NOT_FOUND, "steps": steps,
                 "detail": f"prompt field not found: {body.field_name!r}"}
