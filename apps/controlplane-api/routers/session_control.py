@@ -4611,8 +4611,27 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     bb.world["apply_tab"] = next((t for t in (obs.get("tabs") or [])
                                   if t.get("url") == ats_url), {"url": ats_url})
     bb.world["apply_queue"] = queue.as_dict()
+    # WHY THE RECORD MOVED, not just that it did. A reconcile is the system admitting the world
+    # went somewhere it did not follow, and the CAUSE is the whole content of that admission: a
+    # screen advancing under a drive reads identically to one the SERVER took away, and only one
+    # of those means "everything you filled is gone". Live 2026-08-14: an idle BrassRing session
+    # expired, the tab bounced to the careers home, and the reconcile recorded
+    # `application_form -> account_gate` in exactly the same words it uses for progress.
+    _back_to_wall = (new_state or "").endswith("_account_gate") and \
+        (was_state or "").endswith(("_application_form", "_review", "_confirmation"))
     bb.log("reconcile_step", f"{step.job_id}: recorded {added or 'nothing new'} from the live "
-                             f"window ({disc.platform})")
+                             f"window ({disc.platform})",
+           why=("the session was signed out — the window has fallen BACK to the account wall from "
+                "a screen further in, which is what an expiry looks like from here. Anything "
+                "filled and not saved by the site is gone (optimistic UI is not a server record)."
+                if _back_to_wall else
+                "the window had moved on and the record had not; the browser is truth and memory "
+                "yields" if added else
+                "asked the window and it agreed with the record"),
+           next_up=("Sign in again with the stored credential, then re-check what the server "
+                    "actually kept." if _back_to_wall else
+                    "Work the rung the reconciled screen calls for." if added else
+                    "Nothing to catch up — carry on from the rung already recorded."))
     _persist(bb, ledger)
     obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)
     stuck = step.needs_operator()

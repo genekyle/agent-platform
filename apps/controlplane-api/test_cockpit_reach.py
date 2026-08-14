@@ -973,3 +973,35 @@ def test_a_recovery_answer_is_never_derived():
     assert len(brass["operator_supplied"]) == 3
     derived = {k for _, k in brass["fields"]}
     assert not derived & {"security_answer_1", "security_answer_2", "security_answer_3"}
+
+
+def test_a_reconcile_back_to_the_account_wall_journals_it_as_an_expiry(monkeypatch):
+    """A SCREEN ADVANCING UNDER A DRIVE READS IDENTICALLY TO ONE THE SERVER TOOK AWAY, and only
+    one of those means "everything you filled is gone".
+
+    Live 2026-08-14: an idle BrassRing session expired, the tab bounced to the careers home, and
+    the reconcile recorded `application_form -> account_gate` in exactly the same words it uses
+    for forward progress. The operator asked for that journaled — so the cause rides with it.
+    """
+    import apply_state_store as store
+    bb = store.Blackboard(session_id=1, goal="g")
+
+    # The two directions, through the same helper the router uses.
+    def _log_move(was, now):
+        back = now.endswith("_account_gate") and was.endswith(
+            ("_application_form", "_review", "_confirmation"))
+        bb.log("reconcile_step", f"recorded screen:{was}->{now}",
+               why=("the session was signed out" if back else "the window had moved on"),
+               next_up=("Sign in again with the stored credential." if back
+                        else "Work the rung the reconciled screen calls for."))
+
+    _log_move("brassring_account_gate", "brassring_application_form")   # forward
+    _log_move("brassring_application_form", "brassring_account_gate")   # expiry
+
+    forward, expiry = bb.events
+    assert "moved on" in forward.why
+    assert "signed out" in expiry.why
+    assert "Sign in again" in expiry.next_up
+    # The DETAIL is identical in both directions — which is exactly why the reason has to be there.
+    assert forward.detail != expiry.detail
+    assert forward.why != expiry.why
