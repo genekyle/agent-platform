@@ -62,6 +62,9 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
   // A ref, not the state, because the interval closes over its first render.
   const busyRef = useRef(false);
   busyRef.current = busy;
+  //: Whether the declared query has been copied into the form yet. See `load` — this is a one-shot
+  //: latch precisely so an intentionally-emptied query box is not refilled by the next poll.
+  const formSyncedRef = useRef(false);
   const lastLoadRef = useRef(0);
   const settleUntilRef = useRef(0);
 
@@ -78,11 +81,17 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
         // keyed by session id — the carry can never cross into another session's story.
         setPanel((prev) => ({ ...d, last_step: d.last_step ?? prev?.last_step ?? null }));
         // Sync the form ONCE, when a declared query first arrives. Re-syncing on every ping would
-        // overwrite what the operator is mid-way through typing. (A query cannot change within a
-        // session — the server refuses — so once is enough.)
-        setForm((f) => (d.query && !f.query
-          ? { query: d.query, location: d.location || "", radius_miles: d.radius_miles || 50 }
-          : f));
+        // overwrite what the operator is mid-way through typing.
+        //
+        // ONE-SHOT BY A REF, NOT BY `!f.query` — which reads "sync whenever the box is empty", and
+        // an empty box is exactly the state a step-back starts from. So clearing the query for a
+        // new search re-filled it from the panel on the very next poll (1s later), putting the old
+        // query back under the operator's cursor.
+        if (d.query && !formSyncedRef.current) {
+          formSyncedRef.current = true;
+          setForm((f) => ({ ...f, query: d.query, location: d.location || "",
+            radius_miles: d.radius_miles || 50 }));
+        }
         setError("");
       })
       .catch((e) => setError(e.message || "could not read the session"));
@@ -273,7 +282,17 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
           // ABANDONING A SEARCH IS A DETOUR, NOT AN EXIT. It swaps the work surface for the
           // declare form; the session, its browser and its sign-in are untouched, and
           // `/initialize` starts the next search inside it.
-          onNewSearch={() => { setViewMoment("declare"); setSelection(null); }}
+          //
+          // The QUERY is cleared and nothing else is: the field the operator must change arrived
+          // pre-filled with the one value that is guaranteed wrong (the query being stepped away
+          // from, which `/initialize` treats as a no-op). Location and radius are kept, because
+          // "only the query changes" is the literal promise this detour makes. The reason box is
+          // cleared too — a rationale is written for the step back it accompanies, never inherited.
+          onNewSearch={() => {
+            setForm((f) => ({ ...f, query: "", release_open: "" }));
+            setViewMoment("declare");
+            setSelection(null);
+          }}
           busy={busy}
           error={error}
           call={(path, body) => (path === "/choose" ? callChoose(path, body) : call(path, body))}
