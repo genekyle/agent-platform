@@ -119,12 +119,22 @@ def test_location_and_radius_only_exist_once_results_are_on_screen():
         assert step["on_state"] == lr.SEARCH_RESULTS
 
 
-def test_radius_follows_location_never_precedes_it():
-    """A radius is meaningless before there is a location to be radial about."""
+def test_location_comes_first_and_radius_never_comes_at_all():
+    """RETRACTED AND REWRITTEN 2026-08-14, and kept under a new name rather than deleted.
+
+    This test used to assert that after location the next stage is `radius` — encoding the belief
+    that LinkedIn has a radius slider. It never did. The belief was Indeed's shape written into
+    LinkedIn's recipe and asserted by a test, which is how an unmeasured claim earns a green tick
+    and survives three weeks: the test was true about the CODE and false about the PAGE.
+
+    Measured live (session #29): no distance pill on the filter row, zero DOM hits for
+    distance/radius/mile/within, and the location popup holds only a place-name field. So after
+    location the next real work is the traversal.
+    """
     on_results = lr.stage_for_state(lr.SEARCH_RESULTS, done=("title",))
-    assert on_results["stage"] == "location"
+    assert on_results["stage"] == lr.STAGE_LOCATION
     after_loc = lr.stage_for_state(lr.SEARCH_RESULTS, done=("title", "location"))
-    assert after_loc["stage"] == "radius"
+    assert after_loc["stage"] == lr.STAGE_TRAVERSE
 
 
 def test_a_state_with_no_outstanding_stage_answers_none():
@@ -339,12 +349,14 @@ def test_a_linkedin_tab_has_the_search_role_and_a_posting_is_the_handoff():
 def test_the_search_spine_is_per_engine_and_its_ids_are_the_live_states():
     """The subtask ids ARE the live state ids — that contract is what lets `_advance_plan` mark
     progress with no model, and it is why one Indeed-shaped spine could never advance on LinkedIn."""
-    assert sc.search_recipe_states("linkedin") == [lr.HOME, lr.SEARCH_RESULTS, lr.JOB_DETAIL]
+    assert sc.search_recipe_states("linkedin") == [
+        lr.HOME, lr.BLENDED_SEARCH, lr.SEARCH_RESULTS, lr.JOB_DETAIL]
     # THE CONTRACT: every spine id must be something the live classifier actually EMITS. A spine
     # of invented ids type-checks, reads fine, and silently never advances — which is the failure
     # this whole change is about. So walk a real url per state and prove the classifier agrees.
     reachable = {
         lr.HOME: "https://www.linkedin.com/jobs/",
+        lr.BLENDED_SEARCH: "https://www.linkedin.com/search/results/all/?keywords=x",
         lr.SEARCH_RESULTS: "https://www.linkedin.com/jobs/search-results/?keywords=x",
         lr.JOB_DETAIL: "https://www.linkedin.com/jobs/view/4123456789/",
     }
@@ -364,3 +376,65 @@ def test_an_unclaimed_state_answers_none_rather_than_indeed():
     assert sc.engine_of_state(lr.LOGIN_WALL) is None
     assert sc.engine_of_state("unknown") is None
     assert sc.engine_of_state(None) is None
+
+
+# --- the disambiguation page is a STATE, not a stumble ------------------------------------------
+# Operator, 2026-08-14, watching a drive sit on it: "it was basically a page of 'general search'
+# results that is just making sure you didn't mean to search a company or a person named 'reporting
+# analyst' … I simply pressed the 'show all results' on that in-between state where it shows only 3
+# job opportunities." It had lived only as a branch inside `_run_query`, so nothing could name it.
+
+def test_the_blended_search_is_its_own_named_state():
+    blended = "https://www.linkedin.com/search/results/all/?keywords=Reporting%20Analyst&origin=GLOBAL_SEARCH_HEADER"
+    assert lr.map_url_to_state(blended) == lr.BLENDED_SEARCH
+    assert ar.map_url_to_state(blended) == lr.BLENDED_SEARCH   # the LIVE classifier, not just ours
+    # It is a search surface, so a tab sitting on it is not role `other` with nothing to reason from.
+    assert ar.describe_tab(blended)["role"] == "search"
+    assert lr.BLENDED_SEARCH in ar.search_states()
+
+
+def test_the_blended_page_is_not_confused_with_the_jobs_results():
+    """One segment apart: `/search/results/` vs `/jobs/search-results/`. Collapsing them would make
+    the disambiguation page report itself as the result set — a page claiming to be its own goal."""
+    assert lr.map_url_to_state(
+        "https://www.linkedin.com/jobs/search-results/?keywords=x") == lr.SEARCH_RESULTS
+    assert lr.map_url_to_state(
+        "https://www.linkedin.com/search/results/all/?keywords=x") == lr.BLENDED_SEARCH
+
+
+def test_the_spine_knows_the_way_off_the_blended_page():
+    """Being able to NAME a state is only half of it — the cadence has to say what to do there."""
+    spine = sc.search_recipe_for("linkedin")
+    step = next(s for s in spine if s["state"] == lr.BLENDED_SEARCH)
+    assert step["expect"] == [lr.SEARCH_RESULTS]
+    # And the home step must admit that BOTH landings are ordinary, or the common one reads as a fault.
+    home = next(s for s in spine if s["state"] == lr.HOME)
+    assert set(home["expect"]) == {lr.SEARCH_RESULTS, lr.BLENDED_SEARCH}
+    # The way off spends no new search: the query is already committed.
+    assert lr.BLENDED_TO_RESULTS["commits"] is False
+    assert lr.BLENDED_TO_RESULTS["lands_on"] == lr.SEARCH_RESULTS
+
+
+def test_the_way_off_excludes_the_job_cards_and_the_filter_pill():
+    """MEASURED 2026-08-14: 12 anchors share the /jobs/search-results/ prefix. Ten are job CARDS
+    (they carry currentJobId); of the two whole-set links, the vertical pill is covered by a LABEL
+    and does not navigate when clicked at its centre. So the selector names the SEE_ALL affordance
+    — a destination is not a target."""
+    sel = lr.BLENDED_TO_RESULTS["selector"]
+    assert "currentJobId" in sel and ":not(" in sel   # cards excluded
+    assert "SEE_ALL" in sel                            # and the pill is not merely hoped against
+
+
+def test_linkedin_has_no_radius_and_the_cadence_stops_offering_one():
+    """Retracted from a scaffold that was never measured. Live 2026-08-14: the filter row carries no
+    distance pill, a DOM sweep for distance/radius/mile/within returned ZERO, and the location popup
+    — the last place it could hide, since LinkedIn's popups do not render until opened — holds only
+    a text field with the place name. A stage with no control is not outstanding work."""
+    radius = next(s for s in lr.SEARCH_CADENCE if s["stage"] == lr.STAGE_RADIUS)
+    assert radius["applies"] is False and radius["control"] is None
+    # So it is never handed back as the next thing to do...
+    assert lr.stage_for_state(lr.SEARCH_RESULTS, done=(lr.STAGE_LOCATION,))["stage"] == lr.STAGE_TRAVERSE
+    # ...and the engine registry agreed all along; the disagreement lived in this recipe.
+    import command_center
+    assert command_center.has_distance_filter("linkedin_jobs") is False
+    assert command_center.has_distance_filter("indeed_jobs") is True

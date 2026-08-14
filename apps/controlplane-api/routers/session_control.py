@@ -2263,25 +2263,32 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
         # wrong attribution as the 08-14 truncated-dropdown note.
         #
         # The DISTINGUISHING fact, off the live page rather than from memory: a CARD always carries
-        # `currentJobId`, and a link meaning "show me the whole result set" never does. Excluding
-        # `currentJobId` is therefore the whole fix — and note what that buys: it does not identify
-        # one link, it makes the CHOICE AMONG THE SURVIVORS STOP MATTERING. Both the Jobs pill and
-        # "Show all" go to the full result set for these keywords, and the recipe's success
-        # condition is the PATH, not the `origin=`. So document order is safe here for the first
-        # time — not because we got lucky with it, but because everything it could pick is right.
+        # `currentJobId`; a link meaning "show me the whole result set" never does. That exclusion
+        # takes 12 matches down to 2 — the Jobs vertical pill and "Show all".
         #
-        # (Deliberately NOT a selector list like `…[href*=SEE_ALL], …` to "prefer" one: a CSS list
-        # matches in DOCUMENT order, not list order, so that would read as a preference while doing
-        # nothing. A comment that describes a preference the code does not implement is worse than
-        # no preference at all.)
+        # AND TWO IS STILL ONE TOO MANY, for a reason no amount of reading hrefs could reveal.
+        # Both remaining links point at the right place, so an earlier version of this fix argued
+        # the choice between them had stopped mattering. It had not: HIT-TESTING the pill's own
+        # centre returns a `LABEL` that overlays it. The pill is a filter control wearing an
+        # anchor's href, so a trusted click at its centre toggles a radio and NAVIGATES NOWHERE —
+        # which is exactly what the drive did, twice, reporting a click that landed and a page
+        # that never moved. A destination is not a target; what is ON TOP at the click point is.
+        # (Same family as the react-select fronting a hidden native select, and as `.click()` not
+        # focusing: the thing you addressed and the thing your press reaches are two questions.)
+        #
+        # So the target is named exactly: the SEE_ALL affordance, which is the one the operator's
+        # own measured route took. MEASURED 2026-08-14: matches exactly 1, and its hit-test
+        # resolves to a SPAN *inside the anchor*, so a press at its centre reaches the link itself.
         landed = ((await _tab_urls()) or [""])[0]
         if "/search/results/" in landed and engine.get("platform") == "linkedin":
-            bb.log("run_query", "landed on the blended search — taking the jobs results link "
-                                "(by href, excluding the job cards that share its prefix)")
+            bb.log("run_query", "landed on the blended search — taking the jobs section's "
+                                "'Show all' (the SEE_ALL affordance, not the filter pill that "
+                                "shares its destination)")
             res = await _capture_post("/execute", {
                 "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
                 "target_bbox": {},
-                "selector": 'a[href*="/jobs/search-results/"]:not([href*="currentJobId"])',
+                "selector": ('a[href*="/jobs/search-results/"][href*="SEE_ALL"]'
+                             ':not([href*="currentJobId"])'),
                 "driver": "humanized"})
             if res.get("outcome") in _ACTED_OK:
                 await asyncio.sleep(xs.pause_for(style, xs.NAVIGATION))

@@ -71,11 +71,24 @@ SEARCH_RECIPE = [
 # all, and it has no distance control to floor. See `linkedin_recipe.SEARCH_CADENCE`.
 _LINKEDIN_SEARCH_RECIPE = [
     {"step": 0, "state": "linkedin_home",       "action": "enter the job title alone, press Enter",
+     # BOTH landings are legitimate and the spine says so: Enter can go straight to the jobs
+     # results, or to the disambiguation page. A spine that named only the happy landing would
+     # make the ordinary one look like a fault.
+     "expect": ["linkedin_job_search", "linkedin_blended_search"]},
+    # THE DISAMBIGUATION PAGE, as a step of its own. Operator-named 2026-08-14: LinkedIn checking
+    # we did not mean a company or a person by that name, showing three jobs and a "Show all".
+    # It was previously invisible — a branch inside `_run_query` — so a drive standing on it had
+    # nothing to reason from and could only re-submit a query it had already spent. Its action
+    # spends NO new search: the query is already committed, this only chooses the vertical.
+    {"step": 1, "state": "linkedin_blended_search",
+     "action": "click the Jobs section's 'Show all' (see linkedin_recipe.BLENDED_TO_RESULTS — the "
+               "SEE_ALL affordance, not the filter pill that shares its destination)",
      "expect": ["linkedin_job_search"]},
-    {"step": 1, "state": "linkedin_job_search", "action": "apply the location filter, then the radius; "
-     "WHEEL the virtualised list to the end; click into every card to read its pane; click pagination to page forward (bounded)",
+    {"step": 2, "state": "linkedin_job_search", "action": "confirm/set the location filter (LinkedIn has "
+     "NO radius control — the location IS the area); WHEEL the virtualised list to the end; click into "
+     "every card to read its pane; click pagination to page forward (bounded)",
      "expect": ["linkedin_job_search", "linkedin_job_detail"]},
-    {"step": 2, "state": "linkedin_job_detail", "action": "click Easy Apply, or hand off to the employer's ATS",
+    {"step": 3, "state": "linkedin_job_detail", "action": "click Easy Apply, or hand off to the employer's ATS",
      "expect": ["linkedin_job_detail", "linkedin_easy_apply"]},
 ]
 

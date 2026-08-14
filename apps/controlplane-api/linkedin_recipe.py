@@ -138,10 +138,33 @@ LOGIN_WALL = "login_wall"               # shared id: the logged-out wall
 EASY_APPLY = "linkedin_easy_apply"      # the on-engine apply modal. UNVERIFIED.
 UNKNOWN = "unknown"
 
+#: THE DISAMBIGUATION PAGE — a STATE, not a stumble. Operator, 2026-08-14, watching a drive sit on
+#: it: *"it was basically a page of 'general search' results that is just making sure you didn't
+#: mean to search a company or a person named 'reporting analyst' … I simply pressed the 'show all
+#: results' on that in-between state where it shows only 3 job opportunities."*
+#:
+#: MEASURED live the same day (session #29). Committing the query from the header box lands on
+#: `/search/results/all/?keywords=…&origin=GLOBAL_SEARCH_HEADER`: LinkedIn's everything-search,
+#: sectioned into Jobs / Posts / People / Courses / Groups, showing THREE jobs and a "Show all".
+#: It is not a failure, not a different query, and NOT the results page — it is LinkedIn asking
+#: which vertical you meant.
+#:
+#: Naming it is the point. It lived only as a branch inside `_run_query`, so nothing else in the
+#: system could see it: the classifier called it `unknown`, the transition corpus banked it as
+#: `unknown`, and a drive standing on it had no state to reason from — it could only re-submit the
+#: query it had already spent. A screen the operator can describe in one sentence is a screen the
+#: system should be able to name. (Same lesson as `indeed_apply_resume_highlights`: its own screen,
+#: its own state, because folding it into a neighbour tells the ladder a decision is a nothing.)
+BLENDED_SEARCH = "linkedin_blended_search"
+
 _URL_STATES: list[tuple[str, str]] = [
     (r"/jobs/search", SEARCH_RESULTS),
     (r"/jobs/view/", JOB_DETAIL),
     (r"/jobs/?$|/jobs/collections|/jobs/tracker", HOME),
+    # BEFORE the login pattern, and narrow: `/search/results/` is the everything-search. It must
+    # not be confused with `/jobs/search-results/`, which the first rule above already claimed —
+    # ordering does that work, and the two paths differ by exactly the segment that matters.
+    (r"/search/results/", BLENDED_SEARCH),
     (r"/login|/uas/login|/checkpoint", LOGIN_WALL),
 ]
 
@@ -150,7 +173,33 @@ _URL_STATES: list[tuple[str, str]] = [
 #: give a tab its role. Declared here because only this module knows which of its states are
 #: search surfaces; `EASY_APPLY` is deliberately absent (it is an apply surface, and the role
 #: rule already catches it by name).
-SEARCH_STATES: tuple[str, ...] = (HOME, SEARCH_RESULTS, JOB_DETAIL)
+SEARCH_STATES: tuple[str, ...] = (HOME, BLENDED_SEARCH, SEARCH_RESULTS, JOB_DETAIL)
+
+#: What to do when we are standing on the disambiguation page. Declared as DATA so the cadence and
+#: the ladder can both read it, rather than each knowing a selector.
+#:
+#: THE TARGET IS NOT THE DESTINATION. Every one of the twelve `/jobs/search-results/` anchors on
+#: that page goes somewhere reasonable-looking, so addressing by href prefix picks a job CARD ten
+#: times out of twelve (they carry `currentJobId`; the whole-set links never do). Excluding those
+#: leaves two — and the FIRST of them, the "Jobs" vertical pill, hit-tests to a `LABEL` overlaying
+#: it: a filter control wearing an anchor's href, so a trusted click at its centre toggles a radio
+#: and navigates nowhere. Measured 2026-08-14, after two drives reported a click that landed on a
+#: page that never moved. So the affordance is named exactly — the SEE_ALL link, which is the one
+#: the operator pressed by hand — and it is the only match whose hit-test lands inside itself.
+BLENDED_TO_RESULTS: dict[str, Any] = {
+    "action": "click the Jobs section's 'Show all'",
+    "selector": ('a[href*="/jobs/search-results/"][href*="SEE_ALL"]'
+                 ':not([href*="currentJobId"])'),
+    "lands_on": SEARCH_RESULTS,
+    "lands_on_path": "/jobs/search-results/",
+    "commits": False,   # the query was already spent; this only picks which vertical to view
+    "why": ("The blended page is LinkedIn checking whether we meant a company or a person by that "
+            "name. It shows three jobs; the whole result set is one click away, and that click "
+            "spends no new search."),
+    "measured": ("2026-08-14 session #29: 12 anchors share the /jobs/search-results/ prefix, 10 are "
+                 "job cards (currentJobId), and of the 2 whole-set links the vertical pill is "
+                 "covered by a LABEL and does not navigate when clicked at its centre."),
+}
 
 #: The state a posting-detail page is in — the HANDOFF point where the search phase ends and the
 #: apply phase may begin. Indeed's is `indeed_job_posting`; naming LinkedIn's lets the shared
@@ -310,14 +359,35 @@ SEARCH_CADENCE: tuple[dict[str, Any], ...] = (
                "but does not spend a new search.",
     },
     {
+        # THERE IS NO RADIUS ON LINKEDIN. Retracted 2026-08-14 after the operator asked whether we
+        # still had to set one and the page answered: the filter row is topical (Date posted,
+        # Remote, Analytics, Data, Fintech, IT Services, Easy Apply, Experience level, Employment
+        # type, Company, Under 10 applicants) and carries NO distance pill; a DOM sweep for
+        # distance/radius/mile/within over every button, link, input, select and label returned
+        # ZERO; and opening the location popup — the last place it could hide, since LinkedIn's
+        # popups do not render until opened — shows only a "Location" heading and a text field
+        # holding "Greater Boston". LinkedIn takes a PLACE NAME and decides the area itself.
+        #
+        # This entry previously declared "Radius is a slider on the results page" with
+        # `control: "distance"`. That was never measured; it was Indeed's shape written into
+        # LinkedIn's recipe, and it is exactly what this module's own STATUS header warns about.
+        # It is kept as an explicit RETRACTION rather than deleted, because a stage that silently
+        # disappears is indistinguishable from one nobody got round to — and the next person will
+        # otherwise ask this same question and re-drive the page to answer it.
+        #
+        # `command_center.has_distance_filter("linkedin_jobs")` already returns False, so the sweep
+        # was right; the disagreement lived here.
         "stage": STAGE_RADIUS,
         "on_state": SEARCH_RESULTS,
-        "value_from": "radius_miles",       # ~100mi, or the nearest offered stop
-        "control": "distance",              # the slider — /set_distance's linkedin branch
+        "applies": False,                   # <- the operative field: this engine has no such control
+        "control": None,
         "commits": False,
         "lands_on": SEARCH_RESULTS,
-        "why": "Radius is a slider on the results page and is meaningless before there is a "
-               "location to be radial about — which is why it follows location, not precedes it.",
+        "why": "LinkedIn has no distance control anywhere — not on the filter row, not inside the "
+               "location popup. The location IS the area ('Greater Boston'), so there is no radius "
+               "to set and refusing to gather over a missing widget would be enforcing a rule "
+               "about a control that does not exist.",
+        "measured": "2026-08-14 session #29, live: filter row read, DOM swept, location popup opened.",
     },
     {
         # THE STAGE THAT ACTUALLY GATHERS. The three above only aim the search; this one walks
@@ -412,6 +482,13 @@ def stage_for_state(state: str, done: tuple[str, ...] = ()) -> Optional[dict[str
     """
     for step in SEARCH_CADENCE:
         if step["stage"] in done:
+            continue
+        # A stage this engine HAS NO CONTROL FOR is not outstanding work — it is not work at all.
+        # Handing back the radius stage on an engine with no distance widget sends the caller
+        # hunting for a control that cannot exist, which is the same failure as looking for the
+        # location box on the jobs home (see STAGE_LOCATION's note) with the polarity reversed:
+        # there the control was staged, here it is genuinely absent.
+        if step.get("applies") is False:
             continue
         if step["on_state"] == state:
             return step

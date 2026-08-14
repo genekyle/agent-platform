@@ -485,8 +485,11 @@ def test_a_linkedin_session_actually_advances_its_plan():
     assert [s[0] for s in seen] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
     # The current subtask tracks the live page, which is the whole contract.
     assert [s[2] for s in seen] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
-    # And progress accumulates behind it rather than every step reading `pending`.
-    assert seen[-1][3] == ("done", "done", "active")
+    # And progress accumulates behind it rather than every step reading `pending`. The spine has a
+    # blended-search step between home and results (the disambiguation page, operator-named
+    # 2026-08-14); this walk goes home -> results directly, which is the OTHER legitimate landing,
+    # so that step is simply behind us — `done`, not skipped-and-broken.
+    assert seen[-1][3] == ("done", "done", "done", "active")
     # A posting is the handoff, on LinkedIn exactly as on Indeed.
     assert seen[-1][1] == "triage"
 
@@ -500,7 +503,8 @@ def test_an_unrecognised_page_keeps_the_spine_it_has():
         "https://www.linkedin.com/uas/login",
         "https://www.linkedin.com/jobs/view/4123456789/",
     ])
-    assert [s.id for s in bb.plan] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
+    assert [s.id for s in bb.plan] == ["linkedin_home", "linkedin_blended_search",
+                                       "linkedin_job_search", "linkedin_job_detail"]
     # No progress is claimed while we cannot see a spine state — but nothing is torn down either.
     assert seen[1][2] is None
     assert seen[2][2] == "linkedin_job_detail"
@@ -513,7 +517,8 @@ def test_driving_from_one_engine_to_the_other_swaps_the_spine():
         "https://www.indeed.com/jobs?q=report+analyst",
         "https://www.linkedin.com/jobs/search-results/?keywords=report+analyst",
     ])
-    assert [s.id for s in bb.plan] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
+    assert [s.id for s in bb.plan] == ["linkedin_home", "linkedin_blended_search",
+                                       "linkedin_job_search", "linkedin_job_detail"]
     assert store.search_engine_of(bb) == "linkedin"
     assert any(e.kind == "plan_spine" for e in bb.events)
 
@@ -522,7 +527,7 @@ def test_the_spine_labels_drop_their_own_engine_prefix():
     """The label strip was hardcoded to `indeed_`, so LinkedIn's subtasks wore their prefix in the
     cockpit ("linkedin job search") while Indeed's read cleanly."""
     assert [s.label for s in store.search_plan("linkedin")] == [
-        "home", "job search", "job detail"]
+        "home", "blended search", "job search", "job detail"]
     assert [s.label for s in store.search_plan("indeed")] == [
         "home", "search results", "job posting"]
 
