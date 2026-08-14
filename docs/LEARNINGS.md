@@ -8533,3 +8533,74 @@ own source, before injection.
 
 *Where it stands:* no live drive this act. Tests: mcp **124** (5 new), controlplane-api 1612
 passed / 1 skipped.
+
+### 2026-08-14, eighth act — the résumé wall was a mismeasurement, and the defaults that reject you
+
+**FIRST CONFIRMED SENT.** Boston Children's *Analyst I, Healthcare Data* reached "Application
+Complete · 100% · Your application has been submitted." End-to-end on BrassRing, every act driven
+through `/execute` on CDP-AX node ids. The operator re-logged in by hand and drove to the apply
+page; the loop took it from there.
+
+**THE BLOCKER THAT ENDED SESSION #28 DID NOT EXIST.** Yesterday's entry called the résumé uploader
+"a real protocol gap — no `input[type=file]` in the DOM at all, open modal or closed," and scoped
+the next build to `Page.setInterceptFileChooserDialog` or a synthesized `DataTransfer` drop. Both
+were unnecessary. **There is exactly one `input[type=file]`, and it lives in a same-origin CHILD
+IFRAME** (`/TGNewUI/Profile/Home/ProfileBuilder?...&calledFrom=resume`). The "Add résumé/CV" modal
+is an iframe, not a DOM overlay, so every scan of the top document answered *zero* — correctly, and
+uselessly. `Browse` is a `LABEL.fileUpload` fronting that hidden input; the input is `id=file`,
+`accept=".doc,.docx,.pdf,..."`, AngularJS `change="ValidateAndUpload"`.
+
+The driver's EXISTING `upload` action attached `GM_Resume.pdf` on the first attempt with no new
+code — `DOM.setFileInputFiles` takes a `backendNodeId` and does not care which frame owns it. BCH
+then parsed the file into ~40 skills, which is the ingesting-uploader shape the driver's own comment
+already predicted.
+
+*The lesson is about the shape of the claim, not about iframes.* "The DOM does not contain X" is not
+a finding until it says **which document was searched**. A single-document negative got written down
+as a protocol-level absence, and that sentence set a build plan for a capability we already had.
+A negative result needs its search scope in the sentence, or it will be read as universal.
+
+**AND THE SCANNER CONFIRMED A FORM IT COULD NOT SEE.** On the Questions step `/scan_required`
+returned `outcome: ok · "all required fields answered"` while reporting exactly ONE field. There
+were five. The four it missed were radio groups — each marked `*` on screen — and **two carried
+pre-selected answers that are auto-rejections**:
+
+* *Are you currently legally authorized to work in the U.S?* → pre-selected **No**
+* *Do you now or will you in the future require sponsorship?* → pre-selected **Yes**
+
+Nobody chose those. BrassRing renders them checked. A run that trusts `scan_required` and presses
+Save and continue submits an application that says the candidate cannot work here and needs
+sponsorship — the two answers most likely to end it before a human reads the résumé. This is the
+same family as the 0% bar and the `application_form -> account_gate` reconcile: **a summary that is
+silent about what it did not examine reads exactly like a summary that examined everything.** The
+count of things checked belongs next to the verdict, or the verdict is not evidence.
+
+Correlating control to question mattered here too: each group had a distinct `name`
+(`custom_26786_...`, `custom_26787_...`), so the answer was read per-group and never by position.
+
+**TWO WITNESSES, ONE WIDGET, OPPOSITE VERDICTS.** For *How did you hear about us?*,
+`/scan_required` read `companion_select` and said ANSWERED "LinkedIn"; `/describe_widget` on the
+same selector read `[class*=singleValue]`, found `companion_selector: null`, and said
+`answered: false`. The native select was the truth (`selectedIndex: 1`). That false negative is the
+dangerous direction — it invites the retry, and a retry on a stateful widget is not idempotent
+(08-13). Filed as its own task: companion resolution must be ONE helper both endpoints call, so
+`answered` never depends on which endpoint asked. Incidentally the option list held only
+`Choose...` and `LinkedIn` — a source attribution BrassRing narrows by partner, so "wrong" answers
+are sometimes the only answer available.
+
+**PRE-FILLED DATES GO STALE SILENTLY.** Both the disclosures e-signature and the CC-305 disability
+form arrived dated **1/15/2026** — seven months stale — on documents whose whole function is to
+attest *as of a date*. Corrected to 8/14/2026 on both at the operator's direction. Worth a rule: a
+date the site pre-fills is a claim about when the form was signed, and it is the one field that is
+wrong by default the longer an application sits.
+
+*Escalated rather than assumed:* the e-signature (a legal attestation authorizing CORI, reference
+checks, and third-party data sharing), the EEO demographics (pre-filled Male / Not Hispanic /
+Asian — the operator chose LEAVE AS-IS rather than the stored decline preference, because values
+already entered truthfully are not the case that preference was written for), and the final
+**Send my application**. The submit is the one act that is never inferred.
+
+*Where it stands:* `ats_boston_children_s_hospital_brassring` active, **Boston Children's Analyst I,
+Healthcare Data SUBMITTED and confirmed** (100%, "Your application has been submitted"). The
+BrassRing spine is now proven land-to-SUBMITTED. Tests not run this session — the work was live
+drive only, no code changed.
