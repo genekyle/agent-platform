@@ -7182,3 +7182,83 @@ to fail without their fix).
 picked, waiting on the operator. Both half-finished applications are parked and reachable
 ("Step back in"): Boston Children's one screen from Submit, HopeWell one attempt in. Nothing was
 re-applied to and nothing was sent. Tests: controlplane-api 1577 → **1591**.
+
+### 2026-08-14, second act — driving the repick, and five gates that were each a narrow rule enforced broadly
+
+Operator: *"steps chosen make sure to use our ui first, but also while playing the role of the
+teacher when need be."* Eight picks, driven from the cockpit. The first application found five
+defects, and four of them are the same sentence: **a rule that is true of one case, applied to a
+class that contains another.**
+
+**THE PARKED-PICK GUARD PAID OFF ON ITS FIRST LIVE USE.** Boston Children's came back into the
+queue carrying its 8 walked rungs and its `brassring` platform, not as a blank duplicate — which is
+what would have happened yesterday. But it then had **no control anywhere in the cockpit**: the
+parked strip hides in-queue rows whenever the focus kind is application-shaped, on the assumption
+that such a focus IS that row. True while a parked app could only become the focus with nothing
+else in flight; false the moment a repick restores one beside fresh picks. The focus was offering
+the next UNOPENED pick and the strip had hidden the operator's own #1 as a duplicate of a focus
+that was not about it. Compare the job id (`cycle.application`), never the focus kind.
+
+**"RETURN TO SEARCH RESULT" IS NOT A SUBMIT** — containment matching, third layer in two days.
+`search_cadence._pick` took the first name containing "search"; Indeed renders that link whenever a
+detail pane is open. `_named_control` and `_resolve_ax_node` both learned this on 08-13 and nothing
+went looking for the fourth site. Ranked EXACT > LEADING > CONTAINING. *The lesson about the
+lesson: a rule fixed at three call sites is fixed at three call sites.*
+
+**SEVERAL CONTROLS, OR ONE CONTROL DRAWN SEVERAL TIMES?** Then `_resolve_ax_node` refused the
+posting's Apply: TWO `link` nodes named exactly "Apply", identical role/name/x/width/height, y 395
+and 2137 — the Apply block repeated above and below the description. The ambiguity refusal is right
+about "Country" naming two different fields and wrong about ordinary furniture, and **the count
+cannot tell them apart**. The page can: a link's identity is where it GOES, so an ambiguous tier
+now gets one measured question — same href? — and differing, unreadable or unread destinations all
+keep the refusal. Deliberately not "same size means same control": iCIMS renders two genuinely
+different Submits on one packet form and they would pass a geometry test.
+
+**A CAPPED LIST THAT DOES NOT SAY IT IS CAPPED READS AS THE WHOLE LIST.** The Country select
+censused 24 of ~250 options, whose only "United" entry was United Arab Emirates. The fill planner
+held the right answer from the store, matched it against the list it was given, found nothing, and
+Country stayed silently unanswered. The cap is right; the silence is not. `option_count` and
+`options_truncated` now ride with `options` — and it paid immediately on the very next field, where
+Area of Interest reported **32 options, truncated**, so the 8 hidden ones could be read at the
+widget before the operator chose. Same class as a probe that found nothing being reported as "no".
+
+**THE PAGE COMPLAINED ABOUT A FIELD IT NEVER CALLED REQUIRED.** With every required field answered,
+Save & Continue did nothing — twice — and only the StepRunner's "nothing observable changed" caught
+it. The screenshot showed the reason instantly: the resume parser had filled the OPTIONAL Job
+Description past the form's 500-char limit and the page said so in red under the control. Census:
+`unanswered: 0`, `page_errors: []`, that field `valid: true`. `page_errors` could not carry it and
+should not — that list is for refusals attributed to NO field, which are a human's to judge because
+there is nothing to fill. This one names its control. `field_errors` joins the page's sentence to
+the field it mentions **regardless of requiredness**, and the advance gate blocks on it: the
+operator's 08-12 rule (*"regardless of whether it's required or not"*) arriving one axis over.
+[[feedback_confirm_state_with_screenshot]] again — the census says WHAT, only the picture says WHY.
+
+**AND THE ONE THAT COST REAL WORK: another application's live tab is not this step's debris.**
+Flagging the C&S duplicate as already-applied closed **Boston Children's BrassRing tab**, mid-flight,
+one screen from Submit. `_apply_cleanup` opens by closing `_apply_tab(bb, obs)` — which answers "the
+SESSION's apply tab" — while describing it as *"the application tab for {step.job_id}"*, a sentence
+that is false whenever the tab belongs to another job. The closing survey then asked the window
+manager what looked retirable, and from outside a live ATS tab is exactly the shape of an orphaned
+apply flow; unlike the three blocks between them it carried no owner check at all. `tab_claims`
+exists for precisely this — an UNCLAIMED apply tab is still fair game, a tab claimed by a job that
+has not finished is live work.
+
+**Teacher calls made on the record, with their evidence.** Area of Interest routes the application
+internally and was the operator's to choose — put to them with the posting's own Job Category
+("Information Systems", req 85104BR) as the evidence and the full 32-option list read at the widget
+first; they chose Information Technology. The over-long Job Description was shortened to the bullets
+the field itself renders — their own words, cut to the form's stated limit, with the attached résumé
+carrying the full detail. C&S was skipped rather than re-applied to, flagged `abandoned:operator`
+with the reason spelled out, because the taxonomy has no "already applied" flag — worth adding.
+
+*Also worth fixing, measured but not built:* an OPEN step whose tab has been closed still renders
+"census + fill + Continue · 1 screen from Submit" as driveable — the rung refuses honestly when
+pressed, but the affordance promises a page that is gone. The parked case learned this on 08-13
+("a promise about a tab is only true while the tab exists"); the open case has not. And a terminal
+flag can only be pressed on the CURRENT step, so skipping a queued duplicate needed the API.
+
+*Where it stands:* session #28, **search 2**, page 1 read (15 results), **8 picked, C&S skipped as
+already applied, 6 untouched**. Boston Children's re-walking from the posting after its tab was lost
+— everything it had filled was accepted server-side first (name, email, phone, zip, Country, résumé,
+job title, Area of Interest) and BrassRing issued its own job-details page for req 85104BR. Nothing
+was submitted. Tests: controlplane-api 1577 → **1594**, mcp 114 → **119**.
