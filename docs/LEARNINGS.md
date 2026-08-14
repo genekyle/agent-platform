@@ -7656,3 +7656,59 @@ option, per the standing rule) which also cleared an overlay.
 *Where it stands:* session #28 — **2 submitted** (C&S 08-13, Boston Children's 08-14), 1 skipped as
 already-applied, **5 untouched**. MAPFRE is on its careers site at the apply control, blocked on the
 near-twin. Tests: controlplane-api **1631**, mcp 119, interaction 275.
+
+### 2026-08-14, ninth act — a button's action fingerprint, and a failed probe reported as a challenge
+
+**THE NEAR-TWIN PROBLEM IS SOLVED FOR BUTTONS, AND MEASURING FIRST IS WHY IT WORKED.** MAPFRE's
+posting repeats a real `<button>Apply now</button>` top and bottom: two AX candidates, identical
+role and name. Three things had to be measured before anything was built —
+* the `<a class="…apply…">Apply now »</a>` I first assumed was one of the pair **is not**: AX
+  exposes only the two buttons, and the anchor is a different element entirely;
+* so the tag tiebreak (below) cannot separate them either — both are genuine `<button>`s;
+* and `_same_destination`'s href test was therefore right to refuse: a button's behaviour is a
+  listener, not a URL.
+
+What IS readable is everything the page uses to tell its own handlers apart — form target, inline
+handler, name/value, and the `data-*` attributes frameworks and analytics hang off controls. Same
+fingerprint, same action, however many times drawn. **It deliberately refuses a TRIVIAL
+fingerprint**: two bare `<button type=submit>`s carry nothing distinguishing, which is exactly
+iCIMS's two-Submits-on-one-packet-form, so no distinguishing attribute means no evidence and the
+refusal stands. The click that had refused three times then resolved and landed.
+
+**AX ROLE IS NOT DOM TAG, AND THE ROLE GATE WAS ABSOLUTE.** An `<a>` styled or marked as a button
+reports `button`, so a caller asking for a LINK was gated out of the very node they meant and got
+`not_found` for a control plainly on screen. The role is now a PREFERENCE that widens — the rule
+this module already applied on the prompt path — and on a widened ambiguous tier the caller's role
+becomes the tiebreak via the candidates' real `tagName`. **Not choosing between ambiguous
+candidates: honouring a discrimination the caller made and AX erased.**
+
+**THREE LOOSE SELECTORS OF MINE, THREE CORRECT REFUSALS — and one of them would have clicked
+"Start applying with LinkedIn".** `[id*=apply i]` matched 6 nodes, `a[href*=apply i]` 4,
+`a[class*=apply i]` 6 — the last including the SSO detour `GENERIC_CONTROL_EXCLUSIONS` exists to
+refuse. *A loose selector is a guess wearing a structural costume*, and the ambiguity refusal
+caught every one.
+
+**"APPLY NOW HELP" BEAT "APPLY NOW".** `_named_control` prefers a name that LEADS with the token
+and then takes the LONGEST — and both lead, so the qualifier won. The C&S rule fixed
+leading-versus-containing; this is the tier *below* it, unfixed: **among names that all lead with
+the same token, extra words are qualifiers and the SHORTEST is the control.** ("Review your
+application" over "Review" is not a counter-example — that is a more specific TOKEN, tried first
+by the controls list, not a longer match on the same one.) Not yet built.
+
+**AND A FAILED PROBE WAS REPORTED AS A CHALLENGE.** The loop stopped with *"A challenge is up —
+clear it yourself. We never auto-solve."* There was no challenge: `/challenge_visibility` had
+answered `ok: false — Runtime.evaluate: no matching CDP response within 25s`, `/screenshot`
+returned `None`, and `/native_dialog` gave the real verdict — **`renderer_responsive: false`, a
+native dialog owns the tab**. This is `interaction.measured`'s whole thesis in the wild once more,
+and the exact mirror of `/auth_state` reporting `logged_in: false` because it could not look: *a
+probe that could not run has not found a captcha.* The escalation was harmless here and the
+diagnosis was wrong, which is the dangerous half — it sent the operator looking for a challenge
+that was not there. `challenge_visibility` is already top of the `measured` migration backlog; this
+is the second reason.
+
+*Where it stands:* MAPFRE's Apply DID navigate (`…/1421459433/?source=Indeed`) before the dialog
+appeared, so the application is one dismissal from being open. **The dialog is left for the
+operator deliberately** — 08-13 records that `/dismiss_native_dialog` presses Return, and Return on
+a beforeunload takes the DEFAULT, which is the navigation you are trying not to make. Read the
+buttons, press the one you mean. Session #28: **2 submitted, 1 skipped, 5 untouched.** Tests:
+controlplane-api 1632, mcp **121**, interaction 275.
