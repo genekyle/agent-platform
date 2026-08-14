@@ -7393,3 +7393,52 @@ that answer rather than picking one.
 six text inputs addressed, three question pickers identified and refused as ambiguous, nothing
 typed. Session #28, search 2, **8 picked / 1 skipped / 6 untouched**. Tests: interaction 275,
 controlplane-api **1607**, mcp 119.
+
+### 2026-08-14, fifth act — BrassRing mapped, and a false-negative refusal that invited a wrong act
+
+**THE ACCOUNT GATE, TAUGHT AND LIVE.** `screen:unknown -> brassring_account_gate`, and the cockpit's
+next action became "Get past the account wall". Then the account rung refused exactly as it should
+— *"no create_account form mapped for 'brassring' … do not drive it blind"* — so it is mapped.
+
+**MEASURED, NOT INFERRED FROM THE OTHER THREE, and the first draft proved why.** I wrote
+`#securityQuestionN` for the pickers, inferred from the answer fields' names; it matched nothing.
+The real selectors (`#selectSecurityQuestionN-button`) came from the census's **OPTIONAL** rows —
+which only reach the controlplane at all because the projection hole was fixed hours earlier. Then
+`/describe_widget` named the shape rather than me: `aria_listbox`, popup by `aria-owns`, commits
+`on_select`, truth at the opener's own label. *An address is a prediction; a probe is evidence* —
+and the probe endpoint exists precisely so a map is written from the second.
+
+**RECOVERY CREDENTIALS ARE THEIR OWN CLASS.** BrassRing is the first mapped form to ask for security
+questions, and the boundary is not mechanical: a generated answer to "your first pet's name" is a
+fact the operator does not know about their own account, and some employers verify them with a
+human. The fields carry **no `answer_key`** — which is what stops the fill planner ever speaking to
+one — and sit under `operator_supplied` so the leg's refusal names what it wants. A password is
+different in kind: nobody is ever asked to recall one out loud. *Operator's choice, recorded:* the
+three questions picked deliberately avoid mother's maiden name, first pet, first school and
+childhood street — the classic banking/email recovery set — so an ATS answer cannot widen their
+blast radius.
+
+**A FALSE-NEGATIVE REFUSAL INVITES A RETRY, AND A RETRY ON A STATEFUL WIDGET IS NOT IDEMPOTENT.**
+This is the act's real lesson and it is a new shape. `select_option` answered `not_staged: option
+would not stage` on question 1 — over a change it had ACTUALLY MADE. Everything this system has
+learned about verification points the other way (a reported success that did not happen); this is
+the mirror, and it is dangerous differently. I retried, as anyone would, and **the retry set the
+wrong question** — option 1 of the list rather than the one asked for, because a picker left open
+by an earlier probe turned the protocol's own opening click into a closing one. So:
+* the confirm (`aria-selected`, or the opener's label changing) is racing the widget's re-render;
+  `/describe_widget` reads the correct label seconds later, so the value is there and the check
+  window is too short.
+* **a widget left open by a previous act is a hazard to the next one** — the protocol's open step
+  assumes closed, and nothing hands over the widget's state between acts.
+
+*Unsolved, and where the next attempt starts:* questions 2 and 3 will not stage at all. Their
+`aria-owns` menu reports `option_count: null` and zero options **both closed and after our click**,
+while question 1's enumerated ten when it happened to be open — and the options are not reachable
+as `role=option` in AX either. So either the click is not truly opening a `span` opener, or the
+site removes already-chosen questions from its siblings. Measure that before writing more code.
+
+*Where it stands:* BrassRing mapped (`apply_fields.BRASSRING_FIELDS`, both account legs). Boston
+Children's sits on the create-account form with **question 1 set correctly and 2 and 3 unset**;
+username, password and the three answers untyped; nothing submitted. Session #28, **8 picked / 1
+skipped / 6 untouched, held at the operator's direction until this one is finished.** Tests:
+interaction 275, controlplane-api **1609**, mcp 119.
