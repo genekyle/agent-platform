@@ -200,8 +200,21 @@ async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Opt
     def nm(c: dict) -> str:
         return (c.get("caption") or c.get("name") or "").strip().lower()
 
-    exact = [c for c in cands if role_ok(c) and nm(c) == want]
-    hit = exact[0] if exact else next((c for c in cands if role_ok(c) and want and want in nm(c)), None)
+    # EXACT, THEN LEADING, THEN ANYWHERE. The middle tier is the one that matters: a field's
+    # accessible name is its label plus whatever the widget decorates it with ("State Select One
+    # Required"), so a prefix match reaches the real control — while a bare substring reaches any
+    # field whose VALUE happens to contain the word. Measured live 2026-08-13: asking for "State"
+    # on Workday's My Information opened the COUNTRY prompt, because "state" is inside "Country
+    # United States of America Required" and that node came first. Same shape as the apply door
+    # that clicked "CURRENT C&S EMPLOYEES APPLY HERE" over "APPLY NOW" earlier the same day: a
+    # label that LEADS with the wanted words is the control; one that merely contains them is a
+    # coincidence.
+    def pick(pred) -> Optional[dict]:
+        return next((c for c in cands if role_ok(c) and pred(nm(c))), None)
+
+    hit = (pick(lambda n: n == want)
+           or (want and pick(lambda n: n.startswith(want)))
+           or (want and pick(lambda n: want in n)))
     return hit.get("backend_node_id") if hit else None
 
 

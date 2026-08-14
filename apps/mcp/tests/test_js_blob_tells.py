@@ -43,3 +43,48 @@ def test_check_group_reports_a_missing_control_as_not_found():
     tick" — the distinction a consent step has to make, because tenants of one ATS differ on
     whether the box exists at all."""
     assert re.search(r"code:\s*'not_found'", protocols.CHECK_GROUP_JS)
+
+
+# --------------------------------------------------------------- role/name target resolution
+# `_resolve_ax_node` ranks exact -> leading -> anywhere. The middle tier is load-bearing: a field's
+# accessible name is its label plus the widget's decoration ("State Select One Required"), so a
+# prefix reaches the real control while a bare substring reaches any field whose VALUE contains the
+# word. Live 2026-08-13: asking for "State" opened the COUNTRY prompt, because "state" sits inside
+# "Country United States of America Required" and that node came first.
+import asyncio
+from unittest.mock import patch
+
+import app.main_server as ms
+
+_WORKDAY_MY_INFORMATION = [
+    {"role": "button", "name": "Country United States of America Required", "backend_node_id": 1},
+    {"role": "button", "name": "State Select One Required", "backend_node_id": 2},
+    {"role": "button", "name": "Phone Device Type Mobile Required", "backend_node_id": 3},
+]
+
+
+def _resolve(name, role=None, cands=None):
+    rows = _WORKDAY_MY_INFORMATION if cands is None else cands
+
+    async def _fake(**_kw):
+        return rows
+
+    with patch("app.observer.ax_proposer.propose_ax_candidates", _fake):
+        return asyncio.run(ms._resolve_ax_node("http://x", None, None, role, name))
+
+
+def test_a_label_that_leads_beats_one_that_merely_contains():
+    assert _resolve("State") == 2, "'state' is inside 'United States' — the leading match wins"
+    assert _resolve("Country") == 1
+    assert _resolve("Phone Device Type") == 3
+
+
+def test_an_exact_name_still_wins_outright():
+    assert _resolve("State", cands=[
+        {"role": "button", "name": "State Select One", "backend_node_id": 9},
+        {"role": "button", "name": "State", "backend_node_id": 7}]) == 7
+
+
+def test_a_substring_is_still_reachable_when_nothing_leads():
+    assert _resolve("State", cands=[
+        {"role": "button", "name": "Please choose your State now", "backend_node_id": 5}]) == 5
