@@ -826,8 +826,38 @@ SCAN_REQUIRED_JS = r"""
     }
   }
 
+  // A COMPLAINT ABOUT A FIELD THAT IS NOT "YOU LEFT IT EMPTY".
+  //
+  // The whole gate above asks one question — which REQUIRED fields are UNANSWERED — and a page can
+  // refuse for a reason that answers neither half. Live 2026-08-14, Boston Children's: the resume
+  // parser filled the OPTIONAL "Job Description" past the form's limit and the page printed, in
+  // red, under the control: "Job Description (current or recent job responsibilities) is too long,
+  // maximum {500 chars}." The census reported `unanswered: 0`, `page_errors: []` and that very
+  // field as `valid: true`, so every rung above it believed the form complete while Save &
+  // Continue did nothing at all. Twice.
+  //
+  // `page_errors` cannot carry this and should not: that list is deliberately for refusals the
+  // page attributes to NO field ("Error Code: VPS|…"), which are a human's to judge because there
+  // is nothing to fill. This one names its control, which makes it actionable — and it is the
+  // operator's 2026-08-12 rule arriving one axis over: *"regardless of whether it's required or
+  // not"*. An optional field filled with the wrong answer is the same error.
+  const fieldErrors = [];
+  const known = [...out, ...done, ...optional];
+  for (const t of errText) {
+    if (/is required(?: and must have a value)?/i.test(t)) continue;   // the empty-field case
+    if (/^errors? found$/i.test(t.trim())) continue;
+    const hit = known.find((f) => contains(t, f.field));
+    if (!hit) continue;
+    const row = {field: hit.field, selector: hit.selector || null,
+                 required: !!hit.required, message: t.slice(0, 200)};
+    if (!fieldErrors.some((e) => e.field === row.field && e.message === row.message)) {
+      fieldErrors.push(row);
+    }
+  }
+
   return {unanswered: out, answered: done, optional,
           page_errors: pageErrors.slice(0, 6),
+          field_errors: fieldErrors.slice(0, 8),
           url: (location.href || '').slice(0, 140)};
 }
 """

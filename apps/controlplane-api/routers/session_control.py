@@ -5915,6 +5915,20 @@ async def _unanswered_required(browser_url: str, tab_id: str,
         label = row["field"][:60] if len(row["field"]) <= 60 else ""
         if label:
             out.append(label)
+    # A FIELD THE PAGE IS COMPLAINING ABOUT BLOCKS THE ADVANCE TOO, whatever its requiredness.
+    #
+    # This gate's whole question was "which REQUIRED fields are UNANSWERED", and a page can refuse
+    # for a reason that answers neither half. Live 2026-08-14 on Boston Children's: the resume
+    # parser filled the OPTIONAL Job Description past the form's 500-char limit, the page printed
+    # the complaint in red under the control, and the census reported zero unanswered — so the rung
+    # clicked Save & Continue over a form the page had already refused, twice, and only the
+    # StepRunner's "nothing observable changed" caught it. The operator's rule from 2026-08-12,
+    # one axis over: *"regardless of whether it's required or not"* — an optional field filled with
+    # the wrong answer is the same error.
+    for err in (census.get("field_errors") or []):
+        label = str(err.get("field") or "")[:60]
+        if label and label not in out:
+            out.append(label)
     return out
 
 

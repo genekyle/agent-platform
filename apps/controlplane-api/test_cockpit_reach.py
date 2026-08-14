@@ -586,3 +586,55 @@ def test_picking_a_job_that_is_already_parked_restores_it_instead_of_queueing_a_
     assert len(restored) == 1
     assert "Analyst I, Healthcare Data" in restored[0].detail
     assert restored[0].why and restored[0].next_up
+
+
+# --- the page complains about a field it never called required ---------------------------------
+
+def test_a_field_the_page_is_complaining_about_blocks_the_advance(monkeypatch):
+    """LIVE 2026-08-14, Boston Children's. The resume parser filled the OPTIONAL "Job Description"
+    past the form's 500-char limit; the page printed the complaint in red under the control and
+    refused Save & Continue. The census answered `unanswered: 0` — because the gate's only question
+    was "which REQUIRED fields are UNANSWERED", and this was neither — so the rung clicked Continue
+    over a form the page had already refused, twice.
+
+    The operator's rule from two days earlier, one axis over: *"regardless of whether it's required
+    or not"*. An optional field filled with the wrong answer is the same error.
+    """
+    census = {
+        "unanswered": [],
+        "answered": [{"field": "Your First Name*", "value_preview": "Gene"}],
+        "optional": [{"field": "Job Description (current or recent job responsibilities)",
+                      "selector": "#description", "required": False, "valid": True}],
+        "page_errors": [],
+        "field_errors": [{
+            "field": "Job Description (current or recent job responsibilities)",
+            "selector": "#description", "required": False,
+            "message": "Job Description (current or recent job responsibilities) is too long, "
+                       "maximum {500 chars}."}],
+        "url": "https://jobs.bostonchildrens.org/apply/join/",
+    }
+
+    async def fake_census(_url, _tab):
+        return census
+    monkeypatch.setattr(sc, "_form_census", fake_census)
+
+    import asyncio
+    pending = asyncio.run(sc._unanswered_required("http://x", "t1"))
+    assert pending == ["Job Description (current or recent job responsibilities)"]
+
+    # And the distinction the gate must not lose: "could not look" is still not "complete".
+    async def blind(_url, _tab):
+        return None
+    monkeypatch.setattr(sc, "_form_census", blind)
+    assert asyncio.run(sc._unanswered_required("http://x", "t1")) is None
+
+
+def test_a_clean_form_still_advances(monkeypatch):
+    """The other half — a census with no unanswered and no complaint licenses the advance. Without
+    this the fix above could quietly turn every form into a refusal."""
+    async def fake_census(_url, _tab):
+        return {"unanswered": [], "answered": [], "optional": [],
+                "page_errors": [], "field_errors": [], "url": "https://x/form"}
+    monkeypatch.setattr(sc, "_form_census", fake_census)
+    import asyncio
+    assert asyncio.run(sc._unanswered_required("http://x", "t1")) == []
