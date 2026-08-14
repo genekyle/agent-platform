@@ -61,10 +61,15 @@ export default function FillPlan({ plan, summary, busy, onPlan, onFill }) {
 
       {plan.length > 0 && (
         <ul className="rungs">
-          {plan.map((r) => {
+          {/* Keyed by index alongside the name: a form can census the same name twice (Boston
+              Children's uploader, 2026-08-14), and React's answer to a duplicate key is that a
+              row may be OMITTED — here, a field silently missing from the list the operator is
+              checking before they press Fill. */}
+          {plan.map((r, i) => {
             const src = SOURCE_COPY[r.source] || { label: r.source, tone: "muted", why: "" };
             return (
-              <li key={r.field} className={`rung rung--${r.fillable ? "held" : "pending"}`}>
+              <li key={`${r.field}|${i}`}
+                  className={`rung rung--${r.fillable ? "held" : "pending"}`}>
                 <div className="rung__body">
                   <div className="rung__line">
                     <span className="rung__label">{r.field}</span>

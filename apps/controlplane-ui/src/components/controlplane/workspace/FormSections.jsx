@@ -80,8 +80,8 @@ export default function FormSections({ sections, ats, accordionAts, busy, onExpa
       )}
 
       <ul className="rungs">
-        {rows.map((r) => (
-          <li key={r.field} className={`rung rung--${r.state === "open" ? "held" : "pending"}`}>
+        {rows.map((r, i) => (
+          <li key={`${r.field}|${i}`} className={`rung rung--${r.state === "open" ? "held" : "pending"}`}>
             <span className={`rung__mark badge badge--${STATE_TONE[r.state] || "muted"}`}>
               <AppIcon name={STATE_MARK[r.state] || "circle"} size={13} />
             </span>

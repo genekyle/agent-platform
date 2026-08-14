@@ -46,7 +46,20 @@ function intentFor(row, value) {
   return { intent: "set_text", params: { field: row.field, value } };
 }
 
-function Row({ row, busy, onArm, armed }) {
+// A ROW'S IDENTITY IS NOT ITS NAME. Two rows on one form can carry the same name — Boston
+// Children's uploader censused twice, once as "CHOOSE A FILE" and once from its own helper text —
+// and both lists here keyed on `field` alone. React said what that costs out loud ("children may
+// be duplicated and/or omitted"), and an OMITTED row on a census that gates the Submit is a
+// required field the operator never sees. The `armed` comparison had the same fault from the same
+// cause: arming one row lit up every row sharing its name.
+//
+// The selector is the structural identity the census already mints; the index is the fallback for
+// rows that have none, and it is stable because the list order is the walk order.
+// Scoped by LIST too: the answered and unanswered lists each restart their index, so an
+// unscoped key can collide across them.
+const rowKey = (r, i, list) => `${list}|${r.selector || ""}|${r.field || ""}|${i}`;
+
+function Row({ row, busy, onArm, armed, rowId }) {
   const [typed, setTyped] = useState("");
   const kindWord = KIND_COPY[row.kind] || row.kind || "answer";
   const canEnumerate = row.kind === "react_select" && !(row.options || []).length;
@@ -89,14 +102,14 @@ function Row({ row, busy, onArm, armed }) {
               <button key={opt} className="btn btn-sm btn-ghost" disabled={busy}
                       aria-label={`${row.field}: ${opt}`}
                       title={`Teach: answer “${row.field}” with “${opt}” — journaled, reversible`}
-                      onClick={() => onArm(row, opt)}>
+                      onClick={() => onArm(row, opt, rowId)}>
                 {opt}
               </button>
             ))}
             {canEnumerate && (
               <button className="btn btn-sm btn-ghost" disabled={busy} aria-label="List choices"
                       title="This dropdown only shows its choices while open — probe it with a value that cannot match; its refusal carries the real option list"
-                      onClick={() => onArm(row, ENUMERATE_SENTINEL)}>
+                      onClick={() => onArm(row, ENUMERATE_SENTINEL, rowId)}>
                 List choices
               </button>
             )}
@@ -114,7 +127,7 @@ function Row({ row, busy, onArm, armed }) {
                        placeholder={truncated ? "or type the exact option" : "type the answer"}
                        onChange={(e) => setTyped(e.target.value)} />
                 <button className="btn btn-sm btn-ghost" disabled={busy || !typed.trim()}
-                        onClick={() => { onArm(row, typed.trim()); setTyped(""); }}>
+                        onClick={() => { onArm(row, typed.trim(), rowId); setTyped(""); }}>
                   Answer
                 </button>
               </span>
@@ -132,8 +145,8 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread }) 
   const unanswered = census.unanswered || [];
   const answered = census.answered || [];
 
-  const arm = (row, value) => setArmedAct({
-    row, value,
+  const arm = (row, value, key) => setArmedAct({
+    row, value, key,
     rationale: value === ENUMERATE_SENTINEL
       ? `probe to enumerate the choices of “${row.field}” — a closed listbox only shows them open`
       : `operator answered “${row.field}” with “${value}” from the cockpit form census`,
@@ -163,9 +176,9 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread }) 
 
       {unanswered.length > 0 && (
         <ul className="rungs">
-          {unanswered.map((r) => (
-            <Row key={r.field} row={r} busy={busy} onArm={arm}
-                 armed={armedAct?.row?.field === r.field} />
+          {unanswered.map((r, i) => (
+            <Row key={rowKey(r, i, "u")} row={r} busy={busy} rowId={rowKey(r, i, "u")}
+                 onArm={arm} armed={armedAct?.key === rowKey(r, i, "u")} />
           ))}
         </ul>
       )}
@@ -205,9 +218,9 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread }) 
           <summary>The {answered.length} answered field(s) — check them, a filled answer can
             still be the wrong one</summary>
           <ul className="rungs">
-            {answered.map((r) => (
-              <Row key={r.field} row={r} busy={busy} onArm={arm}
-                   armed={armedAct?.row?.field === r.field} />
+            {answered.map((r, i) => (
+              <Row key={rowKey(r, i, "a")} row={r} busy={busy} rowId={rowKey(r, i, "a")}
+                   onArm={arm} armed={armedAct?.key === rowKey(r, i, "a")} />
             ))}
           </ul>
         </details>
