@@ -34,6 +34,7 @@ employer's branded ATS wrapper is a NORMAL shape, not an oddity — it is how iC
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -59,7 +60,13 @@ MARKERS: dict[str, tuple[str, ...]] = {
     # Checked FIRST — a confirmation page still contains most of the job's words.
     CONFIRMATION: (
         "application submitted", "thank you for applying", "we have received your application",
-        "your application has been submitted", "application complete", "thanks for applying",
+        "your application has been submitted", "thanks for applying",
+        # WAS "application complete", REMOVED 2026-08-14. It is a substring of "Percent of
+        # application completed 0%" — BrassRing's progress meter — so a form nobody had started
+        # classified as a SENT application, decisively, on a page that also listed nine empty
+        # required fields. The confirmation sense needs the copula; a progress label does not have
+        # one.
+        "your application is complete", "application is complete",
         # Cornerstone's terminal wording, read off the live confirmation 2026-08-11: "Thank You!
         # You have successfully applied to <job>". None of the six above matched it, so a sent
         # application read as `unknown` until this row.
@@ -128,6 +135,11 @@ DECISIVE = (CONFIRMATION, GONE)
 WEIGHED = (REVIEW, APPLICATION_FORM, ACCOUNT_GATE, JOB_POSTING, JOB_LIST)
 
 ORDER = DECISIVE + WEIGHED
+
+#: "Percent of application completed 0%", "25% complete", "Step 2 of 6". A page that reports how
+#: far through itself you are is a page you are still inside.
+_PROGRESS_METER = re.compile(
+    r"(percent of .{0,24}complet|\b\d{1,3}\s?%\s*(complete|completed|done)|\bstep\s+\d+\s+of\s+\d+)")
 
 #: Phrases that are worth TWO ordinary markers because they are unambiguous on their own. A page
 #: saying "Enter your information" above an email box is an identity step and nothing else — but
@@ -210,10 +222,25 @@ def classify_kind(text: str, *, source: str = "top") -> Landing:
     if not body:
         return Landing(UNREADABLE, (), source, 0)
 
+    # A PAGE MEASURING ITS OWN INCOMPLETENESS IS NOT A CONFIRMATION, whatever phrase it contains.
+    #
+    # DECISIVE means "one marker is enough", which is right for phrases that can only mean one
+    # thing and severe when one turns out to have a second meaning. Live 2026-08-14 on BrassRing:
+    # "Percent of application completed 0%" carries the substring "application complete", so the
+    # first screen of an untouched application was classified `confirmation` — `steps_to_submit:
+    # 0`, the flow reporting a finished application, on a form with nine empty required fields.
+    # Marking a job applied-to that was never sent is the worst outcome in this system: it removes
+    # the job from every future search and the operator never learns why.
+    #
+    # A progress meter is the tell, and it is unambiguous in the other direction — no confirmation
+    # page reports what percentage of itself is done. Belt and braces with the marker fix, because
+    # this failure is not one to catch only once.
+    progressing = bool(_PROGRESS_METER.search(body))
+
     # Decisive first: one unambiguous phrase is enough.
     for kind in DECISIVE:
         hits = tuple(m for m in MARKERS[kind] if m in body)
-        if hits:
+        if hits and not (kind == CONFIRMATION and progressing):
             return Landing(kind, hits[:4], source, len(body))
 
     # Then weigh the rest. Two markers minimum — a single "overview" is a word that appears

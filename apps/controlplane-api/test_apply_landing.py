@@ -189,3 +189,58 @@ Personal Information
 Forgot password?
 """
     assert al.classify_kind(form).kind == al.APPLICATION_FORM
+
+
+#: BrassRing's application step 1, signed in, nothing filled — captured live 2026-08-14.
+BRASSRING_FORM_0PCT = """Job successfully saved
+Job search Work at BCH Diversity & Inclusion Candidate Zone  Sign Out
+Back
+Contact, Resume, Education and Experience
+Percent of application completed
+0%
+Analyst I, Healthcare Data
+Fields marked with an asterisk (*) are required.
+* First name
+Middle name
+* Last name
+* Address line 1
+* City
+* State/Region/Province
+* Zip/Postal code
+* Country/Region
+* Home phone
+"""
+
+
+def test_a_page_measuring_its_own_incompleteness_is_not_a_confirmation():
+    """THE WORST MISCLASSIFICATION THIS SYSTEM CAN MAKE, met live 2026-08-14.
+
+    "Percent of application completed 0%" contains the substring "application complete", which was
+    a DECISIVE confirmation marker — so the first screen of an untouched application classified as
+    a SENT one, `steps_to_submit: 0`, on a form listing nine empty required fields. Marking a job
+    applied-to that was never sent removes it from every future search and the operator never
+    learns why.
+
+    Fixed twice over on purpose: the marker now needs the copula a confirmation actually uses, and
+    a progress meter blocks a decisive confirmation regardless. No confirmation page reports what
+    percentage of itself is done.
+    """
+    landing = al.classify_kind(BRASSRING_FORM_0PCT)
+    assert landing.kind == al.APPLICATION_FORM, landing.evidence
+    assert al.landing_state("brassring", landing.kind) == "brassring_application_form"
+
+
+def test_a_real_confirmation_is_still_decisive():
+    """The guard must not cost us the thing it guards. A sent application still reads as sent."""
+    for page in ("Thank you for applying. Your application has been submitted.",
+                 "Thank You! You have successfully applied to Analyst I, Healthcare Data",
+                 "We have received your application and will be in touch.",
+                 "Your application is complete."):
+        assert al.classify_kind(page).kind == al.CONFIRMATION, page
+
+
+def test_a_confirmation_that_also_shows_a_step_counter_still_defers():
+    """The guard is deliberately broad — "Step 2 of 6" is the same claim as a percentage. A page
+    still walking its own stepper has not finished, whatever else it says."""
+    mid = "Step 2 of 6  Application submitted successfully for the previous section"
+    assert al.classify_kind(mid).kind != al.CONFIRMATION
