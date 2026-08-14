@@ -152,8 +152,100 @@ def test_the_reason_releases_the_driven_application_and_parks_it_resumable(monke
     # The operator's own words ride onto the step, not just into the log line.
     assert "wrong candidates for this query" in survivors[0]["terminal_detail"]
     step_back = [e for e in saved["bb"].events if e.kind == "search_step_back"][0]
-    assert step_back.why == "wrong candidates for this query"
+    # The `why` names WHICH refusal was paid, because two of them can be paid in one press.
+    assert step_back.why == "released open work: wrong candidates for this query"
     assert aps.Queue.from_dict(saved["bb"].world.get("apply_queue")).steps == []
+
+
+# --- running the same terms again, on purpose --------------------------------------------------
+
+def test_the_same_query_is_a_no_op_without_a_reason(monkeypatch):
+    """The once-only guard's real job: refusing the ACCIDENTAL repeat. Re-declaring the terms this
+    search is already running changes nothing and spends nothing — it must not quietly burn a
+    search ordinal, and it must not re-submit."""
+    bb = _at_start_line(query="report analyst", location="Manchester, NH")
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/initialize",
+                        json={"query": "report analyst", "location": "Manchester, NH"})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    assert r.json()["search"]["n"] == 1                      # still the same search
+    assert [e for e in saved["bb"].events if e.kind == "search_step_back"] == []
+
+
+def test_a_reason_reruns_spent_terms_as_a_brand_new_search(monkeypatch):
+    """SAME TERMS, ASKED AGAIN — a decision, not an accident (operator-directed 2026-08-14).
+
+    `query_entered` is consuming because repeating a query TOO OFTEN gets it collapsed; that is a
+    rule about frequency, and enforcing it as a rule about EVER meant the most ordinary thing a job
+    search does — the same terms tomorrow, when the postings have turned over — had two answers,
+    both wrong: a silent no-op, or a flat 409. With a reason it starts a genuinely new search, and
+    the reason is on the record.
+    """
+    bb = _at_start_line(query="report analyst", location="Manchester, NH")
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:stale", "title": "Yesterday's Pick"}])
+    bb.world["apply_queue"] = q.as_dict()
+    bb.search_state.approved = ["indeed:stale"]
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/initialize",
+                        json={"query": "report analyst", "location": "Manchester, NH",
+                              "radius_miles": 100,
+                              "rerun_spent": "a day on, the postings have turned over"})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    view = r.json()
+    assert view["search"]["n"] == 2                          # a genuinely new search
+    assert view["picks"] == []                               # chosen off a page that is being re-read
+    assert aps.Queue.from_dict(saved["bb"].world.get("apply_queue")).steps == []
+
+    step = [e for e in saved["bb"].events if e.kind == "search_step_back"][0]
+    # The arrow notation would read `'x' -> 'x'` here, which is not what happened.
+    assert "re-running 'report analyst'" in step.detail
+    assert step.why == ("re-running spent terms deliberately: a day on, the postings have "
+                        "turned over")
+    assert "FRESH selection" in step.next_up
+
+    # AND THE ONCE-ONLY PROMISE IS STILL REAL: search 1's spend stays on the ledger, so an
+    # unreasoned repeat is still refused rather than quietly allowed from here on.
+    ledger = cps.Ledger.from_dict(saved["bb"].checkpoints)
+    assert ledger.has_spent("report analyst")
+
+
+def test_an_unreasoned_repeat_of_another_searchs_query_is_still_refused(monkeypatch):
+    """Going BACK to terms a previous search spent, with no reason given, still refuses — and now
+    names the way through instead of only the way back."""
+    bb = _at_start_line(query="data analytics")
+    ledger = cps.Ledger.from_dict(bb.checkpoints)
+    ledger.note_query("data analytics")
+    ledger.start_new_search()
+    ledger.note_query("report analyst")
+    ledger.mark("query_entered", evidence="ran")
+    bb.checkpoints = ledger.as_dict()
+    bb.search_state.query = "report analyst"
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/initialize",
+                        json={"query": "data analytics"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "already ran" in detail
+    assert "rerun_spent" in detail            # the refusal carries its own way through
 
 
 def test_step_back_in_resurrects_a_parked_application_from_a_finished_search(monkeypatch):

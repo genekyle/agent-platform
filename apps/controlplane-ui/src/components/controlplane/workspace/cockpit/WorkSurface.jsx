@@ -269,9 +269,16 @@ function SetupBody({ focus, panel, form, setForm, busy, call }) {
     const back = focus.stepBack;
     const stepping = !!back && (back.bill || []).length > 0;
     const reason = (form.release_open || "").trim();
-    const blocked = stepping && back.needsReason && !reason;
-    const same = !!panel.query
-      && panel.query.trim().toLowerCase() === form.query.trim().toLowerCase();
+    // SAME TERMS, ASKED AGAIN. Checked against every query this session has SPENT — not just the
+    // one currently declared — because `search.spent` is the ledger's own record of what has
+    // actually hit the board, and a query declared but never run costs nothing to re-point at.
+    // The old check compared only against `panel.query`, which disabled the button outright; the
+    // once-only rule is about the accidental repeat, so this asks for a reason instead of refusing.
+    const typed = (form.query || "").trim().toLowerCase();
+    const alreadySpent = !!typed && Object.values(panel.search?.spent || {})
+      .some((q) => (q || "").trim().toLowerCase() === typed);
+    const rerun = (form.rerun_spent || "").trim();
+    const blocked = (stepping && back.needsReason && !reason) || (alreadySpent && !rerun);
     return (
       <>
         {stepping && (
@@ -290,7 +297,10 @@ function SetupBody({ focus, panel, form, setForm, busy, call }) {
                 a new result set; a queue built from cards that have left the screen is exactly the
                 stale-context fault the cockpit rebuild exists to prevent. */}
             <p className="empty-hint">
-              A new query means a fresh selection — nothing from “{panel.query}” carries over.
+              {alreadySpent
+                ? `Running “${panel.query}” again means a fresh selection — the result set turns `
+                  + "over, so the earlier picks were chosen off cards that may no longer be there."
+                : `A new query means a fresh selection — nothing from “${panel.query}” carries over.`}
             </p>
           </div>
         )}
@@ -324,23 +334,35 @@ function SetupBody({ focus, panel, form, setForm, busy, call }) {
                    onChange={(e) => setForm((f) => ({ ...f, release_open: e.target.value }))} />
           </label>
         )}
+        {/* THE SAME TERMS, ASKED AGAIN. Not forbidden — repeating a query TOO OFTEN is what gets
+            it collapsed, and the same search a day later, when the postings have turned over, is
+            the most ordinary thing a job search does. Asked for rather than refused, so the
+            once-only rule keeps the job it is good at: stopping the accidental repeat. */}
+        {alreadySpent && (
+          <label className="work-field">
+            <span>This session already ran that — why run it again?</span>
+            <input value={form.rerun_spent || ""} disabled={busy}
+                   placeholder="a day on, the postings have turned over"
+                   onChange={(e) => setForm((f) => ({ ...f, rerun_spent: e.target.value }))} />
+          </label>
+        )}
         <div className="work__actions">
-          <button className="btn btn-primary" disabled={busy || !form.query.trim() || blocked || same}
+          <button className="btn btn-primary" disabled={busy || !form.query.trim() || blocked}
                   title={blocked
-                    ? `${back.worked.map((w) => w.title || w.job_id).join(", ")} has real work in `
-                      + "it — say why you are stepping back and it parks with that reason."
-                    : same ? "That is the query this search is already running."
-                      : "Start this search on the browser that is already open and signed in."}
+                    ? "Say why, and this starts a new search with that reason on the record."
+                    : "Start this search on the browser that is already open and signed in."}
                   onClick={() => call("/initialize", { ...form })}>
-            {busy ? "…" : stepping ? "Step back · start this search" : "Initialize this session"}
+            {busy ? "…" : alreadySpent ? "Run it again · new search"
+              : stepping ? "Step back · start this search" : "Initialize this session"}
           </button>
           {/* The refusal, said BEFORE the press rather than as a 409 after it. */}
-          {(blocked || same) && (
+          {blocked && (
             <span className="work__alt-why">
-              {blocked
-                ? ` — ${back.worked.map((w) => w.title || w.job_id).join(", ")} has real work in `
-                  + "it; say why and it parks, still resumable."
-                : " — that is the query this search is already running."}
+              {alreadySpent && !rerun
+                ? " — the board collapses results for a query repeated too often, so a deliberate "
+                  + "re-run goes on the record with its reason."
+                : ` — ${back.worked.map((w) => w.title || w.job_id).join(", ")} has real work in `
+                  + "it; say why and it parks, still resumable."}
             </span>
           )}
         </div>

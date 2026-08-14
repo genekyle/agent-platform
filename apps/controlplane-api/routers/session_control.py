@@ -1079,6 +1079,11 @@ class InitializeBody(BaseModel):
     #: request this field came from was *"the journal needs to know why"* — so the confirmation and
     #: the rationale are the same keystroke, and there is no way to spend the one without the other.
     release_open: str = ""
+    #: THE OPERATOR'S REASON FOR RUNNING TERMS THIS SESSION HAS ALREADY SPENT. Same shape and same
+    #: argument as `release_open`: the once-only rule is good at refusing the ACCIDENTAL repeat,
+    #: and a deliberate one — the postings have turned over since yesterday — is a decision the
+    #: record should carry rather than something the system pretends cannot happen.
+    rerun_spent: str = ""
 
 
 @router.post("/api/session_control/{session_id}/initialize")
@@ -1122,20 +1127,40 @@ async def initialize(session_id: int, body: InitializeBody,
     if spent and ledger.holds("query_entered") and not ledger.queries.get(ledger.search):
         ledger.note_query(spent)
 
-    if spent.lower() == query.lower():
-        pass                                        # same query, same search — idempotent
-    elif ledger.has_spent(query):
-        # THE RULE THAT SURVIVES, and it is a SESSION-WIDE question — deliberately checked before
-        # anything about the current search. Nested under `holds("query_entered")` it stopped
-        # running the moment a new search was declared but not yet run, which is precisely when
-        # somebody would try to go back to the query they just left.
-        ran_in = [n for n, q in ledger.spent_queries().items()
-                  if q and (q.lower() == query.lower() or query.lower() in q.lower())]
-        raise HTTPException(
-            status_code=409,
-            detail=(f"This session already ran {query!r} (search {', '.join(map(str, ran_in))}). "
-                    f"Re-running the same query is what makes {engine['label']} collapse results "
-                    f"— go back to those results instead."))
+    # RUNNING THE SAME TERMS AGAIN, ON PURPOSE (operator-directed 2026-08-14).
+    #
+    # `query_entered` is CONSUMING because repeating a query TOO OFTEN is what makes the board
+    # cache and collapse it — results we already saw stop coming back. That is a rule about
+    # frequency, and it was enforced as a rule about ever: the same terms a day later, when the
+    # postings have turned over, is the most ordinary thing a job search does, and the system's
+    # answers were a silent no-op (same search still current) or a flat 409 (a different search
+    # spent it). Neither produces the fresh page the operator asked for.
+    #
+    # So the guard keeps the job it is actually good at — refusing the ACCIDENTAL repeat, the
+    # double-press, the loop that re-searches to "finish properly" — and a deliberate re-run is a
+    # price with a reason attached, exactly like `release_open` below. It starts a NEW SEARCH
+    # (its own ordinal, its own results, its own picks), because that is what it is: the same
+    # question asked again, not the previous answer revisited.
+    rerun = " ".join((body.rerun_spent or "").split())
+    if ledger.has_spent(query) and not rerun:
+        if spent.lower() == query.lower():
+            pass                                    # same query, same search — idempotent
+        else:
+            # THE RULE THAT SURVIVES, and it is a SESSION-WIDE question — deliberately checked
+            # before anything about the current search. Nested under `holds("query_entered")` it
+            # stopped running the moment a new search was declared but not yet run, which is
+            # precisely when somebody would try to go back to the query they just left.
+            ran_in = [n for n, q in ledger.spent_queries().items()
+                      if q and (q.lower() == query.lower() or query.lower() in q.lower())]
+            raise HTTPException(
+                status_code=409,
+                detail=(f"This session already ran {query!r} (search "
+                        f"{', '.join(map(str, ran_in))}). Re-running the same query is what makes "
+                        f"{engine['label']} collapse results — go back to those results instead, "
+                        f"or say why you want it run again (`rerun_spent`) and it starts a new "
+                        f"search."))
+    elif spent.lower() == query.lower() and not ledger.holds("query_entered"):
+        pass                    # declared but never run — re-pointing at the same terms is free
     elif ledger.holds("query_entered"):
         # A DIFFERENT QUERY, and this search has already spent its own. New search, same session,
         # same sign-in. (A search that has been DECLARED but not yet run is simply re-pointed —
@@ -1185,9 +1210,13 @@ async def initialize(session_id: int, body: InitializeBody,
         # and the timeline had no idea. Counted from the released bill rather than re-derived, so
         # what is journaled is what actually happened.
         kept = len(released["parked"]) + len(cost["worked"])
+        # `'x' -> 'x'` is not a legible way to say "the same terms, asked again" — the one case
+        # where the arrow notation lies about what happened.
+        move = (f"re-running {query!r}" if spent.lower() == query.lower()
+                else f"{spent!r} -> {query!r}")
         bb.log(
             "search_step_back",
-            f"search {leaving} -> {started_search}: {spent!r} -> {query!r} "
+            f"search {leaving} -> {started_search}: {move} "
             f"(same session, still signed in). Released "
             f"{len(released['unworked'])} unworked pick(s)"
             + (f": {', '.join(u['title'] or u['job_id'] for u in released['unworked'])}"
@@ -1196,13 +1225,22 @@ async def initialize(session_id: int, body: InitializeBody,
                f"{'it' if len(cost['worked']) == 1 else 'them'}" if cost["worked"] else "")
             + (f". {kept} application(s) kept on the ledger" if kept else "")
             + (f". {released['submitted']} already submitted" if released["submitted"] else ""),
-            why=reason or (f"The operator is searching for something else; search {leaving} held "
-                           f"no driven application, so leaving it costs only picks nobody had "
-                           f"opened."),
+            # BOTH REASONS WHEN BOTH REFUSALS WERE PAID. Re-running spent terms and releasing
+            # driven work are two different decisions that can be taken in one press, and a `why`
+            # that reported only one of them would leave the other unexplained on the record.
+            why=" · ".join(filter(None, [
+                rerun and f"re-running spent terms deliberately: {rerun}",
+                reason and f"released open work: {reason}",
+            ])) or (f"The operator is searching for something else; search {leaving} held no "
+                    f"driven application, so leaving it costs only picks nobody had opened."),
             next_up=(f"Run {query!r} as search {started_search} on the same signed-in browser, "
-                     f"read page 1, and take a FRESH selection — the picks from {spent!r} do not "
-                     f"carry over, because they were chosen off results that are no longer on "
-                     f"screen."))
+                     f"apply the distance filter, read page 1, and take a FRESH selection. "
+                     + (f"Search {leaving}'s picks do not carry over: the same terms return a "
+                        f"result set that has turned over since, so they were chosen off cards "
+                        f"that may no longer be on the page."
+                        if spent.lower() == query.lower() else
+                        f"The picks from {spent!r} do not carry over, because they were chosen "
+                        f"off results that are no longer on screen.")))
 
     bb.search_state.query = query
     # WHICH QUERY THIS SEARCH IS SPENDING, on the ledger and as a fact rather than as prose. This
