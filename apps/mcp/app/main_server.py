@@ -217,38 +217,103 @@ async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Opt
     # under them — which re-rendered the whole form localized. A tier with more than one candidate
     # means the caller's name does not identify a control, and answering anyway is how you act on
     # the wrong one.
-    def tier(pred) -> list[dict]:
-        return [c for c in cands if role_ok(c) and pred(nm(c))]
+    def tier(pred, gated: bool = True) -> list[dict]:
+        return [c for c in cands if (role_ok(c) if gated else True) and pred(nm(c))]
 
-    for pred in ((lambda n: n == want),
-                 (lambda n: bool(want) and n.startswith(want)),
-                 (lambda n: bool(want) and want in n)):
-        found = tier(pred)
-        if len(found) == 1:
-            return found[0].get("backend_node_id")
-        if len(found) > 1:
-            # SEVERAL CONTROLS, OR ONE CONTROL RENDERED SEVERAL TIMES? Those are different facts
-            # and the count cannot tell them apart. The refusal above is right about the first —
-            # "Country" naming both the country field and the phone-code field cost a real
-            # application on 2026-08-13 — and wrong about the second, which is ordinary page
-            # furniture: a job posting repeats its Apply/Save/Share block at the top and bottom of
-            # the description, a checkout repeats its Continue, a long form repeats its Submit.
-            # Measured live 2026-08-14 on Boston Children's: TWO `link` nodes named exactly
-            # "Apply", identical role, name, x, width and height, differing only in y (395 and
-            # 2137). The drive could not press either, on a posting a person applies to by
-            # clicking the first thing they see.
-            #
-            # ASK THE PAGE RATHER THAN GUESS. A link's identity is where it GOES, so candidates
-            # that resolve to one destination are one action however many times it is drawn, and
-            # clicking any of them is the same act. That is evidence, not a heuristic — and when
-            # the destinations differ, or cannot be read at all, the refusal stands exactly as
-            # before. Deliberately NOT "same size means same control": iCIMS renders two genuinely
-            # different Submit buttons on one packet form, and they would pass a geometry test.
-            same = await _same_destination(browser_url, tab_id, tab_url, found)
-            if same:
+    _preds = ((lambda n: n == want),
+              (lambda n: bool(want) and n.startswith(want)),
+              (lambda n: bool(want) and want in n))
+
+    # THE ROLE GATE IS A PREFERENCE, NOT A REQUIREMENT — the rule this module already applies to
+    # the prompt path, arriving here for the same reason. AX `role` is an ACCESSIBILITY role, so an
+    # `<a>` styled or marked as a button reports `button`; a caller asking for a LINK is then gated
+    # out of the very node they meant and gets `not_found` for a control plainly on screen
+    # (measured 2026-08-14 on MAPFRE). Tried gated first, then role-free — and when the role-free
+    # tier is ambiguous, the caller's ROLE becomes the tiebreak below, which is the discrimination
+    # they made being honoured rather than discarded.
+    # THE ROLE GATE IS A PREFERENCE, NOT A REQUIREMENT — the rule this module already applies on
+    # the prompt path, arriving here for the same reason. AX `role` is an ACCESSIBILITY role, so an
+    # `<a>` styled or marked as a button reports `button`; a caller asking for a LINK is gated out
+    # of the very node they meant and gets `not_found` for a control plainly on screen (measured
+    # 2026-08-14 on MAPFRE, whose posting carries `<a class="…apply…">Apply now »</a>` beside
+    # `<button class="btn…">Apply now</button>`). Gated first, then role-free — and when the
+    # role-free tier is ambiguous the caller's ROLE becomes the tiebreak, which is the
+    # discrimination they made being honoured rather than discarded.
+    for gated in (True, False):
+        if not gated and not want_role:
+            break                      # the first pass was already role-free
+        for pred in _preds:
+            found = tier(pred, gated)
+            if len(found) == 1:
                 return found[0].get("backend_node_id")
-            return None      # named several controls; the caller must say which
+            if len(found) > 1:
+                # SEVERAL CONTROLS, OR ONE CONTROL RENDERED SEVERAL TIMES? Those are different
+                # facts and the count cannot tell them apart. The refusal is right about the first
+                # — "Country" naming both the country field and the phone-code field cost a real
+                # application on 2026-08-13 — and wrong about the second, which is ordinary page
+                # furniture: a posting repeats its Apply block top and bottom, a checkout repeats
+                # its Continue, a long form repeats its Submit.
+                #
+                # ASK THE PAGE RATHER THAN GUESS. A link's identity is where it GOES, so candidates
+                # resolving to one destination are one action however many times it is drawn.
+                # Evidence, not a heuristic — differing, unreadable or unread destinations all keep
+                # the refusal. Deliberately NOT "same size means same control": iCIMS renders two
+                # genuinely different Submit buttons on one packet form.
+                if await _same_destination(browser_url, tab_id, tab_url, found):
+                    return found[0].get("backend_node_id")
+                # And when the page cannot settle it, the caller's own role may — see `_by_dom_tag`.
+                picked = await _by_dom_tag(browser_url, tab_id, tab_url, found, want_role)
+                if picked is not None:
+                    return picked
+                break          # this tier named several controls; a looser tier cannot fix that
+
     return None
+
+
+#: Which DOM tag a caller means when they name an accessibility role. Deliberately tiny: these are
+#: the two that collide in practice, because a link styled as a button is the web's most common
+#: piece of costume. Anything not here declines to discriminate rather than inventing a mapping.
+_ROLE_TAGS: dict[str, str] = {"link": "A", "button": "BUTTON"}
+
+
+async def _by_dom_tag(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
+                      candidates: list[dict], want_role: str) -> Optional[int]:
+    """The one candidate whose DOM tag matches the role the caller asked for, or None.
+
+    Answers None on anything less than a clean single match — no tag mapping for the role, a read
+    that failed, zero matches, or more than one. The refusal is the default and this only narrows
+    it on positive evidence, same contract as `_same_destination`.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    want_tag = _ROLE_TAGS.get((want_role or "").strip().lower())
+    if not want_tag:
+        return None
+    node_ids = [c.get("backend_node_id") for c in candidates]
+    if not all(isinstance(n, int) for n in node_ids):
+        return None
+    try:
+        target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"],
+                                      max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("DOM.enable")
+            await cdp.send("Runtime.enable")
+            hits: list[int] = []
+            for node_id in node_ids:
+                resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": node_id})
+                obj = (resolved.get("object") or {}).get("objectId")
+                if not obj:
+                    return None
+                r = await cdp.send("Runtime.callFunctionOn", {
+                    "objectId": obj, "returnByValue": True,
+                    "functionDeclaration": "function(){return this.tagName || '';}"})
+                if str(((r.get("result") or {}).get("value")) or "").upper() == want_tag:
+                    hits.append(node_id)
+            return hits[0] if len(hits) == 1 else None
+    except Exception:  # noqa: BLE001 — a failed read is not evidence
+        logger.debug("could not read dom tags for %s", node_ids, exc_info=True)
+        return None
 
 
 async def _same_destination(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],

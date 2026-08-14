@@ -313,3 +313,59 @@ def test_an_unambiguous_name_never_asks_the_page(monkeypatch):
                         raising=False)
     got = asyncio.run(ms._resolve_ax_node("http://x", None, None, None, "Apply"))
     assert got == 7 and called["n"] == 0
+
+
+def test_a_role_the_caller_asked_for_breaks_an_ax_collapsed_tie(monkeypatch):
+    """AX ROLE IS NOT DOM TAG, and an `<a>` styled as a button reports `button` exactly like a real
+    one. MAPFRE's posting carries `<a class="…apply…">Apply now »</a>` beside
+    `<button class="btn…">Apply now</button>`, so both collapse to the same candidate and a caller
+    who asked for a LINK had their distinction discarded before the tier was built.
+
+    This is not choosing between them — it is honouring a discrimination the caller made and AX
+    erased.
+    """
+    cands = [{"role": "button", "name": "Apply now", "backend_node_id": 1598},
+             {"role": "button", "name": "Apply now", "backend_node_id": 1869}]
+
+    async def fake_propose(**_kw):
+        return list(cands)
+    monkeypatch.setattr("app.observer.ax_proposer.propose_ax_candidates", fake_propose,
+                        raising=False)
+
+    async def no_same(*_a, **_k):
+        return False
+    monkeypatch.setattr(ms, "_same_destination", no_same)
+
+    tags = {1598: "A", 1869: "BUTTON"}
+
+    async def fake_tag(_u, _t, _tu, found, want_role):
+        want = ms._ROLE_TAGS.get(want_role)
+        hits = [c["backend_node_id"] for c in found if tags[c["backend_node_id"]] == want]
+        return hits[0] if len(hits) == 1 else None
+    monkeypatch.setattr(ms, "_by_dom_tag", fake_tag)
+
+    # The caller says "link" and gets the anchor; says "button" and gets the button.
+    assert asyncio.run(ms._resolve_ax_node("http://x", None, None, "link", "Apply now")) == 1598
+    assert asyncio.run(ms._resolve_ax_node("http://x", None, None, "button", "Apply now")) == 1869
+
+
+def test_two_anchors_of_the_same_name_are_still_ambiguous(monkeypatch):
+    """The tiebreak narrows the refusal on positive evidence and never replaces it. A role that
+    cannot separate the candidates leaves them separated by nothing."""
+    cands = [{"role": "link", "name": "Apply now", "backend_node_id": 1},
+             {"role": "link", "name": "Apply now", "backend_node_id": 2}]
+
+    async def fake_propose(**_kw):
+        return list(cands)
+    monkeypatch.setattr("app.observer.ax_proposer.propose_ax_candidates", fake_propose,
+                        raising=False)
+
+    async def no_same(*_a, **_k):
+        return False
+    monkeypatch.setattr(ms, "_same_destination", no_same)
+
+    async def both_anchors(_u, _t, _tu, found, want_role):
+        return None          # two A's — the tag cannot separate them either
+    monkeypatch.setattr(ms, "_by_dom_tag", both_anchors)
+
+    assert asyncio.run(ms._resolve_ax_node("http://x", None, None, "link", "Apply now")) is None
