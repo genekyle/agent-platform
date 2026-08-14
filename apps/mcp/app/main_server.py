@@ -342,15 +342,37 @@ async def _same_destination(browser_url: str, tab_id: Optional[str], tab_url: Op
                     return False
                 r = await cdp.send("Runtime.callFunctionOn", {
                     "objectId": obj, "returnByValue": True,
-                    # The nearest anchor, because the accessible node is often a span INSIDE the
-                    # link. An empty answer (no anchor, or a bare "#") is not a destination and
-                    # falls through to the refusal.
-                    "functionDeclaration": "function(){const a=this.closest&&this.closest('a');"
-                                           "const h=a&&a.href;return (h&&h!=='#')?h:'';}"})
-                href = str(((r.get("result") or {}).get("value")) or "")
-                if not href:
+                    # The nearest anchor's href, or — for a control that is not a link — an ACTION
+                    # FINGERPRINT.
+                    #
+                    # A button's behaviour lives in a listener we cannot read, so href alone left
+                    # every repeated `<button>` unprovable. MAPFRE's posting repeats a real
+                    # `<button>Apply now</button>` top and bottom (measured 2026-08-14) and the
+                    # drive could press neither. What IS readable is everything the page uses to
+                    # tell its own handlers apart: form target, inline handler, name/value, and
+                    # the `data-*` attributes analytics and frameworks hang off controls.
+                    #
+                    # DELIBERATELY REFUSES A TRIVIAL FINGERPRINT. Two bare `<button
+                    # type=submit>`s carry nothing distinguishing, and iCIMS renders exactly that
+                    # — two genuinely different Submits on one packet form. No distinguishing
+                    # attribute means no evidence, and no evidence keeps the refusal.
+                    "functionDeclaration": """function(){
+                      const a = this.closest && this.closest('a');
+                      const h = a && a.href;
+                      if (h && h !== '#') return 'href:' + h;
+                      const parts = [];
+                      for (const at of (this.attributes || [])) {
+                        const n = at.name.toLowerCase();
+                        if (n.startsWith('data-') || n === 'onclick' || n === 'formaction'
+                            || n === 'form' || n === 'name' || n === 'value')
+                          parts.push(n + '=' + at.value);
+                      }
+                      return parts.length ? 'act:' + parts.sort().join('|') : '';
+                    }"""})
+                mark = str(((r.get("result") or {}).get("value")) or "")
+                if not mark:
                     return False
-                seen.add(href)
+                seen.add(mark)
             return len(seen) == 1
     except Exception:  # noqa: BLE001 — a failed read is not evidence of sameness
         logger.debug("could not compare destinations for %s", node_ids, exc_info=True)
