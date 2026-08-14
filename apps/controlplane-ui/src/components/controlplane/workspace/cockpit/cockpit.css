@@ -178,6 +178,12 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .trace__line time { margin-left: auto; color: var(--text-subtle); font-size: 10.5px; }
 .trace__body p { margin: 3px 0 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
 .trace__body small { display: block; margin-top: 2px; color: var(--text-subtle); font-size: 10px; overflow-wrap: anywhere; }
+/* The reasoning either side of an event: why the state changed, and what we said would happen
+   next. Rail-marked rather than boxed so a run of entries still reads as one column, and tinted
+   apart from `detail` because they answer different questions about the same moment. */
+.trace__why, .trace__next { border-left: 2px solid var(--line); padding-left: 7px; }
+.trace__why b, .trace__next b { color: var(--text-subtle); font-weight: 600; }
+.trace__next { color: var(--text-subtle); font-style: italic; }
 
 /* NOTE deliberately no bare `.cockpit` rule here. The legacy workspace surfaces
    (DomainWorkspace, ErrandsPanel, TrainingReadiness) still render `className="cockpit"`

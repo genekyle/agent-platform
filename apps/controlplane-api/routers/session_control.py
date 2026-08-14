@@ -738,6 +738,12 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
             "query": ss.query,
             "spent": {str(k): v for k, v in ledger.spent_queries().items()},
             "all": ledger.searches(),
+            # WHAT LEAVING THIS SEARCH WOULD COST, priced before anything is pressed. The refusal
+            # that used to guard this was a 409 the operator met only AFTER typing a new query, and
+            # it named a job rather than a bill. The cockpit renders this beside the form instead,
+            # so "four picks nobody opened are released; one half-driven application is parked and
+            # stays resumable" is something you read before deciding, not after.
+            "step_back": _step_back_cost(bb),
         },
         # HOW FAR THIS APPLICATION IS FROM SUBMIT, and the screens between here and there. The
         # ladder's tail, rendered — so "what is left" stops being something only the recipe knows.
@@ -747,7 +753,12 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # is indistinguishable from no practice at all.
         "learning": _learning_scoreboard(),
         "last_step": last,
-        "events": [{"ts": e.ts, "kind": e.kind, "detail": e.detail} for e in bb.events[-12:]],
+        # THE TIMELINE, WITH ITS REASONING. `why` and `next_up` are what make a run of events read
+        # as a story rather than a list of arrivals: the first says why a state changed, the second
+        # says what we expected to happen next — which the following event then either matches or
+        # contradicts. Empty on the events that genuinely have neither; nothing invents one.
+        "events": [{"ts": e.ts, "kind": e.kind, "detail": e.detail,
+                    "why": e.why, "next_up": e.next_up} for e in bb.events[-12:]],
         # How old is what we are looking at (perception/staleness.py — PROTOTYPE). Advisory: the
         # panel shows it and the operator decides. Nothing here acts on it.
         "staleness": _staleness_for(bb, obs),
@@ -971,15 +982,62 @@ def _queue_in_progress(bb: Any) -> bool:
 _SEARCH_SCOPED_WORLD: tuple[str, ...] = (
     "page_results", "apply_queue", "open_pane", "applied_check", "tab_drift", "orient",
     "apply_tab", "account_handoff", "apply_proposal", "radius_miles", "last_belief",
+    # THE SEARCH ROW ITSELF (`models.Search.id`), which outranked every other key here for damage.
+    # It is minted by `review_page` and it is what every JobDecision joins through — so a search
+    # that changed query while this key survived would file the NEXT search's decisions against the
+    # PREVIOUS search's identity. Clearing it is also correct by construction rather than by luck:
+    # `/choose` cannot run before `review_page` (it refuses picks that are not on the page), and
+    # `review_page` is the one place that mints the row. Absent means "not minted yet", which is a
+    # true statement; the old id was a false one ([[feedback_state_is_context_bound]]).
+    "search_id",
 )
 
 
-def _reset_for_new_search(bb: Any, *, leaving_search: Optional[int] = None) -> None:
-    """Clear what belonged to the search we are leaving, and nothing else.
+def _step_back_cost(bb: Any) -> dict[str, Any]:
+    """What leaving THIS search would cost, priced before anything is touched.
+
+    Read-only, and deliberately separate from the reset that spends it: the operator is entitled to
+    see the bill before pressing, and the cockpit renders exactly this. Four buckets, because they
+    are four different facts and conflating any two of them is how a repick loses an application:
+
+      * **worked** — not done, and somebody has actually driven it (a real half-finished
+        application). Dropping one is a decision, so it needs the operator's reason.
+      * **unworked** — a pick nobody has opened: queued, zero minis. Releasing it costs nothing,
+        which is why it needs no reason — but it is still NAMED, because four candidates
+        disappearing without a line in the journal is precisely the confusion this exists to stop.
+      * **parked** — survives the search by harvest (below). Listed so the panel can say so.
+      * **submitted** — already history. Nothing here can touch it.
+    """
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    out: dict[str, Any] = {"worked": [], "unworked": [], "parked": [], "submitted": 0}
+    for s in queue.steps:
+        card = {"job_id": s.job_id, "title": s.title, "company": s.company,
+                "status": s.status, "terminal": s.terminal, "minis": len(s.minis or ())}
+        if s.terminal == aps.SUBMITTED:
+            out["submitted"] += 1
+        elif (s.terminal or "").startswith("parked:"):
+            out["parked"].append(card)
+        elif s.done:
+            pass                                     # abandoned — already a closed decision
+        elif s.status == aps.STATUS_QUEUED and not (s.minis or ()):
+            out["unworked"].append(card)
+        else:
+            out["worked"].append(card)
+    return out
+
+
+def _reset_for_new_search(bb: Any, *, leaving_search: Optional[int] = None) -> dict[str, Any]:
+    """Clear what belonged to the search we are leaving, and nothing else. Returns what it released.
 
     The picks go too: `approved` is a list of job ids chosen off the OLD result set, and carrying
     them into a new search would offer the operator a queue built from results that are no longer
     on screen — the display-side contextual clobbering the cockpit rebuild exists to prevent.
+
+    IT USED TO DO ALL OF THAT IN SILENCE, and the silence was the defect (operator, 2026-08-13:
+    *"make sure our system doesn't get confused"*). Picks vanished, a queue vanished, and the
+    timeline showed one line about a query changing — so the only record that four chosen jobs had
+    ever been chosen was a `select:N` rung whose evidence still claimed them. Returning the bill is
+    what lets the caller journal it; the caller is the one holding the operator's reason.
 
     PARKED APPLICATIONS SURVIVE THE SEARCH THEY PARKED IN. Dropping `apply_queue` wholesale
     silently orphaned them: parked means "not now, come back" (a REAL half-finished application
@@ -990,6 +1048,7 @@ def _reset_for_new_search(bb: Any, *, leaving_search: Optional[int] = None) -> N
     it must not vanish either (this harvest). `apply_reopen` resurrects from here into whatever
     queue is current.
     """
+    released = _step_back_cost(bb)
     world = dict(bb.world or {})
     queue = aps.Queue.from_dict(world.get("apply_queue"))
     survivors = {p.get("job_id"): p for p in (world.get("parked_apps") or []) if p.get("job_id")}
@@ -1001,6 +1060,9 @@ def _reset_for_new_search(bb: Any, *, leaving_search: Optional[int] = None) -> N
     if survivors:
         bb.world["parked_apps"] = list(survivors.values())
     bb.search_state.approved = []
+    released["from_search"] = leaving_search
+    released["from_page"] = queue.page
+    return released
 
 
 class InitializeBody(BaseModel):
@@ -1008,6 +1070,15 @@ class InitializeBody(BaseModel):
     location: str = ""
     radius_miles: int = 50
     initiator: str = "operator"
+    #: THE OPERATOR'S REASON FOR STEPPING BACK OUT OF LIVE WORK — required (and only required) when
+    #: this search still holds an application somebody has actually driven.
+    #:
+    #: A REASON RATHER THAN A BOOLEAN, deliberately. `confirm: true` records that a warning was
+    #: dismissed; it cannot tell a later reader whether the work was dropped because the query was
+    #: wrong, because the candidates were wrong, or because somebody misread the screen. The whole
+    #: request this field came from was *"the journal needs to know why"* — so the confirmation and
+    #: the rationale are the same keystroke, and there is no way to spend the one without the other.
+    release_open: str = ""
 
 
 @router.post("/api/session_control/{session_id}/initialize")
@@ -1069,18 +1140,69 @@ async def initialize(session_id: int, body: InitializeBody,
         # A DIFFERENT QUERY, and this search has already spent its own. New search, same session,
         # same sign-in. (A search that has been DECLARED but not yet run is simply re-pointed —
         # nothing was spent, so there is nothing to preserve and no ordinal to burn.)
-        in_flight = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
-        if in_flight is not None:
+        #
+        # STEPPING BACK IS A DECISION, AND IT USED TO BE PRICED WRONG IN BOTH DIRECTIONS.
+        # The old guard was `queue.current() is not None` — the first step that has not reached a
+        # terminal flag — which is true of a pick NOBODY HAS OPENED. So a session holding four
+        # untouched candidates refused a new search with "…is still open in this search", naming a
+        # job that had never been driven, over a cost of exactly nothing; and it said "finish it or
+        # flag it" while the cockpit offered no way to do either from that moment. A truthful
+        # refusal the operator cannot act on is still a dead end (2026-08-13).
+        #
+        # Priced by what is actually there instead: an application somebody has DRIVEN is worth
+        # stopping for, an unopened pick is not.
+        reason = " ".join((body.release_open or "").split())
+        cost = _step_back_cost(bb)
+        if cost["worked"] and not reason:
+            names = ", ".join(w["title"] or w["job_id"] for w in cost["worked"])
             raise HTTPException(
                 status_code=409,
-                detail=(f"{in_flight.title or in_flight.job_id} is still open in this search — "
-                        f"starting a new one would drop it silently. Finish it or flag it, then "
-                        f"search again."))
+                detail=(f"{names} {'has' if len(cost['worked']) == 1 else 'have'} real work in "
+                        f"{'this' if len(cost['worked']) == 1 else 'them this'} search, and "
+                        f"starting a new one would leave "
+                        f"{'it' if len(cost['worked']) == 1 else 'them'} behind. Say why you are "
+                        f"stepping back (`release_open`) and "
+                        f"{'it is' if len(cost['worked']) == 1 else 'they are'} parked with that "
+                        f"reason — still resumable, never silently dropped. Or finish "
+                        f"{'it' if len(cost['worked']) == 1 else 'them'} first."))
+        # PARKED, NOT DISCARDED. `parked:operator` is precisely "your call — not now, come back to
+        # it", so the harvest below carries these into `parked_apps` and `apply_reopen` can bring
+        # them back. Flagged BEFORE the reset, because the harvest is what reads the flag.
+        if cost["worked"]:
+            queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+            for step in queue.steps:
+                if any(w["job_id"] == step.job_id for w in cost["worked"]):
+                    step.finish(aps.PARKED_OPERATOR,
+                                f"Stepped back to search for {query!r}: {reason}")
+            bb.world = dict(bb.world or {})
+            bb.world["apply_queue"] = queue.as_dict()
+
         leaving = ledger.search
         started_search = ledger.start_new_search()
-        _reset_for_new_search(bb, leaving_search=leaving)
-        bb.log("new_search",
-               f"search {started_search}: {spent!r} -> {query!r} (same session, still signed in)")
+        released = _reset_for_new_search(bb, leaving_search=leaving)
+        # THE STEP BACK, ON THE RECORD, WITH WHAT IT COST AND WHAT COMES NEXT. The old line said
+        # only that one query became another; four chosen candidates left the queue underneath it
+        # and the timeline had no idea. Counted from the released bill rather than re-derived, so
+        # what is journaled is what actually happened.
+        kept = len(released["parked"]) + len(cost["worked"])
+        bb.log(
+            "search_step_back",
+            f"search {leaving} -> {started_search}: {spent!r} -> {query!r} "
+            f"(same session, still signed in). Released "
+            f"{len(released['unworked'])} unworked pick(s)"
+            + (f": {', '.join(u['title'] or u['job_id'] for u in released['unworked'])}"
+               if released["unworked"] else "")
+            + (f". Parked {len(cost['worked'])} with work in "
+               f"{'it' if len(cost['worked']) == 1 else 'them'}" if cost["worked"] else "")
+            + (f". {kept} application(s) kept on the ledger" if kept else "")
+            + (f". {released['submitted']} already submitted" if released["submitted"] else ""),
+            why=reason or (f"The operator is searching for something else; search {leaving} held "
+                           f"no driven application, so leaving it costs only picks nobody had "
+                           f"opened."),
+            next_up=(f"Run {query!r} as search {started_search} on the same signed-in browser, "
+                     f"read page 1, and take a FRESH selection — the picks from {spent!r} do not "
+                     f"carry over, because they were chosen off results that are no longer on "
+                     f"screen."))
 
     bb.search_state.query = query
     # WHICH QUERY THIS SEARCH IS SPENDING, on the ledger and as a fact rather than as prose. This
@@ -1093,7 +1215,13 @@ async def initialize(session_id: int, body: InitializeBody,
     bb.world = dict(bb.world or {})
     bb.world["radius_miles"] = max(int(body.radius_miles or 50), 50)
     bb.log("initialize", f"session declared for {query!r} "
-                         f"({bb.search_state.location or 'anywhere'}) by {body.initiator}")
+                         f"({bb.search_state.location or 'anywhere'}) by {body.initiator}",
+           # DECLARED IS NOT RUN, and the gap between them is a state the timeline has to name:
+           # nothing has been spent yet, so the once-only guard does not apply and a mis-typed
+           # query is still free to change. Saying so is what stops a reader (or a rung) treating
+           # a declaration as a search that happened.
+           next_up=(f"Nothing spent yet — the next crank submits {query!r} to "
+                    f"{engine['label']} and only then is it a search that cannot be re-run."))
     # Remember the target across sessions so the cadence and the panel agree on what we search.
     jst.add_target(query, bb.search_state.location, radius_miles=bb.world["radius_miles"])
 
@@ -6981,9 +7109,25 @@ async def choose(session_id: int, body: ChooseBody,
         logging.getLogger("session_control").exception(
             "could not record the decision ledger for page %s", page)
 
+    # THE DECISION, WITH ITS REASONING — the one event on this timeline a human actually authored.
+    # `note` is the operator's own words and belongs in `why`, not appended to a count; `next_up`
+    # states what these picks are about to become, which is the difference between "7 picked" and
+    # "7 applications will be walked one at a time, and this page will not turn until each reaches
+    # a terminal flag". A reader who does not already know that rule cannot follow what comes next.
+    queued_names = ", ".join(
+        (by_id.get(j) or {}).get("title") or j for j in body.picks[:4])
     bb.log("choose", f"page {page}: picked {len(body.picks)} of {len(known)} "
                      f"by {body.decided_by} ({added} queued to apply)"
-                     + (f" — {body.note}" if body.note else ""))
+                     + (f" — {body.note}" if body.note else ""),
+           why=body.note or (f"{body.decided_by} reviewed all {len(known)} cards on page {page} "
+                             f"and chose {len(body.picks)}"
+                             + (f": {queued_names}" if queued_names else "")
+                             + ("…" if len(body.picks) > 4 else "")),
+           next_up=(f"Work {added} queued application(s) one at a time; page {page} does not turn "
+                    f"until every one reaches a terminal flag."
+                    if added else
+                    f"Nothing queued from page {page} — the page is reviewed and the ladder may "
+                    f"turn to the next one."))
 
     if queue.blocks_page():
         summary = queue.summary()

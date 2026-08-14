@@ -52,9 +52,20 @@ def record_page_decisions(db: Session, *, cards: list[dict[str, Any]], picked: s
     """One row per card under review — picked AND passed. Returns {picked, passed, skipped}.
 
     `cards` is the page as the decider saw it, IN ORDER, so `rank` is the card's own position.
-    Idempotent per (job, session, page): choosing again after adding a pick REPLACES that page's
-    decisions rather than stacking duplicates, because `choose` is a standing rung the operator
-    re-presses (a second press is a revised decision, not a second one).
+    Idempotent per (job, session, page, SEARCH): choosing again after adding a pick REPLACES that
+    page's decisions rather than stacking duplicates, because `choose` is a standing rung the
+    operator re-presses (a second press is a revised decision, not a second one).
+
+    THE SEARCH IS PART OF THE KEY, and leaving it out was a silent overwrite (found 2026-08-13
+    building the repick). A session holds many searches and each one starts again at page 1, so
+    `(session, page)` alone says "page 1 of this session" — which is two different pages of two
+    different result sets once the operator searches for something else. A job that appears in both
+    (likely: same location, adjacent queries) would have its FIRST decision rewritten by its
+    second, and the pair — passed on one query, picked on another — is exactly the contrast a
+    boundary is learned from. Two searches, two decisions, both kept.
+
+    A legacy row (`search_id IS NULL`, written before searches were rows) still matches, because
+    the alternative is a duplicate for every job decided before that column existed.
     """
     reasons = reasons or {}
     shown = len(cards)
@@ -64,6 +75,7 @@ def record_page_decisions(db: Session, *, cards: list[dict[str, Any]], picked: s
         d.job_id: d for d in db.scalars(
             select(JobDecision).where(JobDecision.session_id == session_id,
                                       JobDecision.page == page)).all()
+        if d.search_id is None or search_id is None or d.search_id == search_id
     } if session_id is not None else {}
 
     for rank, card in enumerate(cards, start=1):

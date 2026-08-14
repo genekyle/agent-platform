@@ -200,6 +200,8 @@ export function SessionTrace({ sessionId }) {
       actor: "recorded step",
       title: event.kind?.replaceAll("_", " ") || "system event",
       detail: event.detail || "",
+      why: event.why || "",
+      next_up: event.next_up || "",
     }));
     const windows = (data.windows?.timeline || []).map((event) => ({
       key: `win-${event.ts}-${event.kind}-${event.url || ""}`,
@@ -314,6 +316,15 @@ export function SessionTrace({ sessionId }) {
                     <time>{fmtTime(entry.ts)}</time>
                   </div>
                   {entry.detail && <p>{entry.detail}</p>}
+                  {/* WHY IT HAPPENED, AND WHAT WAS EXPECTED NEXT. The timeline used to be a list
+                      of arrivals — legible only to somebody who already knew the story. `why` is
+                      the reason a state changed; `next_up` is the consequence we DECLARED at the
+                      time, which the entry above it then either matches or contradicts. That is
+                      what makes the record falsifiable rather than merely complete. */}
+                  {entry.why && <p className="trace__why"><b>Why:</b> {entry.why}</p>}
+                  {entry.next_up && (
+                    <p className="trace__next"><b>Next:</b> {entry.next_up}</p>
+                  )}
                   {entry.from && <small>from {entry.from}</small>}
                   {entry.source === "step" && (
                     <StepDetail sessionKey={String(sessionId)} entry={entry} onSaved={load} />

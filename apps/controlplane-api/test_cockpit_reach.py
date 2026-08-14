@@ -66,13 +66,53 @@ def test_a_new_search_carries_parked_applications_into_the_session_level_list(mo
     assert aps.Queue.from_dict(saved["bb"].world.get("apply_queue")).steps == []
 
 
-def test_an_open_application_still_blocks_a_new_search(monkeypatch):
-    """The refusal that keeps the harvest honest: IN-FLIGHT work is never dropped silently —
-    parked survives a new search precisely because open work cannot reach that code path."""
+def _driven_queue(job_id="indeed:driven", title="Driven One"):
+    """A pick somebody has actually worked — one recorded mini is what makes it real. `record`
+    flips QUEUED to OPEN, which is the same transition a live drive makes."""
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": job_id, "title": title}])
+    q.steps[0].record("open_pane", "ok", "detail pane loaded")
+    return q
+
+
+def test_an_unopened_pick_does_not_block_a_new_search_and_is_named_in_the_journal(monkeypatch):
+    """A PICK NOBODY HAS OPENED COSTS NOTHING TO RELEASE, and the old guard could not tell it from
+    a half-finished application.
+
+    `queue.current()` is "the first step with no terminal flag", which is true of a freshly queued
+    card — so a session holding four untouched candidates refused a new search by naming a job that
+    had never been driven. Releasing them is right; releasing them SILENTLY is what put four
+    candidates outside the record, so the journal names each one and says what happens next.
+    """
     bb = _at_start_line(query="data analytics")
     q = aps.Queue(page=1)
-    q.enqueue([{"job_id": "indeed:open", "title": "Open One"}])
+    q.enqueue([{"job_id": "indeed:untouched", "title": "Untouched One"}])
     bb.world["apply_queue"] = q.as_dict()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/initialize",
+                        json={"query": "reporting analyst"})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    step_back = [e for e in saved["bb"].events if e.kind == "search_step_back"]
+    assert len(step_back) == 1
+    assert "Untouched One" in step_back[0].detail          # named, not merely counted
+    assert step_back[0].why                                 # why we stepped back
+    assert "reporting analyst" in step_back[0].next_up      # and what happens now
+    assert "FRESH selection" in step_back[0].next_up
+    assert aps.Queue.from_dict(saved["bb"].world.get("apply_queue")).steps == []
+
+
+def test_a_driven_application_blocks_a_new_search_until_a_reason_is_given(monkeypatch):
+    """The refusal that keeps the harvest honest — now priced on WORK DONE rather than on the
+    absence of a terminal flag. And it names the way out, because a truthful refusal the operator
+    cannot act on is still a dead end."""
+    bb = _at_start_line(query="data analytics")
+    bb.world["apply_queue"] = _driven_queue().as_dict()
     _install(monkeypatch,
              {"/list_tabs": _tabs(SEARCH_URL),
               "/auth_state": {"ok": True, "logged_in": True}},
@@ -83,7 +123,37 @@ def test_an_open_application_still_blocks_a_new_search(monkeypatch):
     finally:
         _teardown()
     assert r.status_code == 409
-    assert "still open" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert "Driven One" in detail
+    assert "release_open" in detail          # the field that carries the way out
+    assert "resumable" in detail             # and the promise that makes it safe to press
+
+
+def test_the_reason_releases_the_driven_application_and_parks_it_resumable(monkeypatch):
+    """Given the reason, the step back happens — and the driven application is PARKED with that
+    reason rather than discarded, so `apply_reopen` can bring it back. `parked:operator` is exactly
+    "your call — not now, come back to it", which is what stepping back actually means."""
+    bb = _at_start_line(query="data analytics")
+    bb.world["apply_queue"] = _driven_queue().as_dict()
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/initialize",
+                        json={"query": "reporting analyst",
+                              "release_open": "wrong candidates for this query"})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    survivors = saved["bb"].world.get("parked_apps") or []
+    assert [p["job_id"] for p in survivors] == ["indeed:driven"]
+    assert survivors[0]["terminal"] == aps.PARKED_OPERATOR
+    # The operator's own words ride onto the step, not just into the log line.
+    assert "wrong candidates for this query" in survivors[0]["terminal_detail"]
+    step_back = [e for e in saved["bb"].events if e.kind == "search_step_back"][0]
+    assert step_back.why == "wrong candidates for this query"
+    assert aps.Queue.from_dict(saved["bb"].world.get("apply_queue")).steps == []
 
 
 def test_step_back_in_resurrects_a_parked_application_from_a_finished_search(monkeypatch):

@@ -425,3 +425,33 @@ def test_reconcile_preserves_world_keys_it_does_not_own():
     assert bb.world["open_pane"]["apply_type"] == "company_site"
     assert bb.world["apply_proposal"]["intent"] == "click"
     assert bb.world["radius_miles"] == 50
+
+
+# --- the timeline: WHAT, WHY, and WHAT COMES NEXT ------------------------------------
+def test_an_event_carries_why_and_next_up_and_neither_is_invented():
+    """The two fields that turn a list of arrivals into a story. Both optional: an event with no
+    reason beyond itself must not be made to fabricate one (PRINCIPLES §10)."""
+    bb = store.Blackboard(session_id=1, goal="g")
+    bb.log("tab_cleanup", "closed 2 tab(s)")
+    bb.log("search_step_back", "search 1 -> 2: 'report analyst' -> 'data analyst'",
+           why="the candidates were wrong for this query",
+           next_up="run 'data analyst' and take a FRESH selection")
+
+    plain, reasoned = bb.events
+    assert (plain.why, plain.next_up) == ("", "")
+    assert reasoned.why == "the candidates were wrong for this query"
+    assert "FRESH selection" in reasoned.next_up
+
+
+def test_a_blackboard_written_before_why_existed_still_loads():
+    """Additive by construction — `Event(**e)` supplies the defaults, so every event already on
+    disk reads back unchanged rather than raising on an unknown shape."""
+    legacy = {
+        "session_id": 4, "goal": "g",
+        "events": [{"ts": "2026-08-01T00:00:00+00:00", "kind": "choose", "detail": "picked 3"}],
+    }
+    bb = store.Blackboard.from_dict(legacy)
+    assert bb.events[0].detail == "picked 3"
+    assert bb.events[0].why == "" and bb.events[0].next_up == ""
+    # and it round-trips with the new keys present
+    assert store.Blackboard.from_dict(bb.to_dict()).events[0].kind == "choose"

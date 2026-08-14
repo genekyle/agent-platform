@@ -262,8 +262,38 @@ function More({ focus, busy, onFlag }) {
 
 function SetupBody({ focus, panel, form, setForm, busy, call }) {
   if (focus.kind === "declare") {
+    // STEPPING BACK, PRICED BEFORE THE PRESS. `focus.stepBack` is what leaving the current search
+    // costs — nothing at all on a first declaration, and on a live one the honest bill. It renders
+    // above the form because it changes what the operator is deciding: not "what shall I search
+    // for" but "what am I putting down to search for it".
+    const back = focus.stepBack;
+    const stepping = !!back && (back.bill || []).length > 0;
+    const reason = (form.release_open || "").trim();
+    const blocked = stepping && back.needsReason && !reason;
+    const same = !!panel.query
+      && panel.query.trim().toLowerCase() === form.query.trim().toLowerCase();
     return (
       <>
+        {stepping && (
+          <div className="work__section">
+            <div className="work__section-head">
+              <AppIcon name="boxes" size={13} /> What stepping back costs
+            </div>
+            <ul className="rungs">
+              {back.bill.map((line) => (
+                <li key={line} className="rung rung--pending">
+                  <div className="rung__body"><div className="rung__line">{line}</div></div>
+                </li>
+              ))}
+            </ul>
+            {/* The picks do not carry over, and this is the sentence that says so. A new query is
+                a new result set; a queue built from cards that have left the screen is exactly the
+                stale-context fault the cockpit rebuild exists to prevent. */}
+            <p className="empty-hint">
+              A new query means a fresh selection — nothing from “{panel.query}” carries over.
+            </p>
+          </div>
+        )}
         <div className="work-setup">
           <label className="work-field">
             <span>Query</span>
@@ -281,11 +311,38 @@ function SetupBody({ focus, panel, form, setForm, busy, call }) {
                    onChange={(e) => setForm((f) => ({ ...f, radius_miles: Number(e.target.value) }))} />
           </label>
         </div>
+        {/* A REASON, NOT A CONFIRMATION TICK. Only asked when an application has actually been
+            driven — an unopened pick costs nothing and being made to justify releasing it is
+            friction that teaches operators to type anything. What is typed here becomes the
+            parked step's own note AND the journal's `why`, so the record says why the work was
+            put down, not merely that somebody agreed to put it down. */}
+        {stepping && back.needsReason && (
+          <label className="work-field">
+            <span>Why are you stepping back?</span>
+            <input value={form.release_open || ""} disabled={busy}
+                   placeholder="wrong candidates for this query"
+                   onChange={(e) => setForm((f) => ({ ...f, release_open: e.target.value }))} />
+          </label>
+        )}
         <div className="work__actions">
-          <button className="btn btn-primary" disabled={busy || !form.query.trim()}
+          <button className="btn btn-primary" disabled={busy || !form.query.trim() || blocked || same}
+                  title={blocked
+                    ? `${back.worked.map((w) => w.title || w.job_id).join(", ")} has real work in `
+                      + "it — say why you are stepping back and it parks with that reason."
+                    : same ? "That is the query this search is already running."
+                      : "Start this search on the browser that is already open and signed in."}
                   onClick={() => call("/initialize", { ...form })}>
-            {busy ? "…" : "Initialize this session"}
+            {busy ? "…" : stepping ? "Step back · start this search" : "Initialize this session"}
           </button>
+          {/* The refusal, said BEFORE the press rather than as a 409 after it. */}
+          {(blocked || same) && (
+            <span className="work__alt-why">
+              {blocked
+                ? ` — ${back.worked.map((w) => w.title || w.job_id).join(", ")} has real work in `
+                  + "it; say why and it parks, still resumable."
+                : " — that is the query this search is already running."}
+            </span>
+          )}
         </div>
       </>
     );

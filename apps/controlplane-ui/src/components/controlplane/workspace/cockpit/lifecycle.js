@@ -394,13 +394,20 @@ function executeFocus(p, step, nextAction) {
   // unrecognised mid-application: the primary is a LOOK — orient, with the witnesses' scored
   // reads on the surface — and the ladder's presumed rung waits demoted until the page is
   // recognised. Forcing "Work this · Open the posting" here was the wrong-menu bug.
-  // (No `searchAgain` on the in-flight focuses below, deliberately: `/initialize` refuses a new
-  // search over an OPEN application — "finish it or flag it" — and a button that always leads to
-  // a refusal is a lie-shaped affordance. The truthful exit from in-flight is one press away in
-  // More (Park, "not now"), and the PARKED focus above carries `searchAgain` from there.)
+  //
+  // `searchAgain` USED TO BE WITHHELD FROM EVERY IN-FLIGHT FOCUS, and the reasoning was sound
+  // against the backend of the time: `/initialize` refused a new search over any step without a
+  // terminal flag, so the door led only to a refusal, and a button that can only refuse is a
+  // lie-shaped affordance. The premise is gone (2026-08-13). `/initialize` now prices the step
+  // back instead of forbidding it — an unopened pick is released, a DRIVEN application is parked
+  // with the operator's stated reason and stays resumable — and the declare surface shows that
+  // bill before anything is pressed. So the door is real from here, and withholding it was the
+  // thing that left the operator with no menu but "work this application" when they wanted a
+  // different search entirely. It stays an ALTERNATE: the application in flight is still the work.
   if (nextAction?.lost) {
     return { ...base, kind: "orient", flow: p.apply_flow || null,
       whereabouts: p.observer || null,
+      searchAgain: true,
       why: nextAction.why || "The screen isn't one the recipe or the observer recognises.",
       primary: actionFrom(nextAction),
       alternates: [
@@ -422,6 +429,11 @@ function executeFocus(p, step, nextAction) {
   //
   // It is still ONE primary action — the rule the whole pane exists to enforce — just an
   // unmistakable one.
+  //
+  // AND THE ONE IN-FLIGHT FOCUS THAT KEEPS NO `searchAgain`. Everywhere else the door out is a
+  // fair offer; here it is a distraction one press from an irreversible act, on a surface built to
+  // carry exactly one unmistakable choice. Stepping back from the gate is still reachable — Park,
+  // in More — and it costs a deliberate press, which at this particular moment is the point.
   if (primary?.consequential) {
     return { ...base, kind: "gate", flow: p.apply_flow || null,
       why: "This is the irreversible one. Everything before it on this ladder can be walked back; "
@@ -432,6 +444,7 @@ function executeFocus(p, step, nextAction) {
   }
 
   return { ...base, kind: "application", flow: p.apply_flow || null,
+    searchAgain: true,
     why: nextAction?.why || "",
     say: nextAction && !nextAction.driveable ? nextAction.label : "",
     primary,
@@ -531,10 +544,29 @@ function recoverResultsFocus(p) {
  * this is not provisioning a session, it is pointing an open, signed-in one at different work.
  * `/initialize` decides whether that is a new search or a refused repeat; the surface does not
  * pre-judge it.
+ *
+ * IT NOW CARRIES THE BILL. Stepping back out of a search is a decision with a price, and the price
+ * used to arrive as a 409 AFTER the operator had typed a new query — naming one job, in prose,
+ * with no way to act on it. `search.step_back` is that price computed before anything is pressed:
+ * how many picks nobody opened (released, free), which applications have real work in them
+ * (parked with your reason, still resumable), what is already parked, and what has been submitted
+ * and is therefore untouchable. `needsReason` is the one case the backend will refuse without it.
  */
 export function newSearchFocus(panel) {
   const p = panel || {};
   const spent = Object.values(p.search?.spent || {});
+  const cost = p.search?.step_back || { worked: [], unworked: [], parked: [], submitted: 0 };
+  const worked = cost.worked || [];
+  const unworked = cost.unworked || [];
+  const parked = cost.parked || [];
+  const bill = [
+    unworked.length ? `${unworked.length} pick${unworked.length === 1 ? "" : "s"} nobody opened `
+      + "— released, costs nothing" : null,
+    worked.length ? `${worked.length} application${worked.length === 1 ? "" : "s"} with real work `
+      + "— parked with your reason, still resumable" : null,
+    parked.length ? `${parked.length} already parked — kept` : null,
+    cost.submitted ? `${cost.submitted} already submitted — untouched` : null,
+  ].filter(Boolean);
   return {
     kind: "declare",
     group: "search", groupLabel: p.search?.n > 1 ? `Search ${p.search.n}` : "Search",
@@ -546,6 +578,10 @@ export function newSearchFocus(panel) {
         ? ` — this session has already run ${spent.map((q) => `“${q}”`).join(", ")}, and running `
           + "one of those again is the repeat that gets results collapsed."
         : "."),
+    // The picks do NOT carry over, and saying so here is the point: a fresh query means a fresh
+    // result set, and a queue built from cards that are no longer on screen is the stale-context
+    // fault this whole surface exists to avoid.
+    stepBack: { ...cost, bill, needsReason: worked.length > 0 },
     primary: null, alternates: [],
   };
 }

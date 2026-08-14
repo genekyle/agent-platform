@@ -150,9 +150,32 @@ class Blocker:
 
 @dataclass
 class Event:
+    """One line of the session's timeline: WHAT happened, WHY, and WHAT COMES NEXT.
+
+    The first two fields were the whole event for a long time, and the timeline they built could
+    only ever be read forwards by someone who already knew the story. Operator, asking for the
+    step-back that motivated this (2026-08-13): *"the journal needs to know why and what's going to
+    happen next so make sure our system doesn't get confused."*
+
+    That is two distinct gaps, and `detail` was silently carrying neither:
+
+      * **why** — the REASON a state changed, as opposed to the change itself. "search 2:
+        'report analyst' -> 'data analyst'" says what moved; it does not say the operator wanted a
+        fresh set of candidates, which is the only thing that makes the next four events legible.
+      * **next_up** — the DECLARED consequence. Between two states there is an intention, and a
+        journal that records only arrivals leaves every gap to be re-inferred. Writing down what we
+        expect to happen next is also what makes the record falsifiable: the following event either
+        matches it or does not, and a mismatch is a finding rather than a shrug.
+
+    Both default to empty and both are additive, so every event already on a blackboard reads back
+    unchanged (`Event(**e)` simply supplies the defaults).
+    """
+
     ts: str
     kind: str
     detail: str
+    why: str = ""
+    next_up: str = ""
 
 
 # --- Search-phase memory: what we're searching + how far we've gotten --------------
@@ -267,8 +290,12 @@ class Blackboard:
         bb.updated_at = d.get("updated_at", _utcnow())
         return bb
 
-    def log(self, kind: str, detail: str) -> None:
-        self.events.append(Event(ts=_utcnow(), kind=kind, detail=detail))
+    def log(self, kind: str, detail: str, *, why: str = "", next_up: str = "") -> None:
+        """Append to the session's timeline. `why` and `next_up` are keyword-only and optional —
+        an event that genuinely has no reason beyond itself ("2 tabs closed") must not be made to
+        invent one, and a fabricated rationale is worse than a missing one (PRINCIPLES §10)."""
+        self.events.append(Event(ts=_utcnow(), kind=kind, detail=detail,
+                                 why=why, next_up=next_up))
         if len(self.events) > _MAX_EVENTS:
             self.events = self.events[-_MAX_EVENTS:]
 

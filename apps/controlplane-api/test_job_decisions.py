@@ -131,3 +131,51 @@ def test_decisions_carry_the_search_join(db):
                              session_id=25, page=1, query="data analytics", search_id=None)
     db.commit()
     assert all(r.search_id == 7 for r in db.scalars(select(JobDecision)).all())
+
+
+def test_a_second_search_in_one_session_does_not_overwrite_the_firsts_page_one(db):
+    """TWO SEARCHES, TWO DECISIONS, BOTH KEPT — the silent overwrite found building the repick.
+
+    A session holds many searches and every one of them starts again at page 1, so an idempotence
+    key of `(session, page)` says "page 1 of this session" — which is two different pages of two
+    different result sets. A job surfaced by both queries (likely: same location, adjacent terms)
+    had its first decision REWRITTEN by its second, and that pair — passed on one query, picked on
+    the next — is exactly the contrast a boundary is learned from.
+    """
+    shared = {"job_id": "indeed:both", "title": "Report Analyst", "company": "Co"}
+    jd.record_page_decisions(db, cards=[shared], picked=set(), decided_by="operator",
+                             session_id=28, page=1, query="report analyst", search_id=3)
+    db.commit()
+    jd.record_page_decisions(db, cards=[shared], picked={"indeed:both"}, decided_by="operator",
+                             session_id=28, page=1, query="data analyst", search_id=4)
+    db.commit()
+
+    rows = db.scalars(select(JobDecision).where(JobDecision.job_id == "indeed:both")).all()
+    assert len(rows) == 2, "the second search overwrote the first search's decision"
+    assert {(r.search_id, r.decision, r.query) for r in rows} == {
+        (3, "passed", "report analyst"), (4, "picked", "data analyst")}
+
+    # And within ONE search a re-press is still a revision, not a duplicate — the standing select
+    # rung has to stay re-pressable, which is the property this key must not break.
+    jd.record_page_decisions(db, cards=[shared], picked=set(), decided_by="operator",
+                             session_id=28, page=1, query="data analyst", search_id=4)
+    db.commit()
+    rows = db.scalars(select(JobDecision).where(JobDecision.job_id == "indeed:both")).all()
+    assert len(rows) == 2
+    assert {(r.search_id, r.decision) for r in rows} == {(3, "passed"), (4, "passed")}
+
+
+def test_a_legacy_row_with_no_search_is_revised_rather_than_duplicated(db):
+    """Rows written before searches were rows carry `search_id IS NULL`. A re-press that now knows
+    its search must ADOPT that row, not shadow it — the alternative is a duplicate for every
+    decision made before the column existed."""
+    card = {"job_id": "indeed:legacy", "title": "Analyst"}
+    jd.record_page_decisions(db, cards=[card], picked=set(), decided_by="operator",
+                             session_id=9, page=1, query="q")
+    db.commit()
+    jd.record_page_decisions(db, cards=[card], picked={"indeed:legacy"}, decided_by="operator",
+                             session_id=9, page=1, query="q", search_id=11)
+    db.commit()
+    rows = db.scalars(select(JobDecision).where(JobDecision.job_id == "indeed:legacy")).all()
+    assert len(rows) == 1
+    assert rows[0].search_id == 11 and rows[0].decision == "picked"
