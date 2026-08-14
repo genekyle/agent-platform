@@ -311,3 +311,36 @@ def test_longest_still_wins_when_nothing_leads_with_the_verb():
 def test_a_control_the_page_does_not_have_is_still_refused():
     import apply_recipe as ar
     assert ar._named_control(["Save", "Share"], ["apply"]) == ""
+
+
+# ------------------------------------------------- the page states its own step; markers infer it
+def test_the_review_page_is_not_my_information():
+    """REVIEW lists every section it is reviewing, so "my information" matches there too — and it
+    sits above the review markers in the table. A completed application at the Submit gate
+    classified as `workday_my_information`, and the cockpit offered to fill a form four screens
+    behind the browser (live 2026-08-13). Workday's stepper says where it is; read that."""
+    import apply_recipe as ar
+    review = ("completed step 1 of 6 My Information completed step 2 of 6 My Experience "
+              "completed step 3 of 6 Application Questions completed step 4 of 6 Voluntary "
+              "Disclosures completed step 5 of 6 Self Identify current step 6 of 6 Review Submit")
+    assert ar.map_workday_state("https://x.wd1.myworkdayjobs.com/j", review) == "workday_review"
+
+
+def test_the_stepper_names_every_screen_it_is_on():
+    import apply_recipe as ar
+    u = "https://x.wd1.myworkdayjobs.com/j"
+    assert ar.map_workday_state(u, "current step 1 of 6 My Information") == "workday_my_information"
+    assert ar.map_workday_state(u, "current step 2 of 6 My Experience") == "workday_my_experience"
+    assert ar.map_workday_state(u, "current step 3 of 6 Application Questions") == "workday_questions"
+    # Self Identify is its own screen that our spine folds into the disclosures rung.
+    assert ar.map_workday_state(
+        u, "current step 5 of 6 Self Identify") == "workday_voluntary_disclosures"
+
+
+def test_markers_still_serve_a_tenant_that_renders_no_stepper():
+    """The stepper is evidence when present; the marker table remains the fallback, and a Workday
+    origin with neither is still the job posting."""
+    import apply_recipe as ar
+    u = "https://x.wd1.myworkdayjobs.com/j"
+    assert ar.map_workday_state(u, "Start Your Application Autofill with Resume") == "workday_apply_method"
+    assert ar.map_workday_state(u, "") == "workday_job_posting"

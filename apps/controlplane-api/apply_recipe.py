@@ -1426,7 +1426,48 @@ def _classify_from_markers(page_text: str, markers: list[tuple[str, str]]) -> Op
     return None
 
 
+#: Workday's own stepper names, in its words, mapped to our states. `Self Identify` is a distinct
+#: screen (the CC-305) that our spine folds into the disclosures rung, which is why two names share
+#: a state.
+_WORKDAY_STEP_NAMES: tuple[tuple[str, str], ...] = (
+    ("my information", "workday_my_information"),
+    ("my experience", "workday_my_experience"),
+    ("application questions", "workday_questions"),
+    ("voluntary disclosures", "workday_voluntary_disclosures"),
+    ("self identify", "workday_voluntary_disclosures"),
+    ("review", "workday_review"),
+)
+
+
+def _workday_current_step(page_text: str) -> Optional[str]:
+    """The step Workday SAYS it is on, read from its own progress bar.
+
+    The bar renders every step with its status — "completed step 1 of 6 My Information … current
+    step 6 of 6 Review" — so the page states its position outright, and that is better evidence
+    than substring-matching section names.
+
+    Substring markers cannot survive this page. REVIEW lists every section it is reviewing, so
+    "my information" matches there too, and it sits above the review markers in the table — which
+    is how a completed application at the Submit gate classified as `workday_my_information` and
+    the cockpit offered to fill a form four screens behind the browser (live 2026-08-13). The
+    marker table stays as the fallback for tenants that render no stepper.
+    """
+    import re
+    m = re.search(r"current step\s+\d+\s+of\s+\d+\s+(.{0,40})", page_text or "", re.I)
+    if not m:
+        return None
+    tail = " ".join(m.group(1).split()).lower()
+    for name, state in _WORKDAY_STEP_NAMES:
+        if tail.startswith(name):
+            return state
+    return None
+
+
 def map_workday_state(url: str, page_text: str = "") -> str:
+    # THE PAGE'S OWN STATEMENT FIRST. Only then the markers, which are inference.
+    said = _workday_current_step(page_text)
+    if said:
+        return said
     hit = _classify_from_markers(page_text, _WORKDAY_STATE_MARKERS)
     if hit:
         return hit
