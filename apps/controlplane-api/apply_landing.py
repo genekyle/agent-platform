@@ -88,6 +88,19 @@ MARKERS: dict[str, tuple[str, ...]] = {
         # to start or resume an application. It is the account wall wearing a friendlier label.
         "enter your information", "email address", "start your application",
         "resume your application",
+        # THE CREDENTIAL FORM ITSELF, met live on BrassRing 2026-08-14 (Boston Children's). The
+        # table had "already have an account" and not its inverse, "sign in to continue" and not a
+        # bare sign-in form's own instruction — so a page reading "Sign in using username and
+        # password / Forgot Username or Password? / Don't have an account yet?" classified as
+        # UNKNOWN, the ladder said "genuinely new territory", and the account rung sat staged and
+        # unreachable beside it.
+        #
+        # These are the phrases a login wall carries and essentially nothing else does. A password
+        # recovery link exists to recover a password; an invitation to create an account is
+        # offered where one is required. WEIGHED rather than decisive, so a real application form
+        # with a "forgot password" link in its footer still classifies as the form it is.
+        "forgot username", "forgot password", "don't have an account", "dont have an account",
+        "sign in using", "show password",
     ),
     JOB_POSTING: (
         "job description", "overview", "responsibilities", "qualifications", "job id",
@@ -126,6 +139,11 @@ STRONG: frozenset = frozenset({
     "start your application", "resume your application", "already have an account",
     "upload your resume", "* indicates a required", "apply for this job",
     "review your application", "review and submit",
+    # A credential form is a SHORT page — username, password, two links — so the same weighting
+    # argument the iCIMS email gate earned applies here: these phrases are unambiguous on their
+    # own, and a flat two-marker minimum on a five-line page reads as "unknown".
+    "forgot username", "forgot password", "don't have an account", "dont have an account",
+    "sign in using",
 })
 
 

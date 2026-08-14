@@ -134,3 +134,58 @@ def test_a_frame_that_rendered_nothing_is_not_the_content():
     text, source = al.pick_content("real wrapper text", [
         {"id": "empty", "readable": True, "width": 1249, "height": 1654, "text": "  "}])
     assert source == "top"
+
+
+# --- the credential form is an account gate on every platform -----------------------------------
+
+#: The BrassRing sign-in wall as it actually renders, captured live 2026-08-14 (Boston Children's,
+#: req 85104BR). A fixture rather than a paraphrase: the wording IS the evidence, and a paraphrase
+#: tests the paraphrase.
+BRASSRING_SIGN_IN = """Opportunityawaits...
+Skip to main content
+Job search Work at BCH Diversity & Inclusion
+Back
+Sign In
+Sign in using username and password
+Fields marked with an asterisk (*) are required.
+*Username
+*Password
+Show password
+Forgot Username or Password?
+Sign in
+Don't have an account yet?
+ Privacy Practices Terms of Use
+ Infinite Talent Privacy Statement
+"""
+
+
+def test_a_bare_credential_form_is_an_account_gate():
+    """The table had "already have an account" and not its inverse, "sign in to continue" and not
+    a sign-in form's own instruction — so this page classified as UNKNOWN, the ladder said
+    "genuinely new territory", and the account rung sat staged and unreachable beside it.
+
+    These are the phrases a login wall carries and essentially nothing else does: a password
+    recovery link exists to recover a password, an invitation to create an account is offered
+    where one is required.
+    """
+    landing = al.classify_kind(BRASSRING_SIGN_IN)
+    assert landing.kind == al.ACCOUNT_GATE
+    assert al.landing_state("brassring", landing.kind) == "brassring_account_gate"
+    assert landing.evidence, "a classification with no evidence is a guess"
+
+
+def test_a_recovery_link_in_a_forms_footer_does_not_make_it_a_login():
+    """WEIGHED, not decisive — the reason the iCIMS header ("Returning Candidate? / Log back in!")
+    did not turn a job posting into an account gate. A real application form outweighs a stray
+    recovery link, and it must, or every ATS footer becomes a wall."""
+    form = """Application
+* Indicates a required field
+First Name*
+Last Name*
+Upload your resume
+Work Experience
+Voluntary Disclosures
+Personal Information
+Forgot password?
+"""
+    assert al.classify_kind(form).kind == al.APPLICATION_FORM
