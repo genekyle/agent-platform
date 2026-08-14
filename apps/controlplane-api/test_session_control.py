@@ -5520,3 +5520,79 @@ def test_ensure_account_reports_whether_it_minted_the_row():
         assert ats.ensure_account(company, plat)["created"] is False
     finally:
         accounts_mod.delete_account(aid)
+
+
+# --- separation: a LinkedIn session must never be handed Indeed's furniture --------------------
+# Three literals (`"indeed.com/jobs"`) and one host pair were harmless while Indeed was the only
+# engine. With a second aggregator they are cross-domain leaks, and they fire precisely when the
+# search tab is NOT in the observation — which, before the state layer learned LinkedIn, was
+# always, because a LinkedIn tab had role `other`.
+
+def _bb_on(engine_platform):
+    """A blackboard whose spine says which engine this session is working."""
+    bb = store.new_blackboard(7, query="report analyst")
+    bb.plan = store.search_plan(engine_platform)
+    return bb
+
+
+def test_closing_a_linkedin_apply_tab_refocuses_linkedin_not_indeed():
+    """The one that would have been visible immediately: an apply tab closing sends the window to
+    `focus_tab_url`, and a hardcoded Indeed meant a LinkedIn drive got dumped on Indeed's job
+    search mid-session — with an Indeed session possibly live in another browser."""
+    bb = _bb_on("linkedin")
+    assert sc._search_focus_url(bb, {"tabs": []}) == "linkedin.com/jobs"
+    assert sc._search_focus_url(_bb_on("indeed"), {"tabs": []}) == "indeed.com/jobs"
+
+
+def test_the_observed_search_tab_wins_over_the_remembered_engine():
+    """Ground truth first: what is actually open beats what the blackboard remembers."""
+    bb = _bb_on("linkedin")
+    obs = {"search_tab": {"url": "https://www.linkedin.com/jobs/search-results/?keywords=x"},
+           "tabs": []}
+    assert sc._search_focus_url(bb, obs).startswith("https://www.linkedin.com/jobs/search-results")
+
+
+def test_an_open_results_tab_names_the_engine_when_the_search_tab_is_missing():
+    bb = _bb_on("indeed")   # the blackboard is stale/wrong on purpose
+    obs = {"tabs": [{"url": "https://www.linkedin.com/jobs/search-results/?keywords=x"}]}
+    assert sc._search_focus_url(bb, obs) == "linkedin.com/jobs"
+
+
+def test_a_click_that_never_left_linkedin_is_not_an_entered_application():
+    """`strayed` asked only about Indeed's hosts, so the same mis-click on LinkedIn — matching a
+    result card or a filter chip and entering nothing — was journaled as OK. A corpus row saying we
+    entered an application we never entered trains the wrong thing."""
+    assert sc._engine_of_landed("https://www.linkedin.com/jobs/view/4123456789/")["platform"] == "linkedin"
+    assert sc._engine_of_landed("https://www.linkedin.com/jobs/search-results/?keywords=x")["platform"] == "linkedin"
+    assert sc._engine_of_landed("https://www.indeed.com/viewjob?jk=abc")["platform"] == "indeed"
+    assert sc._engine_of_landed("https://www.indeed.com/jobs?q=x")["platform"] == "indeed"
+    # A real hand-off HAS left the engine — these must not read as strayed.
+    assert sc._engine_of_landed("https://smartapply.indeed.com/beta/indeedapply/form/resume") is None
+    assert sc._engine_of_landed("https://tenant.myworkdayjobs.com/en-US/careers/job/1") is None
+    assert sc._engine_of_landed("") is None
+
+
+def test_a_correction_is_journaled_under_the_surface_it_teaches():
+    """The task id names the TRAINING BUCKET. Hardcoded `indeed_apply`, every LinkedIn correction
+    the teacher wrote landed in Indeed's — the exact place "share what generalizes, separate what
+    doesn't" has to be right, because the ATS bucket is what generalizes across employers."""
+    # The ATS the application actually lives in wins: that is what the correction teaches, and it
+    # generalizes to every other employer on that ATS.
+    assert sc._apply_task_name(_bb_on("linkedin"),
+                               SimpleNamespace(platform="workday")) == "workday_apply"
+    assert sc._apply_task_name(_bb_on("indeed"),
+                               SimpleNamespace(platform="workday")) == "workday_apply"
+    # An on-engine apply has no separate ATS, so it falls back to the engine — and the engine is
+    # read from the session, not assumed.
+    assert sc._apply_task_name(_bb_on("linkedin"),
+                               SimpleNamespace(platform="")) == "linkedin_apply"
+    assert sc._apply_task_name(_bb_on("indeed"),
+                               SimpleNamespace(platform="")) == "indeed_apply"
+
+
+def test_driven_platforms_is_no_longer_a_second_copy():
+    """It was a hand-kept mirror of `apply_steps.DRIVEN_PLATFORMS` that could only drift. And it is
+    deliberately NOT extended with linkedin: we have never driven an Easy Apply to submission, and
+    this set is a claim about measurement."""
+    assert sc.DRIVEN_PLATFORMS_VIEW is aps.DRIVEN_PLATFORMS
+    assert "linkedin" not in sc.DRIVEN_PLATFORMS_VIEW

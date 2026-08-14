@@ -455,3 +455,84 @@ def test_a_blackboard_written_before_why_existed_still_loads():
     assert bb.events[0].why == "" and bb.events[0].next_up == ""
     # and it round-trips with the new keys present
     assert store.Blackboard.from_dict(bb.to_dict()).events[0].kind == "choose"
+
+
+# --- the search spine follows the ENGINE, not just the phase -----------------------------------
+# Before this, `search_plan()` was built from Indeed's state ids alone. On LinkedIn the live states
+# (`linkedin_job_search`, …) matched no subtask, `_advance_plan` returned None every cycle, and the
+# cockpit showed a session that was working as one doing nothing at all.
+
+def _walk(urls):
+    """Reconcile a fresh blackboard across a sequence of live urls; return it."""
+    import apply_recipe
+    bb = store.new_blackboard(4242, query="report analyst")
+    seen = []
+    for u in urls:
+        d = apply_recipe.describe_tab(u)
+        store.reconcile(bb, tabs=[{"tab_id": "t1", "url": u,
+                                   "state": d["state"], "role": d["role"]}])
+        seen.append((d["state"], bb.phase, bb.current_subtask_id,
+                     tuple(s.status for s in bb.plan)))
+    return bb, seen
+
+
+def test_a_linkedin_session_actually_advances_its_plan():
+    bb, seen = _walk([
+        "https://www.linkedin.com/jobs/",
+        "https://www.linkedin.com/jobs/search-results/?keywords=report+analyst",
+        "https://www.linkedin.com/jobs/view/4123456789/",
+    ])
+    assert [s[0] for s in seen] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
+    # The current subtask tracks the live page, which is the whole contract.
+    assert [s[2] for s in seen] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
+    # And progress accumulates behind it rather than every step reading `pending`.
+    assert seen[-1][3] == ("done", "done", "active")
+    # A posting is the handoff, on LinkedIn exactly as on Indeed.
+    assert seen[-1][1] == "triage"
+
+
+def test_an_unrecognised_page_keeps_the_spine_it_has():
+    """A LinkedIn session that walks onto its own sign-in wall is still a LinkedIn session. If the
+    engine defaulted on an unclaimed state, the spine would be rebuilt as Indeed's mid-drive and
+    every step already walked would read `pending` again."""
+    bb, seen = _walk([
+        "https://www.linkedin.com/jobs/search-results/?keywords=x",
+        "https://www.linkedin.com/uas/login",
+        "https://www.linkedin.com/jobs/view/4123456789/",
+    ])
+    assert [s.id for s in bb.plan] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
+    # No progress is claimed while we cannot see a spine state — but nothing is torn down either.
+    assert seen[1][2] is None
+    assert seen[2][2] == "linkedin_job_detail"
+
+
+def test_driving_from_one_engine_to_the_other_swaps_the_spine():
+    """The engine comes from the OBSERVED state, so a session started on Indeed and driven to
+    LinkedIn re-homes itself — the tab is a fact and the session's label is a label."""
+    bb, _ = _walk([
+        "https://www.indeed.com/jobs?q=report+analyst",
+        "https://www.linkedin.com/jobs/search-results/?keywords=report+analyst",
+    ])
+    assert [s.id for s in bb.plan] == ["linkedin_home", "linkedin_job_search", "linkedin_job_detail"]
+    assert store.search_engine_of(bb) == "linkedin"
+    assert any(e.kind == "plan_spine" for e in bb.events)
+
+
+def test_the_spine_labels_drop_their_own_engine_prefix():
+    """The label strip was hardcoded to `indeed_`, so LinkedIn's subtasks wore their prefix in the
+    cockpit ("linkedin job search") while Indeed's read cleanly."""
+    assert [s.label for s in store.search_plan("linkedin")] == [
+        "home", "job search", "job detail"]
+    assert [s.label for s in store.search_plan("indeed")] == [
+        "home", "search results", "job posting"]
+
+
+def test_an_indeed_session_is_unchanged():
+    bb, seen = _walk([
+        "https://www.indeed.com/",
+        "https://www.indeed.com/jobs?q=report+analyst",
+        "https://www.indeed.com/viewjob?jk=abc",
+    ])
+    assert [s[2] for s in seen] == ["indeed_home", "indeed_search_results", "indeed_job_posting"]
+    assert seen[-1][1] == "triage"
+    assert store.search_engine_of(bb) == "indeed"

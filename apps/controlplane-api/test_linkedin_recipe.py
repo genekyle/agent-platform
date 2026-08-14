@@ -280,3 +280,87 @@ def test_the_title_stage_asserts_which_search_it_committed():
     # BLENDED_SEARCH via the global box + the Jobs section's "Show all"). Asserting one origin
     # would have failed a route the operator confirmed works.
     assert title["lands_on_path"] == "/jobs/search-results/"
+
+
+# --- the state layer: LinkedIn's own states, finally reaching the live classifier ---------------
+# `linkedin_recipe.classify`/`map_url_to_state` were measured live on 2026-07-30 and then called by
+# nothing: the live classifier is `apply_recipe.map_url_to_state`, which had no LinkedIn patterns at
+# all. So every LinkedIn tab in the system read `state="unknown"`, `role="other"`, and every
+# consumer downstream fell through to Indeed's default. These pin the delegation.
+
+import apply_recipe as ar
+
+
+def test_the_live_classifier_knows_linkedins_states():
+    """The whole point: `apply_recipe.map_url_to_state` is what the ladder, the blackboard and the
+    transition corpus all call. Before this, all four of these returned `unknown`."""
+    assert ar.map_url_to_state("https://www.linkedin.com/jobs/") == lr.HOME
+    assert ar.map_url_to_state(
+        "https://www.linkedin.com/jobs/search-results/?keywords=report+analyst"
+    ) == lr.SEARCH_RESULTS
+    assert ar.map_url_to_state("https://www.linkedin.com/jobs/view/4123456789/") == lr.JOB_DETAIL
+    assert ar.map_url_to_state("https://www.linkedin.com/uas/login") == lr.LOGIN_WALL
+
+
+def test_an_engines_matcher_may_only_speak_about_its_own_host():
+    """LinkedIn's login pattern is `/login|/uas/login|/checkpoint` — correct within linkedin.com and
+    a land-grab anywhere else. Un-host-gated it would claim Workday's and smartapply's sign-in
+    pages, which is the same over-broad-matcher fault as `/<Tenant>/search/` claiming
+    `linkedin.com/jobs/search` in `ats_registry`."""
+    assert ar.map_url_to_state("https://tenant.myworkdayjobs.com/en-US/careers/login") != lr.LOGIN_WALL
+    assert ar.map_url_to_state("https://secure.icims.com/checkpoint") != lr.LOGIN_WALL
+
+
+def test_indeeds_states_are_untouched_by_the_delegation():
+    """A regression guard on the engine that already worked — the delegation runs FIRST, so a
+    mistake in it would silently re-label every Indeed page."""
+    assert ar.map_url_to_state("https://www.indeed.com/jobs?q=report+analyst") == "indeed_search_results"
+    assert ar.map_url_to_state("https://www.indeed.com/viewjob?jk=abc") == "indeed_job_posting"
+    assert ar.map_url_to_state(
+        "https://smartapply.indeed.com/beta/indeedapply/form/resume-selection"
+    ) == "indeed_apply_resume_selection"
+
+
+def test_a_linkedin_tab_has_the_search_role_and_a_posting_is_the_handoff():
+    """`describe_tab`'s role decided "search" from a literal tuple of Indeed states, so LinkedIn's
+    search tab was `other` — which is why `obs["search_tab"]` came back empty on LinkedIn and every
+    hardcoded `indeed.com/jobs` fallback fired."""
+    assert ar.describe_tab("https://www.linkedin.com/jobs/")["role"] == "search"
+    assert ar.describe_tab(
+        "https://www.linkedin.com/jobs/search-results/?keywords=x")["role"] == "search"
+    assert ar.describe_tab("https://www.linkedin.com/jobs/view/1/")["role"] == "search"
+    # Easy Apply is an APPLY surface and is caught by the name rule, not the search set.
+    assert lr.EASY_APPLY not in ar.search_states()
+    # Both engines' posting pages are the search->apply handoff.
+    assert lr.JOB_DETAIL in ar.triage_states()
+    assert "indeed_job_posting" in ar.triage_states()
+
+
+def test_the_search_spine_is_per_engine_and_its_ids_are_the_live_states():
+    """The subtask ids ARE the live state ids — that contract is what lets `_advance_plan` mark
+    progress with no model, and it is why one Indeed-shaped spine could never advance on LinkedIn."""
+    assert sc.search_recipe_states("linkedin") == [lr.HOME, lr.SEARCH_RESULTS, lr.JOB_DETAIL]
+    # THE CONTRACT: every spine id must be something the live classifier actually EMITS. A spine
+    # of invented ids type-checks, reads fine, and silently never advances — which is the failure
+    # this whole change is about. So walk a real url per state and prove the classifier agrees.
+    reachable = {
+        lr.HOME: "https://www.linkedin.com/jobs/",
+        lr.SEARCH_RESULTS: "https://www.linkedin.com/jobs/search-results/?keywords=x",
+        lr.JOB_DETAIL: "https://www.linkedin.com/jobs/view/4123456789/",
+    }
+    for state in sc.search_recipe_states("linkedin"):
+        assert ar.map_url_to_state(reachable[state]) == state
+    # Indeed's spine is unchanged, and an unmapped engine gets it rather than an error.
+    assert sc.search_recipe_states("indeed")[0] == "indeed_home"
+    assert sc.search_recipe_states("dice") == sc.search_recipe_states("indeed")
+
+
+def test_an_unclaimed_state_answers_none_rather_than_indeed():
+    """The load-bearing None. If `engine_of_state` defaulted, every page no spine names — a login
+    wall, a captcha, the blank moment between navigations — would read as Indeed, and a LinkedIn
+    session's spine would be torn down and rebuilt as Indeed's on its own sign-in page."""
+    assert sc.engine_of_state(lr.SEARCH_RESULTS) == "linkedin"
+    assert sc.engine_of_state("indeed_search_results") == "indeed"
+    assert sc.engine_of_state(lr.LOGIN_WALL) is None
+    assert sc.engine_of_state("unknown") is None
+    assert sc.engine_of_state(None) is None

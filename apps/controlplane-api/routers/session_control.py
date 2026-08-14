@@ -121,6 +121,70 @@ def engine_of_url(url: str) -> Optional[dict[str, Any]]:
     return None
 
 
+#: The engine surfaces a click can land on WITHOUT having entered an application: the results
+#: list and a posting's own detail page. `engine_of_url` is not enough on its own — it requires
+#: the results path, and Indeed's posting url is `/viewjob`.
+_ENGINE_STAY_PATHS = ("/viewjob", "/jobs", "/jobs/view")
+
+
+def _apply_task_name(bb: Any, step: Any) -> str:
+    """The task id a teacher correction is journaled under — `<platform>_apply`.
+
+    The PLATFORM here is the ATS the application actually lives in (`workday_apply`), because that
+    is the surface the correction teaches and the bucket that generalizes across every employer on
+    it (`ats_registry`: an ATS renders the same component library for every tenant). Only when the
+    step has no platform does it fall back to the ENGINE — an on-engine apply (Indeed smartapply,
+    LinkedIn Easy Apply) is the engine's own surface.
+    """
+    platform = (getattr(step, "platform", "") or "").strip().lower()
+    if not platform:
+        import apply_state_store as store
+        platform = (store.search_engine_of(bb) if bb is not None else "") or \
+            DEFAULT_ENGINE["platform"]
+    return f"{platform}_apply"
+
+
+def _engine_of_landed(url: str) -> Optional[dict[str, Any]]:
+    """The engine we are STILL ON, if this url is one of its own non-apply pages — else None.
+
+    An apply that never left the engine did not begin. Answering this per-engine (rather than
+    matching two Indeed literals) is what lets the guard fire on LinkedIn, where the same
+    mis-click lands on `linkedin.com/jobs/...` instead.
+    """
+    u = (url or "").lower()
+    for e in ENGINES:
+        if e["host"] not in u:
+            continue
+        if any(p in u for p in _ENGINE_STAY_PATHS):
+            return e
+    return None
+
+
+def _search_focus_url(bb: Any, obs: dict[str, Any]) -> str:
+    """Where to send the window when an apply tab closes — THIS session's search, never Indeed's.
+
+    Three sources, most-factual first: the observed search tab, then any open tab that is an
+    engine's results page, then the engine the blackboard remembers working. The literal
+    `"indeed.com/jobs"` these replace was harmless while Indeed was the only engine and is a
+    cross-domain leak now: a LinkedIn session whose search tab was not in `obs` would have its
+    browser refocused onto Indeed's job search mid-drive.
+
+    Falls back to Indeed's front door only when nothing anywhere names an engine — the same
+    default `engine_for` uses, so nothing that exists today changes behaviour.
+    """
+    observed = (obs.get("search_tab") or {}).get("url")
+    if observed:
+        return observed
+    for tab in obs.get("tabs") or []:
+        found = engine_of_url(tab.get("url", "") or "")
+        if found:
+            return found["search_tab"]
+    import apply_state_store as store
+    platform = store.search_engine_of(bb) if bb is not None else None
+    engine = next((e for e in ENGINES if e["platform"] == platform), DEFAULT_ENGINE)
+    return engine["search_tab"]
+
+
 def engine_for(session: Any, tab: Optional[dict] = None) -> dict[str, Any]:
     """The engine this session is working. A live tab wins (it is a fact), then the session's
     declared domain, then Indeed — so nothing that exists today changes behaviour."""
@@ -1440,9 +1504,18 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
     return out
 
 
-#: Platforms with an end-to-end recipe, for the observer's plan wording. Mirrors
-#: apply_steps.DRIVEN_PLATFORMS without importing the executor's policy into a read path.
-DRIVEN_PLATFORMS_VIEW = frozenset({"indeed", "workday", "greenhouse"})
+#: Platforms with an end-to-end recipe, for the observer's plan wording.
+#:
+#: Was a hand-kept COPY of `apply_steps.DRIVEN_PLATFORMS`, justified as "without importing the
+#: executor's policy into a read path" — but `apply_steps` is imported at the top of this module
+#: anyway, so the copy bought nothing and could only drift out of step with the set that actually
+#: decides. Aliased, so "have we driven this?" has one answer.
+#:
+#: Deliberately NOT extended with `linkedin` while adding LinkedIn parity: we have never driven an
+#: Easy Apply to submission (`linkedin_recipe.EASY_APPLY` is UNVERIFIED, and the registry recipe is
+#: still `seed`). This set is a claim about measurement, and the LinkedIn search side being ready
+#: is not evidence about its apply side.
+DRIVEN_PLATFORMS_VIEW = aps.DRIVEN_PLATFORMS
 
 
 class OrientNowBody(BaseModel):
@@ -5057,7 +5130,11 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         res = await _capture_post("/open_job_card",
                                   {"browser_url": browser_url, "external_id": ext,
                                    "tab_id": search_tab.get("tab_id") or None,
-                                   "tab_url": None if search_tab.get("tab_id") else "indeed.com/jobs"})
+                                   # THIS engine's search tab. Naming Indeed's here sent a
+                                   # LinkedIn card lookup at an Indeed page, where it could only
+                                   # ever report the card missing.
+                                   "tab_url": None if search_tab.get("tab_id")
+                                   else _search_focus_url(bb, obs)})
         if not res.get("ok"):
             step.record("open_pane", aps.FAILED, res.get("detail") or "card did not open",
                         initiator=body.initiator)
@@ -5180,13 +5257,18 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                 landed = (new[0] if new else
                           next((t for t in tabs_after if t.get("tab_id") == tab_id), {}))
                 landed_url = (landed or {}).get("url", "")
-                strayed = "indeed.com/viewjob" in landed_url or "indeed.com/jobs" in landed_url
-                if strayed and not new:
+                # DID WE ACTUALLY LEAVE THE ENGINE? This asked only about Indeed, so the same
+                # miss on LinkedIn — a click that matched a card or a filter and never entered
+                # anything — was journaled as OK. That is the corpus row the comment above calls
+                # worse than a failure, at the fourth engine-blind site in this file.
+                strayed_engine = _engine_of_landed(landed_url)
+                if strayed_engine and not new:
+                    label = strayed_engine["label"]
                     step.record("enter_apply", aps.FAILED,
-                                f"clicked {ctrl.get('name')!r} and stayed on Indeed "
+                                f"clicked {ctrl.get('name')!r} and stayed on {label} "
                                 f"({landed_url[:80]}) — that was not this job's apply control",
                                 initiator=body.initiator)
-                    detail = (f"That click did not enter an application — we are still on Indeed. "
+                    detail = (f"That click did not enter an application — we are still on {label}. "
                               f"It matched {ctrl.get('name')!r}, which is not this posting's Apply "
                               f"button. Nothing was recorded as entered.")
                 else:
@@ -5637,7 +5719,10 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
     from routers import controller as controller_router
     commit_body = controller_router.TeachCommitBody(
         browser_url=_session_browser_url(session), tab_id=tab_id,
-        task="indeed_apply", goal_text=f"apply to {step.title or step.job_id}",
+        # THE TASK NAMES THE TRAINING BUCKET. Hardcoded, every LinkedIn correction the teacher
+        # wrote landed in Indeed's — the one place where "share what generalizes, separate what
+        # doesn't" has to be got right, because a mislabelled golden row teaches the wrong engine.
+        task=_apply_task_name(bb, step), goal_text=f"apply to {step.title or step.job_id}",
         decision=controller_router.TeachDecisionIn(
             intent=body.intent, params=dict(body.params or {}), rationale=body.rationale,
             evidence=list(body.evidence), expected_next=list(body.expected_next)),
@@ -6746,7 +6831,12 @@ def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "",
     row = db.get(ObservedJob, step.job_id)
     if row is None:
         platform, _, ext = step.job_id.partition(":")
-        row = ObservedJob(job_id=step.job_id, platform=platform or "indeed", external_id=ext,
+        # The job_id's own prefix names the platform (`linkedin:4123…`). When it carries none,
+        # prefer what the STEP recorded over a hardcoded "indeed" — filing a LinkedIn application
+        # under Indeed in the canonical job table is the kind of wrong that survives forever.
+        row = ObservedJob(job_id=step.job_id,
+                          platform=platform or step.platform or DEFAULT_ENGINE["platform"],
+                          external_id=ext,
                           title=step.title or "", company=step.company or "")
         db.add(row)
     row.application_status = status
@@ -6853,7 +6943,7 @@ async def _apply_cleanup(bb: Any, obs: dict[str, Any], browser_url: str,
     from controller import window as window_mod
 
     tabs = obs.get("tabs") or []
-    search_url = (obs.get("search_tab") or {}).get("url") or "indeed.com/jobs"
+    search_url = _search_focus_url(bb, obs)
     apply_tab = _apply_tab(bb, obs)
     closed: list[dict[str, Any]] = []
 
@@ -7060,7 +7150,7 @@ async def close_tab(session_id: int, body: CloseTabBody,
 
     res = await _capture_post("/close_tab", {
         "browser_url": browser_url, "tab_id": body.tab_id,
-        "focus_tab_url": (obs.get("search_tab") or {}).get("url") or "indeed.com/jobs"})
+        "focus_tab_url": _search_focus_url(bb, obs)})
     if not res.get("ok"):
         raise HTTPException(status_code=502,
                             detail=f"The tab did not close: {res.get('detail', 'no reason given')}")

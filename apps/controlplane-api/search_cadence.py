@@ -59,9 +59,66 @@ SEARCH_RECIPE = [
 ]
 
 
-def search_recipe_states() -> list[str]:
+# LinkedIn's spine. Same three beats, because the cadence is about how we BEHAVE — enter a query,
+# work the results, open a posting. What differs is the state ids, and they must be the ones the
+# live classifier actually emits (`linkedin_recipe`, delegated to by `apply_recipe.map_url_to_state`)
+# or the plan cannot advance: a spine whose ids never match the observed state leaves every subtask
+# `pending` forever, which is exactly what a LinkedIn session used to show.
+#
+# The step-1 action differs in substance, not just wording, and the difference is measured:
+# LinkedIn stages location and radius onto the RESULTS page (there is no location box on the jobs
+# home), its results list is virtualised and must be wheeled through before the results exist at
+# all, and it has no distance control to floor. See `linkedin_recipe.SEARCH_CADENCE`.
+_LINKEDIN_SEARCH_RECIPE = [
+    {"step": 0, "state": "linkedin_home",       "action": "enter the job title alone, press Enter",
+     "expect": ["linkedin_job_search"]},
+    {"step": 1, "state": "linkedin_job_search", "action": "apply the location filter, then the radius; "
+     "WHEEL the virtualised list to the end; click into every card to read its pane; click pagination to page forward (bounded)",
+     "expect": ["linkedin_job_search", "linkedin_job_detail"]},
+    {"step": 2, "state": "linkedin_job_detail", "action": "click Easy Apply, or hand off to the employer's ATS",
+     "expect": ["linkedin_job_detail", "linkedin_easy_apply"]},
+]
+
+#: platform -> the spine that engine's live states walk. Indeed's is the default because it was
+#: first, not because it is the norm — an unknown engine getting Indeed's spine is a plan that
+#: cannot advance, so `engine_of_state` answers honestly rather than guessing.
+_SEARCH_RECIPES: dict[str, list[dict]] = {
+    "indeed": SEARCH_RECIPE,
+    "linkedin": _LINKEDIN_SEARCH_RECIPE,
+}
+
+DEFAULT_SEARCH_PLATFORM = "indeed"
+
+
+def engine_of_state(state: Optional[str]) -> Optional[str]:
+    """Which engine owns this live page state, or **None** when no spine claims it.
+
+    Read off the STATE ITSELF (`linkedin_job_search` -> `linkedin`) rather than from the session's
+    declared domain, on the same precedence the rest of the system uses: the tab is a fact and the
+    label is a label.
+
+    None is the load-bearing part. Returning a default here would mean every page a spine does not
+    name — a login wall, a captcha, the blank moment between two navigations — reads as *Indeed*,
+    and a LinkedIn session would have its spine torn down and rebuilt as Indeed's the first time it
+    hit its own sign-in page. A probe that found nothing must say so rather than answer "no"
+    (the same rule the truncated-options census learned).
+    """
+    s = (state or "").strip().lower()
+    for platform, recipe in _SEARCH_RECIPES.items():
+        if any(entry["state"] == s for entry in recipe):
+            return platform
+    return None
+
+
+def search_recipe_for(platform: str) -> list[dict]:
+    """This engine's search spine. Unknown engines get Indeed's — the honest fallback, since a
+    spine is only useful if its ids match what the classifier emits, and we have no others."""
+    return _SEARCH_RECIPES.get((platform or "").strip().lower(), SEARCH_RECIPE)
+
+
+def search_recipe_states(platform: str = DEFAULT_SEARCH_PLATFORM) -> list[str]:
     """The state ids the search spine advances through (for validation + the planner)."""
-    return [entry["state"] for entry in SEARCH_RECIPE]
+    return [entry["state"] for entry in search_recipe_for(platform)]
 
 
 # --- Finding the search box, by looking rather than by assuming --------------------------------

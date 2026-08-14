@@ -15,7 +15,9 @@ same teacher→distill loop used everywhere else.
 from __future__ import annotations
 
 import re
+from importlib import import_module
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 # --- The recipe: expected linear spine of an Indeed quick-apply -------------------
 # Each step: state id, the action that advances it, and the state(s) it may lead to.
@@ -177,8 +179,75 @@ _URL_STATES = [
 ]
 
 
+#: Engines whose page states are declared by their OWN recipe rather than by `_URL_STATES` above.
+#: Host-gated on purpose: `linkedin_recipe`'s login pattern is `/login|/uas/login|/checkpoint`,
+#: which is correct within linkedin.com and would otherwise claim Workday's and smartapply's
+#: sign-in pages. An engine's matcher may only speak about its own host.
+#:
+#: This is a DELEGATION, never a copy. LinkedIn's states were measured live (session #22,
+#: 2026-07-30) and written down in `linkedin_recipe` — and then nothing called them, so every
+#: LinkedIn tab in the system read as `unknown`/`other` and every consumer fell through to
+#: Indeed's default. Duplicating the patterns here would have created the second copy that the
+#: 08-12 `__questionOf` lesson is about; importing the one that exists keeps a future measurement
+#: landing in exactly one place.
+_ENGINE_STATE_HOSTS: tuple[tuple[str, str], ...] = (
+    ("linkedin.com", "linkedin_recipe"),
+)
+
+
+def _engine_state(url: str) -> Optional[str]:
+    """The state an engine's own recipe gives this url, or None when no engine owns the host."""
+    host = (urlparse(url or "").hostname or "").lower()
+    for needle, module_name in _ENGINE_STATE_HOSTS:
+        if needle not in host:
+            continue
+        recipe = import_module(module_name)
+        state = recipe.map_url_to_state(url)
+        # UNKNOWN from the owning engine is a real answer about its own host, but it must not
+        # shadow a pattern below that recognises the page some other way — so it falls through
+        # rather than short-circuiting.
+        return state if state != recipe.UNKNOWN else None
+    return None
+
+
+#: Indeed's search-side states. LinkedIn's are declared by `linkedin_recipe.SEARCH_STATES`; the
+#: union is what `search_states()` answers, so adding an engine never means editing a role rule.
+INDEED_SEARCH_STATES: tuple[str, ...] = (
+    "indeed_search_results", "indeed_job_posting", "indeed_home",
+)
+
+#: Where the search phase ENDS and triage/apply may begin, per engine. `_phase_for` used to know
+#: only `indeed_job_posting`, so a LinkedIn posting never became the handoff point.
+TRIAGE_STATES: tuple[str, ...] = ("indeed_job_posting",)
+
+
+def search_states() -> frozenset[str]:
+    """Every state that is a SEARCH surface, across every engine that declares its own.
+
+    Asked as a function rather than frozen as a constant so an engine recipe stays the one place
+    its states are written down — the same reason `map_url_to_state` delegates instead of copying.
+    """
+    out = set(INDEED_SEARCH_STATES)
+    for _, module_name in _ENGINE_STATE_HOSTS:
+        out.update(getattr(import_module(module_name), "SEARCH_STATES", ()))
+    return frozenset(out)
+
+
+def triage_states() -> frozenset[str]:
+    """Every state that is a posting DETAIL page — the search→apply handoff, per engine."""
+    out = set(TRIAGE_STATES)
+    for _, module_name in _ENGINE_STATE_HOSTS:
+        engine_triage = getattr(import_module(module_name), "TRIAGE_STATE", "")
+        if engine_triage:
+            out.add(engine_triage)
+    return frozenset(out)
+
+
 def map_url_to_state(url: str) -> str:
     u = url or ""
+    engine_state = _engine_state(u)
+    if engine_state:
+        return engine_state
     for pattern, state in _URL_STATES:
         if re.search(pattern, u):
             return state
@@ -204,7 +273,7 @@ def describe_tab(url: str, page_text: str = "") -> dict[str, Any]:
     branch = APPLY_BRANCHES.get(state)
     entry = _recipe_entry(state)
     role = ("apply" if "apply" in state or state in ("interview_review", "post_submit_feedback", "captcha")
-            else "search" if state in ("indeed_search_results", "indeed_job_posting", "indeed_home")
+            else "search" if state in search_states()
             else "other")
     return {
         "url": (url or "")[:90],

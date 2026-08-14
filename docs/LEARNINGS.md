@@ -7539,3 +7539,71 @@ end of a long drive. The next move is to scope the submit to the panel that hold
 Boston Children's contact step complete behind the wall with only the résumé outstanding, and the
 sign-in panel filled and waiting on one click. Nothing submitted. Session #28, **8 picked / 1
 skipped / 6 untouched.** Tests: controlplane-api **1613**, mcp 119, interaction 275.
+
+## 2026-08-14 (third act) — LinkedIn was built, documented, and never wired: one layer explained every symptom
+
+Operator: *"get [LinkedIn] up to speed with what we've done with indeed like the cockpit, how it
+works, and the principals like the guard rails is what allows us to generalize … make sure linkedin
+and indeed domains are totally separated but still share the same things."*
+
+The audit's answer was not the one the ask implies. **Almost all of LinkedIn parity already
+existed** — `ENGINES` carries a full LinkedIn row (front door, `keywords`, page size 25,
+`commit: "enter"`, `distance_filter: false`, `spa: true`); `run_query` already consults
+`linkedin_recipe.search_controls` and honours the `Skip to search` guard; the apply-door matcher
+knows "Apply on company WEBSITE", `linkedin_easy_apply` and the 60-char bound; `traversal_for`
+returns the virtualised inner-scroller walk; `has_distance_filter` stops the sweep refusing over a
+control LinkedIn does not have. **And the cross-site sharing the operator asked for was already
+right**: `ats_registry.classify_ats` is engine-agnostic, so a Workday reached from LinkedIn is the
+same `workday` id, the same recipe and the same training bucket as one reached from Indeed.
+
+**ONE LAYER HAD NEVER LEARNED LINKEDIN, AND IT WAS THE STATE LAYER.**
+`linkedin_recipe.classify`/`map_url_to_state` were measured live on 2026-07-30, written down, and
+**called by nothing**. The live classifier is `apply_recipe.map_url_to_state`, which had zero
+LinkedIn patterns. So every LinkedIn tab in the system read `state="unknown"`, `role="other"` — and
+every consumer downstream did something reasonable with that and arrived somewhere wrong:
+
+* **The blackboard could not advance.** `search_plan()` built the spine from Indeed's state ids, and
+  the subtask ids ARE the live state ids — that identity is what lets `_advance_plan` mark progress
+  with no model. On LinkedIn nothing matched, so every subtask stayed `pending` forever and the
+  cockpit showed a working session as a stalled one. The spine is now per-engine and the family
+  string carries it (`search:linkedin`), so the existing rebuild-on-family-change does the work.
+* **`role="other"` emptied `obs["search_tab"]`, which armed three hardcoded `"indeed.com/jobs"`
+  fallbacks.** Closing a LinkedIn apply tab would refocus the browser onto **Indeed's job search** —
+  a cross-domain leak that only becomes visible once a second engine exists, which is exactly the
+  separation the operator was asking about. `_search_focus_url` answers from ground truth first
+  (observed tab → any open results tab → the engine the blackboard remembers).
+* **`strayed` asked only about Indeed's hosts**, so the same mis-click on LinkedIn — matching a
+  result card or a filter chip and entering nothing — was journaled as an entered application. The
+  comment three lines above calls that row *worse than a failure*. Fourth engine-blind site.
+* **`task="indeed_apply"` was hardcoded**, so every LinkedIn correction the teacher wrote landed in
+  Indeed's training bucket. Now `<platform>_apply`, preferring the ATS (which is what generalizes
+  across employers) and falling back to the engine only for an on-engine apply.
+
+**NONE IS AN ANSWER, AND HERE IT IS LOAD-BEARING.** `engine_of_state` returns `None` for a state no
+spine claims. Defaulting would have meant every unclaimed page — a login wall, a captcha, the blank
+moment between two navigations — reads as *Indeed*, and a LinkedIn session's spine would be torn
+down and rebuilt as Indeed's the first time it hit its own sign-in page, discarding the progress it
+had walked. The current spine wins over the default: an unrecognised page is not evidence that we
+changed engines. Same rule as the truncated-options census — a probe that found nothing must say so.
+
+**AN ENGINE'S MATCHER MAY ONLY SPEAK ABOUT ITS OWN HOST.** The delegation is host-gated because
+`linkedin_recipe`'s login pattern is `/login|/uas/login|/checkpoint` — correct within linkedin.com,
+a land-grab anywhere else, and it would have claimed Workday's and smartapply's sign-in pages. Same
+fault as `/<Tenant>/search/` claiming `linkedin.com/jobs/search` in `ats_registry`. And the
+delegation is a DELEGATION, never a copy: duplicating the patterns here would have created the
+second definition that the 08-12 `__questionOf` lesson is about.
+
+*Deliberately NOT done, and both are claims about measurement:* `linkedin` is not added to
+`DRIVEN_PLATFORMS` — we have never driven an Easy Apply to submission, and `linkedin_recipe`'s
+`EASY_APPLY` is still UNVERIFIED. `DRIVEN_PLATFORMS_VIEW` was a hand-kept copy justified as "without
+importing the executor's policy", while `apply_steps` is imported at the top of that module anyway
+— aliased, so "have we driven this?" has one answer.
+
+*Also:* the drive lock is a machine-global singleton with no session identity. Correct while one
+drive runs; under two concurrent live drives it cannot say whose it is. Noted, not changed —
+it needs the operator's call on whether concurrent driving is wanted at all.
+
+*Where it stands:* code-only, no live drive, nothing on the browser touched — Boston Children's
+(BrassRing) and HopeWell are still parked exactly as session #28 left them. Tests: controlplane-api
+1612 → **1629** (+17, every behavioural one falsified against the unfixed code), mcp 119,
+interaction 275.

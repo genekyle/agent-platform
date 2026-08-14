@@ -146,6 +146,18 @@ _URL_STATES: list[tuple[str, str]] = [
 ]
 
 
+#: The states that are the SEARCH side of this engine — read by `apply_recipe.describe_tab` to
+#: give a tab its role. Declared here because only this module knows which of its states are
+#: search surfaces; `EASY_APPLY` is deliberately absent (it is an apply surface, and the role
+#: rule already catches it by name).
+SEARCH_STATES: tuple[str, ...] = (HOME, SEARCH_RESULTS, JOB_DETAIL)
+
+#: The state a posting-detail page is in — the HANDOFF point where the search phase ends and the
+#: apply phase may begin. Indeed's is `indeed_job_posting`; naming LinkedIn's lets the shared
+#: phase rule ask the engine instead of hardcoding one engine's answer.
+TRIAGE_STATE = JOB_DETAIL
+
+
 def map_url_to_state(url: str) -> str:
     for pattern, state in _URL_STATES:
         if re.search(pattern, url or "", re.I):

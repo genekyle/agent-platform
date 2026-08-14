@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import apply_recipe
+import search_cadence
 
 SCHEMA_VERSION = 1
 _MAX_EVENTS = 200  # keep the log bounded; it's a rolling window, not an archive
@@ -217,14 +218,46 @@ def _phase_for(role: Optional[str], state: Optional[str]) -> str:
     s = state or ""
     if role == "apply" or "apply" in s or s in _APPLY_STATE_HINTS:
         return "apply"
-    if s == "indeed_job_posting":
+    # ASK EVERY ENGINE, not just Indeed. This was `s == "indeed_job_posting"`, so a LinkedIn
+    # posting — the same handoff point, one engine over — never became triage.
+    if s in apply_recipe.triage_states():
         return "triage"
     return "search"
 
 
-def _plan_family(phase: str) -> str:
-    """Which plan spine a phase uses: apply has its own; search+triage share the search spine."""
-    return "apply" if phase == "apply" else "search"
+def _engine_of_plan(plan: list[Subtask]) -> Optional[str]:
+    """Which engine the spine we are CURRENTLY holding belongs to — read back off its own ids.
+
+    This is how an unrecognised page keeps the spine it has instead of reverting to the default:
+    the plan remembers the engine, so a LinkedIn session that walks onto its own login wall is
+    still a LinkedIn session.
+    """
+    for sub in plan or []:
+        engine = search_cadence.engine_of_state(sub.id)
+        if engine:
+            return engine
+    return None
+
+
+def _plan_family(phase: str, state: Optional[str] = None,
+                 plan: Optional[list[Subtask]] = None) -> str:
+    """Which plan spine a phase uses: apply has its own; search+triage share the search spine.
+
+    The search family is qualified BY ENGINE (`search:linkedin`), because the spine's subtask ids
+    must equal the live state ids for `_advance_plan` to match them. A single Indeed-shaped spine
+    meant a LinkedIn session's plan could never advance past step 0 — every subtask stayed
+    `pending` and the cockpit showed a session doing nothing while it worked.
+
+    The engine comes from the OBSERVED state (the tab is a fact, the session's `domain_id` is a
+    label). When the state names no engine, the spine ALREADY HELD wins over the default — an
+    unrecognised page is not evidence that we changed engines.
+    """
+    if phase == "apply":
+        return "apply"
+    engine = (search_cadence.engine_of_state(state)
+              or _engine_of_plan(plan or [])
+              or search_cadence.DEFAULT_SEARCH_PLATFORM)
+    return f"search:{engine}"
 
 
 @dataclass
@@ -318,16 +351,24 @@ def default_plan() -> list[Subtask]:
     return plan
 
 
-def search_plan() -> list[Subtask]:
-    """The search/triage spine, instantiated from search_cadence.SEARCH_RECIPE. No form gates —
-    search has no required-field invariants; its blockers are bot-safety + captchas."""
-    import search_cadence
+def search_plan(platform: str = search_cadence.DEFAULT_SEARCH_PLATFORM) -> list[Subtask]:
+    """This ENGINE's search/triage spine. No form gates — search has no required-field
+    invariants; its blockers are bot-safety + captchas.
+
+    The subtask ids ARE the live state ids, which is what lets `_advance_plan` mark progress
+    without a model. That contract is why the spine has to be per-engine: Indeed's ids on a
+    LinkedIn page match nothing, and a plan that matches nothing reports a working session as
+    a stalled one.
+    """
     plan: list[Subtask] = []
-    for entry in search_cadence.SEARCH_RECIPE:
+    for entry in search_cadence.search_recipe_for(platform):
         state = entry["state"]
         plan.append(Subtask(
             id=state,
-            label=state.replace("indeed_", "").replace("_", " "),
+            # Strip whichever engine prefix this state carries, so the label reads "search
+            # results", not "linkedin job search". Hardcoding `indeed_` left LinkedIn's labels
+            # wearing their prefix in the cockpit.
+            label=state.replace(f"{platform}_", "").replace("_", " "),
             step=entry["step"],
             gate=None,
         ))
@@ -335,7 +376,13 @@ def search_plan() -> list[Subtask]:
 
 
 def _plan_for_family(family: str) -> list[Subtask]:
-    return default_plan() if family == "apply" else search_plan()
+    """Build the spine a family names. `search:<platform>` carries its engine (see
+    `_plan_family`); `apply` is engine-independent — the ATS spine is chosen per platform
+    elsewhere, and this one is Indeed's quick-apply."""
+    if family == "apply":
+        return default_plan()
+    _, _, platform = family.partition(":")
+    return search_plan(platform or search_cadence.DEFAULT_SEARCH_PLATFORM)
 
 
 def new_blackboard(session_id: int, goal: Optional[str] = None,
@@ -542,11 +589,19 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
     # Re-derive the phase off the active tab; swap the plan spine when the family changes
     # (search/triage share the search spine; apply has its own). Statuses are recomputed from
     # the active state below, so rebuilding the plan loses nothing.
-    new_phase = _phase_for(bb.world.get("role"), bb.world.get("page_state"))
+    new_state = bb.world.get("page_state")
+    new_phase = _phase_for(bb.world.get("role"), new_state)
     if new_phase != bb.phase:
         bb.log("phase_change", f"{bb.phase} -> {new_phase}")
-    if _plan_family(new_phase) != _plan_family(bb.phase) or not bb.plan:
-        bb.plan = _plan_for_family(_plan_family(new_phase))
+    # The family carries the ENGINE, so driving a session from Indeed onto LinkedIn swaps the
+    # spine the same way search→apply does — no extra plumbing, and the engine is re-read from
+    # ground truth every cycle. `prev_state` (not `bb.phase`) names the family we currently hold:
+    # asking `_plan_family(bb.phase)` with the NEW state would compare a family to itself and
+    # never rebuild.
+    new_family = _plan_family(new_phase, new_state, bb.plan)
+    if new_family != _plan_family(bb.phase, prev_state, bb.plan) or not bb.plan:
+        bb.plan = _plan_for_family(new_family)
+        bb.log("plan_spine", f"spine -> {new_family}")
     bb.phase = new_phase
 
     if form_fields is not None:
@@ -560,6 +615,18 @@ def reconcile(bb: Blackboard, *, tabs: list[dict[str, Any]],
 
 
 # --- Layer 3 made ACTIVE: the proceed/submit decision + the loop gate --------------
+def search_engine_of(bb: Blackboard) -> Optional[str]:
+    """Which career-search engine this session is working, or None if nothing says yet.
+
+    Written down rather than re-derived: the blackboard's search spine already carries the engine
+    in its own subtask ids, and it survives a process restart. Callers deep in the apply stage —
+    where the search tab may not even be open — need this to avoid falling back to *Indeed* on a
+    LinkedIn session, which is how a LinkedIn apply tab got closed onto Indeed's job search.
+    """
+    engine = search_cadence.engine_of_state(bb.world.get("page_state"))
+    return engine or _engine_of_plan(bb.plan)
+
+
 def current_subtask(bb: Blackboard) -> Optional[Subtask]:
     return next((s for s in bb.plan if s.id == bb.current_subtask_id), None)
 
