@@ -10,6 +10,7 @@ import asyncio
 
 import apply_state_store as store
 import escalation_rules
+import search_cadence
 import main
 from db import get_db
 from fastapi.testclient import TestClient
@@ -523,3 +524,54 @@ def test_indeed_still_refuses_to_gather_when_its_distance_pill_fails(monkeypatch
     finally:
         _teardown()
     assert r["ok"] is False and r["stopped_reason"] == "distance_filter_failed"
+
+
+# --- naming: containment picks the wrong control (2026-08-14, live) ------------------------------
+
+def test_the_submit_button_is_the_one_named_search_not_the_one_mentioning_it():
+    """LIVE FAILURE, session #28: Indeed's results page with a detail pane open carries a button
+    named "Return to Search Result". It CONTAINS "search", it sorts ahead of the real Search button
+    in AX order, and it is not a submit — so `run_query` typed the query, clicked that, and could
+    not commit. Third layer to learn the same rule in two days: a name that IS the words is the
+    control; one that merely contains them is a coincidence."""
+    controls = search_cadence.find_search_controls([
+        {"role": "combobox", "name": "search: Job title, keywords, or company"},
+        {"role": "combobox", "name": "location: City, state, zip code, or 'remote'"},
+        {"role": "button", "name": "Return to Search Result"},
+        {"role": "button", "name": "Search"},
+    ])
+    assert controls["submit"] == {"role": "button", "name": "Search"}
+    assert controls["query"]["name"] == "search: Job title, keywords, or company"
+    assert controls["location"]["name"] == "location: City, state, zip code, or 'remote'"
+
+
+def test_a_leading_match_beats_a_buried_one_when_nothing_is_exact():
+    """No exact "search" on the page: "Search jobs" is the control qualified, "Return to Search
+    Result" is the coincidence. Leading is the tier that separates them."""
+    controls = search_cadence.find_search_controls([
+        {"role": "combobox", "name": "What: job title, keywords, or company"},
+        {"role": "button", "name": "Return to Search Result"},
+        {"role": "button", "name": "Search jobs"},
+    ])
+    assert controls["submit"]["name"] == "Search jobs"
+
+
+def test_a_containing_match_is_still_taken_when_it_is_all_there_is():
+    """The tiers rank, they do not filter — a page whose only submit buries the word is still
+    driveable. Loosening the criteria is the fallback, never the first choice."""
+    controls = search_cadence.find_search_controls([
+        {"role": "combobox", "name": "What"},
+        {"role": "button", "name": "Go and search now"},
+    ])
+    assert controls["submit"]["name"] == "Go and search now"
+
+
+def test_the_more_specific_hint_still_wins_among_equals():
+    """`_SUBMIT_HINTS` is ordered most-specific first, and ranking by tier must not throw that
+    away: two exact matches are ordered by which hint they answered."""
+    controls = search_cadence.find_search_controls([
+        {"role": "combobox", "name": "What"},
+        {"role": "button", "name": "Search"},
+        {"role": "button", "name": "Find jobs"},
+    ])
+    assert controls["submit"]["name"] == "Find jobs"      # "find jobs" leads _SUBMIT_HINTS

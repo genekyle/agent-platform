@@ -94,14 +94,38 @@ def find_search_controls(candidates: list[dict]) -> dict:
     out: dict[str, dict] = {}
 
     def _pick(roles: tuple[str, ...], hints: tuple[str, ...]) -> Optional[dict]:
-        # Hints are ordered, so a page offering several matches yields the most specific one.
-        for hint in hints:
+        """The best match for these hints, ranked EXACT > LEADING > CONTAINING.
+
+        CONTAINMENT ALONE PICKS THE WRONG CONTROL, and this is the third layer to learn it (the
+        apply-door matcher and `_resolve_ax_node` both learned it on 2026-08-13; this one was not
+        touched and broke a live drive the next day). Indeed's results page, with a job's detail
+        pane open, carries a button named **"Return to Search Result"** — which contains "search",
+        sorts ahead of the real one in AX order, and is not a submit at all. `run_query` typed the
+        query, clicked that, got `not_found`, and correctly refused to mark a CONSUMING rung.
+
+        A name that IS the hint is the control; a name that STARTS with it is almost always the
+        control qualified ("Search jobs"); a name that merely contains it somewhere is a
+        coincidence more often than not. Hints stay ordered within each tier, so the most specific
+        hint still wins among equals.
+
+        Unlike `_resolve_ax_node`, a tie inside a tier is NOT refused here: two controls both named
+        exactly "Search" are interchangeable, and refusing would strand the rung on a page it can
+        drive perfectly well. The refusal there exists because its ties address different fields.
+        """
+        best: Optional[tuple[int, int, dict]] = None
+        for rank, hint in enumerate(hints):
             for c in candidates:
                 role = (c.get("role") or "").lower()
                 name = (c.get("name") or "").strip()
-                if role in roles and name and hint in name.lower():
-                    return {"role": role, "name": name}
-        return None
+                if role not in roles or not name:
+                    continue
+                low = name.lower()
+                tier = 0 if low == hint else 1 if low.startswith(hint) else 2 if hint in low else -1
+                if tier < 0:
+                    continue
+                if best is None or (tier, rank) < (best[0], best[1]):
+                    best = (tier, rank, {"role": role, "name": name})
+        return best[2] if best else None
 
     q = _pick(_TEXT_ROLES, _QUERY_HINTS)
     if q:
