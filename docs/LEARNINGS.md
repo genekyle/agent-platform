@@ -7121,3 +7121,64 @@ the door renders on an in-flight application, the bill prices #28 exactly (4 unw
 1 parked / 1 submitted), and the press is refused with its reason stated before the click rather
 than after. **No new query has been run**: the query is the operator's to choose, and page 1 of it
 is theirs to pick from. Tests: controlplane-api 1577 → **1583**.
+
+## 2026-08-14 — the same terms, asked again: three refusals that were rules about "ever" when they meant something narrower
+
+Operator: *"run a brand new query but same input report analyst manchester nh 100 mile radius."*
+Four rungs and one matcher stood in the way, and every one of them was **a narrow true rule
+enforced as a broad one**.
+
+**A RULE ABOUT FREQUENCY, ENFORCED AS A RULE ABOUT EVER.** `query_entered` is CONSUMING because
+repeating a query *too often* gets it cached and collapsed. Enforced as "this session may never run
+these terms twice", it gave the most ordinary thing a job search does — the same terms tomorrow,
+when the postings have turned over — two answers, both wrong: a silent no-op when the current search
+held those terms, or a flat 409 when an earlier one did. `rerun_spent` makes it a price with a
+reason, and starts a genuinely NEW SEARCH, because that is what it is: the same question asked
+again, not the previous answer revisited. **The measurement vindicated it immediately** — today's
+page 1 shares 11 of 15 with yesterday's and turns over 4 (MAPFRE, Dingley Press, Applied Marketing
+Science, BNY in; HopeWell, two BCBA roles and Radiation Safety out). The guard keeps the job it is
+genuinely good at: the accidental repeat, the double-press, the loop that re-searches to "finish
+properly". Search 1's spend stays on the ledger, so `spent` now honestly reads `{1: 'report
+analyst', 2: 'report analyst'}` and an unreasoned third is still refused.
+
+**CONTAINMENT PICKS THE WRONG CONTROL — THIRD LAYER, TWO DAYS.** The re-run then failed for real:
+`run_query` typed the query, clicked, got `not_found`, and refused to mark the consuming rung. The
+control it clicked was **"Return to Search Result"** — the link Indeed renders once a job's detail
+pane is open. It contains "search", it sorts ahead of the real Search button in AX order, and
+`search_cadence._pick` matched by containment and took the first hit. `_named_control` (the
+employee-vs-candidate Apply door) and `_resolve_ax_node` ("state" inside "Country United States of
+America") both learned this on 08-13; this matcher was never touched. Ranked EXACT > LEADING >
+CONTAINING, hints still ordered most-specific-first within a tier. **Deliberately not refusing ties
+the way `_resolve_ax_node` does**: two controls both named exactly "Search" are interchangeable,
+whereas its ties address different fields — the tiers here rank, they do not filter, so a page whose
+only submit buries the word stays driveable. *The lesson about the lesson: a rule fixed at three
+call sites is not fixed; it is fixed at three call sites. Nothing searched for the fourth.*
+
+**A PARKED JOB PICKED AGAIN IS THE SAME JOB.** The repick's own trap, and it was one press away.
+`enqueue` is idempotent by job_id, which protects a job already in THIS queue — but a parked
+survivor deliberately lives at SESSION level, because `_reset_for_new_search` harvests it there so
+it outlives its search. Re-running the same terms surfaces the same jobs, so picking Boston
+Children's (parked one screen from Submit, five fields filled, **#2 on today's page**) would have
+queued a fresh empty step beside the real one: two records for one application, the visible one
+blank, and the work reachable only from a strip nobody had reason to open. `/choose` now restores
+the saved step — parked flag and walked rungs intact — so the surface offers "Step back in" instead
+of "Open the posting", which would re-walk a mostly-finished application from the top.
+
+**AND THE PARKING PAID FOR ITSELF WITHIN THE HOUR.** Data and Impact Analyst (HopeWell) was the one
+application with real work in search 1, parked rather than dropped on the step back. It has since
+**fallen off page 1 entirely**. Had the step back discarded it, it would now be unreachable from the
+results and unrecorded anywhere.
+
+**THE COUNT IS THE TEST OF THE TEST.** A `cat >> test_search_sweep.py` ran after the shell's cwd had
+reset to the worktree root, so it created a **stray test file at the repo root** while every pytest
+run happened in `apps/controlplane-api`. The suite went green, the file "had 19 tests", and the
+matcher fix was covered by nothing. It was caught only by expecting 1590 and reading 1586 — the
+same harness cwd trap as 2026-08-12 (absolute paths from a worktree editing main), in a relative-path
+shape. **Check the test COUNT moved, not just that the suite is green**, and falsify every new
+regression test against the unfixed code (both matcher tests and the parked-pick test were verified
+to fail without their fix).
+
+*Where it stands:* session #28, **search 2 at the start line**, page 1 read — 15 results, none
+picked, waiting on the operator. Both half-finished applications are parked and reachable
+("Step back in"): Boston Children's one screen from Submit, HopeWell one attempt in. Nothing was
+re-applied to and nothing was sent. Tests: controlplane-api 1577 → **1591**.
