@@ -6576,7 +6576,24 @@ async def _apply_cleanup(bb: Any, obs: dict[str, Any], browser_url: str,
         closed.append({"tab_id": tab_id, "url": url[:90], "why": why,
                        "ok": bool(res.get("ok")), "detail": res.get("detail", "")})
 
-    if apply_tab.get("tab_id") and apply_tab.get("tab_id") != (obs.get("search_tab") or {}).get("tab_id"):
+    # WHOSE APPLY TAB? `_apply_tab` answers "the session's apply tab", and this line called that
+    # "the application tab for {step.job_id}" — a sentence that is simply false when the tab
+    # belongs to a different job. Measured live 2026-08-14: flagging the C&S duplicate as
+    # already-applied closed Boston Children's BrassRing tab, an application mid-flight on another
+    # step, one screen from Submit. The flag was right; the tidying reached past its own step and
+    # then described what it had done in the wrong step's name.
+    #
+    # `tab_claims` is the durable record of whose tab is whose, written so "the window stops being
+    # anonymous". An unclaimed apply tab is still fair game (that is the ordinary case — the step
+    # just finishing is the one that opened it); a tab claimed by a job that has NOT finished is
+    # live work and survives every cleanup but its own.
+    _claims = (bb.world or {}).get("tab_claims") or {}
+    _open_jobs = {s.job_id for s in aps.Queue.from_dict(
+        (bb.world or {}).get("apply_queue")).steps if not s.done and s.job_id != step.job_id}
+    _owner = (_claims.get(apply_tab.get("tab_id")) or {}).get("job_id")
+    if (apply_tab.get("tab_id")
+            and apply_tab.get("tab_id") != (obs.get("search_tab") or {}).get("tab_id")
+            and _owner not in _open_jobs):
         await _close(apply_tab["tab_id"], apply_tab.get("url", ""),
                      f"the application tab for {step.job_id}, now {step.terminal}")
 
@@ -6612,7 +6629,23 @@ async def _apply_cleanup(bb: Any, obs: dict[str, Any], browser_url: str,
     # Whatever else the window manager would retire anyway — blanks, exact duplicates, orphaned
     # duplicate apply flows. Its four rails (never the active tab, the last tab, an UNKNOWN role,
     # or the only search tab) are the reason this is a survey rather than a loop over `tabs`.
-    remaining = [t for t in tabs if t.get("tab_id") not in {c["tab_id"] for c in closed}]
+    #
+    # ANOTHER APPLICATION'S LIVE TAB IS NOT DEBRIS, AND THIS BLOCK HAD NO OWNER CHECK. Every block
+    # above scopes to `step.job_id`; this one asked the window manager "what looks retirable" and
+    # the window manager cannot know that an ATS tab belongs to a DIFFERENT, still-open step —
+    # from outside it is exactly the shape of an orphaned apply flow. Measured live 2026-08-14:
+    # flagging the C&S duplicate as already-applied closed Boston Children's BrassRing tab, an
+    # application mid-flight on another step, one screen from Submit. The flag was correct; the
+    # tidying reached past its own step.
+    #
+    # `tab_claims` is the mechanism that already exists for this — the durable record of whose tab
+    # is whose, written precisely so "the window stops being anonymous". A claim held by a step
+    # that has NOT finished is a live application, and its tab survives every cleanup but its own.
+    live_jobs = {s.job_id for s in aps.Queue.from_dict(
+        (bb.world or {}).get("apply_queue")).steps if not s.done and s.job_id != step.job_id}
+    spoken_for = {tid for tid, claim in claims.items() if claim.get("job_id") in live_jobs}
+    remaining = [t for t in tabs if t.get("tab_id") not in {c["tab_id"] for c in closed}
+                 and t.get("tab_id") not in spoken_for]
     win = window_mod.survey(remaining, active_tab_id=(obs.get("search_tab") or {}).get("tab_id", ""))
     for tab, why in zip(win.closable, win.reasons):
         if tab.role == window_mod.ROLE_SEARCH:

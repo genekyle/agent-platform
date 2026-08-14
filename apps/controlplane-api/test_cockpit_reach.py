@@ -638,3 +638,47 @@ def test_a_clean_form_still_advances(monkeypatch):
     monkeypatch.setattr(sc, "_form_census", fake_census)
     import asyncio
     assert asyncio.run(sc._unanswered_required("http://x", "t1")) == []
+
+
+def test_flagging_one_step_does_not_close_another_steps_live_application_tab(monkeypatch):
+    """LIVE 2026-08-14. Flagging the C&S duplicate as already-applied closed Boston Children's
+    BrassRing tab — a different, still-open application one screen from Submit.
+
+    Every other block in the cleanup scopes to `step.job_id`; the final survey asked the window
+    manager "what looks retirable", and from outside, another application's ATS tab is exactly the
+    shape of an orphaned apply flow. `tab_claims` is the record of whose tab is whose, and a claim
+    held by a step that has not finished means the tab is live work.
+    """
+    import asyncio
+
+    bb = _at_start_line()
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:bch", "title": "Analyst I"},
+               {"job_id": "indeed:dup", "title": "Already Applied"}])
+    q.steps[0].record("open_pane", "ok", "working")          # bch is OPEN
+    q.steps[1].finish(aps.ABANDONED_OPERATOR, "already applied yesterday")
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["tab_claims"] = {"t-bch": {"job_id": "indeed:bch"}}
+
+    tabs = [
+        {"tab_id": "t-search", "url": SEARCH_URL},
+        {"tab_id": "t-bch", "url": "https://sjobs.brassring.com/TGnewUI/Search/home/HomeWithPreLoad"},
+    ]
+    obs = {"tabs": tabs, "search_tab": {"tab_id": "t-search", "url": SEARCH_URL}}
+
+    closed_ids = []
+
+    async def fake_capture(path, payload, **_kw):
+        if path == "/close_tab":
+            closed_ids.append(payload.get("tab_id"))
+            return {"ok": True}
+        if path == "/list_tabs":
+            return {"tabs": tabs}
+        return {"ok": True}
+    monkeypatch.setattr(sc, "_capture_post", fake_capture)
+
+    asyncio.run(sc._apply_cleanup(bb, obs, "http://x", q.steps[1]))
+
+    assert "t-bch" not in closed_ids, "closed a live application's tab from another step's cleanup"
+    # And the claim is untouched, because the tab it names is still doing its job.
+    assert bb.world["tab_claims"].get("t-bch", {}).get("job_id") == "indeed:bch"
