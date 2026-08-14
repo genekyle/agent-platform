@@ -42,6 +42,18 @@ export const PREAMBLE_IDS = ["provisioned", "authenticated", "query_entered", "r
 export const SESSION_IDS = ["provisioned", "authenticated"];
 export const SEARCH_IDS = ["query_entered", "radius_set"];
 
+// SCREENS THAT ARE INSIDE THE APPLICATION — past whatever identity wall the ATS put in front of
+// it. Matched on the KIND half of `<platform>_<kind>`, so it holds for a scripted spine and the
+// generic cadence alike rather than listing Workday's screens and going stale on the next ATS.
+//
+// It answers one question: has the wall already been walked through? An account's lifecycle
+// cannot answer that — `active` means "a login exists", which makes the next leg `sign_in`
+// forever — so after a signup that logged us straight in, the cockpit covered Workday's My
+// Information with a "Sign in automatically" button that would have navigated away from it
+// (live 2026-08-13). The screen is the thing that knows.
+export const APPLICATION_SCREENS =
+  /_(my_information|my_experience|questions|application_form|voluntary_disclosures|self_identify|review|confirmation|submitted)$/;
+
 // What the operator is being asked for, in their words rather than the API's, and WHICH GROUP the
 // ask belongs to. `stage` is the load-bearing half: a blocker is the truest statement available
 // about where a session is, so it outranks every other signal when the current group is resolved.
@@ -272,7 +284,16 @@ function decideFocus(p, results, picks, qs) {
 function executeFocus(p, step, nextAction) {
   const proposal = p.proposal && p.proposal.job_id === step.job_id ? p.proposal : null;
   const handoff = p.account_handoff && p.account_handoff.job_id === step.job_id ? p.account_handoff : null;
-  const account = !handoff && p.account_state && p.account_state.job_id === step.job_id ? p.account_state : null;
+  // THE WALL STANDS DOWN ONCE WE ARE PAST IT. `account_state` is derived from the ACCOUNT's
+  // lifecycle — active means "a login exists", which makes the next leg `sign_in` forever — and it
+  // knows nothing about where the browser is standing. So after a signup that logged us straight
+  // in (Workday does), the cockpit sat on My Information and offered "Sign in automatically" as
+  // the primary: a button that navigates AWAY from the form it is covering. The account rung
+  // already refuses the mirror case ("still before workday's account wall — press Apply first");
+  // this is the other side of the same fact, and the screen is the one that knows it.
+  const pastTheWall = APPLICATION_SCREENS.test(step.landing_state || "");
+  const account = !handoff && !pastTheWall
+    && p.account_state && p.account_state.job_id === step.job_id ? p.account_state : null;
 
   // WHICH QUESTION IS ON TOP. Only one of these can be the thing to answer, and the order is the
   // order the world imposes: a teacher pause is a question already asked; an account wall is a wall
