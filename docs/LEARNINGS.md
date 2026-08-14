@@ -7442,3 +7442,61 @@ Children's sits on the create-account form with **question 1 set correctly and 2
 username, password and the three answers untyped; nothing submitted. Session #28, **8 picked / 1
 skipped / 6 untouched, held at the operator's direction until this one is finished.** Tests:
 interaction 275, controlplane-api **1609**, mcp 119.
+
+### 2026-08-14, sixth act — ACCOUNT CREATED at Boston Children's, and "0% complete" reading as complete
+
+**THE ACCOUNT EXISTS AND THE APPLICATION IS OPEN.** `ats_boston_children_s_hospital_brassring` is
+**active**, its credential in the vault (`has_creds: true`, `secret_ref` set — operator-supplied
+after they created it by hand; never in a commit, a journal line or a log). The account leg has
+flipped to `sign_in`. The window is signed in — "Candidate Zone · Sign Out" — and standing on
+BrassRing's **Contact, Resume, Education and Experience** step of Analyst I, Healthcare Data
+(req 85104BR), which the ladder now reads as `brassring_application_form`, **1 screen from Submit**.
+
+**"PERCENT OF APPLICATION COMPLETED 0%" CLASSIFIED AS A SENT APPLICATION.** The worst
+misclassification available here, and it took one substring: `"application complete"` was a
+DECISIVE confirmation marker, and it lives inside the progress meter's own label. So the first
+screen of an untouched application — nine empty required fields, 0% — read as `confirmation`,
+`steps_to_submit: 0`. **Marking a job applied-to that was never sent removes it from every future
+search and the operator never learns why.** Fixed twice on purpose: the marker now needs the copula
+a confirmation actually uses ("your application is complete" — a progress label has no verb), and a
+progress meter blocks a decisive confirmation regardless of phrasing, broad enough to cover "Step 2
+of 6". Containment-versus-meaning for the fourth time in one day, and the highest-stakes instance.
+
+**A REACT-SELECT FRONTING A HIDDEN NATIVE SELECT — the fourth shape of the `.value` lie, and the
+first where the truth is in a DIFFERENT ELEMENT rather than a different property.** BrassRing
+renders `id="X-input"` (the react combobox the census picks up) over `id="X"` (a real `<select>`
+holding the choice) — react-select's own `inputId` convention. State and Country were VISIBLY set,
+the page rendered both, and the census called them unanswered because `[class*=singleValue]` never
+mounted: a false blocker on a complete form, which would have stopped the advance gate. The
+screenshot settled it in one look, again. Consulted only when singleValue is empty, and the
+companion is found by the id convention first and a `<select>` inside the widget's OWN control
+second — a wrapper holding two fields would otherwise lend one field's answer to another.
+
+**THE SECURITY-QUESTION WIDGET, AND A REFUSAL THAT LIED IN THE SAFE-LOOKING DIRECTION.** The recipe
+that works, measured: **open the opener → verify `aria_expanded` → click the `li` by a position
+read WHILE OPEN**. Two traps, both live:
+* **The `<ul>` exists in the DOM when collapsed**, so `/locate` finds its `li`s and a click on one
+  "succeeds" against a hidden node — which is how the first attempt set option 1 instead of the
+  one asked for. A menu you can find is not a menu that is open.
+* **`select_option` answered `not_staged` over a change it had ACTUALLY MADE.** Everything this
+  system has learned about verification guards the other direction (a reported success that did not
+  happen); this is the mirror and it is dangerous differently — **a false-negative refusal invites a
+  retry, and a retry on a stateful widget is not idempotent.** The retry is what set the wrong
+  question. The confirm is racing the widget's re-render; `/describe_widget` reads the right label
+  seconds later.
+* Also: the option list SHIFTS as siblings are answered (question 1's menu loses its "Select
+  question" placeholder once set), so positions must be re-measured per picker, not cached.
+
+*The one blocker left, and it is a real protocol gap:* the **résumé uploader has no
+`input[type=file]` in the DOM at all**, open modal or closed. Its "Add résumé/CV" dialog offers
+Dropbox, Google Drive, **Browse** and Saved résumés, plus "or drop files in this section". So
+`setFileInputFiles` has no target; Browse raises the OS chooser, which is the native dialog that
+FREEZES the renderer (2026-08-13); and the saved-résumé route attached nothing. The honest routes
+are `Page.setInterceptFileChooserDialog` around the Browse click, or a synthesized drop with a
+DataTransfer — a protocol build, and the same family as the Workday drag-drop prediction that
+evaporated on measurement. **Measure before building this one too.**
+
+*Where it stands:* Boston Children's contact step is COMPLETE — name, address, Concord NH 03301,
+Country, both phones, email, and education imported by the site — with the résumé the only
+outstanding required field. Nothing submitted. Session #28, **8 picked / 1 skipped / 6 untouched,
+held at the operator's direction.** Tests: interaction 275, controlplane-api **1612**, mcp 119.
