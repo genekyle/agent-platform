@@ -6453,6 +6453,10 @@ async def run(session_id: int, body: RunBody,
     stop, stop_detail = STOP_BUDGET, ""
     last_rung: Optional[str] = None
     repeats = 0
+    #: The apply tab's url at the end of the previous crank. None on the first pass, because "we
+    #: have not looked yet" is not "it has not moved" — the same distinction `interaction.measured`
+    #: exists to keep, applied to a loop variable.
+    last_url: Optional[str] = None
 
     for _ in range(max(1, min(int(body.max_steps or 12), 40))):
         session, bb, ledger = _load(session_id, db)
@@ -6478,6 +6482,48 @@ async def run(session_id: int, body: RunBody,
             view = _view(session, bb, ledger, obs_now, page=_current_page(obs_now, bb),
                          awaiting="apply")
             break
+
+        # THE RECORD MUST CATCH UP BEFORE THE NEXT CRANK, or the loop acts on a stale rung.
+        #
+        # Measured on the loop's first real drive (2026-08-14): Save & Continue took Boston
+        # Children's from its careers front onto the BrassRing tenant — a different page entirely
+        # — and the step's `landing_state` still said `company_site_application_form`, so the next
+        # iteration resolved the SAME rung and clicked whatever matched on the new screen. It
+        # found "Save" (save this job to a list) and pressed it. Harmless here; not harmless in
+        # general, and it is precisely the wrong-target class this system keeps paying for.
+        #
+        # `reconcile_step` is the remedy and it already exists — "the browser is truth, the record
+        # is memory, so when they disagree memory yields". The loop's job is to COMPOSE it, not to
+        # re-derive it: when the application tab has moved since the last crank, catch the record
+        # up first. A single press never hit this because a human looks at the screen between
+        # presses; the loop is exactly what makes it reachable.
+        apply_url = (_apply_tab(bb, obs_now) or {}).get("url") or ""
+        if last_url is not None and apply_url and apply_url != last_url:
+            try:
+                await reconcile_step(session_id, ReconcileStepBody(initiator=body.initiator), db)
+            except HTTPException:
+                pass          # nothing to reconcile is not a reason to stop driving
+            session, bb, ledger = _load(session_id, db)
+            queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+            step = queue.current() or step
+            obs_now = await _observe(_session_browser_url(session), bb.search_state.query,
+                                     session_id=session.id)
+            nxt = _resolve_next_action(step, await _orient_now(bb, obs_now,
+                                                               _session_browser_url(session)))
+            if (nxt or {}).get("consequential"):
+                stop = STOP_GATE
+                stop_detail = (f"{step.title or step.job_id} reached the gate: "
+                               f"{(nxt or {}).get('label') or 'Submit'}. This one is yours.")
+                view = _view(session, bb, ledger, obs_now, page=_current_page(obs_now, bb),
+                             awaiting="apply")
+                break
+            # A MOVED PAGE IS PROGRESS, whatever the rung ends up being called. Counting a repeat
+            # across a real transition would fire the no-progress guard on the very move it should
+            # be celebrating — which is exactly what happened on the first live drive, where Save
+            # & Continue crossed from the careers front onto the BrassRing tenant and the guard
+            # read the unchanged rung id as a stall.
+            repeats, last_rung = 0, None
+        last_url = apply_url
 
         before_flag, before_terminal = step.last_flag, step.terminal
         rung_id = (nxt or {}).get("id") or ""
@@ -6506,8 +6552,8 @@ async def run(session_id: int, body: RunBody,
         # NOTHING MOVED, TWICE. A rung that reports ok and leaves the world where it was is the
         # loop's own version of the mismatch the StepRunner catches per-step — and left unchecked
         # it is how a drive spends its whole budget re-clicking one control.
-        if rung_id and rung_id == last_rung and (after.last_flag, after.terminal) == \
-                (before_flag, before_terminal):
+        if rung_id and rung_id == last_rung and \
+                (after.last_flag, after.terminal) == (before_flag, before_terminal):
             repeats += 1
             if repeats >= 1:
                 stop = STOP_NO_PROGRESS
