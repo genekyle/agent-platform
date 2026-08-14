@@ -7040,3 +7040,84 @@ segmented spinbuttons remain unusable and remain unused.
 re-querying (the search is still spent, its 15 results cached). Boston Children's parked one screen
 from Submit. Next: Data and Impact Analyst (HopeWell Inc.). Tests: controlplane-api **1577**,
 mcp **114**.
+
+### 2026-08-13, seventh act — stepping back is a decision, and a journal of arrivals cannot explain one
+
+Operator, asking for a full repick onto a different query: *"the journal needs to know why and
+what's going to happen next so make sure our system doesn't get confused."* That sentence is the
+whole session. Four faults sat between the cockpit and a fresh selection, and every one of them was
+the same shape — **the system knew something and had no way to say it, or said it and had no way to
+be acted on.**
+
+**THE DOOR DID NOT EXIST WHERE IT WAS NEEDED.** `deriveCockpit` resolves an application in flight
+at branch 2 (it holds the page open, so it IS the work), and `searchAgain` rode only the `read` and
+`choose` focuses. So a session holding a queue offered exactly one menu — *work this application* —
+and no way to search for anything else. The comment withholding it was **right when it was written**
+and is worth quoting, because the fix is not "the comment was wrong": *"`/initialize` refuses a new
+search over an OPEN application … and a button that always leads to a refusal is a lie-shaped
+affordance."* True against that backend. The correct move was to remove the premise, not the
+comment — once the refusal became a price the operator can pay, the door stopped being lie-shaped.
+It is an ALTERNATE everywhere in flight, never a primary, and it is deliberately **absent at the
+Submit gate alone**: one press from an irreversible act, on a surface built to carry exactly one
+unmistakable choice, a second door is a distraction rather than an affordance.
+
+**A PICK NOBODY OPENED IS NOT AN APPLICATION IN FLIGHT.** The guard was `queue.current() is not
+None` — "the first step with no terminal flag" — which is true of a card queued thirty seconds ago
+and never touched. Session #28 held four of those, so a new search was refused by naming a job that
+had never been driven, over a cost of exactly nothing, with the advice *"finish it or flag it"* and
+no control anywhere that could do either from that moment. Priced on **work actually done** now
+(`_step_back_cost`): unopened picks are released free, a DRIVEN application is parked under the
+operator's own reason and stays resumable, parked survives as it always did, submitted is history.
+Same lesson as the apply door and the `_resolve_ax_node` fix a day earlier, one layer up: **a
+predicate that is technically true of two very different things will be read as the wrong one.**
+
+**A REASON, NOT A CONFIRMATION TICK.** `release_open` carries the operator's sentence, and the
+refusal holds only until it is written. `confirm: true` would record that a warning was dismissed
+and could never say whether the work was dropped because the query was wrong, the candidates were
+wrong, or somebody misread the screen. Because it is the same keystroke, there is no way to spend
+the confirmation without leaving the rationale — and it lands twice, on the parked step's own note
+and as the journal's `why`.
+
+**THE BILL BELONGS BEFORE THE PRESS.** `search.step_back` is that price computed on every render,
+so the declare surface reads *"4 picks nobody opened — released, costs nothing · 1 application with
+real work — parked with your reason, still resumable · 1 already parked — kept · 1 already
+submitted — untouched"* **before** anything is typed. A 409 that arrives after the operator has
+composed a new query is a bill presented after the meal. This is the third session running to land
+on the same rule: *a state the system can enter must have a way out the operator can press* — and
+the corollary this act adds is that the way out should be **priced where the decision is made**.
+
+**A TIMELINE OF ARRIVALS CANNOT EXPLAIN A DEPARTURE.** `Event` was `{ts, kind, detail}`, and
+`_reset_for_new_search` dropped a queue and a pick list in silence — so four chosen candidates left
+the record under one line about a query changing. `why` and `next_up` are additive fields (old
+blackboards load unchanged, `Event(**e)` supplies the defaults) and they are two different gaps:
+`why` is the reason a state changed, `next_up` is the consequence we **declared at the time**.
+The second is the one worth having, because it makes the record falsifiable rather than merely
+complete — the next event either matches the prediction or contradicts it, and a contradiction is a
+finding. Both are optional and nothing invents one: an event with no reason beyond itself ("closed 2
+tabs") must not be made to fabricate a rationale (§10).
+
+**EVERY SEARCH RESTARTS AT PAGE 1, SO `(session, page)` KEYED TWO RESULT SETS TO ONE ROW.**
+`job_decisions.record_page_decisions` is idempotent so the standing select rung can be re-pressed —
+a second press is a revised decision, not a second one. Correct within a search, and a **silent
+overwrite** across two: a job surfaced by both queries (likely, on adjacent terms in one location)
+had its first decision rewritten by its second. Passed on one query and picked on the next is
+precisely the contrast a boundary is learned from, and it was being deleted on arrival. The search
+is part of the key now, with legacy `search_id IS NULL` rows adopted rather than shadowed.
+And its enabling bug: **`search_id` was not in `_SEARCH_SCOPED_WORLD`**, so the previous search's
+DB row id survived into the next search and every decision would have been filed under it until
+`review_page` minted a replacement. Clearing it is correct by construction, not by luck — `/choose`
+cannot run before `review_page`, and `review_page` is the only place that mints the row.
+[[feedback_state_is_context_bound]], on the one key where being wrong is invisible.
+
+*Smaller, same act:* opening "Search for something else" pre-filled Query with **the query being
+stepped away from** — which `/initialize` treats as a no-op, so the single field that had to change
+was the one already answered. Clearing it was not enough: the form's one-shot sync was keyed on
+`!f.query` ("sync whenever the box is empty"), which is exactly the state a step back starts in, so
+the poll a second later put the old query back under the cursor. **A latch that infers "first time"
+from an empty value fires again the moment somebody empties it on purpose.**
+
+*Where it stands:* the repick path is built and verified in the cockpit against live session #28 —
+the door renders on an in-flight application, the bill prices #28 exactly (4 unworked / 1 driven /
+1 parked / 1 submitted), and the press is refused with its reason stated before the click rather
+than after. **No new query has been run**: the query is the operator's to choose, and page 1 of it
+is theirs to pick from. Tests: controlplane-api 1577 → **1583**.
