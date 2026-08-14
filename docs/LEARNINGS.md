@@ -6925,3 +6925,75 @@ recorded a page AND it is gone, because "we never recorded one" is a different c
 *Where it stands:* Demand Planning Analyst is on the real C&S Workday tenant
 (`R-268279-1`), at **Apply method, 8 screens from Submit**, with the account rung showing
 `create_account · pending`. Tests: **1570**.
+
+### 2026-08-13, fifth act — I changed the operator's country, and the rule that would have stopped me
+
+**THE INCIDENT.** Driving Workday's My Information, setting State put "State of Palestine" into the
+operator's COUNTRY field on a live application, and Workday re-rendered the whole form localized
+(Arabic name fields, +970 phone code, address block cleared). Two silent resolutions did it:
+* `field_role` defaults to `"textbox"` because that is how the prompt this was built for renders
+  ("How Did You Hear About Us?"). The SAME form renders State as a **button**, so the role gate
+  rejected every candidate and reported the field NOT FOUND — as though the page had no State.
+* Role-free, `_resolve_ax_node` fell back to a bare substring, and **"state" sits inside "Country
+  United States of America Required"**. It opened Country and searched it for a state name.
+Then, undoing it, `"Country"` LED both `Country …Required` and `Country Phone Code`, and the first
+match won again.
+
+**The rule this function has owed since 2026-08-12 — "ambiguity is a refusal, not a coin flip" —
+is now enforced here too.** Resolution ranks exact → **leading** → anywhere, and a tier with more
+than one candidate returns None. The middle tier is the load-bearing one: an accessible name is its
+label plus whatever the widget decorates it with ("State Select One Required"), so a PREFIX reaches
+the real control while a SUBSTRING reaches any field whose *value* happens to contain the word.
+That is the same lesson as the apply door that clicked "CURRENT C&S EMPLOYEES APPLY HERE" over
+"APPLY NOW" hours earlier — **matching on containment picks the wrong control; leading with the
+words is what separates the label from the coincidence.** Twice in one day, two layers apart.
+
+*And the declared role is a preference, not a requirement* — tried first, then dropped, with the
+widening recorded in `steps`, because a resolver that had to loosen its own criteria means the
+recipe's role is wrong for that tenant.
+
+**What actually repaired it was addressing by the EXACT rendered name** (`Country State of
+Palestine Required` → open, then option `United States of America` — never "United States", which
+also leads "United States Minor Outlying Islands"). Three prompt-path attempts had failed; two
+`/execute` acts by exact name worked first time. When a page has near-twin labels, the full
+decorated name is the only address that identifies one control.
+
+**THE CONSENT CHECKBOX HAD NEVER RUN — ANYWHERE.** `CHECK_GROUP_JS` calls `__findAll` and was the
+one target-resolving blob whose `__WIDGET_TELLS__` was never substituted. Not an import error: a
+page-side `ReferenceError` at call time, so `Runtime.evaluate` returned no value and the endpoint
+reported a bare `outcome: "error"` with an EMPTY detail — wording it as though the page were at
+fault. Added 2026-08-11, broken since. It surfaced as a Workday signup that filled email/password/
+verify and then refused to submit, which the operator read as "it couldn't find the Create Account
+button". `tests/test_js_blob_tells.py` now scans the module as text; it fails on the original bug.
+
+**And tenants of one ATS disagree about whether the consent EXISTS.** SolutionHealth's Workday
+requires the box and bounces without it (why the step was written); C&S's has none at all — email,
+password, verify, submit, confirmed by AX scan. A box that is not there is not a box we failed to
+tick, so the skip rests on a MEASURED `not_found` and nothing else; a box that IS there and will
+not tick still stops the submit, because a consent we cannot confirm is not a consent.
+
+**An account row is working state until the signup lands.** `ensure_account` writes it on INTENT —
+before the form is touched — and nothing took it back, so every abandoned attempt left a row
+claiming a login the employer never issued. Three had accumulated, one
+(`ats_odyssey_consulting_workday`) minted from a platform prediction that turned out wrong, sitting
+beside the `_icims` row that was the truth. `discard_unclaimed` is now `ensure_account`'s mirror:
+taken back when a captcha stops us before the form and when the drive fails, kept while a FILLED
+form waits on the operator's click (still live work), and swept when the step reaches a terminal
+flag. It refuses anything `active` or holding a secret — a row we can rebuild for free is never
+worth destroying a credential we cannot.
+
+**The wall stands down once we are past it.** Creating the account logged us straight in (Workday
+does) and landed on My Information — where the cockpit offered "Sign in automatically" as the
+PRIMARY, a button that navigates away from the form it is covering. `account_state` is derived from
+the account's lifecycle (`active` ⇒ next leg `sign_in`, forever) and knows nothing about where the
+browser is standing. The SCREEN knows, and now decides.
+
+**"Show me what the buttons did."** Every rung attempt was already journaled with its reasoning and
+the nearest surface was the Trace tab — the wrong distance from the press. The work log now sits
+under the controls that wrote it, newest first, repeats kept, opening itself when the last attempt
+failed. It reads: *"clicked the employee Apply → mismatch → clicked APPLY NOW"*.
+
+*Where it stands:* **Demand Planning Analyst (C&S Wholesale Grocers) at My Experience, 3 screens
+from Submit.** My Information complete and verified by screenshot — Concord NH 03301, Country USA,
+prior-employer question answered No by the operator. Account `ats_c_s_wholesale_grocers_workday`
+active with its credential stored. Tests: controlplane-api **1574**, mcp **114**.
