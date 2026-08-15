@@ -344,3 +344,30 @@ def test_markers_still_serve_a_tenant_that_renders_no_stepper():
     u = "https://x.wd1.myworkdayjobs.com/j"
     assert ar.map_workday_state(u, "Start Your Application Autofill with Resume") == "workday_apply_method"
     assert ar.map_workday_state(u, "") == "workday_job_posting"
+
+
+# --- documentation about the action is not the action ------------------------------------------
+
+def test_a_help_link_beside_the_apply_button_is_not_the_apply_button():
+    """"Apply now Help" beat "Apply now" and the drive spent its click on documentation (live
+    2026-08-14, MAPFRE). Both LEAD with the token, so no length rule can separate them.
+
+    A shortest-among-leading rule was tried first and this suite refused it within the minute:
+    Workday's review screen carries "Review" and "Review your application", both leading, and
+    there the LONGER one is the control. Length was never the signal — what separates them is what
+    the extra word MEANS, which is what the exclusion list is for.
+    """
+    import apply_recipe as ar
+    got = ar._named_control(["Apply now Help", "Apply now", "Share"], ["apply now", "apply"])
+    assert got == "Apply now"
+
+
+def test_the_length_rules_are_untouched_by_that_fix():
+    """Both directions that earned their tiebreaks stay exactly as they were."""
+    import apply_recipe as ar
+    # longest among leading — Workday's review screen
+    assert ar._named_control(["Review", "Review your application"],
+                             ["review"]) == "Review your application"
+    # leading beats containing — the C&S employee door
+    assert ar._named_control(["CURRENT C&S EMPLOYEES APPLY HERE", "APPLY NOW"],
+                             ["apply now", "apply"]) == "APPLY NOW"

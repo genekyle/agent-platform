@@ -1085,6 +1085,11 @@ GENERIC_CONTROL_EXCLUSIONS: tuple[str, ...] = (
     # controls, and the drive clicked "CURRENT C&S EMPLOYEES APPLY HERE" over "APPLY NOW".
     # Not a detour like "Apply with LinkedIn" — a door we can never walk through.
     "employee", "employees", "internal candidate", "current associates",
+    # DOCUMENTATION ABOUT THE ACTION IS NOT THE ACTION. MAPFRE's posting renders "Apply now Help"
+    # beside "Apply now"; both lead with the token, so no length rule can separate them and the
+    # longest-wins tiebreak took the help link (live 2026-08-14). Same judgement as "save" and
+    # "share" — a word that marks a control as being ABOUT the primary action rather than being it.
+    "help", "faq", "learn more", "how to apply",
 )
 
 
@@ -1098,6 +1103,15 @@ def _named_control(names: list[str], wanted_list: list[str]) -> str:
          "current employees apply here", "if you are an internal candidate apply here".
       2. otherwise the longest match, which is the older rule and still the right default when
          nothing leads with the verb ("Review your application" over "Review").
+
+    A THIRD RULE WAS TRIED AND WAS WRONG: "among names that all lead, prefer the SHORTEST",
+    written on 2026-08-14 when "Apply now Help" beat "Apply now" on MAPFRE and the drive spent its
+    click on documentation. The suite refused it within the minute — Workday's review screen
+    carries "Review" and "Review your application", both leading on "review", and there the LONGER
+    one is the control. Neither length is universally right, because length was never the signal:
+    what separates them is what the extra word MEANS. "Help" is documentation about the action;
+    "your application" is the action, named more fully. That belongs in the exclusion list below,
+    where the same judgement about "save", "share" and "linkedin" already lives.
 
     The tiebreak exists because "longest is most specific" is only true within one destination.
     Live 2026-08-13 on C&S Wholesale Grocers, the posting carried FIVE apply-named controls and
