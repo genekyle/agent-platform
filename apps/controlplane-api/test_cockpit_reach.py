@@ -975,6 +975,40 @@ def test_a_recovery_answer_is_never_derived():
     assert not derived & {"security_answer_1", "security_answer_2", "security_answer_3"}
 
 
+def test_reconcile_journals_on_every_path_including_the_one_where_nothing_moved(monkeypatch):
+    """MY OWN TEST WAS TOO WEAK AND A 500 FOUND WHAT IT MISSED.
+
+    The expiry-journalling test below exercises a helper written INSIDE the test rather than the
+    router's own code, so it could not see that `was_state` was bound only inside the
+    screen-moved branch while the journal line read it unconditionally. Any reconcile that AGREED
+    with the record raised NameError — a 500 on the operator's next press (live 2026-08-14).
+
+    This one calls the endpoint, on the path where nothing moved, which is the path that broke.
+    """
+    bb = _at_start_line(query="report analyst")
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:rec", "title": "Rec One"}])
+    q.steps[0].platform = "successfactors"
+    q.steps[0].landing_state = "successfactors_application_form"
+    for rung, detail in (("open_pane", "pane"), ("verify_identity", "ok"),
+                         ("enter_apply", "in"), ("classify", "successfactors")):
+        q.steps[0].record(rung, aps.OK, detail)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"url": "https://career5.successfactors.eu/careers?company=X"}
+
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL,
+                                  "https://career5.successfactors.eu/careers?company=X"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/page_content": {"ok": True, "text": "", "frames": [], "apply_hrefs": []}},
+             blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/reconcile_step", json={"initiator": "operator"})
+    finally:
+        _teardown()
+    assert r.status_code == 200, r.text          # it used to be 500
+
+
 def test_a_reconcile_back_to_the_account_wall_journals_it_as_an_expiry(monkeypatch):
     """A SCREEN ADVANCING UNDER A DRIVE READS IDENTICALLY TO ONE THE SERVER TOOK AWAY, and only
     one of those means "everything you filled is gone".

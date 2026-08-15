@@ -4728,9 +4728,12 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     # marker yet" — and that is a guess about the address, not an observation of the screen.
     # Letting it through demoted a `workday_my_information` that had been read from real content.
     # The suffix check cannot catch it, because the default wears an ordinary state's name.
+    # Bound BEFORE the branch, because the journal below reads it on EVERY path — including the
+    # one where nothing moved. Assigning it only inside the `if` made a reconcile that agreed with
+    # the record raise NameError (live 2026-08-14, a 500 on the operator's next press).
+    was_state = step.landing_state
     if (new_state and _text.strip() and new_state != step.landing_state
             and not new_state.endswith((al.UNKNOWN, al.UNREADABLE))):
-        was_state = step.landing_state
         step.landing_state = new_state
         # NOT a `classify` mini. That rung's history is about naming the PLATFORM, and a screen
         # refresh is a different fact — filing it there would make every reconcile look like a
