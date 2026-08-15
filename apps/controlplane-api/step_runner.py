@@ -298,14 +298,37 @@ class Expectation:
                 "hosts_hint": list(self.hosts_hint)}
 
 
-def expectation_for(rung_id: str, *, external_id: str = "") -> Expectation:
+#: The SERP's own name for "which posting is open". Indeed's default; every other engine that
+#: differs declares its own `SERP_JOB_PARAM` and is delegated to, so this never becomes a second
+#: table drifting away from the recipes.
+_DEFAULT_SERP_JOB_PARAM = "vjk"
+_SERP_JOB_PARAM_RECIPES = {"linkedin": "linkedin_recipe"}
+
+
+def serp_job_param(platform: str = "") -> str:
+    """The URL param this engine's results page uses to say which job is open.
+
+    A PREDICTION IS ENGINE-SPECIFIC OR IT IS NOT A PREDICTION. This was hardcoded to Indeed's
+    `vjk`, under a comment asserting LinkedIn was "carried the same way by the pane check itself"
+    — which was true of the pane check and false of this expectation. So on LinkedIn `open_pane`
+    predicted a param that cannot occur, every correctly-opened pane verified as MISMATCH, and the
+    run loop stopped on no-progress with the right job open on screen (live 2026-08-14).
+    """
+    module_name = _SERP_JOB_PARAM_RECIPES.get((platform or "").strip().lower())
+    if not module_name:
+        return _DEFAULT_SERP_JOB_PARAM
+    from importlib import import_module
+    return getattr(import_module(module_name), "SERP_JOB_PARAM", _DEFAULT_SERP_JOB_PARAM)
+
+
+def expectation_for(rung_id: str, *, external_id: str = "", platform: str = "") -> Expectation:
     """The apply ladder's predictions, one per rung. Declared HERE, before the act, because an
     expectation invented after looking at the outcome is a rationalisation, not a prediction
     (PRINCIPLES §13)."""
     if rung_id == "open_pane":
-        # Opening a card puts the job's id in the SERP's own URL (?vjk= on Indeed; LinkedIn's
-        # currentJobId is carried the same way by the pane check itself).
-        return Expectation(kind="url_param", param="vjk", value=external_id)
+        # Opening a card puts the job's id in the SERP's own URL — `?vjk=` on Indeed,
+        # `?currentJobId=` on LinkedIn. Asked per engine rather than assumed.
+        return Expectation(kind="url_param", param=serp_job_param(platform), value=external_id)
     if rung_id == "enter_apply":
         # Clicking Apply either opens the application's own tab or navigates this one to it.
         #

@@ -429,3 +429,41 @@ def test_a_company_careers_domain_confirms_the_hand_off():
     verdict2, why2 = sr.verify(sr.expectation_for("enter_apply"),
                                sr.diff(before, engine_only), engine_only)
     assert verdict2 == sr.MISMATCH and "engine" in why2
+
+
+# --- the open_pane prediction is engine-specific, or it is not a prediction ---------------------
+# Live 2026-08-14, session #29, first LinkedIn prospect: the pane opened correctly and `open_pane`
+# verified MISMATCH every time, because the expectation was hardcoded to Indeed's `vjk` under a
+# comment claiming LinkedIn was "carried the same way by the pane check itself" — true of the pane
+# CHECK, false of this expectation. /run then stopped on no-progress with the right job on screen,
+# which is the loop behaving correctly on a prediction that could never come true.
+
+def test_the_open_pane_expectation_asks_which_engine():
+    import linkedin_recipe as lr
+    assert sr.serp_job_param("indeed") == "vjk"
+    assert sr.serp_job_param("linkedin") == lr.SERP_JOB_PARAM == "currentJobId"
+    # An engine we have not met keeps the default rather than raising or predicting nothing.
+    assert sr.serp_job_param("ziprecruiter") == "vjk"
+    assert sr.serp_job_param("") == "vjk"
+
+    indeed = sr.expectation_for("open_pane", external_id="abc123", platform="indeed")
+    assert (indeed.param, indeed.value) == ("vjk", "abc123")
+    linked = sr.expectation_for("open_pane", external_id="4451068100", platform="linkedin")
+    assert (linked.param, linked.value) == ("currentJobId", "4451068100")
+
+
+def test_a_linkedin_pane_open_now_verifies_instead_of_mismatching():
+    """The end the operator actually cares about: the same observation that used to be demoted."""
+    ex = sr.expectation_for("open_pane", external_id="4451068100", platform="linkedin")
+    url = "https://www.linkedin.com/jobs/search-results/?currentJobId=4451068100&keywords=x"
+    after = _obs(url=url)
+    verdict, why = sr.verify(ex, sr.diff(_obs(url="https://www.linkedin.com/jobs/"), after), after)
+    assert verdict == sr.CONFIRMED and "currentJobId=4451068100" in why
+
+
+def test_it_still_catches_a_different_job_being_open():
+    """The pane auto-opens the FIRST result, so an unconfirmed click returns the previous job
+    looking perfectly fine — the guard this expectation exists for must survive the fix."""
+    ex = sr.expectation_for("open_pane", external_id="4451068100", platform="linkedin")
+    after = _obs(url="https://www.linkedin.com/jobs/search-results/?currentJobId=9999999999")
+    assert sr.verify(ex, sr.diff(_obs(url="https://www.linkedin.com/jobs/"), after), after)[0] == sr.MISMATCH

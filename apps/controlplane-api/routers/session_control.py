@@ -5138,7 +5138,11 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     # way, because that row IS the training data this system runs on.
     import step_runner as sr
     _ext = step.job_id.split(":", 1)[-1]
-    _expect = sr.expectation_for(rung.id, external_id=_ext)
+    # The job_id's own prefix names the engine this posting was found on, which is what decides
+    # how its results page reports the open pane (`vjk` vs `currentJobId`). Falls back to the
+    # step's recorded platform, then to the engine default inside `expectation_for`.
+    _job_platform = (step.job_id.split(":", 1)[0] if ":" in step.job_id else "") or ""
+    _expect = sr.expectation_for(rung.id, external_id=_ext, platform=_job_platform)
     async def _observe_tab_now() -> Optional[str]:
         """THE TAB THE WORK IS ON *NOW*, re-resolved at each look. Before the apply is entered
         that is the search tab (the card and its pane live there); the instant Apply opens the

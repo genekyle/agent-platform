@@ -206,6 +206,17 @@ BLENDED_TO_RESULTS: dict[str, Any] = {
 #: phase rule ask the engine instead of hardcoding one engine's answer.
 TRIAGE_STATE = JOB_DETAIL
 
+#: WHICH POSTING IS OPEN, as the results URL itself reports it. Indeed writes `?vjk=<id>`;
+#: LinkedIn writes `?currentJobId=<id>`. Already MEASURED and relied on by `RESULTS_TRAVERSAL`
+#: ("the pane's OWN currentJobId equals the id we clicked"), but the apply ladder's `open_pane`
+#: expectation had `vjk` hardcoded — so on LinkedIn it predicted a param that can never appear,
+#: every open was verified as a MISMATCH, and the run loop stopped on no-progress with the pane
+#: sitting correctly open (live 2026-08-14, session #29, first LinkedIn prospect).
+#:
+#: Declared here because the engine owns the fact, and read through `step_runner` so there is one
+#: copy rather than a second table that can drift away from this one.
+SERP_JOB_PARAM = "currentJobId"
+
 
 def map_url_to_state(url: str) -> str:
     for pattern, state in _URL_STATES:
