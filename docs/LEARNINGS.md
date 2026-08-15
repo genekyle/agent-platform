@@ -7797,3 +7797,52 @@ API is a shared resource even when the browsers are not.
 *Where it stands:* session #29 at the start line, page 1 read, 6 new prospects, **nothing picked and
 nothing applied to** — waiting on the operator. Session #28 protected and untouched. Tests:
 controlplane-api 1612 → **1636**.
+
+### 2026-08-14, tenth act — "Apply now" was a dropdown, and two wrong rules caught within minutes
+
+**THE CONTROL WAS NEVER A BUTTON.** MAPFRE's "Apply now ▲" is a **dropdown opener**; the action is
+a `menuitem 'Apply Now'` inside it, with the "?" help icon as its sibling. So the loop was opening
+and closing the menu — click, click, no movement — and the no-progress guard was right both times.
+The screenshot showed it in one look after three rounds of selector archaeology found nothing,
+which is [[feedback_confirm_state_with_screenshot]] earning its keep for the third time today: *the
+state witness says WHAT, only the picture says WHY.* Composite openers are a shape this system
+knows (Workday prompts, the BrassRing security questions); the apply DOOR had never been one, and
+the recipe's `controls` list assumes a press.
+
+**TWO WRONG RULES, BOTH CAUGHT INSIDE MINUTES, BY DIFFERENT MECHANISMS.** Worth recording together
+because the catching is the point:
+* *"Among names that all LEAD with the token, prefer the SHORTEST."* Written when "Apply now Help"
+  beat "Apply now". **The suite refused it in under a minute** — Workday's review screen carries
+  "Review" and "Review your application", both leading, and there the LONGER one is the control
+  (pinned 2026-08-06). Length was never the signal: what separates them is what the extra word
+  MEANS. "Help" is documentation about the action; "your application" is the action named more
+  fully. The fix belongs in the exclusion list, where that judgement about "save" and "linkedin"
+  already lived.
+* *Then: hand the whole exclusion list to `advance_control`.* **Caught by a check before
+  committing** — "save" is disqualifying beside an Apply button ("save this job") and is the
+  legitimate advance control on BrassRing and Workday, so the merge killed "Save and Continue".
+
+The split that came out of it is the durable part: **`NEVER_THE_ACTION` travels** (help, faq, learn
+more, how to apply, linkedin, indeed, employee-internal doors — nothing on any page makes "Apply
+now Help" the button that applies) while save/share/back-to/sign-in/create stay with the apply door
+that earned them. *Context-free judgement travels; context-specific judgement does not.*
+
+**AND `advance_control` HAD NO EXCLUSIONS AT ALL.** It is the FALLBACK the ladder reaches when the
+recipe names nothing, and every name `_named_control` refuses was reachable through it — the first
+crank clicked "Apply now" correctly and the second fell through and clicked the help link. Same
+shape as the morning's containment bug across four layers: **a rule fixed at one call site is fixed
+at one call site.**
+
+**A BUTTON'S ACTION FINGERPRINT.** The near-twin problem is now solved for buttons as well as
+links: form target, inline handler, name/value and `data-*` — same fingerprint, same action,
+however many times drawn. It **refuses a trivial fingerprint**, because two bare `<button
+type=submit>`s carry nothing distinguishing and that is exactly iCIMS's two-Submits-on-one-form.
+And `_resolve_ax_node`'s role gate is now a PREFERENCE that widens, with the caller's role as a
+tiebreak on the widened tier via real `tagName` — AX role is what a control acts like, not what it
+is, and a caller asking for a LINK was being gated out of the node they meant.
+
+*Where it stands:* the menu item resolved and clicked, and **the renderer went unresponsive again —
+a second native dialog on MAPFRE's apply path**. Left for the operator, deliberately: Return takes
+a beforeunload's default, which is the navigation you are trying not to make (08-13). MAPFRE also
+shows "View Profile" in its nav, so that tenant may already hold a session. Session #28: **2
+submitted, 1 skipped, 5 untouched.** Tests: controlplane-api **1640**, mcp 121, interaction 275.
