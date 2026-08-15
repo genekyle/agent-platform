@@ -7917,3 +7917,47 @@ into an unrelated commit. **Check `pwd` before any `>>`.**
 *Where it stands:* session #29, 21 picks approved, prospect 1 (Charles River Community Health,
 Paylocity) parked at the resume modal with the file staged. **Nothing submitted, nothing sent, no
 account created.** 20 picks untouched. Tests: controlplane-api **1642**, mcp **121**.
+
+### 2026-08-14, eleventh act — the apply door was a dropdown, and the API server was not reloading
+
+**OPERATOR FEEDBACK, AND IT IS THE MOST USEFUL THING IN THIS ACT.** *"You were struggling… what you
+didn't notice was on click of the apply button, another apply button appeared as a drop down… if
+something like that happens just let me know."* I spent many rounds on MAPFRE's Apply control —
+`[id*=apply]`, `a[href*=apply]`, `a[class*=apply]`, a role/tag tiebreak, an action fingerprint —
+when a screenshot showed the cause instantly: **clicking Apply opens a dropdown whose menu item is
+the real Apply.** Recorded as [[feedback_surface_the_stall_early]]: two failed attempts on one
+control ⇒ screenshot; three ⇒ tell the operator. The operator is watching the same browser and can
+resolve in a glance what costs many rounds to brute-force — and grinding spends real bot-safety
+budget on a live employer site. It paid immediately: the very next stall (the SuccessFactors
+create-account form) was screenshotted at attempt one and answered in a single click.
+
+**THE CONTROLPLANE API SERVER WAS RUNNING WITHOUT `--reload`.** Only the mcp server had it. So
+every controlplane change today went live only when something happened to restart it — and the
+proof was unmistakable once looked at: calling `reconcile_step` **directly returned OK while the
+same call over HTTP returned 500**. Same code, two answers, which can only mean two versions. A
+`ps` would have said so at any point; nothing else would. Restarted with `--reload` to match its
+sibling. *When a fix "does not take", check that the process you are testing is running the code
+you wrote* — the worktree trap ([[feedback_worktree_runs_the_wrong_module]]) in its other form.
+
+**AND THE 500 WAS MINE.** The expiry journalling added hours earlier reads `was_state` on every
+path, and it was bound only inside the screen-MOVED branch — so a reconcile that AGREED with the
+record raised NameError. Honest about the pins: the test added alongside does **not** reproduce it
+(it passes with the fix reverted), and the earlier expiry test exercises a helper written inside
+the test rather than the router's own code — which is exactly why neither caught it. **A test that
+cannot fail against the bug is a test of the fixture.** Left in with that said rather than dressed
+up.
+
+**A THIRD PLATFORM WHOSE ACCOUNT FORM NEEDS REVEALING FIRST.** Workday defaults to Create Account
+and hides Sign In; BrassRing's careers home hides its panel behind a nav link; SAP SuccessFactors
+serves Sign In and hides Create behind *"Not a registered user yet? Create an account"*. Three
+platforms, one shape — **the account leg should try its own `toggle` before reporting `not_found`
+for a form that is one click away**, which is what Workday's leg already does and the other two do
+not.
+
+*Where it stands:* MAPFRE's chain is fully walked — Indeed → jobs.mapfre.com → **dropdown** →
+`career5.successfactors.eu` → Sign In → Create an account, seven fields on screen, passwords typed.
+Then a **REAL captcha**, verified rather than assumed after this morning's false positive:
+`blocking: true, checkbox_visible: true, checkbox_unsolved: true, anchor_count: 1, ok: true`. A
+visible unsolved reCAPTCHA checkbox on the signup form. **Never auto-solved, on any form** — the
+operator's. Session #28: **2 submitted, 1 skipped, 5 untouched.** Tests: controlplane-api **1644**,
+mcp 121, interaction 275.
