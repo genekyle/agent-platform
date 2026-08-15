@@ -123,6 +123,23 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
     {"ats_id": "adp", "display_name": "ADP Workforce Now", "icon": "🔶",
      "hosts": ["workforcenow.adp.com", "myjobs.adp.com"], "recipe": "seed", "auth": "account",
      "notes": "", "seed_companies": []},
+    {"ats_id": "paylocity", "display_name": "Paylocity Recruiting", "icon": "🟧",
+     "hosts": ["recruiting.paylocity.com", "paylocity.com"], "recipe": "seed", "auth": "unknown",
+     "notes": "MEASURED live 2026-08-14 (session #29) — the FIRST ATS met through LinkedIn rather "
+              "than Indeed, which is the whole point of the registry being engine-agnostic: it "
+              "arrives already organised, and the next Paylocity employer reuses everything learned "
+              "here. Reached from a LinkedIn posting's Apply, which opens a NEW TAB at "
+              "recruiting.paylocity.com/Recruiting/Jobs/Apply/<req_id>/<Employer-Slug>. "
+              "The apply form is ONE long page (Referred by, 'Have you worked with us before?' "
+              "[required select], Upload Cover Letter, Upload Additional Files, Work History), and "
+              "it opens behind an 'Apply with resume' MODAL offering to autofill from an upload — "
+              "so the modal is the first thing any drive meets, not the form. Its footer is "
+              "'Powered by paylocity'. Required fields observed beyond the modal: Desired Salary "
+              "Type, Salary Range, plus 'How did you hear about us'. "
+              "auth stays 'unknown' until a drive MEETS a wall — the form renders without a "
+              "sign-in, but whether Submit demands one is unmeasured, and auth is a promise the "
+              "ladder acts on (same rule the Cornerstone entry states).",
+     "seed_companies": ["Charles River Community Health"]},
     {"ats_id": "phenom", "display_name": "Phenom", "icon": "⚫",
      "hosts": ["phenompeople.com", "phenom.com"], "recipe": "seed", "auth": "account",
      "notes": "career-site CMS, not a uniform host: employers run it on their OWN careers subdomain "

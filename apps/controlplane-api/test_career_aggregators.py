@@ -296,3 +296,23 @@ def test_the_capture_server_picks_its_readers_off_the_tabs_host():
     assert _platform_of("https://www.indeed.com/jobs?q=x") == "indeed"
     # anything unrecognised keeps the historical behaviour rather than inventing a third path
     assert _platform_of("https://example.com/careers") == "indeed"
+
+
+def test_paylocity_is_recognised_and_arrives_through_linkedin():
+    """The first ATS met through LinkedIn rather than Indeed — which is the point of the registry
+    being engine-agnostic. It classifies identically whichever engine sent us, so the recipe and
+    the training bucket are shared and the next Paylocity employer costs nothing to meet.
+
+    MEASURED live 2026-08-14 (session #29): a LinkedIn posting's Apply opened a new tab at
+    recruiting.paylocity.com/Recruiting/Jobs/Apply/4403455/Charles-River-Community-Health.
+    """
+    import ats_registry as reg
+    url = ("https://recruiting.paylocity.com/Recruiting/Jobs/Apply/4403455/"
+           "Charles-River-Community-Health?source=LinkedIn")
+    assert reg.classify_ats(url) == "paylocity"
+    # It was reading as the unmapped catch-all before it was named.
+    assert reg.classify_ats(url) != "company_site"
+    # auth is UNMEASURED and must stay that way — the ladder acts on this promise.
+    assert reg.get_ats("paylocity")["auth"] == "unknown"
+    # And the host list is what the window classifier uses to call such a tab an application.
+    assert any("paylocity" in h for h in reg.off_engine_apply_hosts())
