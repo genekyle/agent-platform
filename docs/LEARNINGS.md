@@ -7961,3 +7961,49 @@ Then a **REAL captcha**, verified rather than assumed after this morning's false
 visible unsolved reCAPTCHA checkbox on the signup form. **Never auto-solved, on any form** — the
 operator's. Session #28: **2 submitted, 1 skipped, 5 untouched.** Tests: controlplane-api **1644**,
 mcp 121, interaction 275.
+
+#### The Paylocity modal, measured properly — and the "two documents" theory retracted
+
+The operator resumed the drive; the modal is still unbeaten, but it is now understood far better and
+two of my own explanations are withdrawn. Keeping both halves, per PRINCIPLES §10.
+
+**RETRACTED: "two reads disagreeing about one document / probably a frame."** `/json/list` shows
+exactly ONE `page` target for the tab — every other target is a tracker or reCAPTCHA iframe, none of
+them the form. Both reads always hit the same document. **Also retracted: "the form unmounts when
+scrolled away."** Measured at `scrollY` 1397 and 0: identical, 29 inputs both times, the salary
+fields absent from both. The real shape is simpler — **while the modal is up, the form's own fields
+are not in the DOM at all**; the modal gates them.
+
+**AN ADDRESS IS A PREDICTION, AND I MADE THE PROPERTY/ATTRIBUTE MISTAKE.** `/execute` reported
+`no node matching 'button[type=submit]'` for a button a probe had just described as
+`{tag: BUTTON, type: "submit"}`. Both were right: `HTMLButtonElement.type` **defaults** to `"submit"`
+when no `type` attribute exists, so the PROPERTY reads submit while the ATTRIBUTE selector matches
+nothing. I read a property and addressed by attribute. Same family as every other address-is-a-
+prediction failure in this log, and worth naming because it will recur on any hand-written selector.
+
+**WHAT IS ACTUALLY MEASURED ABOUT THE MODAL** (Paylocity, Charles River Community Health):
+* Its only affordances are a hidden `input[type=file]` (`accept=".doc,.docx,.pdf"`) and a
+  `<button>Upload Resume</button>` with no `type` attribute. **There is no dismiss control** — no ×,
+  no Cancel, no Skip — and a full-page backdrop at z-index 500.
+* The button is enabled, 310×37 at (615, 490), and hit-tests to a SPAN *inside itself*, so a trusted
+  click at its centre reaches it. Clicking it reports `ok` and changes nothing observable.
+* **No native dialog opens.** `/native_dialog` answers `verdict: clear`, renderer responsive — so
+  the "it opens an OS file chooser that we cannot see" explanation is ruled out, not merely
+  unconfirmed. Nothing is left blocking the operator's machine.
+* `upload` resolves correctly — `re-resolved 'input[type=file]' -> 'Apply with resume' -> node 120`,
+  which is the new `expect_question`-as-address narrowing doing exactly its job — and then
+  **immediately afterwards all four file inputs read `files: 0`.** The file never lands.
+
+**THE ONE LIVE HYPOTHESIS, LABELLED AS SUCH** (PRINCIPLES §13; not to be written up as fact until it
+is measured): the minted path resolves to a backendNodeId, and by the time `DOM.setFileInputFiles`
+runs the modal has re-rendered, so the id addresses a DETACHED input — setting files on which
+succeeds silently and affects nothing. That matches `files: 0` on every attached input while the
+call reports ok, and it is the FB-listing lesson again ("node-ids go stale fast — tight scan→act").
+**Falsifier, for the next session, before any build:** stamp the node's `isConnected` and
+`ownerDocument === document` at set time, and re-read `files.length` through the SAME node id
+immediately after. If the node is connected and still reads 0, the hypothesis is dead and the answer
+is in how the widget consumes the input, not in staleness. Do not build a drag-drop protocol first:
+that is exactly the predicted-protocol that evaporated on 08-12 when someone finally measured.
+
+*Where it stands, unchanged in substance:* prospect 1 parked at the modal. **Nothing submitted,
+nothing sent, no account created, no file accepted by the page.** 20 picks untouched.
