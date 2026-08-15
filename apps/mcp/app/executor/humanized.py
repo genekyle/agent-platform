@@ -128,6 +128,15 @@ class HumanizedDriver(DirectDriver):
         if request.action_id in ("type", "select") and request.value:
             await self._clear_focused(cdp)          # don't append onto residue
             await self._human_type(cdp, request.value, object_id=object_id)
+        elif request.action_id == "clear":
+            # `clear` used to fall through to the base driver's select-all + Delete, whose select-all
+            # is Ctrl+A (`modifiers: 2`). ON macOS THAT IS NOT SELECT-ALL — it is the emacs
+            # "move to line start" binding — so the Delete that follows removes one character, or on
+            # an already-empty caret position none at all, and the field keeps its value while the
+            # call reports ok. Every browser this project drives runs on darwin. `type` never hit
+            # this because it clears through `_clear_focused` first; only a bare `clear` took the
+            # keyboard route. Use the same authoritative write `type` already trusts.
+            await self._clear_focused(cdp)
         else:
             await super()._apply_value(cdp, request, object_id=object_id)
 
@@ -160,6 +169,20 @@ class HumanizedDriver(DirectDriver):
     # framework syncs its state to the field. The setter must come from the element's OWN window —
     # an inner document is a different realm, and reaching for this frame's constructors to patch
     # that frame's node is the same "which document do you mean" mistake one level down.
+    #
+    # AND THE FOCUSED THING IS NOT ALWAYS AN <input>. A WEB COMPONENT is the focus target in its own
+    # right: the browser focuses the HOST, and the real input (if there is one) lives one or more
+    # shadow roots down, unreachable from here. `HTMLInputElement.prototype`'s setter applied to such
+    # a host throws "Illegal invocation" — and this expression's result was never checked, so the
+    # write vanished while `clear` reported success. Measured live 2026-08-14 on MAPFRE's
+    # SuccessFactors form: `ui5-date-picker-xweb-calendar-widget` held a wrong date, `activeElement`
+    # WAS that host, its shadow root contained no input, and `.select` was undefined — so the
+    # keyboard fallback (below) had nothing selected to delete either. The host does expose a `value`
+    # property; assigning it is the widget's own public API and the same "stage then commit" protocol
+    # composite widgets already use.
+    #
+    # So pick the setter by what the element ACTUALLY IS, and let a non-input fall through to a plain
+    # property assignment rather than borrowing a prototype it does not implement.
     @classmethod
     def _set_focused_value_js(cls, value_expr: str) -> str:
         return (
@@ -167,8 +190,9 @@ class HumanizedDriver(DirectDriver):
             " if(!el) return false;"
             " const win = (el.ownerDocument && el.ownerDocument.defaultView) || window;"
             " const proto = el instanceof win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype"
-            "                                                     : win.HTMLInputElement.prototype;"
-            " const set=Object.getOwnPropertyDescriptor(proto,'value');"
+            "              : el instanceof win.HTMLInputElement ? win.HTMLInputElement.prototype"
+            "              : null;"
+            " const set=proto&&Object.getOwnPropertyDescriptor(proto,'value');"
             f" if(set&&set.set){{set.set.call(el,{value_expr});}} else {{el.value={value_expr};}}"
             " el.dispatchEvent(new Event('input',{bubbles:true}));"
             " el.dispatchEvent(new Event('change',{bubbles:true})); return el.value;})()"
