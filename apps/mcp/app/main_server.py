@@ -427,8 +427,17 @@ async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab
                 if n == 0:
                     return None, f"no node matching {selector!r}{where}", {}
                 seen = ", ".join(f"{c.get('question')!r}" for c in (out.get("candidates") or []))
+                # The page has already tried to narrow these by the caller's `expect_question`
+                # (see _RESOLVE_SCOPED_JS): naming a question is an ADDRESS, not merely a check.
+                # So reaching here means it stayed ambiguous even after that — say which it was,
+                # because "ambiguous" and "you named a question nothing answers" are different
+                # problems with different fixes.
+                asked = out.get("expected") or expect_question or ""
+                tail = (f" None of them answers {asked!r} on its own."
+                        if asked else
+                        " Name which one you mean with `expect_question` and it will resolve.")
                 return None, (f"{selector!r}{where} matched {n} nodes — ambiguous, refusing to "
-                              f"guess. They answer: {seen}"), {}
+                              f"guess. They answer: {seen}.{tail}"), {}
             tgt = out.get("target") or {}
             if out.get("mismatch"):
                 return None, (f"TARGET MISMATCH: {selector!r}{where} resolves to a control for "
@@ -577,9 +586,28 @@ _RESOLVE_SCOPED_JS = r"""
     : scoped;
   const identify = (c) => ({question: c.q.question || '(unnamed)', source: c.q.source,
                             section: c.q.section});
-  if (keep.length !== 1)
-    return {matched: keep.length, candidates: scoped.map(identify).slice(0, 6)};
-  const hit = keep[0];
+  // A NAMED QUESTION IS AN ADDRESS, NOT JUST A CHECK. `expect_question` was built as the
+  // CONFIRMATION half (below): assert what you mean, and a disagreement stops the act. But the
+  // ambiguity refusal ran first, so a caller who had ALREADY said which question it meant was
+  // told the page was ambiguous — by a message that then listed the answer it wanted. Measured
+  // live 2026-08-14 on Paylocity: four file inputs answering 'Apply with resume', '<employer>',
+  // 'Upload Cover Letter', 'Upload Additional Files', with the caller naming the first.
+  //
+  // Ambiguity is a property of THE QUESTION ASKED, not of the raw match count. Narrowing by the
+  // caller's own question uses the same `__sameQuestion` rule the confirmation uses, so nothing
+  // is guessed: several matches that answer DIFFERENT questions are only ambiguous until someone
+  // says which question they mean. Zero or several survivors still refuse, so the guard that
+  // stopped a resume going into Workday's Attachments box is untouched.
+  let narrowed = keep;
+  if (keep.length !== 1 && (cfg.expect_question || '').trim()) {
+    const named = keep.filter(c => __sameQuestion(cfg.expect_question, c.q.question) ||
+                                   __sameQuestion(cfg.expect_question, c.q.section));
+    if (named.length === 1) narrowed = named;
+  }
+  if (narrowed.length !== 1)
+    return {matched: narrowed.length, candidates: scoped.map(identify).slice(0, 6),
+            expected: (cfg.expect_question || '')};
+  const hit = narrowed[0];
   // TARGET vs INTENT. The caller's expectation is checked against the control's OWN question, and
   // a mismatch is a refusal — this is the check whose absence let a resume be uploaded into the
   // Attachments box. `automation-id` and `section-only` identities are too weak to CONFIRM on
