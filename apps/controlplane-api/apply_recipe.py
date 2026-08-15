@@ -1074,9 +1074,30 @@ GENERIC_ATS_SPINE: list[dict[str, Any]] = [
 
 GENERIC_ATS_ORDER: list[str] = [str(e["kind"]) for e in GENERIC_ATS_SPINE]
 
-#: Names an apply-ish substring match must never press: SSO detours and the posting's furniture.
-GENERIC_CONTROL_EXCLUSIONS: tuple[str, ...] = (
-    "linkedin", "indeed", "with ", "save", "share", "back to", "sign in", "create",
+#: NEVER THE ACTION, ON ANY SCREEN — the context-free half, shared with `decide.advance_control`.
+#:
+#: These say a control is ABOUT the primary action rather than being it (documentation), or is a
+#: door we can never walk through (SSO, employee-internal). Nothing on any page makes "Apply now
+#: Help" the button that applies, so this half travels.
+NEVER_THE_ACTION: tuple[str, ...] = (
+    # DOCUMENTATION ABOUT THE ACTION IS NOT THE ACTION. MAPFRE's posting renders "Apply now Help"
+    # beside "Apply now"; both lead with the token, so no length rule can separate them.
+    "help", "faq", "learn more", "how to apply",
+    # SSO detours.
+    "linkedin", "indeed",
+    # THE INTERNAL APPLY PATH IS NOT OUR PATH — employer-internal ATS behind employee SSO.
+    # Measured live 2026-08-13 on C&S Wholesale Grocers: five apply-named controls, and the drive
+    # clicked "CURRENT C&S EMPLOYEES APPLY HERE" over "APPLY NOW".
+    "employee", "employees", "internal candidate", "current associates",
+)
+
+#: Names an APPLY-ish substring match must never press. The shared half above, plus words that are
+#: only disqualifying at an apply DOOR — and this is the distinction that matters: "save" means
+#: "save this job to a list" beside an Apply button, and "Save and Continue" is the legitimate
+#: advance control on BrassRing and Workday. Handing the whole list to `advance_control` killed it
+#: (caught before shipping, 2026-08-14). Context-specific judgement stays context-specific.
+GENERIC_CONTROL_EXCLUSIONS: tuple[str, ...] = NEVER_THE_ACTION + (
+    "with ", "save", "share", "back to", "sign in", "create",
     # THE INTERNAL APPLY PATH IS NOT OUR PATH. Employer careers sites routinely show two Apply
     # controls side by side — the candidate one and a "Current employees apply here" that routes
     # into the employer's internal ATS behind employee SSO. Both contain "apply", and the internal

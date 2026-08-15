@@ -163,9 +163,27 @@ def advance_control(ax_identities: Sequence[str]) -> str:
     names = [ident.partition("|")[2].strip() if "|" in ident else ident.strip()
              for ident in (ax_identities or ())]
     names = [n for n in names if n]
+    # ONE EXCLUSION LIST, NOT TWO. `apply_recipe._named_control` refuses names that mark a control
+    # as being ABOUT the action rather than being it — help links, SSO detours, employee doors —
+    # and this function, the FALLBACK the ladder reaches when the recipe names nothing, carried no
+    # such list. So a name refused by one matcher was reachable through the other: live 2026-08-14
+    # on MAPFRE, the first crank correctly clicked "Apply now" and the second fell through to here
+    # and clicked "Apply now Help".
+    #
+    # Imported inside the call, not at module scope, to keep this module free of the recipe layer
+    # in the direction that matters (recipes may import decide; decide must not need them to load).
+    # ONLY the context-free half. The apply-door list also refuses "save" — right beside an Apply
+    # button, where it means "save this job" — and "Save and Continue" is the legitimate advance
+    # control on BrassRing and Workday. Handing the whole list here killed it, caught before
+    # shipping. Context-specific judgement stays context-specific.
+    try:
+        from apply_recipe import NEVER_THE_ACTION as _excluded
+    except Exception:  # noqa: BLE001 — the lexicon must never fail to answer because of an import
+        _excluded = ()
     for control in _ADVANCE_CONTROLS:
         matches = [n for n in names if control.lower() in n.lower()
-                   and not _is_negated(n, control)]
+                   and not _is_negated(n, control)
+                   and not any(x in n.lower() for x in _excluded)]
         if matches:
             return max(matches, key=len)
     return ""

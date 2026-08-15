@@ -371,3 +371,32 @@ def test_the_length_rules_are_untouched_by_that_fix():
     # leading beats containing — the C&S employee door
     assert ar._named_control(["CURRENT C&S EMPLOYEES APPLY HERE", "APPLY NOW"],
                              ["apply now", "apply"]) == "APPLY NOW"
+
+
+def test_the_two_matchers_share_only_the_context_free_exclusions():
+    """ONE EXCLUSION LIST WAS TWO, AND MERGING THEM WHOLE WAS ALSO WRONG.
+
+    `advance_control` — the fallback the ladder reaches when the recipe names nothing — carried no
+    exclusions at all, so a name `_named_control` refused was reachable through it: live
+    2026-08-14 on MAPFRE the first crank clicked "Apply now" and the second fell through and
+    clicked "Apply now Help".
+
+    Handing it the WHOLE apply-door list then killed "Save and Continue", because "save" is
+    disqualifying beside an Apply button ("save this job") and is the legitimate advance control on
+    BrassRing and Workday. Caught before shipping. Context-free judgement travels; context-specific
+    judgement does not.
+    """
+    import apply_recipe as ar
+    from controller.decide import advance_control
+
+    # Shared: documentation and doors we can never walk through.
+    assert "help" in ar.NEVER_THE_ACTION and "linkedin" in ar.NEVER_THE_ACTION
+    assert set(ar.NEVER_THE_ACTION) <= set(ar.GENERIC_CONTROL_EXCLUSIONS)
+    # Apply-door only.
+    assert "save" in ar.GENERIC_CONTROL_EXCLUSIONS
+    assert "save" not in ar.NEVER_THE_ACTION
+
+    # The behaviour that follows, both directions.
+    assert advance_control(["button|Apply now Help", "button|Apply now"]) == ""
+    assert advance_control(["button|Save and Continue",
+                            "button|Continue"]) == "Save and Continue"
