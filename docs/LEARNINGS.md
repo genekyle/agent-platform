@@ -7846,3 +7846,74 @@ a second native dialog on MAPFRE's apply path**. Left for the operator, delibera
 a beforeunload's default, which is the navigation you are trying not to make (08-13). MAPFRE also
 shows "View Profile" in its nav, so that tenant may already hold a session. Session #28: **2
 submitted, 1 skipped, 5 untouched.** Tests: controlplane-api **1640**, mcp 121, interaction 275.
+
+### 2026-08-14, the LinkedIn thread (cont.) — the first cross-site apply FROM LinkedIn, and a modal that is still winning
+
+The operator picked 21 jobs and asked for the Indeed treatment: drive with `/run` (work until it
+needs help) rather than pressing a button per rung. Two engine-blind defects fell out immediately,
+one new ATS was met, and the drive is parked on a blocker that is **not solved** — recorded here as
+open, because a park written down as a finding is the only kind that gets paid for once.
+
+**`/run` STOPPED ON A PREDICTION THAT COULD NEVER COME TRUE.** First prospect, and `open_pane`
+reported MISMATCH on a pane that was correctly open, twice, then the loop stopped on no-progress —
+exactly right, given what it was told to expect. `expectation_for("open_pane")` hardcoded Indeed's
+`?vjk=`, under a comment asserting LinkedIn was "carried the same way by the pane check itself":
+true of the pane CHECK, false of this prediction. LinkedIn writes `?currentJobId=`, which
+`RESULTS_TRAVERSAL` had measured and relied on for weeks. **A prediction is engine-specific or it is
+not a prediction** — and the failure mode is the worst kind, because every layer behaved correctly
+around a premise that was false.
+
+**THE CROSS-SITE HAND-OFF WORKS FROM LINKEDIN, AND BROUGHT A NEW ATS WITH IT.** Apply on a LinkedIn
+posting opened a new tab at `recruiting.paylocity.com/Recruiting/Jobs/Apply/<req>/<Employer>` —
+**Paylocity**, the first ATS this system has met through LinkedIn rather than Indeed. It classified
+as the unmapped `company_site` catch-all until it was named. Nothing about `ats_registry` needed to
+change to accept it, which is the property the whole design is for: the engine that found the job
+is not part of the ATS's identity, so the next Paylocity employer costs nothing.
+
+**A NAMED QUESTION IS AN ADDRESS, NOT MERELY A CHECK.** Uploading the resume refused: four
+`input[type=file]` on the page, answering 'Apply with resume', '<employer>', 'Upload Cover Letter',
+'Upload Additional Files'. The refusal is right and is the guard that stopped a resume going into
+Workday's Attachments box on 08-12 — but the caller had ALREADY named which question it meant, and
+was told the page was ambiguous by a message that then printed the answer. `expect_question` was
+built as the confirmation half only, and the ambiguity check ran first. **Ambiguity is a property of
+the question asked, not of the raw match count.** Narrowed page-side with the same `__sameQuestion`
+rule the confirmation uses, so nothing is guessed: zero or several survivors still refuse, and the
+refusal now distinguishes "ambiguous" from "you named a question nothing answers". The upload then
+resolved first try: `re-resolved 'input[type=file]' -> 'Apply with resume' -> node 120`.
+
+**AND THEN THE MODAL WON — STATED AS OPEN, NOT AS SOLVED.** Paylocity opens its form behind an
+"Apply with resume" modal (backdrop z-index 500) offering to autofill from an upload. It has **no
+dismiss control at all**: its only affordances are a hidden file input and a `type=submit` button
+reading "Upload Resume". The file STAGED into the right input, verified at the node. Then:
+* the commit button is **invisible to the AX layer** (`target not found by name: 'Upload Resume'`),
+* and `button[type=submit]` resolves to **no node** through `/execute`, though a raw probe had
+  listed exactly that element inside the modal minutes earlier,
+* and the form's own fields (`info.minimumDesiredSalary`, `info.firstName`) return null from
+  `getElementsByName` while 29 inputs are present and the modal renders unchanged.
+
+Two reads disagree about one document, which means the next session's first job is to find out WHICH
+DOCUMENT each is talking to (a same-origin frame is the obvious suspect, and `_RESOLVE_SCOPED_JS`
+already carries frame handling that the raw probe does not). **No theory is recorded here on
+purpose** — the last two times this log guessed at a mechanism before measuring, the guess
+evaporated on contact (the Workday drag-drop protocol that was never needed; the truncated dropdown
+blamed for a field the bunch pass simply never attempted).
+
+**A CENSUS THAT CANNOT SEE THE FORM REPORTS ZERO FIELDS, AND ZERO FIELDS READS AS NOTHING TO DO.**
+`apply_fill` answered *"Planned 0 of 0 fields. Every field has a value"* while the page's own
+required-form count said 1 unanswered — because an overlay covered what it was censusing. Same class
+as the capped option list that did not say it was capped. The honest answer is "a modal is covering
+this form", and it does not exist yet.
+
+*Also:* the salary questions were escalated, not guessed — the ladder said *"This one is yours —
+nothing here can be answered on your behalf"*, the operator set 65000–80000 with a standing rule
+(answer inside a posted range without interrupting; these numbers when nothing is posted), and it
+was stored as three reusable `application-answers` rather than typed once into one form.
+
+*Process:* a stray `cat >>` appended a test to **main's** working tree from a worktree session — the
+harness cwd trap in its third distinct shape (absolute paths 08-12, relative paths 08-14, now a
+heredoc after a cwd reset). Caught by `git status`, reverted before the other session could sweep it
+into an unrelated commit. **Check `pwd` before any `>>`.**
+
+*Where it stands:* session #29, 21 picks approved, prospect 1 (Charles River Community Health,
+Paylocity) parked at the resume modal with the file staged. **Nothing submitted, nothing sent, no
+account created.** 20 picks untouched. Tests: controlplane-api **1642**, mcp **121**.
