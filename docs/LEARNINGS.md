@@ -8131,3 +8131,42 @@ is worth the operator's attention, but it was not the loaded gun I called it.
 
 *Process:* after a reboot **Docker must be running before `make dev`** — Postgres and Redis live
 there, and the script fails on the image pull with no hint that the daemon is the problem.
+
+#### The fill counted dispatches, and called it accuracy
+
+Asked how accurate the system is unattended, the answer turned out to be *it cannot tell you* —
+and that was fixable in an afternoon with the browsers down.
+
+**"FILLED 9 FIELD(S)" WAS A COUNT OF KEYSTROKES SENT.** `apply_fill` tallied `/execute` outcomes,
+and `/execute` states plainly in its own return comment that `ok` means "the mechanism completed"
+— not that the value reached the field. The step's expectation was `unmodeled`, with an honest
+reason (typed values live outside the role+name observation), and the effect was that **nothing in
+the loop could distinguish a fill from a no-op.** It is the same blindness that let `clear` report
+success twice over a date that never moved; `type` simply had not been caught at it yet. Every
+failure the day before was caught by a human reading the page back after each step.
+
+**ONE PROBE PER BUNCH BUYS THE POSTCONDITION** (`66f9398`). The verdicts are deliberately four,
+because the honest answer has four cases and a two-state check would lie in both directions:
+`LANDED`; `TRANSFORMED` — the form's own format, a SUCCESS, since a date widget rewriting
+08/15/2026 as "August 15, 2026" holds our value; `EMPTY` — the only real miss; and `UNREADABLE`,
+which is not the same claim as empty. Values compare with punctuation discounted, so "(603)
+369-8867" is the number we typed rather than a mismatch to chase.
+
+**This is the flywheel's actual bottleneck, not a nicety.** A fill with a confirmed postcondition
+is a training example. A fill without one is a guess being stored as fact — and a teaching run
+generates those by the hundred.
+
+*Verified on a real DOM, not only in unit tests* ([[feedback_run_the_scorer_on_real_data]]): a
+throwaway headless Chrome on its own port and profile, a four-field form, the shipped expression.
+The empty field was caught, the `* First Name` label joined once the required marker was stripped,
+and the hidden input stayed out of the read-back.
+
+*What is still unmeasured, stated plainly so no one quotes a number that does not exist:* there is
+**no end-to-end unattended figure** for a form. Every dropdown on MAPFRE was driven by hand with a
+verification gate after each click. Known-open risks for an unattended run: the first open-click on
+a dropdown did not open it roughly 2 times in 7, an AX scan reports options from a popup that has
+already closed, and the compliance block's questions are labelled `.` with the text in the
+paragraph above. Also retracted from my own earlier claim: **it is NOT established that
+`apply_prompt_select` fails on this form's questionnaire** — it failed on two ADDRESS fields that
+were already filled, and its protocol is close to the one that worked by hand. Untested, not
+broken. And the controller regression corpus is **5 cases**, which is not a safety net.
