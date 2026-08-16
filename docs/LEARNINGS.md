@@ -8007,3 +8007,83 @@ that is exactly the predicted-protocol that evaporated on 08-12 when someone fin
 
 *Where it stands, unchanged in substance:* prospect 1 parked at the modal. **Nothing submitted,
 nothing sent, no account created, no file accepted by the page.** 20 picks untouched.
+
+### 2026-08-15, twelfth act — MAPFRE's form filled to the last field, and a `clear` that lied twice
+
+The operator cleared the reCAPTCHA and created the SuccessFactors account by hand, then said to keep
+the run moving. The account gate is genuinely past — `/challenge_visibility` now reports
+`blocking: false, solved: true`, `mark-created` flipped the record to `active`, and `reconcile_step`
+moved the recorded screen `successfactors_account_gate -> successfactors_application_form` off the
+live tab. Everything below happened on the form behind that gate.
+
+**I MIS-FILLED A REAL EMPLOYER'S FORM, AND THE PAGE CAUGHT ME.** `apply_fill`'s census named a
+field "Start Date" with `answer_key: availability_date`, and the only "Start Date" on the page is
+**inside the Education row**. It typed today's date over an education date and SuccessFactors said
+so: *"Start date must be before End date."* (that row ends 06/30/2021). The census is not wrong that
+a "Start Date" exists — it is wrong that a bare label is an ADDRESS. Same family as the four
+`input[type=file]` refusal on 08-14, except here nothing refused, because only ONE control matched.
+**Ambiguity is not the only failure of a label; being the wrong ONE is worse, because it is silent.**
+The repeated-label guard needs a section/owner qualifier, not just a count. Work-experience rows use
+"From Date"/"End Date" and Education uses "Start Date"/"End Date", so the section IS the
+disambiguator and it is right there in the DOM. **Unfixed — it will recur on the next run.**
+
+**A `clear` THAT REPORTED OK AND CHANGED NOTHING, FOR TWO INDEPENDENT REASONS.** Undoing that date
+took the executor apart (fixed, `b33a14f`):
+* `_set_focused_value_js` applies `HTMLInputElement.prototype`'s value setter to whatever holds
+  focus. **A web component is a focus target in its own right** — the browser focuses the HOST and
+  the real input, if any, is one or more shadow roots down. That setter on such a host throws
+  *Illegal invocation*, and the expression's result was never checked, so the write vanished.
+* `clear` then fell through to the base driver's select-all + Delete, whose select-all is Ctrl+A
+  (`modifiers: 2`). **On macOS that is "move to line start", not select-all**, so the Delete removed
+  nothing. `type` never hit this because it clears via `_clear_focused` first; only a bare `clear`
+  took the keyboard route. Every browser this project drives runs on darwin.
+Measured, not guessed: `activeElement` WAS `ui5-date-picker-xweb-calendar-widget`, `.select` was
+`undefined`, and its shadow root held no input.
+
+**SAP SUCCESSFACTORS IS A WEB-COMPONENT FORM, AND THE LIGHT DOM UNDER-REPORTS IT.** `querySelectorAll
+("select")` returns **zero** on a page with nine working dropdowns; the date fields are absent from
+110 `input`s. `grep -rn shadowRoot apps --include='*.py'` returns **nothing** — the DOM resolver
+cannot pierce shadow roots. The AX tree can, and did: role + accessible-name found every control the
+selectors missed. **This is the interaction-layer rule paying off exactly as advertised (§6)** — the
+layer that sees a widget is the layer to drive it on. Note this is a DIFFERENT cause from Paylocity's
+modal in the entry above (fields genuinely absent while the modal is up): same symptom class,
+"my census cannot see what the screenshot shows", two unrelated mechanisms. Do not merge them.
+
+**AN AX SCAN REPORTS OPTIONS FROM A POPUP THAT HAS ALREADY CLOSED.** Reading option lists in a batch
+gave the *"how did you hear"* list for the *under-18* question, and the *race* list for the
+*disability* question. Both would have been answered from the wrong menu. The tell was cheap —
+re-open that one question alone and the true list appears (`I am 18 years of age or older`;
+`I do not have a disability`) — and the guard that saved it was refusing to click an option unless
+the QUESTION'S OWN field holds the expected value afterwards. **A popup's contents are only evidence
+about the question that owns it, and the AX scan does not carry that ownership.** Related: the first
+open-click after a prior commit frequently does not open the menu at all (empty option list); a
+second attempt works. Retry, but never trust a list that did not change.
+
+**A LABEL CAN BE A BARE `.`, WITH THE QUESTION IN THE PARAGRAPH ABOVE IT.** MAPFRE's Compliance block
+renders six required dropdowns whose entire label is `* .` — gender, race, disability, veteran
+status, a certification, and a California public-record election. No census that reads labels can
+name them; identity came from the OPTION LISTS (a gender list and a veteran list are unmistakable)
+plus page order. A screenshot answered in one glance what DOM archaeology could not.
+
+**AND THE LINE I DID NOT CROSS.** The fifth of those dropdowns certifies, under 18 U.S.C. §1033,
+that the applicant has *"never been convicted of a felony crime involving dishonesty or breach of
+trust"* and that their answers are true and complete. Everything else was answered from the
+operator's own stored record; **that one is a statement about them I cannot know**, so it was left
+empty and surfaced. The form reached **25 required fields, 24 filled** — resume attached, salary
+`80000` (inside the posted $58,000–$97,700; the standing rule is to answer inside a posted range),
+zero live validation errors — one dropdown from Apply.
+
+*Also worth storing before the next run:* `desired_salary_*` says 65,000–80,000 while
+`salary_expectation` says **130,000** — two stored answers that disagree, and nothing picks between
+them. And `apply_prompt_select` with `use_source: true` resolved the Country to **`'Indeed'`** — the
+SEARCH ENGINE's name — for two different fields. Both unfixed.
+
+*Process:* the mcp server had no `--reload` because it was started by hand; `make dev` starts both
+with it. The lesson from the eleventh act generalises — **start the stack with `make dev` or expect
+to debug code that is not running.** Also, `reconcile_step` rejects `initiator: "claude"` (enum:
+operator/auto/teacher) while `apply_sections` accepts it; the enum is not enforced consistently.
+
+*Where it stands:* the operator restarted the machine, so both browsers and all servers are down.
+**The MAPFRE form was never Saved, so that filling is gone** — SuccessFactors offers a `Save` beside
+`Apply` and we did not use it. Session #28: **2 submitted, 1 skipped**, MAPFRE back to un-filled.
+**Nothing submitted this act, nothing sent.**
