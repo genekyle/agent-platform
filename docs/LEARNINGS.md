@@ -8087,3 +8087,47 @@ operator/auto/teacher) while `apply_sections` accepts it; the enum is not enforc
 **The MAPFRE form was never Saved, so that filling is gone** — SuccessFactors offers a `Save` beside
 `Apply` and we did not use it. Session #28: **2 submitted, 1 skipped**, MAPFRE back to un-filled.
 **Nothing submitted this act, nothing sent.**
+
+#### Pre-run repairs, and the one that would have answered a sponsorship question with a date
+
+The operator rebooted and asked what to cover before a fresh run. Three fixes went in with the
+browsers down (free — no live driving, no data). The third was not on the list and is the one that
+mattered most.
+
+**A STOPWORD WAS SCORING AS EVIDENCE.** `education_end_date` shipped with the literal
+question_pattern **`"to"`** — the "to" of a date range. `match_question`'s verbatim branch tested
+`pattern in question` and gave it the full 3.0 "whole pattern present" weight, never consulting
+`_STOP` — which has contained "to" since the file was written, and which `_tokens` filters
+correctly on the *other* branch. Replayed against the live table, **four unrelated MAPFRE questions
+came back as `06/2021` at confidence 0.75**, including *"Will MAPFRE Insurance need to sponsor you
+for employment"*, where the truthful answer is "No". This never surfaced yesterday only because I
+drove those dropdowns by hand. **The bug was in the seam between two branches of one function: the
+cheap branch was disciplined, the strong one was not.**
+
+The repair also has a lesson in it. Full word boundaries — the fix `field_answer_key` grew after
+"Ethni-CITY" became the operator's home town — **broke three existing matches**, because these
+patterns are written as STEMS: `sponsor` must answer "sponsorship", `acknowledge` must answer
+"acknowledgement". Anchoring only the LEFT edge keeps the stem and still refuses a needle buried
+inside another word. *The same guard is not automatically right in the sibling function.*
+
+**AND THE HONEST FAILURE UNDERNEATH IT.** With the junk pattern gone, the sponsorship question
+matched **nothing** — its own patterns say `sponsorship`, the noun, and MAPFRE asks with the verb
+("need to sponsor you"). That is a data gap, and it had been hidden all along behind a confident
+wrong answer. Fixing the matcher is what made it visible. Added the verb forms; all nine of
+MAPFRE's questions now resolve from stored answers, so the questionnaire I hand-drove is automatic
+next time.
+
+**THE SECTION GUARD** (`3b9358b`): `plan()` now refuses an application-scoped key inside a record
+section, and the scanner derives that section from **AX geometry** rather than the per-ATS section
+declarations — this tenant rendered seven of its nine bars under names we had not declared, so a
+guard built on declarations would not have fired on the page that needed it. `out_of_scope` reads
+as its own summary line, because "we hold the value, the field is in the wrong place" is not "we
+have no value".
+
+*Corrected from the entry above:* I wrote that the 130,000 `salary_expectation` would be typed into
+MAPFRE's Desired Salary. It would not — the matcher prefers `desired_salary_minimum` (65,000,
+confidence 1.0), which is inside the posted range. The two stored numbers still disagree and that
+is worth the operator's attention, but it was not the loaded gun I called it.
+
+*Process:* after a reboot **Docker must be running before `make dev`** — Postgres and Redis live
+there, and the script fails on the image pull with no hint that the daemon is the problem.
