@@ -250,6 +250,90 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------
+# READ-BACK — what LANDED, as opposed to what we dispatched.
+# ---------------------------------------------------------------------------------------------
+
+def _norm_label(s: str) -> str:
+    """A field label as a comparison key: required marker stripped, whitespace collapsed."""
+    return " ".join(re.sub(r"^\s*\*\s*", "", (s or "")).lower().split())
+
+
+def _norm_value(s: str) -> str:
+    """A value as a comparison key — everything but letters and digits dropped.
+
+    A page is entitled to reformat what it stores: "603-369-8867" comes back "(603) 369-8867",
+    "08/15/2026" as "August 15, 2026". Comparing raw strings would call all of those failures.
+    """
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+#: Per-field verdicts. `TRANSFORMED` is a SUCCESS — the value is there, wearing the page's format.
+LANDED, TRANSFORMED, EMPTY, UNREADABLE = "landed", "transformed", "empty", "unreadable"
+
+
+def readback(planned: list[dict[str, Any]], page: dict[str, str]) -> dict[str, Any]:
+    """Compare what we meant to type against what the page now holds.
+
+    `apply_fill` counted `/execute` outcomes, and `/execute` says plainly that `ok` means "the
+    mechanism completed" — never "the value landed". So "Filled 9 field(s)" was a count of
+    DISPATCHES. That is the same blindness that let `clear` report success while a date sat
+    unchanged in the field (twice, MAPFRE 2026-08-15), and nothing stopped `type` from doing it
+    too; it was caught only because a human read the page back after every step.
+
+    One extra probe per bunch buys the postcondition. It matters twice over on a teaching run: a
+    fill with a confirmed postcondition is a training example, and a fill without one is a guess
+    being stored as fact.
+
+    `page` maps the field's on-screen label to its current value. Verdicts are deliberately four,
+    not two — a reformatted value is NOT a failure, and a field we could not read back is not a
+    field we know is empty. Only EMPTY is a real miss.
+    """
+    idx = {_norm_label(k): v for k, v in (page or {}).items()}
+    rows: list[dict[str, Any]] = []
+    for p in planned:
+        want = p.get("value") or ""
+        key = _norm_label(p.get("field", ""))
+        if key not in idx:
+            verdict, got = UNREADABLE, None
+        else:
+            got = idx[key]
+            if not (got or "").strip():
+                verdict = EMPTY
+            elif _norm_value(got) == _norm_value(want):
+                verdict = LANDED
+            else:
+                verdict = TRANSFORMED
+        rows.append({"field": p.get("field"), "wanted": want, "got": got, "verdict": verdict})
+
+    counts = {v: sum(1 for r in rows if r["verdict"] == v)
+              for v in (LANDED, TRANSFORMED, EMPTY, UNREADABLE)}
+    missed = [r["field"] for r in rows if r["verdict"] == EMPTY]
+    return {
+        "rows": rows,
+        "counts": counts,
+        "missed": missed,
+        # The honest headline: confirmed present on the page, however it chose to format it.
+        "confirmed": counts[LANDED] + counts[TRANSFORMED],
+        "ok": not missed,
+    }
+
+
+def readback_detail(rb: dict[str, Any]) -> str:
+    """One sentence an operator can act on, naming the fields that did not take."""
+    c, n = rb["counts"], len(rb["rows"])
+    if not n:
+        return ""
+    parts = [f"{rb['confirmed']} of {n} confirmed on the page"]
+    if c[TRANSFORMED]:
+        parts.append(f"{c[TRANSFORMED]} reformatted by the form")
+    if rb["missed"]:
+        parts.append(f"STILL EMPTY: {', '.join(rb['missed'])}")
+    if c[UNREADABLE]:
+        parts.append(f"{c[UNREADABLE]} could not be read back")
+    return "; ".join(parts) + "."
+
+
+# ---------------------------------------------------------------------------------------------
 # ACCORDION FORMS — reading whether the form is even open before believing what it says.
 # ---------------------------------------------------------------------------------------------
 

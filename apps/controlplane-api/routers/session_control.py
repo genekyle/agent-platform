@@ -4108,6 +4108,19 @@ async def _scan_ax(browser_url: str, tab_id: str) -> list[dict[str, Any]]:
 #: toggles one; both carry the section's name as their accessible name.
 _SECTION_ROLES = ("heading", "button", "tab")
 
+#: Every visible field's label -> its CURRENT value, for the post-fill read-back. Reads the same
+#: three label sources the AX name is built from, so the keys line up with the plan's field names.
+#: Values come from the light DOM, which is where a typed value lives even on forms whose widgets
+#: the DOM cannot otherwise address.
+_READBACK_JS = """(()=>{const o={};
+document.querySelectorAll("input,textarea").forEach(i=>{
+  if(i.type==="hidden"||!i.offsetParent)return;
+  const l=(i.labels&&i.labels[0]&&i.labels[0].innerText)||i.getAttribute("aria-label")||
+          i.getAttribute("title")||"";
+  const k=l.replace(/\\s+/g," ").trim();
+  if(k&&!(k in o))o[k]=i.value||"";});
+return JSON.stringify(o);})()"""
+
 
 def _section_at(y: float, marks: list[tuple[float, str]]) -> Optional[str]:
     """The nearest section heading ABOVE `y`, or None when the field sits above them all."""
@@ -4392,9 +4405,30 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
         capture_post=_capture_post, browser_url=browser_url, tab_id=tab_id,
         session_id=session.id, rung_id="form_fill")
 
-    step.record("form_fill", aps.OK if filled and not failed else
-                (aps.FAILED if failed else aps.OK),
+    # READ BACK WHAT LANDED. `filled` counts /execute outcomes, and /execute's own contract says
+    # `ok` means the mechanism completed — not that the value is in the field. One probe for the
+    # whole bunch turns "9 dispatched" into "9 confirmed on the page", or names the ones that are
+    # still empty. Failure here degrades to no read-back rather than failing the fill: the typing
+    # already happened, and a probe we could not run is not evidence that it did not.
+    import json as _json
+    typed_rows = [r for r in rows if r["fillable"] and r["widget"] == "text"]
+    readback: Optional[dict[str, Any]] = None
+    if typed_rows:
+        try:
+            probe = await _capture_post("/probe", {
+                "browser_url": browser_url, "tab_id": tab_id,
+                "note": "read back the values this bunch fill just typed",
+                "expression": _READBACK_JS})
+            page_values = _json.loads(probe.get("value") or "{}")
+            readback = form_fill.readback(typed_rows, page_values)
+        except Exception as exc:                                        # noqa: BLE001
+            logging.getLogger("session_control").warning("fill read-back failed: %s", exc)
+            readback = None
+
+    landed_ok = readback["ok"] if readback else not failed
+    step.record("form_fill", aps.OK if landed_ok and not failed else aps.FAILED,
                 f"bunch-filled {len(filled)} field(s)"
+                + (f"; {form_fill.readback_detail(readback)}" if readback else "")
                 + (f"; {len(failed)} failed: {', '.join(failed)}" if failed else "")
                 + (f"; need operator for: {', '.join(summary['missing'])}"
                    if summary["missing"] else ""),
@@ -4406,12 +4440,18 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     # the plan found it.
     census = await _form_census(browser_url, tab_id) or census
     return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
-                 last={"ok": not failed, "action": "apply_fill", "queue": queue.summary(),
+                 last={"ok": (not failed) and landed_ok, "action": "apply_fill",
+                       "queue": queue.summary(),
                        "fill_plan": rows, "fill_summary": summary, "sections": sections,
                        "form_scan": census,
+                       "readback": readback,
                        "verification": _report.verification(),
                        "pace": xs.describe(style),
+                       # THE HEADLINE IS WHAT THE PAGE HOLDS, not what we dispatched. "Filled 9"
+                       # was true of the keystrokes and unproven of the form.
                        "detail": f"Filled {len(filled)} field(s) at {style.name} pace."
+                                 + (f" {form_fill.readback_detail(readback)}" if readback else
+                                    " Read-back unavailable — values not confirmed on the page.")
                                  + (f" {len(failed)} would not take: {', '.join(failed)}."
                                     if failed else "")
                                  + (f" Still need you for: {', '.join(summary['missing'])}."

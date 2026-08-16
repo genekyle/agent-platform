@@ -238,3 +238,59 @@ def test_out_of_scope_is_its_own_summary_line_not_folded_into_missing():
     s = ff.summarise(ff.plan(_EDU_ROW, answers={}, identity=_IDENTITY, today=date(2026, 8, 15)))
     assert [o["field"] for o in s["out_of_scope"]] == ["Start Date"]
     assert "Start Date" not in s["missing"]      # we HOLD the value; it is the place that is wrong
+
+
+# --- read-back: what LANDED, not what we dispatched -------------------------------------------
+#
+# `apply_fill` counted /execute outcomes, and /execute's contract says `ok` means the mechanism
+# completed — not that the value reached the field. That is how `clear` reported success twice
+# over a date that never moved (MAPFRE 2026-08-15).
+
+_PLANNED = [
+    {"field": "First Name", "value": "Gene"},
+    {"field": "Contact Phone", "value": "603-369-8867"},
+    {"field": "City", "value": "Concord"},
+]
+
+
+def test_a_field_the_page_left_empty_is_a_miss_not_a_fill():
+    rb = ff.readback(_PLANNED, {"First Name": "Gene", "Contact Phone": "", "City": "Concord"})
+    assert rb["missed"] == ["Contact Phone"]
+    assert rb["ok"] is False and rb["confirmed"] == 2
+
+
+def test_punctuation_the_form_added_is_the_same_value():
+    """The page is entitled to its own punctuation; "(603) 369-8867" IS the number we typed."""
+    rb = ff.readback(_PLANNED, {"First Name": "Gene", "Contact Phone": "(603) 369-8867",
+                                "City": "Concord"})
+    assert rb["ok"] is True and rb["confirmed"] == 3
+    assert rb["counts"][ff.LANDED] == 3          # identical once punctuation is discounted
+
+
+def test_a_genuinely_rewritten_value_is_confirmed_but_flagged_as_transformed():
+    """A date widget that re-renders 08/15/2026 as "August 15, 2026" has our value in its own
+    words — present, so not a miss, but different enough that the operator should see it."""
+    rb = ff.readback([{"field": "Start Date", "value": "08/15/2026"}],
+                     {"Start Date": "August 15, 2026"})
+    assert rb["ok"] is True and rb["confirmed"] == 1
+    assert rb["counts"][ff.TRANSFORMED] == 1
+    assert "reformatted" in ff.readback_detail(rb)
+
+
+def test_a_required_marker_does_not_break_the_join():
+    rb = ff.readback(_PLANNED, {"* First Name": "Gene", "Contact Phone": "603-369-8867",
+                                "City": "Concord"})
+    assert rb["ok"] is True and rb["counts"][ff.LANDED] == 3
+
+
+def test_a_field_we_cannot_read_back_is_not_reported_as_empty():
+    """Unreadable and empty are different claims — only one of them says the fill failed."""
+    rb = ff.readback(_PLANNED, {"First Name": "Gene", "City": "Concord"})
+    assert rb["counts"][ff.UNREADABLE] == 1 and rb["missed"] == []
+    assert rb["ok"] is True
+
+
+def test_the_detail_names_the_fields_that_did_not_take():
+    rb = ff.readback(_PLANNED, {"First Name": "Gene", "Contact Phone": "", "City": ""})
+    d = ff.readback_detail(rb)
+    assert "STILL EMPTY" in d and "Contact Phone" in d and "City" in d
