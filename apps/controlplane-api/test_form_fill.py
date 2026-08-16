@@ -278,9 +278,17 @@ def test_a_genuinely_rewritten_value_is_confirmed_but_flagged_as_transformed():
 
 
 def test_a_required_marker_does_not_break_the_join():
-    rb = ff.readback(_PLANNED, {"* First Name": "Gene", "Contact Phone": "603-369-8867",
-                                "City": "Concord"})
-    assert rb["ok"] is True and rb["counts"][ff.LANDED] == 3
+    """The marker sits on EITHER end: SuccessFactors prints "* First Name", Workday prints
+    "First Name*". Stripping only the leading form reported 0 of 7 confirmed on a Workday page
+    that was completely filled in (live, Eversource 2026-08-16)."""
+    leading = ff.readback(_PLANNED, {"* First Name": "Gene", "Contact Phone": "603-369-8867",
+                                     "City": "Concord"})
+    assert leading["ok"] is True and leading["counts"][ff.LANDED] == 3
+
+    trailing = ff.readback(_PLANNED, {"First Name*": "Gene", "Contact Phone*": "603-369-8867",
+                                      "City*": "Concord"})
+    assert trailing["ok"] is True and trailing["counts"][ff.LANDED] == 3
+    assert trailing["counts"][ff.UNREADABLE] == 0
 
 
 def test_a_field_we_cannot_read_back_is_not_reported_as_empty():

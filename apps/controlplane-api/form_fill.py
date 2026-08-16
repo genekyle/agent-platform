@@ -254,8 +254,17 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------------
 
 def _norm_label(s: str) -> str:
-    """A field label as a comparison key: required marker stripped, whitespace collapsed."""
-    return " ".join(re.sub(r"^\s*\*\s*", "", (s or "")).lower().split())
+    """A field label as a comparison key: required marker stripped, whitespace collapsed.
+
+    THE MARKER SITS ON EITHER END, and stripping only the leading one made this whole read-back
+    useless on the first real form it met. SuccessFactors prints "* First Name"; Workday prints
+    "First Name*", with no space. Measured live on Eversource 2026-08-16: all seven fields were
+    correctly filled and every one came back `unreadable`, because "first name*" never matched
+    "first name". A read-back that cannot join is indistinguishable from a fill that did not
+    happen — and this one had just told the operator "0 of 7 confirmed" about a form that was
+    completely filled in.
+    """
+    return " ".join(re.sub(r"^\s*\*\s*|\s*\*\s*$", "", (s or "")).lower().split())
 
 
 def _norm_value(s: str) -> str:
