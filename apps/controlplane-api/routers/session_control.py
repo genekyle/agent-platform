@@ -3995,7 +3995,20 @@ async def apply_prompt_select(session_id: int, body: ApplyPromptBody,
         raise HTTPException(status_code=409, detail="No open application.")
 
     import apply_source
+    import form_fill
     if body.use_source:
+        # `use_source` ANSWERS ONE QUESTION, and the caller has to be asking it. Nothing checked
+        # which field this was, so `use_source: true` on "Country of Residence" resolved to
+        # **"Indeed"** — the search engine's name, offered as a country, on two fields of a live
+        # employer's form (MAPFRE, 2026-08-15). The resolution was not wrong; it was answering a
+        # question nobody had asked here. Refuse instead, and say what this flag is for: an
+        # explicit `value` is always available and is what these fields wanted.
+        if not form_fill.answers_how_did_you_hear(body.field_name):
+            raise HTTPException(
+                status_code=422,
+                detail=(f"use_source answers 'how did you hear about us?', and {body.field_name!r} "
+                        f"is not that question — it would offer the job board's name as the "
+                        f"answer. Pass an explicit value instead."))
         source = apply_source.source_from_job_id(step.job_id)
         paths = apply_source.source_paths(source)          # [["Job Board","Indeed"], ..., ["Other"]]
     elif body.value:
@@ -4091,9 +4104,51 @@ async def _scan_ax(browser_url: str, tab_id: str) -> list[dict[str, Any]]:
     return scan.get("candidates") or []
 
 
+#: AX roles that render a form's section headings. A section bar is a heading or a button that
+#: toggles one; both carry the section's name as their accessible name.
+_SECTION_ROLES = ("heading", "button", "tab")
+
+
+def _section_at(y: float, marks: list[tuple[float, str]]) -> Optional[str]:
+    """The nearest section heading ABOVE `y`, or None when the field sits above them all."""
+    best: Optional[str] = None
+    best_y = float("-inf")
+    for my, name in marks:
+        if my <= y and my > best_y:
+            best_y, best = my, name
+    return best
+
+
 def _form_fields_from(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{"role": c.get("role"), "name": c.get("caption") or c.get("name")}
-            for c in candidates if (c.get("caption") or c.get("name"))]
+    """The {role, name} projection the fill planner reads — plus WHICH SECTION each field is in.
+
+    The section is not decoration: it is what tells `availability_date` apart from the start date
+    of a degree. Both are labelled "Start Date", only one of them is an answer to this
+    application, and the page distinguishes them by putting them under different headings
+    (MAPFRE/SuccessFactors, live 2026-08-15 — the planner typed today's date into the Education
+    row and the form rejected it).
+
+    Derived from GEOMETRY rather than from the per-ATS section declarations, because those name
+    the bars we expected and this tenant rendered seven of its nine under different names — the
+    guard has to work on a page we have never seen. A heading's own y-position orders it against
+    the fields below it, which is the same reading a person does.
+    """
+    marks = sorted(
+        (c["bbox"]["y"], (c.get("caption") or c.get("name") or "").strip())
+        for c in candidates
+        if (c.get("role") or "").lower() in _SECTION_ROLES
+        and isinstance(c.get("bbox"), dict) and "y" in c["bbox"]
+        and (c.get("caption") or c.get("name"))
+    )
+    out: list[dict[str, Any]] = []
+    for c in candidates:
+        name = c.get("caption") or c.get("name")
+        if not name:
+            continue
+        bbox = c.get("bbox") or {}
+        section = _section_at(bbox["y"], marks) if "y" in bbox else None
+        out.append({"role": c.get("role"), "name": name, "section": section})
+    return out
 
 
 async def _scan_form_fields(browser_url: str, tab_id: str) -> list[dict[str, Any]]:

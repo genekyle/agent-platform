@@ -5616,3 +5616,17 @@ def test_an_engine_with_no_submit_button_cannot_be_committed_by_button():
     assert engine["commit"] == "enter"
     indeed = next(e for e in sc.ENGINES if e["platform"] == "indeed")
     assert indeed["commit"] == "button"
+
+
+def test_use_source_refuses_a_field_that_is_not_the_how_did_you_hear_question():
+    """`use_source` resolves where the application came FROM. Applied to a Country field it
+    offered "Indeed" as a country, on two fields of a live employer's form (2026-08-15).
+
+    Calls the router's OWN predicate, not a copy of it."""
+    import form_fill as _ff
+
+    assert not _ff.answers_how_did_you_hear("Country of Residence")
+    assert not _ff.answers_how_did_you_hear("State/Province")
+    assert not _ff.answers_how_did_you_hear("Desired Salary")
+    assert _ff.answers_how_did_you_hear("How Did You Hear About Us?")
+    assert _ff.answers_how_did_you_hear("How did you hear about this position?")

@@ -193,3 +193,48 @@ def test_a_needle_inside_another_word_is_another_word():
     assert ff.field_answer_key("Address Line 1") == "street_address"
     assert ff.field_answer_key("Zip Code") == "postal_code"
     assert ff.field_answer_key("State") == "state"
+
+
+# --- the section guard: a bare label is not an address -------------------------------------
+#
+# MAPFRE/SuccessFactors, live 2026-08-15. The candidate profile renders exactly one "Start Date"
+# and it is INSIDE THE EDUCATION ROW; the planner filled it with today's date and the page
+# answered "Start date must be before End date." The ambiguity guard could not help — it counts
+# repeats, and this name appeared once.
+
+_EDU_ROW = [
+    {"role": "textbox", "name": "Title", "section": "Education"},
+    {"role": "textbox", "name": "Start Date", "section": "Education"},
+    {"role": "textbox", "name": "End Date", "section": "Education"},
+]
+
+
+def test_a_date_inside_a_record_section_is_not_an_application_answer():
+    rows = {r["field"]: r for r in ff.plan(_EDU_ROW, answers={}, identity=_IDENTITY,
+                                           today=date(2026, 8, 15))}
+    row = rows["Start Date"]
+    assert row["answer_key"] == "availability_date"      # still RECOGNISED …
+    assert row["fillable"] is False                      # … and refused, because of WHERE it is
+    assert "Education" in row["out_of_scope"]
+
+
+def test_the_same_label_under_no_record_section_still_fills():
+    fields = [{"role": "textbox", "name": "Start Date", "section": "Application Questions"}]
+    row = ff.plan(fields, answers={}, identity=_IDENTITY, today=date(2026, 8, 15))[0]
+    assert row["fillable"] is True and row["value"] == "08/15/2026"
+
+
+def test_an_unplaced_bare_date_label_is_refused_but_an_explicit_one_is_not():
+    bare = ff.plan([{"role": "textbox", "name": "Start Date"}], answers={},
+                   identity=_IDENTITY, today=date(2026, 8, 15))[0]
+    assert bare["fillable"] is False and "no section" in bare["out_of_scope"]
+
+    explicit = ff.plan([{"role": "textbox", "name": "When can you start?"}], answers={},
+                       identity=_IDENTITY, today=date(2026, 8, 15))[0]
+    assert explicit["fillable"] is True and explicit["value"] == "08/15/2026"
+
+
+def test_out_of_scope_is_its_own_summary_line_not_folded_into_missing():
+    s = ff.summarise(ff.plan(_EDU_ROW, answers={}, identity=_IDENTITY, today=date(2026, 8, 15)))
+    assert [o["field"] for o in s["out_of_scope"]] == ["Start Date"]
+    assert "Start Date" not in s["missing"]      # we HOLD the value; it is the place that is wrong

@@ -72,6 +72,64 @@ _FIELD_TO_KEY: tuple[tuple[str, str], ...] = (
 SRC_WORKING, SRC_STORED, SRC_IDENTITY, SRC_MISSING, SRC_SKIP = (
     "working_variable", "stored", "identity", "missing", "skip")
 
+#: Sections that hold REPEATING RECORDS about the applicant's past. A date inside one of these
+#: belongs to the RECORD — when that degree started, when that job ended — and never to the
+#: application being filled.
+_RECORD_SECTIONS: tuple[str, ...] = (
+    "education", "employment", "work experience", "work history", "language",
+    "certification", "training", "reference", "qualification", "mobility",
+)
+
+#: answer_keys that speak about THIS APPLICATION rather than about a record on the page. These are
+#: the only keys the section guard below can block, because they are the only ones whose meaning
+#: depends on WHERE on the page they land.
+_APPLICATION_SCOPED: frozenset[str] = frozenset({"availability_date", "todays_date"})
+
+
+def answers_how_did_you_hear(field_name: str) -> bool:
+    """Is this field the "how did you hear about us?" question, and only that question?
+
+    `apply_prompt_select`'s `use_source` resolves the SOURCE the application came from, so it is
+    an answer to exactly one question. Nothing checked which field it was pointed at, and
+    `use_source: true` on "Country of Residence" offered **"Indeed"** as a country on a live
+    employer's form (MAPFRE, 2026-08-15). Lives here, beside the field->key map, so the router and
+    its test read the SAME predicate rather than two copies that can drift apart.
+
+    Deliberately strict: a name that maps to any other answer_key is disqualified first, so
+    "Referral Source Country" cannot sneak through on the word "source".
+    """
+    n = " ".join((field_name or "").lower().split())
+    if field_answer_key(n) is not None:
+        return False
+    return bool(re.search(r"hear|referr|source|how did you", n))
+
+
+def _application_scope(key: Optional[str], name: str, section: Optional[str]) -> tuple[bool, str]:
+    """May an application-scoped key bind to this field? (ok, why-not).
+
+    A BARE LABEL IS NOT AN ADDRESS. `_FIELD_TO_KEY` maps "start date" to `availability_date`, and
+    on SAP's candidate profile the only "Start Date" on the page sits INSIDE THE EDUCATION ROW.
+    The plan filled it with today's date over a real employer's form and the page caught it —
+    *"Start date must be before End date."* (live, MAPFRE 2026-08-15). Nothing refused, because
+    the name was unique: the ambiguity guard counts REPEATS, and being the wrong single match is
+    the quieter, worse failure.
+
+    The section is the disambiguator and it is right there on the page — work rows are dated
+    "From Date"/"End Date", education rows "Start Date"/"End Date", and both sit under a heading
+    that says which. So an application-scoped key is refused inside a record section, and refused
+    again when there is NO section to place it in and the label does not say availability in its
+    own words. Being unmapped is a visible gap; being mis-mapped is a wrong answer nobody sees.
+    """
+    if key not in _APPLICATION_SCOPED:
+        return True, ""
+    sec = " ".join((section or "").lower().split())
+    hit = next((r for r in _RECORD_SECTIONS if r in sec), None)
+    if hit:
+        return False, f"{section!r} holds dated records — this date would belong to the record"
+    if not sec and not re.search(r"available|when can you", " ".join(name.lower().split())):
+        return False, "a bare date label with no section to place it in"
+    return True, ""
+
 
 def field_answer_key(field_name: str) -> Optional[str]:
     """The answer_key a field maps to, or None if it is one we deliberately skip / do not map.
@@ -120,10 +178,13 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
             continue
         seen[name] = seen.get(name, 0) + 1
         value, source = _resolve(key, answers=answers, identity=identity, today=today)
+        in_scope, why_not = _application_scope(key, name, f.get("section"))
         rows.append({
             "field": name, "role": role, "answer_key": key,
             "value": value, "source": source,
-            "fillable": source in (SRC_WORKING, SRC_STORED, SRC_IDENTITY),
+            "section": f.get("section"),
+            "out_of_scope": None if in_scope else why_not,
+            "fillable": in_scope and source in (SRC_WORKING, SRC_STORED, SRC_IDENTITY),
             "widget": "select" if role == "combobox" else "text",
             # Rides along for fields the ACCESSIBLE NAME cannot address — a census-derived row
             # whose input is anonymous in the AX tree (Cornerstone's contact block). None for
@@ -162,6 +223,11 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     fillable = [r for r in rows if r["fillable"]]
     missing = [r["field"] for r in rows if r["source"] == SRC_MISSING]
     ambiguous = sorted({r["field"] for r in rows if r.get("ambiguous")})
+    # A THIRD REASON A ROW IS NOT FILLABLE, and it reads differently from the other two: we hold
+    # the value and the name is unique, but the field is in the wrong PLACE for it. Folding this
+    # into `missing` would ask the operator for a date they have already given.
+    out_of_scope = [{"field": r["field"], "why": r["out_of_scope"]}
+                    for r in rows if r.get("out_of_scope")]
     # WHAT THIS PASS WILL ACTUALLY TYPE, counted apart from what it can plan.
     #
     # The bunch pass is text-only by design — dropdowns commit through their own widget protocol —
@@ -177,7 +243,7 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     typed = [r for r in fillable if r.get("widget") == "text"]
     deferred = [r["field"] for r in fillable if r.get("widget") != "text"]
     return {"total": len(rows), "fillable": len(fillable), "missing": missing,
-            "ambiguous": ambiguous,
+            "ambiguous": ambiguous, "out_of_scope": out_of_scope,
             "will_type": len(typed), "deferred_to_widget": deferred,
             "by_source": {s: sum(1 for r in rows if r["source"] == s)
                           for s in (SRC_WORKING, SRC_STORED, SRC_IDENTITY, SRC_MISSING)}}
