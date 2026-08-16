@@ -1567,31 +1567,70 @@ def _workday_current_step(page_text: str) -> Optional[str]:
     return None
 
 
-def map_workday_state(url: str, page_text: str = "") -> str:
+#: How a screen got its name. Only the first two are OBSERVATIONS of the page; `url_default` is a
+#: guess drawn from the address, and it is the one that has to be distinguishable.
+NAMED_BY_PAGE, NAMED_BY_MARKER, NAMED_BY_URL_DEFAULT, NAMED_BY_NOTHING = (
+    "page_said", "marker", "url_default", "nothing")
+
+
+def map_workday_state_verbose(url: str, page_text: str = "") -> tuple[str, str]:
+    """(state, how it was named) — so a caller can tell a reading from a guess.
+
+    THE FALLBACK WORE AN ORDINARY STATE'S NAME. `workday_job_posting` is returned both when the
+    posting is genuinely on screen AND when nothing on the page matched anything we know, because
+    a Workday tenant URL is all it takes. Those are different facts and only one is evidence.
+
+    It cost a whole drive (live, Eversource 2026-08-16): the tab moved to Workday's SSO chooser,
+    no marker matched, this answered `workday_job_posting` — the exact value already recorded —
+    and `reconcile_step`'s "did the screen move?" test is `new != recorded`. So the one control
+    whose contract is "align the record to the live window" concluded the window AGREED, three
+    times over, while the ladder kept hunting for an Apply button on a sign-in page.
+
+    The existing guard catches only the EMPTY-text form of this ("only when the page was actually
+    read"). Here the page was read and was full of text; it simply matched nothing. **Having text
+    is not the same as having recognised it**, and the suffix check cannot see the difference
+    because the default is spelled like a real state.
+    """
     # THE PAGE'S OWN STATEMENT FIRST. Only then the markers, which are inference.
     said = _workday_current_step(page_text)
     if said:
-        return said
+        return said, NAMED_BY_PAGE
     hit = _classify_from_markers(page_text, _WORKDAY_STATE_MARKERS)
     if hit:
-        return hit
+        return hit, NAMED_BY_MARKER
     # On a Workday origin with no step marker yet, we're at the job posting; otherwise unknown.
     if "myworkdayjobs" in (url or ""):
-        return "workday_job_posting"
-    return "unknown"
+        return "workday_job_posting", NAMED_BY_URL_DEFAULT
+    return "unknown", NAMED_BY_NOTHING
+
+
+def map_workday_state(url: str, page_text: str = "") -> str:
+    """The state alone. Callers that act on the answer should prefer the verbose form."""
+    return map_workday_state_verbose(url, page_text)[0]
+
+
+def map_greenhouse_state_verbose(url: str, page_text: str = "") -> tuple[str, str]:
+    """(state, how it was named) — same distinction Workday needs, for the same reason."""
+    hit = _classify_from_markers(page_text, _GREENHOUSE_STATE_MARKERS)
+    if hit:
+        return hit, NAMED_BY_MARKER
+    # The whole Greenhouse application is one form; if we're on it at all, that's the state.
+    if "greenhouse" in (url or "") or "gh_jid" in (url or "") or page_text:
+        return "greenhouse_apply_form", NAMED_BY_URL_DEFAULT
+    return "unknown", NAMED_BY_NOTHING
 
 
 def map_greenhouse_state(url: str, page_text: str = "") -> str:
-    hit = _classify_from_markers(page_text, _GREENHOUSE_STATE_MARKERS)
-    if hit:
-        return hit
-    # The whole Greenhouse application is one form; if we're on it at all, that's the state.
-    return "greenhouse_apply_form" if ("greenhouse" in (url or "") or "gh_jid" in (url or "")
-                                       or page_text) else "unknown"
+    return map_greenhouse_state_verbose(url, page_text)[0]
 
 
-def _describe_from_recipe(url: str, state: str, recipe: list[dict], branches: dict) -> dict[str, Any]:
-    """Shared 'where are we' builder — the Workday/Greenhouse twin of Indeed's describe_tab."""
+def _describe_from_recipe(url: str, state: str, recipe: list[dict], branches: dict,
+                          named_by: str = NAMED_BY_MARKER) -> dict[str, Any]:
+    """Shared 'where are we' builder — the Workday/Greenhouse twin of Indeed's describe_tab.
+
+    `named_by` rides out with the state so a caller can tell an OBSERVATION from a fallback. It
+    defaults to `marker` for the callers that pass a state they already trust.
+    """
     entry = next((s for s in recipe if s["state"] == state), None)
     branch = branches.get(state)
     human = bool(branch and branch.get("human_required")) or state in _CREDENTIAL_STATES
@@ -1608,18 +1647,23 @@ def _describe_from_recipe(url: str, state: str, recipe: list[dict], branches: di
         "is_branch": (branch is not None) or state in _CREDENTIAL_STATES,
         "human_required": human,
         "branch_note": note,
+        "named_by": named_by,
+        # The single question a caller acting on this actually has: may I treat this name as
+        # something I SAW? A URL default is a guess about the address wearing a state's name.
+        "observed": named_by in (NAMED_BY_PAGE, NAMED_BY_MARKER),
     }
 
 
 def describe_workday_tab(url: str, page_text: str = "") -> dict[str, Any]:
-    return _describe_from_recipe(url, map_workday_state(url, page_text),
-                                 WORKDAY_APPLY_RECIPE, WORKDAY_APPLY_BRANCHES)
+    state, named_by = map_workday_state_verbose(url, page_text)
+    return _describe_from_recipe(url, state, WORKDAY_APPLY_RECIPE, WORKDAY_APPLY_BRANCHES,
+                                 named_by=named_by)
 
 
 def describe_greenhouse_tab(url: str, page_text: str = "") -> dict[str, Any]:
     branches = {"captcha": {"human_required": True, "note": GREENHOUSE_APPLY_RECIPE[0]["captcha"]}}
-    return _describe_from_recipe(url, map_greenhouse_state(url, page_text),
-                                 GREENHOUSE_APPLY_RECIPE, branches)
+    state, named_by = map_greenhouse_state_verbose(url, page_text)
+    return _describe_from_recipe(url, state, GREENHOUSE_APPLY_RECIPE, branches, named_by=named_by)
 
 
 def lessons_for(ats: str) -> dict[str, Any]:

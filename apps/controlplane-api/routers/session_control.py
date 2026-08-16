@@ -4816,7 +4816,25 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     # path already uses, and it routes to the platform's own mapper.
     import apply_recipe as _ar
     _text = _content.get("text") or ""
-    _named = _ar.describe_for_ats(step.platform, ats_url, _text).get("state") or ""
+    _readout = _ar.describe_for_ats(step.platform, ats_url, _text)
+    _named = _readout.get("state") or ""
+    # A GUESS MUST NOT BE ABLE TO IMPERSONATE A READING. The platform mappers fall back to a
+    # URL-only default when nothing on the page matched — and that default is spelled like an
+    # ordinary state (`workday_job_posting`), so it is invisible to the suffix check below and to
+    # the `new_state != step.landing_state` test that decides whether the screen moved.
+    #
+    # Live, Eversource 2026-08-16: the tab moved to Workday's SSO chooser, no marker matched, the
+    # mapper answered `workday_job_posting` — the value ALREADY recorded — so reconcile concluded
+    # "asked the window and it agreed with the record" and changed nothing, three presses running,
+    # while the ladder kept hunting for an Apply control on a sign-in page. The `_text.strip()`
+    # guard above cannot catch it: the page was read, and was full of text that matched nothing.
+    #
+    # `observed` is the mapper saying which of the two it did. An unobserved name is dropped here,
+    # so the screen is left alone AND `added` stays empty — which the log line below turns into an
+    # honest "could not name this screen" instead of a false agreement.
+    _named_observed = bool(_readout.get("observed", True))
+    if _named and not _named_observed:
+        _named = ""
     new_state = _named or disc.state or ""
     # ONLY WHEN THE PAGE WAS ACTUALLY READ. With no text a platform mapper falls back to its
     # URL-only default — Workday answers `workday_job_posting` for any tenant URL "with no step
@@ -4856,10 +4874,20 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
                 if _back_to_wall else
                 "the window had moved on and the record had not; the browser is truth and memory "
                 "yields" if added else
+                # THE THIRD ANSWER, which used to be told as the second. "Agreed" and "could not
+                # read it" are opposite facts about our confidence, and collapsing them is what
+                # let a stuck ladder look settled for three presses.
+                "the screen could not be named — the page was read but matched nothing we know, "
+                "so the record was LEFT ALONE rather than confirmed. This is not agreement: the "
+                "window may well have moved somewhere we cannot see."
+                if not _named_observed else
                 "asked the window and it agreed with the record"),
            next_up=("Sign in again with the stored credential, then re-check what the server "
                     "actually kept." if _back_to_wall else
                     "Work the rung the reconciled screen calls for." if added else
+                    "Name this screen — teach it — so the ladder can place it; working the "
+                    "recorded rung would drive a recipe written for a different page."
+                    if not _named_observed else
                     "Nothing to catch up — carry on from the rung already recorded."))
     _persist(bb, ledger)
     obs2 = await _observe(browser_url, bb.search_state.query, session_id=session.id)

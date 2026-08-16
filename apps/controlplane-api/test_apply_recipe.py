@@ -400,3 +400,54 @@ def test_the_two_matchers_share_only_the_context_free_exclusions():
     assert advance_control(["button|Apply now Help", "button|Apply now"]) == ""
     assert advance_control(["button|Save and Continue",
                             "button|Continue"]) == "Save and Continue"
+
+
+# --- a fallback must not be able to impersonate a reading -------------------------------------
+#
+# Live, Eversource 2026-08-16: the tab moved to Workday's SSO chooser ("Sign in with Apple /
+# Google / LinkedIn"), no marker matched, and the mapper answered `workday_job_posting` — the
+# value already recorded — so reconcile's `new != recorded` test concluded the window agreed and
+# the ladder kept hunting for an Apply control on a sign-in page, three presses running.
+
+_SSO_CHOOSER = ("Back to Job Posting Data Analyst, Asset Management Technology Sign In "
+                "By choosing to sign in with a social account (e.g. Google, Apple ID, LinkedIn) "
+                "Sign in with Apple Sign in with Google Sign in with LinkedIn OR Sign in with email")
+
+
+def test_the_url_default_says_it_is_a_default():
+    import apply_recipe as ar
+    state, via = ar.map_workday_state_verbose("https://x.wd1.myworkdayjobs.com/job/y", _SSO_CHOOSER)
+    assert state == "workday_job_posting"          # unchanged: we still have no better name …
+    assert via == ar.NAMED_BY_URL_DEFAULT          # … but it no longer passes as an observation
+
+
+def test_a_real_marker_is_reported_as_observed():
+    import apply_recipe as ar
+    u = "https://x.wd1.myworkdayjobs.com/j"
+    _, via = ar.map_workday_state_verbose(u, "Start Your Application Autofill with Resume")
+    assert via == ar.NAMED_BY_MARKER
+    _, via2 = ar.map_workday_state_verbose(u, "current step 1 of 6 My Information")
+    assert via2 == ar.NAMED_BY_PAGE
+
+
+def test_describe_marks_a_defaulted_screen_unobserved():
+    import apply_recipe as ar
+    guess = ar.describe_workday_tab("https://x.wd1.myworkdayjobs.com/job/y", _SSO_CHOOSER)
+    assert guess["state"] == "workday_job_posting" and guess["observed"] is False
+
+    seen = ar.describe_workday_tab("https://x.wd1.myworkdayjobs.com/j",
+                                   "current step 1 of 6 My Information")
+    assert seen["state"] == "workday_my_information" and seen["observed"] is True
+
+
+def test_greenhouse_default_is_also_marked():
+    import apply_recipe as ar
+    assert ar.describe_greenhouse_tab("https://boards.greenhouse.io/x", "some prose")["observed"] is False
+
+
+def test_the_plain_mapper_keeps_its_signature():
+    """Existing callers read the state alone and must not change behaviour."""
+    import apply_recipe as ar
+    assert ar.map_workday_state("https://x.wd1.myworkdayjobs.com/j", "") == "workday_job_posting"
+    assert ar.map_workday_state("https://x.myworkdayjobs.com/job/y",
+                                "current step 3 of 6 Application Questions") == "workday_questions"
