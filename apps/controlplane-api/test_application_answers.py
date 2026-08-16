@@ -85,3 +85,49 @@ def test_a_shared_word_across_patterns_cannot_manufacture_a_match():
                   "How many years of email marketing have you done?"]:
         r = aa.match_question(decoy, ANSWERS)
         assert r["answer_key"] != "marketing_sms_consent" if r["matched"] else True, decoy
+
+
+# --- an all-stopword pattern is not evidence -------------------------------------------------
+#
+# `education_end_date` shipped with the literal pattern "to" (the "to" of a date range). The
+# verbatim branch did not consult _STOP, so on 2026-08-15 four unrelated MAPFRE questions came
+# back as that education date at confidence 0.75 — including "Will MAPFRE Insurance need to
+# sponsor you for employment", where the truthful answer is "No".
+
+_JUNK = [
+    {"answer_key": "education_end_date", "display_name": "Education end date",
+     "value": "06/2021", "question_patterns": ["end date", "graduation", "education end", "to"]},
+    {"answer_key": "sponsorship_required", "display_name": "Sponsorship required",
+     "value": "No", "question_patterns": ["sponsor", "visa sponsorship", "require sponsorship"]},
+]
+
+
+def test_a_stopword_only_pattern_cannot_claim_a_verbatim_match():
+    for q in ("Are you related to anyone at any MAPFRE Location?",
+              "Which of the following are you willing to work?",
+              "Notice to California Applicants: would you like a copy of any public record"):
+        got = aa.match_question(q, _JUNK)
+        assert got.get("answer_key") != "education_end_date", f"{q!r} -> {got}"
+
+
+def test_the_sponsorship_question_reaches_its_own_answer():
+    got = aa.match_question(
+        "Will MAPFRE Insurance need to sponsor you for employment at the present time?", _JUNK)
+    assert got["matched"] and got["answer_key"] == "sponsorship_required" and got["value"] == "No"
+
+
+def test_a_real_pattern_still_matches_verbatim():
+    got = aa.match_question("What was your education end date?", _JUNK)
+    assert got["matched"] and got["answer_key"] == "education_end_date"
+
+
+def test_a_pattern_buried_inside_another_word_does_not_count():
+    """"city" must not match "ethni-CITY" — but a pattern IS allowed to match a longer word it
+    starts, because these patterns are stems ("sponsor" answers "sponsorship")."""
+    ans = [{"answer_key": "city", "display_name": "City", "value": "Concord",
+            "question_patterns": ["city"]}]
+    assert not aa.match_question("What is your ethnicity?", ans).get("matched")
+
+    stem = [{"answer_key": "sponsorship_required", "display_name": "Sponsorship",
+             "value": "No", "question_patterns": ["sponsor"]}]
+    assert aa.match_question("Do you require sponsorship for employment?", stem)["matched"]

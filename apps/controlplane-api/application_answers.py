@@ -184,10 +184,28 @@ def match_question(question: str, answers: list[dict[str, Any]]) -> dict[str, An
         score = 0.0
         for pat in a.get("question_patterns") or []:
             patl = pat.lower().strip()
-            if patl and patl in q:
+            pat_tokens = _tokens(pat)
+            # A PATTERN MADE ONLY OF STOPWORDS IS NOT EVIDENCE, and the verbatim branch used to be
+            # the one place that never asked. `_STOP` has contained "to" from the start and
+            # `_tokens` filtered it correctly — but `patl in q` bypassed all of that, so
+            # `education_end_date`'s literal "to" pattern (meant as the "to" of a date range)
+            # scored the full 3.0 on any question containing the word. Measured 2026-08-15:
+            # "Will MAPFRE Insurance need to sponsor you for employment" resolved to
+            # `education_end_date` = '06/2021' at confidence 0.75, and so did "Are you related to
+            # anyone", "Which of the following are you willing to work" and the California notice.
+            # A wrong answer to a sponsorship question, wearing a trustworthy number.
+            #
+            # ANCHORED AT THE START OF A WORD, AND ONLY THERE. `field_answer_key` grew full word
+            # boundaries after "Ethni-CITY" became the operator's home town, but that rule is too
+            # strict here: these patterns are written as STEMS, and both edges would break
+            # "acknowledge" against "acknowledgement" and "sponsor" against "sponsorship" — the
+            # sponsorship entry's own pattern. Anchoring only the left edge keeps the stem match
+            # and still refuses the needle buried inside another word, because "city" in
+            # "ethnicity" does not begin one.
+            if patl and pat_tokens and re.search(rf"(?<![a-z0-9]){re.escape(patl)}", q):
                 score = max(score, 3.0)          # whole pattern present verbatim
             else:
-                score = max(score, len(_tokens(pat) & q_tokens) * 1.0)
+                score = max(score, len(pat_tokens & q_tokens) * 1.0)
         # The answer_key / display_name tokens themselves are weak signals.
         score += 0.5 * len(_tokens(a.get("display_name", "")) & q_tokens)
         if score > best_score:
