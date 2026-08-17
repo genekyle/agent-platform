@@ -8170,3 +8170,105 @@ paragraph above. Also retracted from my own earlier claim: **it is NOT establish
 `apply_prompt_select` fails on this form's questionnaire** — it failed on two ADDRESS fields that
 were already filled, and its protocol is close to the one that worked by hand. Untested, not
 broken. And the controller regression corpus is **5 cases**, which is not a safety net.
+
+### 2026-08-16, thirteenth act — the cockpit was reading a memory, and the observer had been advisory all along
+
+A reboot took the session, a fresh Indeed search reached the choosing point, and one pick
+(Eversource, Workday) went far enough to expose the thing this log has been circling for a week.
+The operator named it in one sentence: *"what if everything we see is based off of the observer …
+because making you update it is just a dumb revolving task that keeps happening until the observer
+is actually doing its job."* They were right, and the measurement is the entry.
+
+**SEVEN RUNGS UNATTENDED, AND THEN THE LADDER STOOD STILL.** `/run` drove `open_pane` →
+`verify_identity` ("pane title matches the pick") → `enter_apply` → `classify` (Workday) → skipped
+`account` correctly ("the wall engages when you press Apply") → Apply → Apply Manually. Then
+Workday moved to its SSO chooser and the ladder did not: *"no advance control among 13 elements
+(recipe expects click Apply — the posting's own control)"*. The perception layer was honest about
+it — `dom:tfidf` reported *"never seen anything like this, novelty 1.0, so it abstains"*, the
+verdict was `workday_unknown`, and the panel said "Unrecognised page" rather than guessing.
+
+**A URL-ONLY DEFAULT COULD IMPERSONATE A READING** (`ac5130f`). `map_workday_state` ends with
+"on a Workday origin with no step marker yet, we're at the job posting" — and that default is
+spelled like an ordinary state. On the SSO chooser nothing matched, so it answered
+`workday_job_posting`: **the value already on the record**. `reconcile_step` decides the screen
+moved by `new_state != step.landing_state`, so the one control whose contract is "align the record
+to the live window" concluded the window AGREED — three presses running. Orient could not name the
+page, Teach stored a label the runtime never read, and Catch-up-to-the-window reported success and
+moved nothing. **Three recovery paths, all reporting fine, none of them working.** The existing
+guard catches only the EMPTY-text form of this; here the page was read and was full of text that
+matched nothing. *Having text is not the same as having recognised it.* The mappers now say HOW
+they answered and an unobserved name is dropped, so the log stops claiming agreement it does not
+have.
+
+**THEN THE MEASUREMENT THAT SETTLED THE ARCHITECTURE.** `_view` has documented itself since it was
+written as rendering the observer's verdict *"INSTEAD of trusting the recipe position"*, and
+`_orient_now` says it *"runs on EVERY panel render"*. Both were statements of intent.
+
+    render sites that pass the observer:  3 of 56
+    writers to `step.landing_state`:      11, every one inside our own action paths
+    plus `reconcile_step`:                a twelfth, whose only job is repairing the other eleven
+
+So the panel moved when WE moved, and an operator driving the same Chrome by hand desynced it
+instantly. **An optional argument that must always be supplied is a bug with extra steps.**
+
+**THE INVERSION, IN THREE MOVES.** There are exactly as many `_observe` calls as `_view` calls and
+`bb` is in scope at every one, so the verdict is computed inside the observation and rides home in
+`obs`, which `_view` already requires positionally (`1fc1d10`). The record became contradictable:
+`RUNG_NEEDS` covered the generic rungs and NONE of the scripted spine, so `workday_my_information`
+declared no needs and could never be wrong — `_SPINE_KIND` declares what kind of screen each spine
+state is, and a `drift` mismatch fires when the window disagrees (`9f8fd57`). And the observation
+was made as PRECISE as the record: it answered only in generic kinds, so it was structurally
+coarser than the thing it was meant to outrank, while Workday renders its whole stepper ("current
+step 1 of 8 My Information") and `_workday_current_step` had been reading it for weeks without the
+fusion ever seeing it (`efa1ab8`).
+
+**ONE BUG SHAPE, FOUND FOUR TIMES IN ONE DAY — this is the generalisation worth keeping.**
+
+    _view's observer kwarg   diagnosis available, not wired      -> 53 renders drew from the record
+    the drift mismatch       diagnosis impossible to express     -> a spine rung could not be wrong
+    apply_flow's stepper     diagnosis correct, display stale    -> "My Information, 4 from Submit"
+                                                                    rendered over a sign-in wall
+    the account controls     diagnosis correct, affordance hidden -> `pastTheWall` asked the RECORD,
+                                                                    so the wall's own buttons were
+                                                                    suppressed AT the wall
+
+Every one was written with the right intent and wired to the stale source. Three are closed; the
+fourth (`e0d5c9f`) is the sharpest, because the panel diagnosed the wall perfectly — high
+confidence, "Recipe Mismatch", "Create account" on the stepper — and then offered the operator no
+way to act on its own diagnosis. The guard's own comment ends *"the screen is the one that knows
+it."* It was reading the record.
+
+**THE LINE THAT KEEPS THE IDEA HONEST.** "Everything from the observer" is right for WHERE WE ARE
+and wrong for WHAT WE SPENT. The observer cannot see that the operator picked these eight jobs,
+that the query already ran (a consuming rung — Indeed collapses repeats), or that something was
+already submitted. So: **where we ARE is observed and never stored; what we SPENT and DECIDED is
+recorded and never re-derived.** The ladder's own consuming/standing split already draws that line.
+
+**NOT A REWORK, AND THE EVIDENCE FOR IT.** The design held everywhere — witness fusion, the
+arbiter, the driveable-honesty rule (`DRIVEABLE = {press_apply, reorient}`; *"offering a control we
+cannot honour is how a panel starts lying again"*), the "lost is a state" branch. What had drifted
+was plumbing. The remaining readers of the stored position are a handful, concentrated in the
+prefix-rung walk, and the trace view — which SHOULD read the record, because it explains what
+happened.
+
+*What the drive found about the world, separately from the code:* this Workday tenant renders
+**eight** steps (My Information, My Experience, Application Questions 1 of 2 and 2 of 2, Voluntary
+Disclosures, **Self Identify**, **Take Assessment**, Review) where our flow model knows four and
+has never seen an assessment. `How Did You Hear About Us?` is a HIERARCHICAL prompt whose twelve
+categories contain no Indeed, no job board and no Other, so `use_source`'s flat
+Indeed→SimplyHired→Other ladder has nowhere to land. And a page refresh — the operator's own
+remedy for a wedged referral list, and the right call — silently signed the session out and took
+seven unsaved fields with it. *Save the screen before refreshing it, when the screen will let you.*
+
+*The read-back earned itself on first contact.* It caught two of its own bugs: the required marker
+sits on EITHER end of a label (SuccessFactors "* First Name", Workday "First Name*"), so it
+reported "0 of 7 confirmed" about a form that was completely filled (`3a030d6`); and it correctly
+flagged Country Phone Code as uncommitted when the fill had reported success — the typed `+1` had
+not stuck until the prompt protocol committed it. **Still open:** a committed Workday prompt renders
+as a PILL while its search input stays empty by design, so `readback` calls a good selection EMPTY.
+False negative, the safe direction, but it sends the operator chasing fields that are fine.
+
+*Where it stands:* session #30, `report analyst` / Concord NH / 50mi, one pick. Eversource's account
+exists, is `active`, its credential is in the vault, and the cockpit now offers "Sign in
+automatically" AT the wall. **Nothing submitted, nothing sent.** MAPFRE's earlier fill was lost to
+the refresh and needs redoing. Tests: controlplane-api **1675**.
