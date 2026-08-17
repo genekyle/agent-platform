@@ -503,3 +503,32 @@ def test_text_menu_confirms_a_multi_select_by_membership_not_equality():
         hit={"found": True, "count": 50, "x": 9, "y": 9},
         reads=["Credit Union, Direct Writer"])
     assert outcome2 is Outcome.NOT_STAGED
+
+# --- /check_group: a checkbox's name is often not inside it (live 2026-08-17, Eversource) -------
+def test_check_group_reports_the_options_it_could_actually_name(corpus, monkeypatch):
+    """Workday associates checkbox labels as `<label for=id>` SIBLINGS, and the resolver only
+    read the ancestor <label> before falling through to `.value` — which the browser sets to "on"
+    when the author gave none. Twelve certifications came back as one meaningless name, and
+    values:["None"] failed with `options: ["on"]`. The endpoint's contract is unchanged; what it
+    can NAME is what changed, so this pins the reported vocabulary."""
+    wire_cdp(monkeypatch, lambda e: {"ok": False, "code": "no_option",
+                                     "detail": 'no option(s) ["None"]',
+                                     "options": ["Professional Engineer (PE)", "Other", "None"]})
+    out = asyncio.run(ms.check_group(ms.CheckGroupRequest(selector="#certs", values=["None"])))
+    assert out["outcome"] == "no_option"
+    assert "on" not in out["options"], "'on' is the default value, not a name"
+    assert "None" in out["options"]
+
+
+def test_the_check_group_resolver_prefers_a_real_name_over_the_default_value():
+    """The JS is validated live (PRINCIPLES §5), so this pins the ORDER the blob encodes:
+    ancestor label, then `label[for]`, then aria-labelledby, then aria-label, then a value that
+    is not the browser's default."""
+    from app.protocols import CHECK_GROUP_JS
+    order = [CHECK_GROUP_JS.index(x) for x in
+             ("txt(c.closest('label'))", "labelFor(c)", "labelledBy(c)",
+              "c.getAttribute('aria-label')", "ownValue(c)")]
+    assert order == sorted(order)
+    assert "'on' ? '' :" in CHECK_GROUP_JS.replace('"', "'")
+    # Scoped to the box's own document, so it still resolves inside an iframe.
+    assert "c.ownerDocument" in CHECK_GROUP_JS

@@ -398,7 +398,34 @@ CHECK_GROUP_JS = r"""
                            return e.offsetParent !== null && r.width > 0 && r.height > 0; }
                      catch (x) { return false; } };
   const txt = e => ((e && (e.innerText || e.textContent)) || '').replace(/\s+/g, ' ').trim();
-  const label = c => txt(c.closest('label')) || c.getAttribute('aria-label') || c.value || '';
+
+  // A CHECKBOX'S NAME IS OFTEN NOT INSIDE IT. This read the ANCESTOR <label> and then fell
+  // straight through to `.value` — and Workday associates its labels the standard HTML way,
+  // `<label for=id>` as a SIBLING. So every certification on Eversource's Application Questions
+  // 2 of 2 came back named "on", which is the HTML default value for a checkbox that has none:
+  // twelve distinct options, one meaningless name, and `values:["None"]` answered
+  // `no option(s) ["None"] — options: ["on"]` (live 2026-08-17). Resolved the way a screen reader
+  // would, most-specific first, and scoped to the box's OWN document so this keeps working inside
+  // the iframes `__findAll` exists for.
+  const labelFor = (c) => {
+    if (!c.id) return '';
+    const d = c.ownerDocument || document;
+    try {
+      const esc = (window.CSS && CSS.escape) ? CSS.escape(c.id) : c.id;
+      return txt(d.querySelector('label[for="' + esc + '"]'));
+    } catch (x) { return ''; }
+  };
+  const labelledBy = (c) => {
+    const d = c.ownerDocument || document;
+    return (c.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+             .map(i => txt(d.getElementById(i))).join(' ').trim();
+  };
+  //: `value="on"` is what the browser supplies when the author gave none — it identifies nothing
+  //: and collides with every sibling that shares it, so it is not a name (same rule as the
+  //: census's `__isBoilerplate`). Refusing it here is what makes the "no option" report honest.
+  const ownValue = (c) => (String(c.value || '').toLowerCase() === 'on' ? '' : c.value || '');
+  const label = c => txt(c.closest('label')) || labelFor(c) || labelledBy(c)
+                     || c.getAttribute('aria-label') || ownValue(c) || '';
 
   // FRAME-AWARE TARGET LOOKUP. A page is not its top document: iCIMS renders its whole apply flow
   // inside `icims_content_iframe`, and every layer here had to learn this separately — the act-time
