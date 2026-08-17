@@ -8349,3 +8349,104 @@ governs, not the stored 130k, which stays as-is for senior roles), the required 
 and the unemployment account — **the one answer only the operator can write**. This tenant has
 eight steps and an assessment we have never seen; **stop before Take Assessment.** Nothing
 submitted, nothing sent. Tests: controlplane-api **1697**.
+
+### 2026-08-17 — the LinkedIn run: SSO that will not drive, a picker deciding blind, and a catch-all that was never a site
+
+Operator: *"let's start a linkedin run … following the north star … sharing skills that we find in
+workday applications across the domains and such so we aren't rebuilding."* Session #29 resumed on
+its persistent profile; session #30 (Indeed, Eversource in flight) protected first, the 08-14
+concurrent-drive pattern. Nothing was submitted this session.
+
+**`resume` PAID FOR ITSELF EXACTLY AS ITS DOCSTRING PROMISES.** The ladder came back with
+`query_entered` still **held** — the search was not re-spent — and `radius_set` still reading "not
+applicable on LinkedIn". Only `provisioned`/`authenticated` regressed, because only the browser had
+gone away. The fresh search then released 20 unworked picks and **parked** the one with real work
+rather than dropping it. The alternative that docstring names ("we wasted a good search and actual
+candidates") is the failure this avoided.
+
+**A PROBE THAT COULD NOT LOOK, ONE MORE TIME — AND I NEARLY BANKED IT.** `authenticated: false` on
+resume, with `/auth_state` answering `All connection attempts failed`. The cause was mine: the
+session record's port had moved to **9325** and I probed the stale 9323 from an earlier listing. The
+panel had the right port all along. *Read the port off the record you just refreshed, not off the
+listing you took before it.*
+
+**LINKEDIN'S GOOGLE SSO IS NOT DRIVEABLE THROUGH THIS LAYER, MEASURED.** AX offers two ways in:
+`button "Continue with google"` (node 65, 400×40 at x43,y399) and `Iframe "Sign in with Google
+Button"` (node 25, 420×44 at x33,y397). **The iframe completely covers the button** — same family as
+the "Show all" pill that hit-tested to a LABEL — so a click at the button's centre reaches Google's
+GSI frame, which is why the first attempt only scrolled. Driving the iframe opens
+`accounts.google.com/gsi/select` **as a top-level tab, which renders blank**, focused or not: GSI
+select only renders inside its intended popup/iframe context. The operator signed in by hand.
+Related: the Google flow diverted to a `gds.google.com/web/homeaddress` card that had to be
+**Skipped** before the chooser would appear — an SSO detour is not always an auth wall, and the
+07-30 rule holds in a new form: *the passkey is not the end of the sign-in.*
+
+**`/run` IS THE APPLY LOOP, NOT THE SEARCH LOOP**, and I read the panel wrong for two calls before
+checking. It cranks `queue.current()` and stops `no_step` when the queue is empty — correct
+behaviour on a fresh search, and the `awaiting: apply` beside it is not a diagnosis. The search
+phase is `/step`. Worth writing down because the panel's own `next` said `action: run_query` the
+whole time.
+
+**THE SHARING WORKED, AND THE NUMBERS ARE THE POINT.** Page 1 read 25/25 off the virtualised list:
+**5 new, 20 already seen, 3 likely already applied** — and all three matched applications found by
+**Indeed** drives, across **three different ATSs** (`indeed_quick_apply`, `icims`, `brassring`).
+`classify_ats` takes no engine parameter, so nothing had to be taught twice. Charles River is the
+sharpest case: the job session #29 was parked on at the Paylocity modal had **already been applied
+to through Indeed on 08-11**.
+
+**THE PICKER WAS DECIDING BLIND, AND THE OPERATOR PICKED TWO ALREADY-APPLIED JOBS BEFORE ANYONE
+NOTICED.** `applied_index.check_many` has run at scan time since 07-27 and `review_page` writes a
+verdict onto every card; the picker's table rendered #, Role, Company, Where, Pay and **dropped
+it**, and `/choose` never asked. Operator: *"we need to note which ones we already applied to so we
+don't waste any time."* Now: an "Applied?" column reusing `AppliedNote`'s exact vocabulary and
+source (the two surfaces cannot drift), a count of how many are **in the picks**, and `/choose`
+answering the two tiers differently — CERTAIN refuses with a per-job `confirm_reapply` override,
+FUZZY queues and journals `applied_warning`. Asked again at choose time rather than trusting the
+card, because the stored verdict is a memory and submissions land after the page was read.
+
+**AND THE LANDING VERDICT HAD NO SUBJECT.** `AppliedVerdict.job_id` names the row that MATCHED, so
+`bb.world["applied_check"]` was an answer with no question attached — and it survives until the next
+landing overwrites it. Its three siblings on the same panel (`proposal`, `account_handoff`,
+`account_state`) were already scoped by `job_id === step.job_id`; this was the fourth and the only
+one missing it. **Fifth instance of the 08-16 shape.** Stamped `for_job_id` at the write, scoped in
+`executeFocus`, and the surface now reads `focus.applied`. "Already applied" is the sentence an
+operator acts on by NOT applying, which makes the wrong job the expensive direction to be wrong in.
+
+**`company_site` IS A BUCKET, NOT A SITE — one employer's protocol had become every employer's
+prior.** The operator named the architecture: *"we have an 'interaction profile' which we pull from
+… share that … or discover what works and label the website, its ats."* That profile is
+`app/dialect.py`, and its sharing half was already right — the store is keyed on PLATFORM with no
+engine anywhere, so a Workday dialect learned on Indeed is offered first on a Workday reached from
+LinkedIn. The labelling half was not. The live store held:
+
+    company_site::option_select -> native_select (wins 4)
+    evidence: #areaInterest · selected Information Technology     <- Boston Children's BrassRing
+
+`company_site` is `ats_registry`'s catch-all for every unrecognised employer site, so BrassRing's
+answer was the first-tried protocol on **WAHVE's** form — bare `<div class="dropdown-label">`, no
+role, no `<select>` in the document, where `native_select` cannot possibly win. Catch-alls now narrow
+to the HOST; a real ATS keeps its ATS-level key, because an ATS id names one component library and
+that generalisation is the whole premise. Normalisation lives in `host_of` so the write key and the
+read key cannot drift — that drift is silent and presents as a dialect that never seems to learn.
+
+**WAHVE: A THIRD MECHANISM FOR "MY CENSUS CANNOT SEE WHAT THE SCREENSHOT SHOWS", AND A FILL THAT
+LIED.** Measured on `insurance.brainwahve.com/apply`: `selects: 0`, `[role=combobox|listbox]: 0`,
+**`shadowHosts: 0`** (so NOT SuccessFactors' web components), 1 iframe, and **15** "This field is
+required" messages. The inputs' `name`/`id` are randomly generated per render — `H1hOyflPGe`,
+`S1l3_yzlPfe`, `Bk-2uJGgvzl` — so **there is no stable address on this form**. `apply_fill` reported
+*"Planned 6 of 6 fields. Every field has a value. The page shows no required form fields"* while a
+read-back showed **every input empty** and the page showed fifteen required markers. The 08-16
+read-back postcondition is evidently not on this path. *No mechanism is proposed here for the
+role-less dropdowns* — the last two times this log guessed before measuring, the guess evaporated.
+
+*Where it stands:* session #29, `report analyst` / Greater Boston, 25 read, 16 picked, **13
+remaining**. Boston Children's and Joslin flagged `abandoned:already_applied` — the purpose-built
+flag, so the decision ledger does not learn a rejection that was really a duplicate. WAHVE is at its
+form, unfilled. **Nothing submitted, nothing sent, no account created.** Tests: controlplane-api
+**1697**, mcp 121 → **126**.
+
+*Two gaps left open on purpose.* `abandoned:already_applied` writes **nothing durable**
+(`_TERMINAL_TO_STATUS` has no entry), so the same two jobs will re-surface as `likely_applied` on
+every future LinkedIn search and need the same judgement again; the durable answer is merging the
+sighting into the canonical Job (`/api/career_search/duplicates`), and the operator deferred it. And
+`how_did_you_hear` is stored as **`Indeed`**, which is wrong on every LinkedIn-sourced application.
