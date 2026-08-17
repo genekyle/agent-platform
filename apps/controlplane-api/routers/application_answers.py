@@ -40,6 +40,12 @@ class ApplicationAnswerUpdate(BaseModel):
 
 class QuestionMatchRequest(BaseModel):
     question: str
+    #: The control the question is asked THROUGH — the census's `kind` ("textarea", "button",
+    #: "input") and/or the AX `role`. Optional, and omitting them scores exactly as before; but
+    #: text alone cannot tell a Yes/No chooser from a prose box, and that is what let a
+    #: three-reference textarea resolve to `city` = "Concord" (live 2026-08-17).
+    kind: str = ""
+    role: str = ""
 
 
 def _answer_dict(a: ApplicationAnswer) -> dict[str, Any]:
@@ -133,4 +139,4 @@ def match_application_answer(body: QuestionMatchRequest, db: Session = Depends(g
     import application_answers as aa
     rows = db.scalars(select(ApplicationAnswer).where(ApplicationAnswer.status == "active")).all()
     answers = [_answer_dict(a) for a in rows]
-    return aa.match_question(body.question, answers)
+    return aa.match_question(body.question, answers, kind=body.kind, role=body.role)

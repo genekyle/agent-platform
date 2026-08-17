@@ -131,3 +131,82 @@ def test_a_pattern_buried_inside_another_word_does_not_count():
     stem = [{"answer_key": "sponsorship_required", "display_name": "Sponsorship",
              "value": "No", "question_patterns": ["sponsor"]}]
     assert aa.match_question("Do you require sponsorship for employment?", stem)["matched"]
+
+
+# --- the control's SHAPE is evidence (measured live 2026-08-17, Eversource/Workday) -----------
+#
+# The live store holds both of these. Neither the seed list nor the question text can separate
+# them on the references question: `location`'s bare "city" pattern hits the sentence's last word
+# verbatim (3.0) and takes the display-name bonus on the same word (3.5), while the references
+# entry reaches only 3.0 on token overlap. The widget is what tells them apart.
+_REFERENCES = {
+    "answer_key": "references_long_form", "display_name": "References (long form)",
+    "category": "references", "input_hint": "textarea",
+    "value": "Alex Wall — Development Database Manager\nAixa Lovezzola — Director of Finance",
+    "question_patterns": ["please list your references", "list three references",
+                          "list your references", "professional references"],
+    "options": [],
+}
+_CITY = {
+    "answer_key": "city", "display_name": "City", "category": "logistics",
+    "value": "Concord", "input_hint": "text",
+    "question_patterns": ["city"], "options": [],
+}
+_SHAPED = [_CITY, _REFERENCES]
+
+# The census cuts field names at ~90 chars, which is why this ends mid-clause on the word `city,`.
+_REFS_Q = ("List three business references (previous supervisors); "
+           "include name, title, company, city,")
+
+
+def test_a_three_reference_textarea_does_not_resolve_to_the_home_town():
+    """The bug, exactly as it was planned live: 'Concord' into a three-reference box."""
+    assert aa.match_question(_REFS_Q, _SHAPED)["answer_key"] == "city"      # text alone: wrong
+    r = aa.match_question(_REFS_Q, _SHAPED, kind="textarea")                # + the widget: right
+    assert r["matched"] and r["answer_key"] == "references_long_form"
+    assert r["control_class"] == aa.LONG_TEXT
+
+
+def test_a_multi_line_block_is_refused_by_a_single_line_control():
+    """The mirror: the references block must never be typed into a short City input."""
+    r = aa.match_question("City", _SHAPED, kind="input")
+    assert r["matched"] and r["answer_key"] == "city"
+    assert "references_long_form" in r["refused_for_kind"]
+
+
+def test_a_prose_answer_is_refused_by_a_chooser():
+    r = aa.match_question(_REFS_Q, _SHAPED, kind="button")
+    assert "references_long_form" in r["refused_for_kind"]
+
+
+def test_the_ax_role_is_used_when_the_census_kind_is_absent():
+    assert aa.control_class("", "combobox") == aa.CHOICE
+    assert aa.control_class("textarea", "textbox") == aa.LONG_TEXT   # kind wins over role
+
+
+def test_a_short_text_answer_still_fills_a_textarea():
+    """Workday asks for a full legal name in a textarea — `text` into prose is not refused."""
+    name = {"answer_key": "full_name", "display_name": "Full name", "input_hint": "text",
+            "value": "Gene Kyle Magsipoc",
+            "question_patterns": ["full legal name", "your full name"], "options": []}
+    r = aa.match_question("Please list your full legal name.*", [name], kind="textarea")
+    assert r["matched"] and r["answer_key"] == "full_name"
+
+
+def test_a_text_answer_still_wins_a_chooser_it_was_always_right_for():
+    """`work_authorization` is stored as the text 'Yes' and is answered by PICKING Yes."""
+    r = aa.match_question("Are you legally authorized to work in the United States?*",
+                          ANSWERS, kind="button")
+    assert r["matched"] and r["answer_key"] == "work_authorization"
+
+
+def test_the_shape_bonus_cannot_carry_a_match_on_its_own():
+    """+1.0 is a tiebreak, never evidence: below threshold stays below threshold."""
+    r = aa.match_question("Describe a challenging project you led.", ANSWERS, kind="textarea")
+    assert r["matched"] is False
+
+
+def test_scoring_without_a_kind_is_unchanged():
+    for q in ("What is your gender?", "Are you a protected veteran?",
+              "Voluntary self-identification of disability"):
+        assert aa.match_question(q, ANSWERS) == aa.match_question(q, ANSWERS, kind="", role="")

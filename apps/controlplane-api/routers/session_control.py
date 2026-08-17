@@ -4443,7 +4443,12 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
         c_name = (c_row.get("field") or "").strip()
         if (c_row.get("kind") in ("input", "textarea") and c_row.get("selector")
                 and c_name and _bare(c_name) not in known_names):
-            fields.append({"role": "textbox", "name": c_name,
+            # THE KIND RIDES ALONG, because the AX role cannot carry it. Both an `<input>` and a
+            # `<textarea>` are role `textbox`, so flattening them here threw away the one fact
+            # that separates a City box from a three-reference prose box — and the planner, given
+            # only "textbox", mapped Eversource's references question to `city` = "Concord"
+            # (live 2026-08-17). `form_fill._label_scope` reads this.
+            fields.append({"role": "textbox", "kind": c_row["kind"], "name": c_name,
                            "selector": c_row["selector"]})
             known_names.add(_bare(c_name))
     rows = _fill_plan_for(bb, fields, db)

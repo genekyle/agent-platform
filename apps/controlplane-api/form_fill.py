@@ -26,6 +26,7 @@ import re
 from datetime import date
 from typing import Any, Optional
 
+import application_answers as aa
 import working_variables as wv
 
 #: A field's accessible name (lowercased, substring-matched) -> the answer_key it maps to. Ordered
@@ -131,6 +132,33 @@ def _application_scope(key: Optional[str], name: str, section: Optional[str]) ->
     return True, ""
 
 
+def _label_scope(key: Optional[str], kind: str, role: str) -> tuple[bool, str]:
+    """May an identity-map key bind to a control of this SHAPE? (ok, why-not).
+
+    A NEEDLE IN A SENTENCE IS NOT A FIELD LABEL. `_FIELD_TO_KEY`'s needles are field labels —
+    "City", "State", "Email Address" — and `field_answer_key` matches them on word boundaries,
+    which is enough while the label IS a label. It is not enough once the "label" is a question:
+    Eversource's Workday asks *"List three business references (previous supervisors); include
+    name, title, company, city,"* and the census cuts names at ~90 chars, so the row handed to the
+    planner ended on the word `city,`. It matched as a whole word, and the plan for a
+    three-reference box was **"Concord"** (live 2026-08-17, caught in the preview).
+
+    The shape is the discriminator the text could not supply. A `<textarea>` is a prose box: it is
+    never the City field, never the Email field, never any of the short identity boxes this map
+    is made of. So the identity map does not bind inside one, and a prose answer reaches it
+    through the stored `question_patterns` instead — where `references_long_form` is waiting.
+
+    Kept and MARKED rather than dropped, like `_application_scope`: "we found it and cannot
+    safely address it" is a different fact from "it is not there", and only the first tells the
+    operator what to do.
+    """
+    if key is None:
+        return True, ""
+    if aa.control_class(kind, role) == aa.LONG_TEXT:
+        return False, "a free-text box, not one of the short identity fields this map names"
+    return True, ""
+
+
 def field_answer_key(field_name: str) -> Optional[str]:
     """The answer_key a field maps to, or None if it is one we deliberately skip / do not map.
 
@@ -178,9 +206,12 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
             continue
         seen[name] = seen.get(name, 0) + 1
         value, source = _resolve(key, answers=answers, identity=identity, today=today)
+        kind = (f.get("kind") or "").lower()
         in_scope, why_not = _application_scope(key, name, f.get("section"))
+        if in_scope:
+            in_scope, why_not = _label_scope(key, kind, role)
         rows.append({
-            "field": name, "role": role, "answer_key": key,
+            "field": name, "role": role, "kind": kind, "answer_key": key,
             "value": value, "source": source,
             "section": f.get("section"),
             "out_of_scope": None if in_scope else why_not,

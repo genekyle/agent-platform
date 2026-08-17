@@ -302,3 +302,35 @@ def test_the_detail_names_the_fields_that_did_not_take():
     rb = ff.readback(_PLANNED, {"First Name": "Gene", "Contact Phone": "", "City": ""})
     d = ff.readback_detail(rb)
     assert "STILL EMPTY" in d and "Contact Phone" in d and "City" in d
+
+
+# --- a needle in a sentence is not a field label (measured live 2026-08-17, Eversource) --------
+def test_the_identity_map_does_not_bind_inside_a_free_text_box():
+    """`_FIELD_TO_KEY` names short identity boxes; a textarea is never one of them.
+
+    The census cuts field names at ~90 chars, so Eversource's references question arrived ending
+    on the word `city,`. It matched as a whole word — the guard `field_answer_key` already has —
+    and the plan for a three-reference box was the single word "Concord".
+    """
+    name = ("List three business references (previous supervisors); "
+            "include name, title, company, city,")
+    assert ff.field_answer_key(name) == "city"          # the text still matches
+    rows = ff.plan([{"role": "textbox", "kind": "textarea", "name": name}],
+                          answers={"city": "Concord"}, identity={})
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["fillable"] is False and row["out_of_scope"]
+    assert row["value"] == "Concord"      # kept and MARKED, so the operator can see what it was
+
+
+def test_a_real_city_input_still_fills():
+    rows = ff.plan([{"role": "textbox", "kind": "input", "name": "City"}],
+                          answers={"city": "Concord"}, identity={})
+    assert rows[0]["fillable"] is True and rows[0]["value"] == "Concord"
+
+
+def test_a_field_with_no_kind_declared_behaves_as_before():
+    """The AX scan supplies no `kind`; an unknown shape must not start refusing fills."""
+    rows = ff.plan([{"role": "textbox", "name": "City"}],
+                          answers={"city": "Concord"}, identity={})
+    assert rows[0]["fillable"] is True

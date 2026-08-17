@@ -160,22 +160,100 @@ def _tokens(text: str) -> set[str]:
     return {w for w in _WORD.findall((text or "").lower()) if w not in _STOP and len(w) > 1}
 
 
-def match_question(question: str, answers: list[dict[str, Any]]) -> dict[str, Any]:
+#: The three control shapes that decide whether a stored value can LAND in a control at all.
+#: A textarea is a prose box; a chooser has a fixed option set and is answered by picking, not
+#: typing; everything else is one short line. Deliberately coarser than the census's `kind` — the
+#: question here is not "which widget is this" but "could this value ever be a right answer here".
+LONG_TEXT, CHOICE, SHORT_TEXT = "long_text", "choice", "short_text"
+
+#: Census `kind` / AX `role` -> control class. Both vocabularies land here because the fill plan
+#: is fed from both scanners and they name the same widgets differently.
+_KIND_CLASS: dict[str, str] = {
+    "textarea": LONG_TEXT,
+    "button": CHOICE, "select": CHOICE, "combobox": CHOICE,
+    "radio": CHOICE, "checkbox": CHOICE, "radiogroup": CHOICE,
+    "input": SHORT_TEXT, "textbox": SHORT_TEXT, "text": SHORT_TEXT,
+}
+
+#: A stored answer's `input_hint` -> the control class it was WRITTEN for. `text`/`number`/`date`
+#: are all one short line, so they collapse together.
+_HINT_CLASS: dict[str, str] = {
+    "textarea": LONG_TEXT,
+    "select": CHOICE, "radio": CHOICE, "checkbox": CHOICE,
+}
+
+
+def control_class(kind: str = "", role: str = "") -> str:
+    """Which of the three shapes this control is, or '' when nothing said.
+
+    `kind` (the DOM census) wins over `role` (the AX tree) because the census reads the tag and
+    the AX tree flattens `<textarea>` and `<input>` into the same `textbox` role — which is
+    exactly the distinction the guards below turn on.
+    """
+    for token in ((kind or "").strip().lower(), (role or "").strip().lower()):
+        if token in _KIND_CLASS:
+            return _KIND_CLASS[token]
+    return ""
+
+
+def answer_class(input_hint: str) -> str:
+    return _HINT_CLASS.get((input_hint or "").strip().lower(), SHORT_TEXT)
+
+
+def kind_refuses(control: str, answer: str) -> str:
+    """Why this answer can never be right for this control's shape, or '' if it might be.
+
+    Only the pairings that are wrong on their FACE are refused; this is a shape check, not a
+    judgement about the question. A short `text` answer in a textarea is fine (Workday asks for a
+    full legal name in one), and a short `text` answer on a chooser is fine too (`work_authorization`
+    is stored as the text "Yes" and is answered by picking Yes). What can never be right is prose
+    in a box that cannot hold it, or an option pick offered as prose.
+    """
+    if not control or not answer:
+        return ""
+    if answer == LONG_TEXT and control != LONG_TEXT:
+        return "a multi-line block cannot be the answer to a single-line control"
+    if answer == CHOICE and control == LONG_TEXT:
+        return "an option pick is not prose, and this control is a free-text box"
+    return ""
+
+
+def match_question(question: str, answers: list[dict[str, Any]],
+                   kind: str = "", role: str = "") -> dict[str, Any]:
     """Map an on-screen question to the best stored answer.
 
     Scoring: a question_pattern that appears as a substring of the question is a strong
     signal (weight 3); otherwise token overlap between the question and the pattern /
     answer name (weight 1 each). Returns {matched, answer_key, value, options, score,
     confidence, reason}. `matched` is False when nothing clears the threshold — the
-    caller then escalates to Haiku."""
+    caller then escalates to Haiku.
+
+    THE CONTROL'S SHAPE IS EVIDENCE, and leaving it out cost a right answer to a wrong one.
+    Eversource's Workday asks *"List three business references (previous supervisors); include
+    name, title, company, city,"* in a TEXTAREA, and `references_long_form` holds exactly that
+    block. But `location`'s bare "city" pattern hit the sentence's last word verbatim (3.0) and
+    took the display-name bonus on the same word (3.5), while the references entry could only
+    reach 3.0 on token overlap — so the planned fill for a three-reference box was the single
+    word **"Concord"**, one Execute away from a real employer's form (live, 2026-08-17).
+
+    Text alone could not separate them; the widget could. So a `kind`/`role` refuses the answers
+    whose shape can never fit, and breaks the remaining tie toward the answer written for this
+    shape. Both are optional: called without a kind this scores exactly as it did before.
+    """
     q = (question or "").lower().strip()
     q_tokens = _tokens(q)
     if not q_tokens:
         return {"matched": False, "reason": "empty_question", "score": 0.0}
 
+    want = control_class(kind, role)
     best = None
     best_score = 0.0
+    refused: list[str] = []
     for a in answers:
+        why_not = kind_refuses(want, answer_class(a.get("input_hint", "")))
+        if why_not:
+            refused.append(a.get("answer_key", ""))
+            continue
         # The BEST single pattern decides — deliberately not the sum. Summing let a common word
         # repeated across several patterns manufacture a match: "Do you have marketing
         # experience?" scored 3.0 against the three "marketing …" patterns and came back as an
@@ -208,13 +286,20 @@ def match_question(question: str, answers: list[dict[str, Any]]) -> dict[str, An
                 score = max(score, len(pat_tokens & q_tokens) * 1.0)
         # The answer_key / display_name tokens themselves are weak signals.
         score += 0.5 * len(_tokens(a.get("display_name", "")) & q_tokens)
+        # WRITTEN FOR THIS SHAPE. Worth a whole pattern's weight because it is the same order of
+        # evidence: an entry whose hint is `textarea` was authored to fill a prose box, and that
+        # says more about fitness than one more shared word does. Only ever a tiebreak — it
+        # cannot lift an answer over MATCH_THRESHOLD on its own, since 1.0 < 3.0.
+        if want and answer_class(a.get("input_hint", "")) == want:
+            score += 1.0
         if score > best_score:
             best_score, best = score, a
 
     matched = best is not None and best_score >= MATCH_THRESHOLD
     if not matched:
         return {"matched": False, "score": round(best_score, 2),
-                "reason": "below_threshold", "best_key": best["answer_key"] if best else None}
+                "reason": "below_threshold", "best_key": best["answer_key"] if best else None,
+                "control_class": want, "refused_for_kind": refused}
     return {
         "matched": True,
         "answer_key": best["answer_key"],
@@ -223,4 +308,7 @@ def match_question(question: str, answers: list[dict[str, Any]]) -> dict[str, An
         "input_hint": best.get("input_hint", "text"),
         "score": round(best_score, 2),
         "confidence": round(min(1.0, best_score / 4.0), 3),
+        # What the shape contributed, so a surprising match is explainable without a re-run.
+        "control_class": want,
+        "refused_for_kind": refused,
     }
