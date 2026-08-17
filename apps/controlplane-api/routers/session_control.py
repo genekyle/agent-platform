@@ -4446,7 +4446,19 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     def _bare(name: str) -> str:
         return re.sub(r"[\s*:]+$", "", (name or "").strip()).strip().lower()
 
-    known_names = {_bare(f.get("name") or "") for f in fields}
+    # "ALREADY KNOWN" MUST MEAN "ALREADY ADDRESSABLE", not "the string appears somewhere in the
+    # tree". Workday wraps every question in a `role=group` whose accessible name IS the question
+    # text, and those groups are in `fields`. So the dedupe saw the question as known and dropped
+    # the census row — and then `form_fill.plan` discarded the group, because a group is not a
+    # fillable control. The field fell through the crack between the two, and the ONLY reason any
+    # of them survived was the census cutting names at ~90 chars, which made the three longest
+    # questions fail to match their own group. Two of Eversource's five textareas were lost this
+    # way, including "Please list your full legal name" (live 2026-08-17).
+    #
+    # Scoped to the roles the planner can actually use, which keeps the dedupe this comment block
+    # was written for: an AX textbox "First Name" still suppresses the census's "First Name*".
+    known_names = {_bare(f.get("name") or "") for f in fields
+                   if (f.get("role") or "").lower() in form_fill.FILLABLE_ROLES}
     for c_row in ((census or {}).get("unanswered") or []):
         c_name = (c_row.get("field") or "").strip()
         if (c_row.get("kind") in ("input", "textarea") and c_row.get("selector")

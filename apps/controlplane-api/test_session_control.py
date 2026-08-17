@@ -2877,6 +2877,57 @@ def test_apply_fill_plans_the_bunch_without_driving(monkeypatch):
     assert "/execute" not in harness.paths()          # plan-only drives nothing
 
 
+def test_a_question_group_does_not_hide_the_control_it_names(monkeypatch):
+    """Workday wraps each question in a `role=group` NAMED AFTER THE QUESTION.
+
+    The census dedupe suppressed any row whose name already appeared in the AX tree, and the
+    planner then dropped the group because a group is not a fillable control — so the field fell
+    through the crack between them. Two of Eversource's five textareas were lost this way, and the
+    three that survived only did so because the census cuts names at ~90 chars and they therefore
+    failed to match their own group (live 2026-08-17). "Already known" has to mean "already
+    addressable".
+    """
+    q = "Please list your full legal name."
+    scan = {"ok": True, "page_text": "", "candidates": [
+        {"role": "group", "name": q},                      # the wrapper, not a control
+        {"role": "button", "name": " Select One Required"},
+    ]}
+    census = {"ok": True, "unanswered": [
+        {"field": q + "*", "kind": "textarea", "selector": "#q1", "answered": False}]}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/ax_scan": scan, "/scan_required": census},
+             blackboard=_wd_step(),
+             answers=[_Answer("full_name", "Gene Kyle Magsipoc",
+                              patterns=["full legal name"], hint="text")])
+    try:
+        r = client.post("/api/session_control/1/apply_fill", json={"execute": False}).json()
+    finally:
+        _teardown()
+    rows = r["last_step"]["fill_plan"]
+    assert [x["answer_key"] for x in rows] == ["full_name"]
+    assert rows[0]["matched_by"] == "question_patterns" and rows[0]["selector"] == "#q1"
+
+
+def test_a_real_control_still_wins_the_dedupe_against_the_census(monkeypatch):
+    """The dedupe this scoping had to preserve: an AX textbox "First Name" must still suppress
+    the census's "First Name*", or the same box is planned — and typed — twice."""
+    scan = {"ok": True, "page_text": "", "candidates": [{"role": "textbox", "name": "First Name"}]}
+    census = {"ok": True, "unanswered": [
+        {"field": "First Name*", "kind": "input", "selector": "#fn", "answered": False}]}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/ax_scan": scan, "/scan_required": census},
+             blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_fill", json={"execute": False}).json()
+    finally:
+        _teardown()
+    assert len(r["last_step"]["fill_plan"]) == 1        # one box, one row
+
+
 def test_apply_fill_executes_only_the_confident_fields(monkeypatch):
     typed = []
 
@@ -4456,7 +4507,14 @@ def _sap_step(bb):
 
 
 class _Answer:
-    def __init__(self, k, v): self.answer_key, self.value = k, v
+    """Stands in for an `ApplicationAnswer` row. Carries the whole shape the planner reads —
+    `_fill_plan_for` passes `question_patterns`/`input_hint` through as the fill's second source,
+    so a double with only key+value would fail on an attribute rather than on the assertion."""
+    def __init__(self, k, v, *, patterns=None, hint="text", display=""):
+        self.answer_key, self.value = k, v
+        self.question_patterns = patterns or []
+        self.input_hint, self.display_name = hint, display or k.replace("_", " ").title()
+        self.options: list[str] = []
 
 
 def test_a_password_that_breaks_the_ats_rules_is_refused_before_a_keystroke(monkeypatch):

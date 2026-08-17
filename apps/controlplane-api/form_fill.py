@@ -69,6 +69,11 @@ _FIELD_TO_KEY: tuple[tuple[str, str], ...] = (
     ("date signed", "todays_date"),
 )
 
+#: The AX roles this planner can actually fill. Exported because the caller's census dedupe has
+#: to agree with it: a name that is "already known" only counts as known if it belongs to a
+#: control we could address, and Workday names its question GROUPS after the question text.
+FILLABLE_ROLES: frozenset[str] = frozenset({"textbox", "combobox", "checkbox"})
+
 #: Sources, for the plan's provenance column and the UI's colour.
 SRC_WORKING, SRC_STORED, SRC_IDENTITY, SRC_MISSING, SRC_SKIP = (
     "working_variable", "stored", "identity", "missing", "skip")
@@ -214,7 +219,7 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
     for f in fields:
         name = (f.get("name") or "").strip()
         role = (f.get("role") or "").lower()
-        if not name or role not in ("textbox", "combobox", "checkbox"):
+        if not name or role not in FILLABLE_ROLES:
             continue
         kind = (f.get("kind") or "").lower()
         key, matched_by, confidence = field_answer_key(name), "label_map", 1.0
