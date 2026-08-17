@@ -8350,6 +8350,35 @@ and the unemployment account — **the one answer only the operator can write**.
 eight steps and an assessment we have never seen; **stop before Take Assessment.** Nothing
 submitted, nothing sent. Tests: controlplane-api **1697**.
 
+**CODA, same day — the screen finished, and the two things that stopped it.** All sixteen required
+controls on Application Questions 1 of 2 are answered and verified by the page's own census
+(`16 answered, 0 unanswered, no field or page errors`), confirmed on a screenshot. The eleven
+choosers are `aria_listbox` — plain `aria-haspopup`, not Workday's searchable prompt — and
+`/widget_select` drives them correctly with `opener_selector` + `option_label`, three options each,
+committing on select with no footer button.
+
+*The seventeenth question had to be read out of the AX tree.* Its control's accessible name
+resolves to the page heading ("Application Questions 1 of 2"), so the census could not say what it
+asks. The unmatched `role=group` held it: *"…Knowing this is a requirement to work at Eversource,
+are you available for Emergency Restoration work?"* — a commitment to call-outs outside normal
+hours and location, not a history question, and correctly routed to the operator rather than
+inferred from the "all No" they had given for the history block. **When a control's name resolves
+to the page heading, the question is still on the page — it is on the wrapping group.**
+
+*Two refusals worth keeping, both correct.* `/set_date` refuses Workday's segmented date outright:
+*"linked auto-advancing spinbuttons — CDP typing scrambles across sub-fields ('12//', '//2012').
+Unsolved; route to the operator. Do not 'try anyway'."* That is the one field on the screen left
+for the human, and the honest refusal is worth more than a scrambled date. And the census files
+that required date under `optional` while the page prints a red asterisk beside it — so a form
+that is 16-of-16 by our count is still not submittable. **`optional` here means "not in the
+required set we could read", not "not required".**
+
+*And a stored answer had quietly rotted.* `availability_date` held **07/12/2026** — a month in the
+past — and would have gone onto a live application as a start date. Now 09/01/2026 by the
+operator. A fixed date answer goes stale silently and nothing was watching it; this wants to be a
+WORKING VARIABLE (today + notice period) like `todays_date`, not a stored constant. Same class as
+the `"None"` sentinel: the store can hold values it cannot honestly serve.
+
 ### 2026-08-17 — the LinkedIn run: SSO that will not drive, a picker deciding blind, and a catch-all that was never a site
 
 Operator: *"let's start a linkedin run … following the north star … sharing skills that we find in
