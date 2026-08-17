@@ -401,11 +401,11 @@ class _FakeCDP:
         return {"result": {"value": self.reads.pop(0) if self.reads else None}}
 
 
-def _run_text_menu(**kw):
+def _run_text_menu(value="No", **kw):
     from app.protocols import text_menu_pick
     cdp = _FakeCDP(**kw)
     outcome, steps, detail = asyncio.run(
-        text_menu_pick(cdp, selector="[data-id=q]", value="No", settle_seconds=0))
+        text_menu_pick(cdp, selector="[data-id=q]", value=value, settle_seconds=0))
     return cdp, outcome, steps, detail
 
 
@@ -478,3 +478,28 @@ def test_text_menu_says_so_when_the_opener_is_not_there():
         opened={"ok": False, "detail": "no node matching [data-id=q]"}, hit={}, reads=[])
     assert outcome is Outcome.NOT_FOUND
     assert "no node matching" in detail
+
+
+def test_text_menu_confirms_a_multi_select_by_membership_not_equality():
+    """"Select the type(s)" is a real question, and this family answers it. WAHVE's insurance-firm
+    menu is checkboxes: after picking 'Other' the opener reads the whole comma-separated set.
+
+    Equality called that a failure — and a false negative is not harmless here. The caller's
+    reasonable response to NOT_STAGED is to try again, and on a multi-select trying again TOGGLES
+    THE VALUE BACK OFF: the retry undoes the success it was sent to confirm.
+    """
+    _, outcome, _, detail = _run_text_menu(
+        "Other",
+        opened={"ok": True, "x": 5, "y": 5, "before": "Credit Union"},
+        hit={"found": True, "count": 50, "x": 9, "y": 9},
+        reads=["Credit Union, Other, Direct Writer / Captive Insurance Carrier"])
+    assert outcome is Outcome.OK
+    assert "multi-select" in detail
+
+    # A value that is NOT among them is still a failure — membership, not "the label changed".
+    _, outcome2, _, _ = _run_text_menu(
+        "Other",
+        opened={"ok": True, "x": 5, "y": 5, "before": "Credit Union"},
+        hit={"found": True, "count": 50, "x": 9, "y": 9},
+        reads=["Credit Union, Direct Writer"])
+    assert outcome2 is Outcome.NOT_STAGED

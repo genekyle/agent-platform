@@ -248,10 +248,25 @@ _TEXT_MENU_PICK_JS = r"""
   const vis = (e) => e.offsetParent !== null && e.getBoundingClientRect().width > 0;
   const leaves = [...document.querySelectorAll("body *")].filter(
     (e) => e.children.length === 0 && vis(e) && (e.textContent || "").trim());
-  const outside = leaves.filter((e) => !(opener && opener.contains(e)));
+  // AN OPTION IS A TAP TARGET, NOT MERELY VISIBLE TEXT. The page behind an open menu is still
+  // visible, so filtering on visibility alone counted every heading and paragraph on the form as
+  // a candidate — 92 "options" on a menu of eight, and a `no_option` refusal whose sample was the
+  // page's prose instead of the choices. Since the commit is a tap, the honest definition of an
+  // option is "a visible leaf inside something focusable", which is what a menu item is and what
+  // body copy never is.
+  const focusableAncestor = (e) => {
+    let a = e;
+    for (let i = 0; i < 4 && a && a.parentElement; i++) {
+      a = a.parentElement;
+      if (a.hasAttribute && a.hasAttribute("tabindex")) return a;
+    }
+    return null;
+  };
+  const outside = leaves.filter(
+    (e) => !(opener && opener.contains(e)) && focusableAncestor(e));
   const texts = [...new Set(outside.map((e) => (e.textContent || "").trim()))];
   const hits = outside.filter((e) => (e.textContent || "").trim().toLowerCase() === want);
-  if (!hits.length) return {found: false, count: outside.length, sample: texts.slice(0, 12)};
+  if (!hits.length) return {found: false, count: outside.length, sample: texts.slice(0, 40)};
   // THE TAP TARGET IS NOT THE TEXT NODE'S ELEMENT. MUI v0 wraps each item in an EnhancedButton
   // (`span[tabindex]`) which is what carries the handler; clicking the inner div works only
   // because the event bubbles, and bubbling is not something to rely on when a library may stop
@@ -336,15 +351,24 @@ async def text_menu_pick(cdp, *, selector: str, value: str,
     got = await _eval(cdp, _text_menu_read_js(selector))
     steps.append({"step": "commit", "kind": "on_select", "value_read_at": ".dropdown-label",
                   "observed": got})
-    if str(got or "").strip().lower() != value.strip().lower():
-        # Deliberately compares to the VALUE rather than merely to `before`: a menu that closed
-        # having selected the wrong item also changes the label, and "it moved" is not "it is
-        # right". This is the guard that caught an option list belonging to a different question
-        # on 2026-08-15.
+    # MEMBERSHIP, NOT EQUALITY — because "select the type(s)" is a real question and this family
+    # answers it. WAHVE's insurance-firm question is a checkbox menu whose opener reads
+    # "Credit Union, Other, Direct Writer / Captive Insurance Carrier"; comparing that whole label
+    # to "Other" called a correct selection NOT_STAGED. A false negative here is not harmless: the
+    # caller's reasonable next move is to try again, and on a multi-select trying again TOGGLES
+    # THE VALUE BACK OFF, so the retry undoes the success it was sent to confirm.
+    #
+    # Still compares against the VALUE and not merely against `before` — a menu that closed on the
+    # wrong item also changes the label, and "it moved" is not "it is right" (2026-08-15).
+    chosen = [p.strip().lower() for p in str(got or "").split(",") if p.strip()]
+    if value.strip().lower() not in chosen:
         return (Outcome.NOT_STAGED, steps,
                 f"tapped {value!r} but the opener reads {got!r}"
                 + (" (unchanged)" if str(got or "") == str(opened.get("before") or "") else ""))
-    return Outcome.OK, steps, f"selected {got!r} (verified at the opener's own label)"
+    return (Outcome.OK, steps,
+            f"selected {got!r} (verified at the opener's own label)"
+            if len(chosen) == 1
+            else f"selected {value!r}; the opener now reads {got!r} (multi-select)")
 
 
 # --- the checkbox-group protocol ----------------------------------------------------
