@@ -19,6 +19,11 @@ from importlib import import_module
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+# Module-level: `_SPINE_KIND` below is built from these constants at import time, and the whole
+# point of that table is that the two vocabularies stay tied together. apply_landing imports
+# nothing from here, so there is no cycle to dodge with a function-local import.
+import apply_landing as al
+
 # --- The recipe: expected linear spine of an Indeed quick-apply -------------------
 # Each step: state id, the action that advances it, and the state(s) it may lead to.
 # Indeed skips steps when the profile is already saved, so `expect` lists alternatives.
@@ -1501,6 +1506,65 @@ _GREENHOUSE_STATE_MARKERS: list[tuple[str, str]] = [
 # is what makes the bundle refuse to drive them, per PRINCIPLES and the ATS-accounts boundary.
 _CREDENTIAL_STATES = frozenset({"workday_sign_in", "workday_create_account",
                                 "appvault_login", "appvault_create_account"})
+
+#: What KIND of screen each SCRIPTED spine state is, in the observer's vocabulary.
+#:
+#: The two vocabularies are the reason the record and the window could not be compared. The
+#: observer answers in generic kinds (`apply_landing.KINDS` — an application form is an
+#: application form on every ATS); a platform with its own recipe walks named steps
+#: (`workday_my_information`). Both describe the same screen and neither can be string-matched
+#: against the other, so the drift between "where the record thinks we are" and "what the window
+#: shows" was structurally invisible — `_generic_kind` deliberately returns "" for a platform with
+#: a scripted flow, which is right for its own purpose and left nothing to compare here.
+#:
+#: Declared rather than inferred: a spine step's kind is a fact about the screen the recipe was
+#: written against, and guessing it from the name would put `workday_questions` (a form) and
+#: `workday_review` (a review) in the same bucket on the strength of a word.
+_SPINE_KIND: dict[str, str] = {
+    # workday
+    "company_careers_landing": al.JOB_POSTING,
+    "ats_landing": al.JOB_POSTING,
+    "workday_job_posting": al.JOB_POSTING,
+    "workday_apply_method": al.JOB_POSTING,      # the modal opens over the posting
+    "workday_apply_auth": al.ACCOUNT_GATE,
+    "workday_create_account": al.ACCOUNT_GATE,
+    "workday_sign_in": al.ACCOUNT_GATE,
+    "workday_my_information": al.APPLICATION_FORM,
+    "workday_my_experience": al.APPLICATION_FORM,
+    "workday_questions": al.APPLICATION_FORM,
+    "workday_voluntary_disclosures": al.APPLICATION_FORM,
+    "workday_review": al.REVIEW,
+    "workday_submitted": al.CONFIRMATION,
+    # indeed quick apply
+    "indeed_job_posting": al.JOB_POSTING,
+    "indeed_apply_resume_selection": al.APPLICATION_FORM,
+    "indeed_apply_resume_highlights": al.APPLICATION_FORM,
+    "indeed_apply_questions": al.APPLICATION_FORM,
+    "indeed_apply_contact_info": al.APPLICATION_FORM,
+    "indeed_apply_resume_review": al.APPLICATION_FORM,
+    "indeed_apply_demographics": al.APPLICATION_FORM,
+    "indeed_apply_review": al.REVIEW,
+    "indeed_apply_submitted": al.CONFIRMATION,
+}
+
+
+def kind_of_state(platform: Optional[str], state: Optional[str]) -> str:
+    """The generic KIND a recorded state claims the screen is — "" when we cannot say.
+
+    This is what makes the record contradictable. Without it the observer could only disagree with
+    a rung that had declared its needs in `RUNG_NEEDS`, which covers the generic rungs and none of
+    the scripted spine — so on Workday the panel showed `workday_my_information` beside an observed
+    `workday_account_gate` and reported no mismatch at all (live, 2026-08-16).
+
+    "" is returned for anything unknown, and callers must treat that as NO CLAIM rather than as
+    disagreement: a state we cannot place is not evidence that the record is wrong.
+    """
+    if not state:
+        return ""
+    hit = _SPINE_KIND.get(state)
+    if hit:
+        return hit
+    return _generic_kind(platform, state)
 
 # Anti-bot / challenge markers — classify -> escalate, NEVER auto-solve (same rule everywhere).
 _CHALLENGE_MARKERS = ("verify you are human", "i'm not a robot", "recaptcha",

@@ -1480,6 +1480,7 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
     exactly as before — deterministic witnesses only.
     """
     import orientation
+    from apply_recipe import kind_of_state as _ar_kind_of_state
     from ats_registry import ats_for_company
 
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
@@ -1518,6 +1519,11 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
         company=step.company or "",
         ats_lookup=ats_for_company,
         known_recipe=(step.platform or "") in DRIVEN_PLATFORMS_VIEW,
+        # WHAT THE RECORD CLAIMS THE SCREEN IS, so the observation can contradict it. The two speak
+        # different vocabularies — the spine walks `workday_my_information`, the observer answers
+        # in generic kinds — so the translation happens here and `orientation` stays pure. "" when
+        # the state cannot be placed, which reads as NO CLAIM rather than as agreement.
+        recorded_kind=_ar_kind_of_state(step.platform, step.landing_state),
         # THE LEARNED WITNESSES, joining the fusion at last. They claim a platform (their measured
         # strength) and abstain at the novelty ceiling, so a witness announcing "I have never seen
         # this page" is rendered without being allowed to vote.

@@ -265,3 +265,58 @@ def test_the_shrug_never_joins_a_family():
     # An ATS outside the facet vocabulary is its own family, compared against itself.
     assert facets.family_of("smartrecruiters") == "smartrecruiters"
     assert facets.family_of("workday") == "workday"
+
+
+# --- the record is a claim, and it must be contradictable --------------------------------------
+#
+# `RUNG_NEEDS` covers the GENERIC rungs and none of the scripted spine, so a platform step
+# ("workday_my_information") declared no needs and could therefore never be wrong. Live
+# 2026-08-16: a refresh silently signed the session out, the panel showed the recorded
+# `workday_my_information` beside an observed account gate, and reported no mismatch at all.
+
+_GATE_TEXT = ("Sign In Back to Job Posting Data Analyst Email Address Password Sign In "
+              "Don't have an account yet? Create Account Forgot your password?")
+
+
+def test_a_record_that_disagrees_with_the_window_is_a_mismatch():
+    import orientation as om
+    o = om.orient("https://x.wd1.myworkdayjobs.com/en-US/ExternalSite/job/y",
+                  page_text=_GATE_TEXT, rung="workday_my_information",
+                  recorded_kind="application_form")
+    assert o.mismatch is not None
+    assert o.mismatch["drift"] is True
+    assert o.mismatch["observed"] == "account_gate"
+    assert "an application form" in o.mismatch["detail"]     # article, not "a application form"
+    assert "an account gate" in o.mismatch["detail"]
+
+
+def test_agreement_between_record_and_window_raises_nothing():
+    import orientation as om
+    o = om.orient("https://x.wd1.myworkdayjobs.com/en-US/ExternalSite/job/y",
+                  page_text=_GATE_TEXT, rung="workday_sign_in",
+                  recorded_kind="account_gate")
+    assert o.mismatch is None
+
+
+def test_a_state_we_cannot_place_is_no_claim_rather_than_disagreement():
+    """kind_of_state returns "" for an unplaceable state; that must not read as a contradiction."""
+    import orientation as om
+    o = om.orient("https://x.wd1.myworkdayjobs.com/en-US/ExternalSite/job/y",
+                  page_text=_GATE_TEXT, rung="workday_my_information", recorded_kind="")
+    assert o.mismatch is None
+
+
+def test_an_unreadable_page_never_evicts_the_record():
+    import orientation as om
+    o = om.orient("https://x.wd1.myworkdayjobs.com/en-US/ExternalSite/job/y",
+                  page_text="", rung="workday_my_information", recorded_kind="application_form")
+    assert o.mismatch is None
+
+
+def test_the_recipe_needs_check_still_wins_when_it_applies():
+    """The original safety catch keeps priority — a rung that declared needs is checked first."""
+    import orientation as om
+    o = om.orient("https://x.wd1.myworkdayjobs.com/en-US/ExternalSite/job/y",
+                  page_text=_GATE_TEXT, rung="submit", recorded_kind="account_gate")
+    assert o.mismatch is not None and not o.mismatch.get("drift")
+    assert o.mismatch["rung"] == "submit"

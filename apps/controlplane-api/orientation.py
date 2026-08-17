@@ -345,6 +345,7 @@ def orient(url: str, page_text: str = "", frames: Optional[list[dict]] = None,
            rung: Optional[str] = None, company: str = "",
            ats_lookup: Optional[Callable[[str], Optional[str]]] = None,
            known_recipe: bool = False,
+           recorded_kind: str = "",
            extra_witnesses: Optional[list[Witness]] = None) -> Orientation:
     """Fuse every witness into one verdict: where we are, how sure, and the way out.
 
@@ -390,14 +391,40 @@ def orient(url: str, page_text: str = "", frames: Optional[list[dict]] = None,
 
     # THE SAFETY CATCH. The rung said what it needs; the page said what it is. Disagreement is
     # surfaced, never resolved silently — resolving it is the plan's job, and the operator's call.
+    def _an(kind_name: str) -> str:
+        """"an application form", "a job posting" — these strings are read by the operator."""
+        words = kind_name.replace("_", " ")
+        return f"{'an' if words[:1] in 'aeiou' else 'a'} {words}"
+
     mismatch = None
     needs = RUNG_NEEDS.get(rung or "", ())
-    if needs and kind not in (al.UNKNOWN, al.UNREADABLE) and kind not in needs:
+    readable = kind not in (al.UNKNOWN, al.UNREADABLE)
+    if needs and readable and kind not in needs:
         mismatch = {
             "rung": rung, "expected": list(needs), "observed": kind,
             "detail": (f"the `{rung}` rung needs a {' or '.join(k.replace('_', ' ') for k in needs)}, "
                        f"but the page is a {kind.replace('_', ' ')} — the recipe and the world have "
                        f"drifted apart; follow the plan, not the rung"),
+        }
+    # THE RECORD IS A CLAIM TOO, and until now it was the one claim nothing could contradict.
+    # `RUNG_NEEDS` covers the generic rungs and NONE of the scripted spine, so a platform step
+    # ("workday_my_information") declared no needs and was therefore never wrong: the panel showed
+    # it beside an observed account gate and reported no mismatch at all (live, 2026-08-16, after
+    # a refresh silently signed the session out).
+    #
+    # `recorded_kind` is the KIND the record's own state implies, translated by the caller — this
+    # module stays pure and vocabulary-agnostic. Empty means NO CLAIM, never disagreement: a state
+    # we cannot place is not evidence the record is wrong.
+    #
+    # Low confidence abstains. An unsure reading may not evict a record that a real action wrote;
+    # the arbiter already says an abstention out loud rather than dropping it in silence.
+    elif (recorded_kind and readable and recorded_kind != kind
+            and confidence != "low"):
+        mismatch = {
+            "rung": rung, "expected": [recorded_kind], "observed": kind, "drift": True,
+            "detail": (f"the record has us on {_an(recorded_kind)} and the window is showing "
+                       f"{_an(kind)} — the world moved and the record did not, so the screen is "
+                       f"the thing to believe"),
         }
 
     return Orientation(platform=platform, kind=kind, state=state, confidence=confidence,
