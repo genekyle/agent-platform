@@ -3934,6 +3934,13 @@ def test_a_fuzzy_applied_match_warns_but_lets_the_step_continue(monkeypatch):
     assert r["last_step"]["ok"] is True                      # NOT halted
     assert "may have applied" in r["last_step"]["detail"]
     assert r["applied_check"]["status"] == "likely_applied"
+    # STAMPED WITH THE JOB IT IS ABOUT. The verdict's own `job_id` names the row that MATCHED
+    # (`workday:JR9`), so without this the stored answer had no subject and the cockpit rendered it
+    # beside whatever step was in focus — including a step reached without a landing, which would
+    # show the previous job's verdict. "Already applied" is the sentence an operator acts on by NOT
+    # applying, so attributing it to the wrong job is the expensive direction to be wrong in.
+    assert r["applied_check"]["for_job_id"] == "indeed:b2"
+    assert r["applied_check"]["job_id"] == "workday:JR9"      # the match, distinct from the subject
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert step.next_rung().id == "verify_identity"          # the ladder moved on
 

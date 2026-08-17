@@ -290,6 +290,13 @@ function decideFocus(p, results, picks, qs) {
 function executeFocus(p, step, nextAction) {
   const proposal = p.proposal && p.proposal.job_id === step.job_id ? p.proposal : null;
   const handoff = p.account_handoff && p.account_handoff.job_id === step.job_id ? p.account_handoff : null;
+  // SCOPED LIKE ITS THREE SIBLINGS. `applied_check` is written on landing and survives on the
+  // blackboard until the NEXT landing overwrites it, so a step reached without one — a resume, a
+  // repick, any path that does not re-open the pane — would render the previous job's verdict as
+  // if it were this one's. "Already applied" is precisely the sentence an operator acts on by NOT
+  // applying, so showing it about the wrong job is the expensive direction to be wrong in.
+  const applied = p.applied_check && p.applied_check.for_job_id === step.job_id
+    ? p.applied_check : null;
   // THE WALL STANDS DOWN ONCE WE ARE PAST IT. `account_state` is derived from the ACCOUNT's
   // lifecycle — active means "a login exists", which makes the next leg `sign_in` forever — and it
   // knows nothing about where the browser is standing. So after a signup that logged us straight
@@ -362,7 +369,7 @@ function executeFocus(p, step, nextAction) {
   // the session-level parked list, where Step back in still reaches it.
   if ((step.terminal || "").startsWith("parked")) {
     return { ...base, kind: "application", parked: step.terminal,
-      flow: p.apply_flow || null,
+      flow: p.apply_flow || null, applied,
       searchAgain: true,
       why: step.terminal_detail
         || "This application parked for you. Stepping back in resumes it where the page really is.",
@@ -429,7 +436,7 @@ function executeFocus(p, step, nextAction) {
   // thing that left the operator with no menu but "work this application" when they wanted a
   // different search entirely. It stays an ALTERNATE: the application in flight is still the work.
   if (nextAction?.lost) {
-    return { ...base, kind: "orient", flow: p.apply_flow || null,
+    return { ...base, kind: "orient", flow: p.apply_flow || null, applied,
       whereabouts: p.observer || null,
       searchAgain: true,
       why: nextAction.why || "The screen isn't one the recipe or the observer recognises.",
@@ -459,7 +466,7 @@ function executeFocus(p, step, nextAction) {
   // carry exactly one unmistakable choice. Stepping back from the gate is still reachable — Park,
   // in More — and it costs a deliberate press, which at this particular moment is the point.
   if (primary?.consequential) {
-    return { ...base, kind: "gate", flow: p.apply_flow || null,
+    return { ...base, kind: "gate", flow: p.apply_flow || null, applied,
       why: "This is the irreversible one. Everything before it on this ladder can be walked back; "
         + "this cannot. Nothing is sent until you press it.",
       sending: { title: step.title || step.job_id, company: step.company || "",
@@ -467,7 +474,7 @@ function executeFocus(p, step, nextAction) {
       primary, alternates: [] };
   }
 
-  return { ...base, kind: "application", flow: p.apply_flow || null,
+  return { ...base, kind: "application", flow: p.apply_flow || null, applied,
     searchAgain: true,
     // ONLY WHERE THERE IS A RUNG TO REPEAT. The ordinary application focus is exactly that: a
     // driveable next action that is not the irreversible one. The gate, the account wall, the

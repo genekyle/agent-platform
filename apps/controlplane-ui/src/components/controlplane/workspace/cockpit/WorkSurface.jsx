@@ -847,7 +847,10 @@ export function WorkSurface({
         {focus.subtitle && <p className="work__subtitle">{focus.subtitle}</p>}
         {/* The walk BEFORE the reasoning: "where am I in this application" is the question the
             operator asks first, and it was the one the surface could not answer at all. */}
-        <FlowStrip flow={focus.flow} applied={panel.applied_check} />
+        {/* `focus.applied`, not `panel.applied_check`: the focus has already scoped the verdict to
+            the step being worked, the same way it scopes the proposal and the account handoff. The
+            raw panel field survives on the blackboard until the next landing overwrites it. */}
+        <FlowStrip flow={focus.flow} applied={focus.applied} />
         {focus.why && <p className="work__why">{focus.why}</p>}
 
         {error && <div className="coaching-error">{error}</div>}

@@ -5442,7 +5442,15 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             verdict = applied_index.check(db, job_id=step.job_id,
                                           title=res.get("title") or step.title,
                                           company=step.company, url=res.get("url") or "")
-            bb.world["applied_check"] = verdict.as_dict()
+            # STAMPED WITH ITS SUBJECT. The verdict's own `job_id` is the row that MATCHED, not the
+            # job being asked about, so the stored answer had no owner — and the panel rendered it
+            # beside whatever step happened to be in focus. Every sibling field on this panel
+            # (`proposal`, `account_handoff`, `account_state`) is already scoped by `job_id ===
+            # step.job_id` in `executeFocus`; this one was the fourth and was missing it, which is
+            # the stale-source shape the 08-16 audit found four times in a day. A wrong "Already
+            # applied" beside the wrong job is worse than none: it is the sentence the operator is
+            # being asked to trust when they decide not to apply.
+            bb.world["applied_check"] = {**verdict.as_dict(), "for_job_id": step.job_id}
             if verdict.applied:
                 step.record("open_pane", aps.OK,
                             f"pane switched to {res.get('title', '')!r} — but we have already "
