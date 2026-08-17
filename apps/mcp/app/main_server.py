@@ -3043,7 +3043,7 @@ async def select_option(body: SelectOptionRequest):
     import websockets
     from app import dialect
     from app.observer.ax_proposer import _CDPSession, _discover_target
-    from app.protocols import react_select_pick
+    from app.protocols import react_select_pick, text_menu_pick
 
     common = {"addressed_by": "selector", "target": body.selector}
     target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
@@ -3146,6 +3146,16 @@ async def select_option(body: SelectOptionRequest):
                     cdp2, selector=body.selector, value=body.value)
             return {"outcome": outcome, "steps": steps, "detail": detail,
                     "actions": ["clear", "type", "click"]}
+        if protocol == "text_menu":
+            async with websockets.connect(target["webSocketDebuggerUrl"],
+                                          max_size=16 * 1024 * 1024) as ws2:
+                cdp2 = _CDPSession(ws2)
+                await cdp2.send("Page.enable", {})
+                await cdp2.send("Runtime.enable", {})
+                outcome, steps, detail = await text_menu_pick(
+                    cdp2, selector=body.selector, value=body.value)
+            return {"outcome": outcome, "steps": steps, "detail": detail,
+                    "actions": ["click", "click"]}
         # aria_listbox — the staged-commit popup protocol, via the existing endpoint.
         inner = await widget_select(WidgetSelectRequest(
             browser_url=body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url,

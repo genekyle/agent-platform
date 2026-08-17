@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 import app.main_server as ms
+from interaction.contract import Outcome
 
 
 @pytest.fixture(autouse=True)
@@ -101,7 +102,7 @@ def test_select_option_cycles_an_unknown_widget_and_reports_every_attempt(corpus
         selector="#weird", value="Yes", ats="greenhouse", field="mystery")))
     assert out["ok"] is False
     assert [t["protocol"] for t in out["tried"]] \
-        == ["native_select", "aria_listbox", "react_select"]
+        == ["native_select", "aria_listbox", "react_select", "text_menu"]
     assert all(t["outcome"] != "ok" for t in out["tried"])
     # The strongest hypothesis's failure is the reported verdict; the journal keeps the row.
     # LAST row, not first: the cycle's aria attempt runs through /widget_select, which journals
@@ -291,3 +292,108 @@ def test_set_date_rejects_an_impossible_month_before_touching_the_page(corpus, m
     wire_cdp(monkeypatch, lambda e: {})
     out = asyncio.run(ms.set_date(ms.SetDateRequest(selector="#m", month=13, year=2015)))
     assert out["ok"] is False and out["outcome"] == "no_option"
+
+
+# --- the text-menu protocol (role-less, tap-driven menus) ----------------------------------------
+class _FakeCDP:
+    """Routes Runtime.evaluate by which of the protocol's three expressions it is, and records
+    every dispatched mouse event so a test can assert the taps actually happened."""
+
+    def __init__(self, *, opened, hit, reads):
+        self.opened, self.hit = opened, hit
+        self.reads = list(reads)          # successive values of the opener's label
+        self.taps: list[tuple[int, int]] = []
+
+    async def send(self, method, params=None):
+        params = params or {}
+        if method == "Input.dispatchMouseEvent":
+            if params.get("type") == "mousePressed":
+                self.taps.append((params.get("x"), params.get("y")))
+            return {}
+        if method != "Runtime.evaluate":
+            return {}
+        expr = params.get("expression", "")
+        if "opener has no box" in expr:
+            return {"result": {"value": self.opened}}
+        if "tapTarget" in expr:
+            return {"result": {"value": self.hit}}
+        return {"result": {"value": self.reads.pop(0) if self.reads else None}}
+
+
+def _run_text_menu(**kw):
+    from app.protocols import text_menu_pick
+    cdp = _FakeCDP(**kw)
+    outcome, steps, detail = asyncio.run(
+        text_menu_pick(cdp, selector="[data-id=q]", value="No", settle_seconds=0))
+    return cdp, outcome, steps, detail
+
+
+def test_text_menu_taps_open_taps_the_option_and_confirms_at_the_opener():
+    """WAHVE, measured 2026-08-17: React 15 + Material-UI v0 renders no <select>, no role and no
+    shadow root — the opener is a div and the items are bare divs inside a span[tabindex]. Both
+    gestures must be TRUSTED mouse events: MUI v0 rides react-tap-event-plugin, which synthesises
+    its tap from real mousedown+mouseup, so a JS .click() highlights the row and commits nothing.
+    """
+    cdp, outcome, steps, detail = _run_text_menu(
+        opened={"ok": True, "x": 500, "y": 300, "before": "Select"},
+        hit={"found": True, "count": 40, "x": 517, "y": 523},
+        reads=["No"])
+    assert outcome is Outcome.OK
+    assert cdp.taps == [(500, 300), (517, 523)], "open, then the option — both as real taps"
+    assert "verified at the opener" in detail
+    assert steps[-1]["value_read_at"] == ".dropdown-label"
+
+
+def test_text_menu_reports_an_unchanged_opener_rather_than_claiming_the_pick():
+    """The failure mode this whole family is prone to: the mechanism completes and the value
+    never lands. Compared against the VALUE, not merely against `before` — a menu that closed on
+    the wrong item also changes the label, and "it moved" is not "it is right"."""
+    _, outcome, _, detail = _run_text_menu(
+        opened={"ok": True, "x": 500, "y": 300, "before": "Select"},
+        hit={"found": True, "count": 40, "x": 517, "y": 523},
+        reads=["Select"])
+    assert outcome is Outcome.NOT_STAGED
+    assert "unchanged" in detail
+
+
+def test_text_menu_calls_a_wrong_commit_not_staged_too():
+    _, outcome, _, detail = _run_text_menu(
+        opened={"ok": True, "x": 500, "y": 300, "before": "Select"},
+        hit={"found": True, "count": 40, "x": 517, "y": 523},
+        reads=["Yes"])
+    assert outcome is Outcome.NOT_STAGED
+    assert "'Yes'" in detail and "unchanged" not in detail
+
+
+def test_text_menu_separates_nothing_rendered_from_your_word_is_not_here():
+    """The distinction `aria_listbox` got wrong on this very widget: it reported `not_opened`
+    about a menu that was plainly open on the screenshot, because absence of a SELECTOR match was
+    being reported as absence of a popup. Two different claims, two different caller moves."""
+    _, outcome, _, _ = _run_text_menu(
+        opened={"ok": True, "x": 5, "y": 5, "before": "Select"},
+        hit={"found": False, "count": 0}, reads=[])
+    assert outcome is Outcome.NOT_OPENED
+
+    _, outcome2, _, detail2 = _run_text_menu(
+        opened={"ok": True, "x": 5, "y": 5, "before": "Select"},
+        hit={"found": False, "count": 40, "sample": ["Yes", "Maybe"]}, reads=[])
+    assert outcome2 is Outcome.NO_OPTION
+    assert "Yes" in detail2
+
+
+def test_text_menu_refuses_two_tap_targets_wearing_the_same_words():
+    """A loose match is a guess wearing a structural costume — and matching by visible TEXT is
+    the loosest addressing in this codebase, so it owes the strictest ambiguity refusal."""
+    cdp, outcome, _, detail = _run_text_menu(
+        opened={"ok": True, "x": 5, "y": 5, "before": "Select"},
+        hit={"found": False, "ambiguous": 2, "sample": ["No", "No"]}, reads=[])
+    assert outcome is Outcome.AMBIGUOUS
+    assert "refusing to guess" in detail
+    assert cdp.taps == [(5, 5)], "opened, and then refused — never a second tap"
+
+
+def test_text_menu_says_so_when_the_opener_is_not_there():
+    _, outcome, _, detail = _run_text_menu(
+        opened={"ok": False, "detail": "no node matching [data-id=q]"}, hit={}, reads=[])
+    assert outcome is Outcome.NOT_FOUND
+    assert "no node matching" in detail

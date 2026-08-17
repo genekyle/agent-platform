@@ -196,6 +196,149 @@ async def react_select_pick(cdp, *, selector: str, value: str,
     return Outcome.OK, steps, f"selected {got!r} (verified at singleValue)"
 
 
+# --- the text-menu protocol ---------------------------------------------------------
+#
+# A MENU WITH NO ROLES AT ALL. Measured live on WAHVE (`insurance.brainwahve.com`, 2026-08-17),
+# which is React 15 + Material-UI v0: the opener is `div.dropdown[data-id=…][tabindex=0]`, the
+# items are bare `<div>`s inside a `<span tabindex="0">`, and there is no `<select>`, no
+# `role=listbox|option|menu`, no `aria-*` and no shadow root anywhere in the document.
+#
+# WHY THE OTHER THREE CANNOT REACH IT, each for its own reason — this is the interaction-layer
+# question (§6) answered by measurement rather than by preference:
+#   native_select  structurally impossible; the tag is a div.
+#   aria_listbox   opens it correctly and then cannot SEE the options — it looks for
+#                  `[role=option]` / `li`, and these carry neither. It reported `not_opened`
+#                  about a menu that was plainly open on the screenshot, which is the
+#                  interesting half: absence of a selector match was being reported as absence
+#                  of a popup. Two different claims.
+#   react_select   types to open; this widget opens on tap and ignores keystrokes.
+#
+# AND THE COMMIT IS A TAP, NOT A CLICK. Material-UI v0 rides react-tap-event-plugin, which
+# synthesises its tap from real mousedown+mouseup. A JS `.click()` (and anything that resolves a
+# node and calls click on it) fires nothing — measured: the option highlighted, the menu stayed
+# open, and the opener's label never changed. So both the open and the pick are TRUSTED mouse
+# events at measured coordinates, which is also why this protocol addresses by bbox: the node id
+# is useless when the handler is listening for a physical gesture.
+_TEXT_MENU_OPEN_JS = r"""
+(selector) => {
+  const el = document.querySelector(selector);
+  if (!el) return {ok: false, detail: `no node matching ${selector}`};
+  el.scrollIntoView({block: "center", inline: "nearest"});
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return {ok: false, detail: "opener has no box (hidden?)"};
+  // The opener's own label is the value_read_at for this family — read it BEFORE opening so a
+  // commit can be judged as a CHANGE rather than as a string that happened to be there.
+  const lbl = el.querySelector(".dropdown-label, [class*=label]");
+  return {ok: true, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+          before: ((lbl || el).textContent || "").trim()};
+}
+"""
+
+#: Find the option by its exact visible TEXT, then hand back the tap target's centre.
+#:
+#: Scoped by EXCLUSION rather than by a popup ref: these menus have no `aria-controls` and no
+#: stable container class, so the honest rule is "a visible leaf carrying this text that is not
+#: inside the opener". The opener has to be excluded explicitly — it renders the chosen value in
+#: exactly the same words, so a committed menu would otherwise match itself and report success
+#: without ever opening.
+_TEXT_MENU_PICK_JS = r"""
+(cfg) => {
+  const want = String(cfg.value).trim().toLowerCase();
+  const opener = document.querySelector(cfg.selector);
+  const vis = (e) => e.offsetParent !== null && e.getBoundingClientRect().width > 0;
+  const leaves = [...document.querySelectorAll("body *")].filter(
+    (e) => e.children.length === 0 && vis(e) && (e.textContent || "").trim());
+  const outside = leaves.filter((e) => !(opener && opener.contains(e)));
+  const texts = [...new Set(outside.map((e) => (e.textContent || "").trim()))];
+  const hits = outside.filter((e) => (e.textContent || "").trim().toLowerCase() === want);
+  if (!hits.length) return {found: false, count: outside.length, sample: texts.slice(0, 12)};
+  // THE TAP TARGET IS NOT THE TEXT NODE'S ELEMENT. MUI v0 wraps each item in an EnhancedButton
+  // (`span[tabindex]`) which is what carries the handler; clicking the inner div works only
+  // because the event bubbles, and bubbling is not something to rely on when a library may stop
+  // propagation. Walk up to the nearest focusable ancestor, bounded, and fall back to the leaf.
+  const tapTarget = (e) => {
+    let a = e;
+    for (let i = 0; i < 4 && a && a.parentElement; i++) {
+      a = a.parentElement;
+      if (a.hasAttribute && a.hasAttribute("tabindex")) return a;
+    }
+    return e;
+  };
+  const boxes = hits.map((h) => { const t = tapTarget(h); const r = t.getBoundingClientRect();
+    return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+            w: Math.round(r.width), h: Math.round(r.height)}; });
+  // Distinct tap targets with the same words: refuse rather than pick. Same rule as every other
+  // ambiguity in this codebase — a loose match is a guess wearing a structural costume.
+  const distinct = [...new Set(boxes.map((b) => `${b.x},${b.y}`))];
+  if (distinct.length > 1) return {found: false, ambiguous: distinct.length, sample: texts.slice(0, 12)};
+  return {found: true, count: outside.length, ...boxes[0]};
+}
+"""
+
+
+def _text_menu_read_js(selector: str) -> str:
+    return (f"(() => {{ const e = document.querySelector({json.dumps(selector)});"
+            " if (!e) return null;"
+            " const l = e.querySelector('.dropdown-label, [class*=label]');"
+            " return ((l || e).textContent || '').trim(); })()")
+
+
+async def text_menu_pick(cdp, *, selector: str, value: str,
+                         settle_seconds: float = 0.5) -> tuple[Outcome, list[dict], str]:
+    """A role-less, tap-driven menu: open by trusted click → pick by TEXT → confirm at the opener.
+
+    tap open → tap the option → confirm the opener's own label changed to the value.
+    """
+    steps: list[dict] = []
+
+    async def _tap(x: int, y: int) -> None:
+        for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+            ev = {"type": typ, "x": x, "y": y}
+            if typ != "mouseMoved":
+                ev.update({"button": "left", "clickCount": 1})
+            await cdp.send("Input.dispatchMouseEvent", ev)
+
+    opened = await _eval(cdp, f"({_TEXT_MENU_OPEN_JS})({json.dumps(selector)})") or {}
+    steps.append({"step": "precheck", "found": bool(opened.get("ok")),
+                  "before": opened.get("before")})
+    if not opened.get("ok"):
+        return Outcome.NOT_FOUND, steps, opened.get("detail") or f"no node matching {selector!r}"
+
+    await _tap(opened["x"], opened["y"])
+    await asyncio.sleep(settle_seconds)
+
+    cfg = json.dumps({"selector": selector, "value": value})
+    hit = await _eval(cdp, f"({_TEXT_MENU_PICK_JS})({cfg})") or {}
+    steps.append({"step": "open", "n_visible": hit.get("count"), "found": bool(hit.get("found"))})
+    if hit.get("ambiguous"):
+        return (Outcome.AMBIGUOUS, steps,
+                f"{value!r} matches {hit['ambiguous']} separate tap targets — refusing to guess")
+    if not hit.get("found"):
+        # NOTHING RENDERED vs YOUR WORD ISN'T THERE — different caller moves, so different
+        # outcomes, and the distinction the aria_listbox attempt got wrong on this very widget.
+        if not hit.get("count"):
+            return Outcome.NOT_OPENED, steps, "tapping the opener rendered nothing"
+        return (Outcome.NO_OPTION, steps,
+                f"no option matching {value!r} among {hit.get('count')} visible — "
+                f"sample: {hit.get('sample')}")
+
+    await _tap(hit["x"], hit["y"])
+    await asyncio.sleep(0.35)
+
+    got = await _eval(cdp, _text_menu_read_js(selector))
+    steps.append({"step": "commit", "kind": "on_select", "value_read_at": ".dropdown-label",
+                  "observed": got})
+    if str(got or "").strip().lower() != value.strip().lower():
+        # Deliberately compares to the VALUE rather than merely to `before`: a menu that closed
+        # having selected the wrong item also changes the label, and "it moved" is not "it is
+        # right". This is the guard that caught an option list belonging to a different question
+        # on 2026-08-15.
+        return (Outcome.NOT_STAGED, steps,
+                f"tapped {value!r} but the opener reads {got!r}"
+                + (" (unchanged)" if str(got or "") == str(opened.get("before") or "") else ""))
+    return Outcome.OK, steps, f"selected {got!r} (verified at the opener's own label)"
+
+
 # --- the checkbox-group protocol ----------------------------------------------------
 # Greenhouse renders required checkbox groups as question_<id>[]_<optid>. Group by the id
 # prefix BEFORE '[]'. A scan that only looks at inputs/selects misses them entirely — we

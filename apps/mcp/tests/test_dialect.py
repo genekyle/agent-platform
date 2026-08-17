@@ -22,7 +22,7 @@ def test_the_first_verified_win_becomes_the_way(dialect):
     """Cornerstone's four selects, replayed: before any win the order is the generic bucket;
     after ONE native win, native leads every later call — the diagnosis is paid once."""
     first = dialect.candidate_order("cornerstone", dialect.FAMILY_OPTION_SELECT)
-    assert first == ["native_select", "aria_listbox", "react_select"]
+    assert first == ["native_select", "aria_listbox", "react_select", "text_menu"]
     dialect.record_win("cornerstone", dialect.FAMILY_OPTION_SELECT, "native_select",
                        evidence="#EEOQuestion-1 · selected Decline to specify")
     assert dialect.learned_protocol("cornerstone", dialect.FAMILY_OPTION_SELECT) == "native_select"
@@ -36,7 +36,7 @@ def test_the_classifier_hint_leads_when_nothing_is_learned(dialect):
     order = dialect.candidate_order("greenhouse", dialect.FAMILY_OPTION_SELECT,
                                     classified="react_select")
     assert order[0] == "react_select"
-    assert set(order) == {"native_select", "aria_listbox", "react_select"}
+    assert set(order) == {"native_select", "aria_listbox", "react_select", "text_menu"}
 
 
 def test_the_tag_drops_the_structurally_impossible(dialect):
@@ -46,7 +46,7 @@ def test_the_tag_drops_the_structurally_impossible(dialect):
     assert dialect.candidate_order("x", dialect.FAMILY_OPTION_SELECT, tag="select") \
         == ["native_select"]
     assert dialect.candidate_order("x", dialect.FAMILY_OPTION_SELECT, tag="div") \
-        == ["aria_listbox", "react_select"]
+        == ["aria_listbox", "react_select", "text_menu"]
     # A learned dialect that contradicts the tag is dropped too — the node outranks the record.
     dialect.record_win("x", dialect.FAMILY_OPTION_SELECT, "native_select")
     assert "native_select" not in dialect.candidate_order(
@@ -97,7 +97,8 @@ def test_two_unmapped_employer_sites_do_not_share_a_dialect(dialect):
         site="https://insurance.brainwahve.com/apply") is None
     order = dialect.candidate_order("company_site", dialect.FAMILY_OPTION_SELECT,
                                     site="https://insurance.brainwahve.com/apply")
-    assert order == ["native_select", "aria_listbox", "react_select"], "generic bucket, unlearned"
+    assert order == ["native_select", "aria_listbox", "react_select", "text_menu"], \
+        "generic bucket, unlearned"
 
 
 def test_a_real_ats_still_generalises_across_tenants_and_engines(dialect):

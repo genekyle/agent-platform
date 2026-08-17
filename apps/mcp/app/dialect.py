@@ -57,8 +57,14 @@ FAMILY_OPTION_SELECT = "option_select"
 #: wrong shape — the native path refuses non-SELECT tags outright, the popup path times out
 #: without staging, react_select requires its own DOM markers before typing. That clean-fail
 #: property is what makes cycling safe on a real page.
+#:
+#: `text_menu` is LAST on purpose. It is the most permissive of the four — it matches options by
+#: visible text anywhere outside the opener — so it must never outrank a protocol that can address
+#: the widget structurally. It is the catch for menus that expose no roles at all (React 15 +
+#: Material-UI v0, measured on WAHVE 2026-08-17), which is exactly the shape the other three each
+#: fail on for a different reason.
 CANDIDATES: dict[str, tuple[str, ...]] = {
-    FAMILY_OPTION_SELECT: ("native_select", "aria_listbox", "react_select"),
+    FAMILY_OPTION_SELECT: ("native_select", "aria_listbox", "react_select", "text_menu"),
 }
 
 #: Which candidates are structurally POSSIBLE given the widget's tag, when we know it. The
@@ -68,8 +74,8 @@ CANDIDATES: dict[str, tuple[str, ...]] = {
 _TAG_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     FAMILY_OPTION_SELECT: {
         "select": ("native_select",),
-        # non-select tags can be either portal shape; native is impossible.
-        "_other": ("aria_listbox", "react_select"),
+        # non-select tags can be any of the portal shapes; native is impossible.
+        "_other": ("aria_listbox", "react_select", "text_menu"),
     },
 }
 
