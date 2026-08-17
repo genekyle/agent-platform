@@ -467,6 +467,19 @@ async def _detect_block(browser_url: str, _page_urls: list[str]) -> Optional[dic
 
 
 # --- the panel read model ---------------------------------------------------------------------
+def _resume_path() -> str:
+    """The canonical résumé's local path, or "" when the asset is missing.
+
+    A read model must not break the panel, and "no résumé on disk" is an ordinary answer rather
+    than an error — the census renders no attach button instead of one that uploads nothing.
+    """
+    try:
+        import assets
+        return assets.resume_path() or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _account_state(bb: Any) -> Optional[dict[str, Any]]:
     """Which account leg is due for the step being worked, and whether we can run it.
 
@@ -804,6 +817,12 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # to press (2026-07-28). A settled create rung is not the end of the account's business —
         # the sign-in leg is what comes next, and it needs a surface.
         "account_state": _account_state(bb),
+        # THE CANONICAL RÉSUMÉ, so a file field can be answered with a press. Resolved here rather
+        # than in the panel because `assets.resume_path()` is the one pointer every ATS uploader
+        # already shares — a path hard-coded in the UI is wrong the first time the asset moves, and
+        # would teach an upload of nothing while looking like it worked. "" when the file is
+        # missing, which the panel renders as no button rather than a broken one.
+        "resume_path": _resume_path(),
         # What the OPEN PANE says the application is. Read at open_pane and surfaced here so a
         # proposal is made against the observed apply type rather than an assumed one — on
         # 2026-07-24 a proposal cited "apply_type=indeed_apply" as evidence for a posting whose

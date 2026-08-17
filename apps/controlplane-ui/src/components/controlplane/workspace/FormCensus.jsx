@@ -21,29 +21,105 @@ import { AppIcon } from "../../../ui/Icon";
 //     what will be taught, with the rationale editable — one deliberate press acts, on a live
 //     page, never a stray click.
 
+// WHAT THE FIELD ACTUALLY IS, IN THE SCANNER'S OWN WORDS. This table and `widget_probe`'s
+// classifier had drifted into two different vocabularies: `select`, `textarea` and `input` are
+// names the scanner NEVER emits, while `file`, `aria_listbox`, `prompt_hierarchical`, `month_year`,
+// `segmented_date`, `number` and `unknown` were all missing — so every one of them fell to the
+// default and rendered as "answer" with a text box.
+//
+// Operator, 2026-08-16, looking at a required résumé upload: *"it got it right … that it needs a
+// file, but it's asking for an 'answer'? … our ui needs to bend with that optionality and
+// understand what is it truly going to ask."* The census had read `kind: "file"` correctly and the
+// panel then offered to type a sentence into it — and would have emitted `set_text`.
+//
+// Keep this list in step with `widget_probe.py`'s CLASSIFY block. A kind that is not here is not
+// broken, but it degrades to a text box, which is right for text and wrong for everything else.
 const KIND_COPY = {
-  radio_group: "pick one",
+  file: "attach a file",
+  segmented_date: "date",
+  month_year: "month & year",
   checkbox_group: "check",
+  radio_group: "pick one",
+  native_select: "dropdown",
   react_select: "dropdown",
-  select: "dropdown",
-  textarea: "long answer",
-  input: "answer",
+  prompt_hierarchical: "browse the list",
+  aria_listbox: "dropdown",
+  number: "a number",
+  text: "answer",
+  unknown: "unrecognised control",
 };
+
+//: The kinds whose value is CHOSEN from the page rather than typed into it. They share the
+//: enumerate-then-pick affordance, and typing at them is a fallback, not the main road.
+const CHOICE_KINDS = new Set(["native_select", "react_select", "aria_listbox",
+                              "prompt_hierarchical", "radio_group", "checkbox_group"]);
 
 //: A value no real option list contains — `/select_option` answers it `no_option` and returns the
 //: widget's own enumerated choices (the working probe from the 2026-08-10 attended drive, now a
 //: button instead of a hand-typed curl).
 const ENUMERATE_SENTINEL = "(list the options)";
 
+//: A control the scanner could not classify. Asking the page what it is beats typing at it — the
+//: executor's vocabulary has carried `describe` all along and nothing could reach it.
+const DESCRIBE_SENTINEL = "(describe this control)";
+
+//: A file field is the one kind whose answer we usually ALREADY HOLD, so the panel offers it as a
+//: press instead of asking for a path by hand. The PATH comes from the server (`assets.resume_path`
+//: — one pointer, reused across every ATS); the UI never carries a filesystem path of its own,
+//: because a hard-coded one is wrong the first time the asset moves and silently teaches an upload
+//: of nothing.
+
+// THE INTENT IS A PROPERTY OF THE CONTROL, NOT OF THE TYPING. Every branch here already existed in
+// the executor's vocabulary (`_INTENT_PARAMS` carries `upload` and `set_date` and has since before
+// this card was written); the panel simply had no way to reach them, so a file input and a date
+// pair were both taught as `set_text`. That is the "capability exists behind an endpoint with no
+// surface" failure this component's own header describes from the 08-10 audit, recurring one layer
+// up.
 function intentFor(row, value) {
   const kind = row.kind || "";
+  if (value === DESCRIBE_SENTINEL) {
+    // Not an answer at all — a question back at the page. Only reachable on `unknown`, where
+    // typing would be a guess dressed as a teaching example.
+    return { intent: "describe", params: { field: row.field } };
+  }
+  if (kind === "file") {
+    // The value IS a path. `upload` takes `path` — typing a sentence at a file input taught
+    // nothing and would have been journaled as if it had.
+    return { intent: "upload", params: { field: row.field, path: value } };
+  }
+  if (kind === "month_year" || kind === "segmented_date") {
+    // "03/2021" or "March 2021" — split at the boundary the intent declares.
+    const parts = String(value).split(/[\s/,-]+/).filter(Boolean);
+    const year = parts.find((p) => /^\d{4}$/.test(p)) || "";
+    const month = parts.find((p) => p !== year) || "";
+    return { intent: "set_date", params: { field: row.field, month, year } };
+  }
   if (kind === "radio_group" || kind === "checkbox_group") {
     return { intent: "check_group", params: { field: row.field, values: [value] } };
   }
-  if (kind === "react_select" || kind === "select") {
+  if (CHOICE_KINDS.has(kind)) {
     return { intent: "select_option", params: { field: row.field, value } };
   }
   return { intent: "set_text", params: { field: row.field, value } };
+}
+
+//: What to put in the box, per kind — the placeholder is the cheapest place to say what the field
+//: will accept, and "type the answer" said it wrong for every non-text control on the page.
+function placeholderFor(kind, truncated) {
+  if (truncated) return "or type the exact option";
+  if (kind === "file") return "absolute path to the file";
+  if (kind === "month_year" || kind === "segmented_date") return "MM/YYYY";
+  if (kind === "number") return "a number";
+  if (CHOICE_KINDS.has(kind)) return "type the exact option";
+  return "type the answer";
+}
+
+//: The verb on the button. "Answer" is right for a question and wrong for an upload or a date.
+function verbFor(kind) {
+  if (kind === "file") return "Attach";
+  if (kind === "month_year" || kind === "segmented_date") return "Set date";
+  if (CHOICE_KINDS.has(kind)) return "Choose";
+  return "Answer";
 }
 
 // A ROW'S IDENTITY IS NOT ITS NAME. Two rows on one form can carry the same name — Boston
@@ -59,7 +135,7 @@ function intentFor(row, value) {
 // unscoped key can collide across them.
 const rowKey = (r, i, list) => `${list}|${r.selector || ""}|${r.field || ""}|${i}`;
 
-function Row({ row, busy, onArm, armed, rowId }) {
+function Row({ row, busy, onArm, armed, rowId, resumePath }) {
   const [typed, setTyped] = useState("");
   const kindWord = KIND_COPY[row.kind] || row.kind || "answer";
   const canEnumerate = row.kind === "react_select" && !(row.options || []).length;
@@ -121,16 +197,32 @@ function Row({ row, busy, onArm, armed, rowId }) {
                 {(row.options || []).length} of {row.option_count} shown
               </span>
             )}
+            {row.kind === "file" && resumePath && (
+              <button className="btn btn-sm btn-ghost" disabled={busy}
+                      title={`Attach the résumé already on file — ${resumePath}`}
+                      onClick={() => onArm(row, resumePath, rowId)}>
+                Attach the résumé on file
+              </button>
+            )}
             {((!(row.options || []).length && !canEnumerate) || truncated) && (
               <span className="form-census__type">
                 <input value={typed} disabled={busy}
-                       placeholder={truncated ? "or type the exact option" : "type the answer"}
+                       placeholder={placeholderFor(row.kind, truncated)}
                        onChange={(e) => setTyped(e.target.value)} />
                 <button className="btn btn-sm btn-ghost" disabled={busy || !typed.trim()}
                         onClick={() => { onArm(row, typed.trim(), rowId); setTyped(""); }}>
-                  Answer
+                  {verbFor(row.kind)}
                 </button>
               </span>
+            )}
+            {row.kind === "unknown" && (
+              // A control we could not classify is the one case where the honest first move is to
+              // ask the page what it is, rather than to type at it and hope.
+              <button className="btn btn-sm btn-ghost" disabled={busy}
+                      title="Ask the page to describe this control before answering it"
+                      onClick={() => onArm(row, DESCRIBE_SENTINEL, rowId)}>
+                Describe this control
+              </button>
             )}
           </div>
         )}
@@ -139,7 +231,7 @@ function Row({ row, busy, onArm, armed, rowId }) {
   );
 }
 
-export default function FormCensus({ census, busy, taught, onTeach, onReread }) {
+export default function FormCensus({ census, busy, taught, onTeach, onReread, resumePath }) {
   const [armedAct, setArmedAct] = useState(null);   // {row, value, rationale}
   if (!census) return null;
   const unanswered = census.unanswered || [];
@@ -178,7 +270,8 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread }) 
         <ul className="rungs">
           {unanswered.map((r, i) => (
             <Row key={rowKey(r, i, "u")} row={r} busy={busy} rowId={rowKey(r, i, "u")}
-                 onArm={arm} armed={armedAct?.key === rowKey(r, i, "u")} />
+                 onArm={arm} armed={armedAct?.key === rowKey(r, i, "u")}
+                 resumePath={resumePath} />
           ))}
         </ul>
       )}
@@ -220,7 +313,8 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread }) 
           <ul className="rungs">
             {answered.map((r, i) => (
               <Row key={rowKey(r, i, "a")} row={r} busy={busy} rowId={rowKey(r, i, "a")}
-                   onArm={arm} armed={armedAct?.key === rowKey(r, i, "a")} />
+                   onArm={arm} armed={armedAct?.key === rowKey(r, i, "a")}
+                   resumePath={resumePath} />
             ))}
           </ul>
         </details>

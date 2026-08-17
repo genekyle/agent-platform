@@ -651,6 +651,9 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
                       // IS corpus work — that is the whole point of routing it here.
                       onTeach={(intent, params, rationale) =>
                         call("/apply_teach", { intent, params, rationale })}
+                      // The canonical résumé, resolved server-side by `assets.resume_path()` so a
+                      // file field can be answered with a press instead of a hand-typed path.
+                      resumePath={panel?.resume_path || ""}
                       onReread={() => call("/apply_fill", { execute: false })} />
           <FormSections sections={last?.sections} busy={busy}
                         ats={panel.account_state?.ats} accordionAts={panel.accordion_ats}
