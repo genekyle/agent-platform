@@ -21,38 +21,59 @@ import { AppIcon } from "../../../ui/Icon";
 //     what will be taught, with the rationale editable — one deliberate press acts, on a live
 //     page, never a stray click.
 
-// WHAT THE FIELD ACTUALLY IS, IN THE SCANNER'S OWN WORDS. This table and `widget_probe`'s
-// classifier had drifted into two different vocabularies: `select`, `textarea` and `input` are
-// names the scanner NEVER emits, while `file`, `aria_listbox`, `prompt_hierarchical`, `month_year`,
-// `segmented_date`, `number` and `unknown` were all missing — so every one of them fell to the
-// default and rendered as "answer" with a text box.
+// WHAT THE FIELD ACTUALLY IS, IN THE SCANNER'S OWN WORDS. The census names the control and this
+// table decides what the operator is shown; where they disagree, the panel asks for the wrong
+// thing in the wrong words.
 //
 // Operator, 2026-08-16, looking at a required résumé upload: *"it got it right … that it needs a
 // file, but it's asking for an 'answer'? … our ui needs to bend with that optionality and
 // understand what is it truly going to ask."* The census had read `kind: "file"` correctly and the
 // panel then offered to type a sentence into it — and would have emitted `set_text`.
 //
-// Keep this list in step with `widget_probe.py`'s CLASSIFY block. A kind that is not here is not
-// broken, but it degrades to a text box, which is right for text and wrong for everything else.
+// THERE ARE TWO SCANNERS AND THEY NAME KINDS DIFFERENTLY — corrected 2026-08-16 after a first pass
+// aligned this table to the wrong one. The census that feeds THIS card is `protocols.py`'s
+// `_SCAN_EVERY_DOCUMENT_JS`, and its rule is
+//
+//     kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase()
+//
+// so most kinds are simply TAG NAMES — `button`, `textarea`, `input`, `select` — with
+// `checkbox_group`, `radio_group`, `file` and `unknown` set explicitly. `widget_probe.py` has its
+// own richer vocabulary (`aria_listbox`, `prompt_hierarchical`, `month_year`, …) for the widget
+// PROTOCOL, and those names never reach this census. Replacing the tag names with the probe's
+// broke the three rows that had always worked, on a page of sixteen.
+//
+// So this is the UNION, and the census names come first. A kind that is not here is not broken; it
+// degrades to a text box, which is right for text and wrong for everything else.
 const KIND_COPY = {
-  file: "attach a file",
-  segmented_date: "date",
-  month_year: "month & year",
+  // --- the census's own vocabulary (protocols.py) --------------------------------------------
+  button: "press a button",
+  textarea: "long answer",
+  input: "answer",
+  select: "dropdown",
+  react_select: "dropdown",
   checkbox_group: "check",
   radio_group: "pick one",
+  file: "attach a file",
+  unknown: "unrecognised control",
+  // --- widget_probe's protocol vocabulary, harmless here and correct if it ever arrives -------
   native_select: "dropdown",
-  react_select: "dropdown",
-  prompt_hierarchical: "browse the list",
   aria_listbox: "dropdown",
+  prompt_hierarchical: "browse the list",
+  segmented_date: "date",
+  month_year: "month & year",
   number: "a number",
   text: "answer",
-  unknown: "unrecognised control",
 };
 
 //: The kinds whose value is CHOSEN from the page rather than typed into it. They share the
 //: enumerate-then-pick affordance, and typing at them is a fallback, not the main road.
-const CHOICE_KINDS = new Set(["native_select", "react_select", "aria_listbox",
+const CHOICE_KINDS = new Set(["select", "native_select", "react_select", "aria_listbox",
                               "prompt_hierarchical", "radio_group", "checkbox_group"]);
+
+//: A required "field" whose control is a BUTTON — Eversource asks twelve yes/no questions this way.
+//: There is no text to set: the answer is WHICH BUTTON gets pressed, which is the `click` intent.
+//: Typing at one taught nothing and was journaled as though it had.
+const PRESS_KINDS = new Set(["button"]);
 
 //: A value no real option list contains — `/select_option` answers it `no_option` and returns the
 //: widget's own enumerated choices (the working probe from the 2026-08-10 attended drive, now a
@@ -94,6 +115,11 @@ function intentFor(row, value) {
     const month = parts.find((p) => p !== year) || "";
     return { intent: "set_date", params: { field: row.field, month, year } };
   }
+  if (PRESS_KINDS.has(kind)) {
+    // The question IS the control's label and the answer is which button to press, so the value
+    // rides as `value` on a `click` — `set_text` at a <button> writes nowhere.
+    return { intent: "click", params: { control: row.field, value } };
+  }
   if (kind === "radio_group" || kind === "checkbox_group") {
     return { intent: "check_group", params: { field: row.field, values: [value] } };
   }
@@ -107,6 +133,7 @@ function intentFor(row, value) {
 //: will accept, and "type the answer" said it wrong for every non-text control on the page.
 function placeholderFor(kind, truncated) {
   if (truncated) return "or type the exact option";
+  if (PRESS_KINDS.has(kind)) return "which button — e.g. Yes";
   if (kind === "file") return "absolute path to the file";
   if (kind === "month_year" || kind === "segmented_date") return "MM/YYYY";
   if (kind === "number") return "a number";
@@ -116,6 +143,7 @@ function placeholderFor(kind, truncated) {
 
 //: The verb on the button. "Answer" is right for a question and wrong for an upload or a date.
 function verbFor(kind) {
+  if (PRESS_KINDS.has(kind)) return "Press";
   if (kind === "file") return "Attach";
   if (kind === "month_year" || kind === "segmented_date") return "Set date";
   if (CHOICE_KINDS.has(kind)) return "Choose";
