@@ -3098,9 +3098,14 @@ async def select_option(body: SelectOptionRequest):
                 "steps": inner.get("steps", []), "detail": inner.get("detail", ""),
                 "actions": ["click", "type", "click"]}
 
+    # THE SITE, ALONGSIDE THE ATS. A real ATS id keys the dialect on its own (one component
+    # library, shared across every tenant and every engine that led there). `company_site` is not
+    # an identity — it is `ats_registry`'s catch-all — so for those the dialect is keyed on the
+    # HOST instead, and one employer's answer stops being every employer's prior.
+    _site = (target or {}).get("url") or body.tab_url or ""
     order = dialect.candidate_order(
         body.ats or "", dialect.FAMILY_OPTION_SELECT,
-        classified=_proto_of(classified) or _proto_of(body.widget_type), tag=tag)
+        classified=_proto_of(classified) or _proto_of(body.widget_type), tag=tag, site=_site)
     if not order:
         return {**common, "outcome": Outcome.NOT_FOUND,
                 "detail": f"no candidate protocol for tag={tag!r} — the widget's shape rules "
@@ -3171,7 +3176,8 @@ async def select_option(body: SelectOptionRequest):
         attempts.append(result)
         if out_v == Outcome.OK.value:
             dialect.record_win(body.ats or "", dialect.FAMILY_OPTION_SELECT, protocol,
-                               evidence=f"{body.selector} · {(result.get('detail') or '')[:80]}")
+                               evidence=f"{body.selector} · {(result.get('detail') or '')[:80]}",
+                               site=_site)
             return {**common, **result, "via_protocol": protocol, "tried": tried}
         if out_v not in _cycle_on:
             return {**common, **result, "via_protocol": protocol, "tried": tried}

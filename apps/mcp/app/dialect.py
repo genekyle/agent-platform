@@ -90,28 +90,75 @@ def _save(data: dict[str, Any]) -> None:
     p.write_text(json.dumps(data, indent=2, sort_keys=True))
 
 
-def _key(platform: str, family: str) -> str:
-    return f"{(platform or 'unknown').strip().lower()}::{family}"
+#: PLATFORM IDS THAT ARE BUCKETS, NOT IDENTITIES. `company_site` is `ats_registry`'s catch-all for
+#: "an employer's own careers page we do not recognise" — every unmapped site in the world shares
+#: it. A real ATS id is the opposite kind of thing: it names ONE component library, which is the
+#: entire premise of this module, so its dialect rightly generalises across every tenant AND every
+#: engine that led there (a Workday found on LinkedIn speaks Workday).
+#:
+#: Keying both the same way was wrong in the direction that matters. Measured 2026-08-17: the store
+#: held `company_site::option_select -> native_select` with the evidence `#areaInterest · selected
+#: Information Technology` — Boston Children's BrassRing careers site — and that had become the
+#: first-tried protocol for WAHVE's form, whose dropdowns are bare `<div class="dropdown-label">`
+#: with no role and no <select> anywhere, where native_select cannot possibly win. One employer's
+#: answer was being offered as every employer's prior.
+#:
+#: So a catch-all narrows to the SITE. Same rule the operator stated: label the working profile to
+#: the website when there is no ATS to label it to.
+_CATCH_ALL_PLATFORMS = frozenset({"", "company_site", "unknown"})
 
 
-def learned_protocol(platform: str, family: str) -> Optional[str]:
+def host_of(url: str) -> str:
+    """The bare host of a url, lowercased — the site identity a catch-all dialect is keyed on.
+
+    Normalisation lives here rather than at the call sites so that the key a win is RECORDED under
+    and the key it is later READ under cannot drift apart; that drift is silent and would present
+    as a dialect that never seems to be learned.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    if "//" in raw:
+        raw = raw.split("//", 1)[1]
+    host = raw.split("/", 1)[0].split("?", 1)[0].split("@")[-1].split(":")[0]
+    return host.lower().removeprefix("www.")
+
+
+def _key(platform: str, family: str, site: str = "") -> str:
+    p = (platform or "unknown").strip().lower()
+    if p in _CATCH_ALL_PLATFORMS:
+        h = host_of(site)
+        # No host either: fall back to the old bucket rather than invent one. A shared prior is
+        # bad; a key that changes shape depending on what we happened to know is worse.
+        return f"site:{h}::{family}" if h else f"{p or 'unknown'}::{family}"
+    return f"{p}::{family}"
+
+
+def learned_protocol(platform: str, family: str, *, site: str = "") -> Optional[str]:
     """The protocol this platform's family has verified with, or None — a PRIOR, not a license."""
     with _lock:
-        row = _load().get(_key(platform, family))
+        row = _load().get(_key(platform, family, site))
     return (row or {}).get("protocol") or None
 
 
-def record_win(platform: str, family: str, protocol: str, *, evidence: str = "") -> None:
+def record_win(platform: str, family: str, protocol: str, *, evidence: str = "",
+               site: str = "") -> None:
     """First verified success sets the dialect; repeats count. A DIFFERENT protocol winning
     replaces it (the site changed, or the first win was luck — either way the page outranks
     the record), with the displaced one kept in `history` so the change is on the record."""
-    if not platform or not protocol:
+    # A CATCH-ALL PLATFORM WITH A SITE IS STILL WORTH LEARNING, which is why this no longer
+    # requires a truthy `platform`: an unmapped employer site has no ATS id and is exactly the
+    # case the site key exists to serve. With neither a platform nor a site there is nothing to
+    # attach the lesson to, and recording under a bucket is what this change is undoing.
+    if not protocol or (not platform and not host_of(site)):
         return
     with _lock:
         data = _load()
-        k = _key(platform, family)
-        row = data.get(k) or {"platform": platform.strip().lower(), "family": family,
+        k = _key(platform, family, site)
+        row = data.get(k) or {"platform": (platform or "").strip().lower(), "family": family,
                               "protocol": protocol, "wins": 0, "history": []}
+        if host_of(site):
+            row["site"] = host_of(site)
         if row.get("protocol") != protocol:
             row.setdefault("history", []).append(
                 {"protocol": row.get("protocol"), "wins": row.get("wins", 0),
@@ -126,7 +173,7 @@ def record_win(platform: str, family: str, protocol: str, *, evidence: str = "")
 
 
 def candidate_order(platform: str, family: str, *, classified: Optional[str] = None,
-                    tag: Optional[str] = None) -> list[str]:
+                    tag: Optional[str] = None, site: str = "") -> list[str]:
     """The protocols to try, in order: learned dialect → classifier's verdict → the rest,
     deduped, with structurally-impossible candidates dropped when the tag is known."""
     base = list(CANDIDATES.get(family) or ())
@@ -135,7 +182,7 @@ def candidate_order(platform: str, family: str, *, classified: Optional[str] = N
     if tag:
         allowed = set(rules.get(tag.strip().lower(), rules.get("_other", tuple(base))))
     order: list[str] = []
-    for cand in [learned_protocol(platform, family), classified, *base]:
+    for cand in [learned_protocol(platform, family, site=site), classified, *base]:
         if not cand or cand in order or cand not in base:
             continue
         if allowed is not None and cand not in allowed:

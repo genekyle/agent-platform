@@ -70,3 +70,75 @@ def test_unknown_platform_and_corrupt_store_stay_harmless(dialect):
     dialect.record_win("", dialect.FAMILY_OPTION_SELECT, "native_select")   # no-op, no crash
     dialect._store_path().write_text("{not json")
     assert dialect.all_dialects() == {}          # corrupt store = empty prior, never a crash
+
+
+# --- the catch-all is not an identity ------------------------------------------------------------
+def test_two_unmapped_employer_sites_do_not_share_a_dialect(dialect):
+    """`company_site` is `ats_registry`'s bucket for "an employer's own careers page we do not
+    recognise" — every unmapped site in the world lands in it. Keying a dialect there teaches one
+    employer's answer to all of them.
+
+    Measured live 2026-08-17: the store held `company_site::option_select -> native_select` with
+    the evidence `#areaInterest · selected Information Technology` (Boston Children's BrassRing),
+    and that was the first-tried protocol on WAHVE's form — whose dropdowns are bare
+    `<div class="dropdown-label">` with no role and no `<select>` in the document, where
+    native_select cannot possibly win.
+    """
+    dialect.record_win("company_site", dialect.FAMILY_OPTION_SELECT, "native_select",
+                       evidence="#areaInterest · selected Information Technology",
+                       site="https://jobs.bostonchildrens.org/apply")
+
+    assert dialect.learned_protocol(
+        "company_site", dialect.FAMILY_OPTION_SELECT,
+        site="https://jobs.bostonchildrens.org/x") == "native_select"
+    # A DIFFERENT unmapped employer inherits nothing.
+    assert dialect.learned_protocol(
+        "company_site", dialect.FAMILY_OPTION_SELECT,
+        site="https://insurance.brainwahve.com/apply") is None
+    order = dialect.candidate_order("company_site", dialect.FAMILY_OPTION_SELECT,
+                                    site="https://insurance.brainwahve.com/apply")
+    assert order == ["native_select", "aria_listbox", "react_select"], "generic bucket, unlearned"
+
+
+def test_a_real_ats_still_generalises_across_tenants_and_engines(dialect):
+    """The other half, and the reason the catch-all is special-cased rather than the key changed
+    for everyone: an ATS id names ONE component library, so its dialect SHOULD cross every tenant
+    and every engine that led there. A Workday found on LinkedIn speaks Workday."""
+    dialect.record_win("workday", dialect.FAMILY_OPTION_SELECT, "aria_listbox",
+                       evidence="#primaryQuestionnaire · selected",
+                       site="https://acme.wd1.myworkdayjobs.com/x")
+    for other in ("https://beta.wd5.myworkdayjobs.com/y", "", "https://anything.example/z"):
+        assert dialect.learned_protocol("workday", dialect.FAMILY_OPTION_SELECT,
+                                        site=other) == "aria_listbox"
+
+
+def test_a_catch_all_with_no_host_keeps_the_old_bucket(dialect):
+    """A key that changes shape depending on what we happened to know is worse than a shared
+    prior: the win would be written under one key and read back under another, silently, and
+    present as a dialect that never seems to be learned."""
+    dialect.record_win("company_site", dialect.FAMILY_OPTION_SELECT, "react_select", site="")
+    assert dialect.learned_protocol("company_site", dialect.FAMILY_OPTION_SELECT,
+                                    site="") == "react_select"
+
+
+def test_a_site_is_learnable_with_no_ats_id_at_all(dialect):
+    """An unmapped employer site has no ATS id, and that is exactly the case the site key exists
+    to serve — so an empty platform must not refuse the lesson when a host is known."""
+    dialect.record_win("", dialect.FAMILY_OPTION_SELECT, "aria_listbox",
+                       site="https://insurance.brainwahve.com/apply")
+    assert dialect.learned_protocol(
+        "", dialect.FAMILY_OPTION_SELECT,
+        site="https://insurance.brainwahve.com/apply") == "aria_listbox"
+    # Nothing to attach it to at all is still refused.
+    dialect.record_win("", dialect.FAMILY_OPTION_SELECT, "react_select", site="")
+    assert dialect.learned_protocol("", dialect.FAMILY_OPTION_SELECT, site="") is None
+
+
+def test_the_host_is_normalised_the_same_way_on_write_and_read(dialect):
+    """www., scheme, port and path must not split one site into several keys."""
+    dialect.record_win("company_site", dialect.FAMILY_OPTION_SELECT, "native_select",
+                       site="https://www.Example.com:443/careers/apply?x=1")
+    for variant in ("http://example.com", "https://www.example.com/other",
+                    "example.com:8080/deep/path"):
+        assert dialect.learned_protocol("company_site", dialect.FAMILY_OPTION_SELECT,
+                                        site=variant) == "native_select"
