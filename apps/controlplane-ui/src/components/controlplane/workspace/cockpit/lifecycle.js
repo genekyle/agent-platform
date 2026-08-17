@@ -297,7 +297,21 @@ function executeFocus(p, step, nextAction) {
   // the primary: a button that navigates AWAY from the form it is covering. The account rung
   // already refuses the mirror case ("still before workday's account wall — press Apply first");
   // this is the other side of the same fact, and the screen is the one that knows it.
-  const pastTheWall = APPLICATION_SCREENS.test(step.landing_state || "");
+  //
+  // ...SO ASK THE SCREEN. This tested `step.landing_state` — the RECORD — which is the one thing
+  // on the panel that does not know where the browser is standing. Live 2026-08-16: a refresh
+  // silently signed the session out, the record still read `workday_my_information`, so this said
+  // "past the wall" and suppressed the account controls WHILE THE WINDOW WAS SHOWING THE WALL.
+  // The observer had it right and said so — high confidence, Recipe Mismatch, "Create account" on
+  // the stepper — and the panel offered the operator no way to act on its own diagnosis.
+  //
+  // The observation decides when it actually read the page; an abstaining one (unknown /
+  // unreadable) falls back to the record rather than inventing a position from a non-answer.
+  const seen = p.observer || null;
+  const readIt = !!(seen && seen.kind && seen.kind !== "unknown" && seen.kind !== "unreadable");
+  const pastTheWall = readIt
+    ? seen.kind !== "account_gate" && APPLICATION_SCREENS.test(seen.state || "")
+    : APPLICATION_SCREENS.test(step.landing_state || "");
   const account = !handoff && !pastTheWall
     && p.account_state && p.account_state.job_id === step.job_id ? p.account_state : null;
 
@@ -307,7 +321,11 @@ function executeFocus(p, step, nextAction) {
   // action stands.
   const base = {
     title: step.title || step.job_id,
-    subtitle: [step.company, step.platform, step.landing_state?.replace(/_/g, " ")]
+    // The heading names the screen the OPERATOR is looking at. Reading it off the record left the
+    // subtitle saying "workday my information" over a sign-in wall while every other part of the
+    // panel had already followed the window — a header contradicting its own page.
+    subtitle: [step.company, step.platform,
+               (readIt ? seen.state : step.landing_state)?.replace(/_/g, " ")]
       .filter(Boolean).join(" · "),
     more: TERMINAL_CHOICES,
   };
