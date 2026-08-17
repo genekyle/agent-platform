@@ -654,6 +654,11 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
                       // The canonical résumé, resolved server-side by `assets.resume_path()` so a
                       // file field can be answered with a press instead of a hand-typed path.
                       resumePath={panel?.resume_path || ""}
+                      // AUTO-FILL, OFFERED RATHER THAN DESCRIBED. `will_type` is what the executor
+                      // will actually type — not `fillable`, which counts rows the bunch pass
+                      // defers to their own widget protocol and would promise more than it does.
+                      fillable={last?.fill_summary?.will_type || 0}
+                      onAutofill={() => call("/apply_fill", { execute: true })}
                       onReread={() => call("/apply_fill", { execute: false })} />
           <FormSections sections={last?.sections} busy={busy}
                         ats={panel.account_state?.ats} accordionAts={panel.accordion_ats}

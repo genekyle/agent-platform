@@ -259,11 +259,18 @@ function Row({ row, busy, onArm, armed, rowId, resumePath }) {
   );
 }
 
-export default function FormCensus({ census, busy, taught, onTeach, onReread, resumePath }) {
+export default function FormCensus({ census, busy, taught, onTeach, onReread, resumePath,
+                                     fillable = 0, onAutofill }) {
   const [armedAct, setArmedAct] = useState(null);   // {row, value, rationale}
   if (!census) return null;
   const unanswered = census.unanswered || [];
   const answered = census.answered || [];
+  // THE CONTROLS THE PAGE HAS THAT THIS SCREEN DOES NOT REQUIRE. The scanner has always returned
+  // them and this card dropped them on the floor, so the panel implied the page held nothing but
+  // its required rows — while the operator was looking at an education and work-experience section
+  // we have driven before and could not see here (2026-08-16). They are a DISCLOSURE, not the
+  // work: collapsed by default, one line when you do not need them, there when you do.
+  const optional = census.optional || [];
 
   const arm = (row, value, key) => setArmedAct({
     row, value, key,
@@ -279,7 +286,7 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread, re
   };
 
   return (
-    <div className="sc-login form-census">
+    <div className="sc-login form-census" aria-busy={busy ? "true" : "false"}>
       <div className="sc-login__head">
         <AppIcon name="listTree" size={14} /> The form as it stands
         <span className={`badge badge--${unanswered.length ? "warn" : "ready"}`}>
@@ -288,10 +295,47 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread, re
         {answered.length > 0 && (
           <span className="badge badge--muted">{answered.length} answered</span>
         )}
+        {optional.length > 0 && (
+          <span className="badge badge--muted">{optional.length} not required</span>
+        )}
       </div>
 
-      {unanswered.length === 0 && answered.length === 0 && (
-        <p className="rung__meta">The scanner found no required fields on this page.</p>
+      {/* THE PAGE IS MOVING AND THIS LIST IS NOT. A census is a photograph: while a step runs, the
+          rows on screen describe the page as it WAS, and their buttons still look live — which is
+          how a press lands on a row that no longer exists. Say so, rather than letting a stale
+          list read as a current one. (Operator, 2026-08-16: "something letting the user know that
+          we know the form has changed … but give a little bit for the form to change.") */}
+      {busy && (
+        <p className="rung__meta form-census__reading" aria-live="polite">
+          <span className="form-census__pulse" aria-hidden="true" />
+          Re-reading the page — these rows are the previous look, so they are held until it lands.
+        </p>
+      )}
+
+      {/* WHAT THE PROFILE CAN ANSWER, OFFERED AS A PRESS. The capability existed (`apply_fill`
+          with execute) but was worded as a description and only appeared once a plan had been
+          drawn, so the operator asked for an auto-fill that was already there. A count makes the
+          offer honest: it says how many of the unanswered rows we actually hold answers for, and
+          nothing about the rest. */}
+      {fillable > 0 && onAutofill && (
+        <div className="cv-actions form-census__autofill">
+          <button className="btn btn-sm btn-primary" disabled={busy} onClick={onAutofill}
+                  title="Fill every field the profile holds an answer for — types on the live page, then reads back what actually landed">
+            Fill {fillable} from the profile
+          </button>
+          <span className="rung__meta">
+            {unanswered.length > fillable
+              ? `${unanswered.length - fillable} would still need you.`
+              : "That covers every unanswered field."}
+          </span>
+        </div>
+      )}
+
+      {unanswered.length === 0 && answered.length === 0 && optional.length === 0 && (
+        <p className="rung__meta">The scanner found no fields on this page.</p>
+      )}
+      {unanswered.length === 0 && (answered.length > 0 || optional.length > 0) && (
+        <p className="rung__meta">Nothing required is outstanding on this screen.</p>
       )}
 
       {unanswered.length > 0 && (
@@ -348,10 +392,31 @@ export default function FormCensus({ census, busy, taught, onTeach, onReread, re
         </details>
       )}
 
+      {optional.length > 0 && (
+        <details className="work__more">
+          <summary>
+            {optional.length} other control(s) on this page — not required to continue, still
+            yours to work
+          </summary>
+          <p className="rung__meta">
+            The screen does not need these to advance. They are listed because a page that offers
+            more than it demands is the normal case — an education or work-history section is
+            optional to the Continue and still the reason you are here.
+          </p>
+          <ul className="rungs">
+            {optional.map((r, i) => (
+              <Row key={rowKey(r, i, "o")} row={r} busy={busy} rowId={rowKey(r, i, "o")}
+                   onArm={arm} armed={armedAct?.key === rowKey(r, i, "o")}
+                   resumePath={resumePath} />
+            ))}
+          </ul>
+        </details>
+      )}
+
       <div className="cv-actions">
         <button className="btn btn-sm" disabled={busy} onClick={onReread} aria-label="Re-read the form"
                 title="Re-scan the live form — reads, types nothing">
-          Re-read the form
+          {busy ? "Reading…" : "Re-read the form"}
         </button>
       </div>
     </div>

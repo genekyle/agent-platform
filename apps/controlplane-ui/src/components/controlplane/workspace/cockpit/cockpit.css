@@ -1021,3 +1021,29 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
 .action-log__meta {
   grid-column: 3; color: var(--text-subtle); font-size: 10px;
 }
+
+/* THE CENSUS IS A PHOTOGRAPH, AND THE PAGE MOVES. While a step runs, these rows describe the page
+   as it WAS; the pulse says so without hiding the list, because a census that vanishes mid-step is
+   worse than one that admits it is a moment behind. */
+.form-census__reading { display: flex; align-items: center; gap: 8px; opacity: .85; }
+.form-census__pulse {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--accent, #b8d98a);
+  animation: form-census-pulse 1.1s ease-in-out infinite;
+}
+@keyframes form-census-pulse {
+  0%, 100% { opacity: .25; transform: scale(.8); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+/* Motion is a signal, not decoration — an operator who has asked for less of it gets a static dot
+   that still reads as "working". */
+@media (prefers-reduced-motion: reduce) {
+  .form-census__pulse { animation: none; opacity: .8; }
+}
+
+/* The offer sits above the list it acts on, and its caveat rides beside it rather than under. */
+.form-census__autofill { align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 2px; }
+.form-census__autofill .rung__meta { margin: 0; }
+
+/* Rows go quiet while the page is in flight — visibly held, not merely disabled. */
+.form-census[aria-busy="true"] .rungs { opacity: .55; transition: opacity .15s ease; }
