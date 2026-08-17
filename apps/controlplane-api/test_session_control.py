@@ -5630,3 +5630,76 @@ def test_use_source_refuses_a_field_that_is_not_the_how_did_you_hear_question():
     assert not _ff.answers_how_did_you_hear("Desired Salary")
     assert _ff.answers_how_did_you_hear("How Did You Hear About Us?")
     assert _ff.answers_how_did_you_hear("How did you hear about this position?")
+
+
+# --- the observer is the basis of the panel, not a decoration ---------------------------------
+#
+# `_view` documented itself as rendering the observer's verdict "INSTEAD of trusting the recipe
+# position", and `_orient_now` claimed to run "on EVERY panel render". Measured 2026-08-16: the
+# verdict was an optional kwarg and **3 of 56 render sites passed it**. The other 53 drew the
+# panel from `step.landing_state` — a stored field with eleven writers, all of them ours — so the
+# cockpit only moved when WE moved it, and an operator driving the same Chrome by hand desynced it
+# instantly. These guard the inversion: the verdict is computed where it cannot be skipped.
+
+
+def _sc_source() -> str:
+    import pathlib
+    return (pathlib.Path(__file__).parent / "routers" / "session_control.py").read_text()
+
+
+def test_observe_takes_the_blackboard_so_it_can_orient():
+    """The query string cannot orient — the fusion needs the queue and the apply tab."""
+    import inspect
+    from routers import session_control as sc
+    params = list(inspect.signature(sc._observe).parameters)
+    assert params[:2] == ["browser_url", "bb"], params
+
+
+def test_every_observation_carries_a_verdict(monkeypatch):
+    """Both of _observe's paths must return a verdict key, or a render can silently fall back to
+    the recorded position — which is the whole bug. Exercised, not grepped."""
+    import asyncio
+    from types import SimpleNamespace
+    from routers import session_control as sc
+
+    bb = SimpleNamespace(search_state=SimpleNamespace(query="report analyst"), world={})
+
+    async def _no_tabs(path, payload, **kw):
+        return {"ok": True, "tabs": []}
+    monkeypatch.setattr(sc, "_capture_post", _no_tabs)
+    empty = asyncio.run(sc._observe("http://127.0.0.1:9324", bb))
+    assert "observer" in empty and empty["observer"] is None
+
+    async def _one_tab(path, payload, **kw):
+        if path == "/list_tabs":
+            return {"ok": True, "tabs": [{"tab_id": "T1", "url": "https://www.indeed.com/jobs?q=x"}]}
+        return {"ok": True, "logged_in": True}
+
+    async def _no_block(*a, **kw):
+        return None
+
+    async def _verdict(bb_, obs_, url_, belief_=None):
+        return {"state": "workday_my_information", "mismatch": False}
+
+    monkeypatch.setattr(sc, "_capture_post", _one_tab)
+    monkeypatch.setattr(sc, "_detect_block", _no_block)
+    monkeypatch.setattr(sc, "_orient_now", _verdict)
+    live = asyncio.run(sc._observe("http://127.0.0.1:9324", bb))
+    assert live["observer"]["state"] == "workday_my_information"
+
+
+def test_no_call_site_passes_a_query_string_any_more():
+    """A leftover `_observe(url, query)` would type-error at runtime rather than quietly skip the
+    fusion — but catching it here is cheaper than catching it live."""
+    import re
+    hits = re.findall(r"await _observe\([^,]+,\s*(?:bb\.search_state\.query|query|ss\.query)\b",
+                      _sc_source())
+    assert hits == [], hits
+
+
+def test_the_explicit_observer_is_an_override_not_the_source():
+    """A caller with a richer look (a fresh perception belief) still wins; everyone else renders
+    what the window said, without having to remember anything."""
+    src = _sc_source()
+    body = src.split("def _view(", 1)[1]
+    assert "observer if observer is not None else obs.get(\"observer\")" in body
