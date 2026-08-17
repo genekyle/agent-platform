@@ -264,7 +264,15 @@ _TEXT_MENU_PICK_JS = r"""
     }
     return e;
   };
-  const boxes = hits.map((h) => { const t = tapTarget(h); const r = t.getBoundingClientRect();
+  // SCROLL IT INTO THE MENU'S VIEW BEFORE MEASURING. A tap is delivered at viewport coordinates,
+  // so an option below the fold of a scrollable menu measures to a box that is not where it will
+  // be tapped — the click lands on whatever row happens to sit there. Measured on WAHVE's State
+  // list (50 options): asking for "New Hampshire" tapped the row showing "Alaska". `nearest`
+  // rather than `center` so a list that already has the option on screen does not jump under the
+  // cursor for no reason.
+  const boxes = hits.map((h) => { const t = tapTarget(h);
+    t.scrollIntoView({block: "nearest", inline: "nearest"});
+    const r = t.getBoundingClientRect();
     return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
             w: Math.round(r.width), h: Math.round(r.height)}; });
   // Distinct tap targets with the same words: refuse rather than pick. Same rule as every other
