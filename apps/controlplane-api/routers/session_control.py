@@ -849,7 +849,7 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         },
         # HOW FAR THIS APPLICATION IS FROM SUBMIT, and the screens between here and there. The
         # ladder's tail, rendered — so "what is left" stops being something only the recipe knows.
-        "apply_flow": _apply_flow(queue.current() or _parked_step(queue)),
+        "apply_flow": _apply_flow(queue.current() or _parked_step(queue), observer),
         # WHAT THE INNER LAYERS ARE GETTING RIGHT. Both are measured on every crank and neither had
         # a surface: the operator asked for the orienter to practise, and practice nobody can see
         # is indistinguishable from no practice at all.
@@ -881,7 +881,8 @@ def _parked_step(queue: Any) -> Optional[Any]:
     return None
 
 
-def _apply_flow(step: Optional[Any]) -> Optional[dict[str, Any]]:
+def _apply_flow(step: Optional[Any],
+                observer: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
     """The application's remaining screens, and how far the gate is. None when nothing is open.
 
     The recipe has always known this and only Workday ever said it out loud. Rendering it is what
@@ -889,12 +890,25 @@ def _apply_flow(step: Optional[Any]) -> Optional[dict[str, Any]]:
     whole complaint was not knowing where in the application they were.
 
     A PARKED step still renders its flow (flagged `parked`): the application is mid-flight and
-    resumable, and hiding the walk is what made parked read as closed."""
+    resumable, and hiding the walk is what made parked read as closed.
+
+    THE WINDOW PLACES THE WALK, NOT THE RECORD. This drew the position from `step.landing_state`,
+    so the stepper showed where our last action left us: after a refresh signed the session out,
+    it rendered "My Information, 4 screens from Submit" over a sign-in wall (live 2026-08-16). The
+    observation is used when it named a state in the ladder's own vocabulary — which it now can,
+    because the fusion takes the page's own stepper reading — and the record remains the fallback
+    for the screens the observer can only describe as a KIND.
+    """
     parked = bool(step is not None and (step.terminal or "").startswith("parked"))
     if step is None or (step.done and not parked):
         return None
     import apply_recipe as ar
-    state = step.landing_state or ""
+    seen = (observer or {}).get("state") or ""
+    # Only a spine-precise reading may place the walk: a generic `<platform>_<kind>` cannot say
+    # WHICH form screen this is, and guessing between My Information and My Experience would move
+    # the stepper on no evidence.
+    state = seen if ar.flow_progress(seen, platform=step.platform or "").get("recognised") \
+        else (step.landing_state or "")
     progress = ar.flow_progress(state, platform=step.platform or "")
     if not progress.get("recognised"):
         # WHY IT IS UNPLACED, SPECIFICALLY. All three of these used to render as one sentence —
@@ -1524,6 +1538,10 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
         # in generic kinds — so the translation happens here and `orientation` stays pure. "" when
         # the state cannot be placed, which reads as NO CLAIM rather than as agreement.
         recorded_kind=_ar_kind_of_state(step.platform, step.landing_state),
+        # THE SPINE-PRECISE READING, when the page actually stated its own step. Gated on
+        # `observed` so a URL-only default cannot promote itself into the verdict — that guess
+        # wears an ordinary state's name and is exactly what stalled the ladder on 08-16.
+        precise_state=_precise_state_from(step.platform, url, content.get("text") or ""),
         # THE LEARNED WITNESSES, joining the fusion at last. They claim a platform (their measured
         # strength) and abstain at the novelty ceiling, so a witness announcing "I have never seen
         # this page" is rendered without being allowed to vote.
@@ -4142,6 +4160,28 @@ async def _scan_ax(browser_url: str, tab_id: str) -> list[dict[str, Any]]:
     scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
                                timeout=25.0)
     return scan.get("candidates") or []
+
+
+def _precise_state_from(platform: Optional[str], url: str, text: str) -> str:
+    """The spine-precise state the PAGE stated, or "" when it only implied one.
+
+    Workday renders its entire stepper ("current step 1 of 8 My Information"), so the screen names
+    itself in the ladder's own vocabulary — better evidence than any inference, and finer than the
+    generic kind the fusion would otherwise compose. Feeding it in is what lets the observation be
+    as precise as the record it is meant to outrank.
+
+    The gate is `observed`: the platform mappers fall back to a URL-only default when nothing
+    matched, and that default is spelled like a real state (b33a14f). Promoting a guess here would
+    hand the ladder a confident wrong position — the precise opposite of the point.
+    """
+    if not platform or not text.strip():
+        return ""
+    try:
+        import apply_recipe as _ar
+        readout = _ar.describe_for_ats(platform, url, text)
+    except Exception:  # noqa: BLE001 — a reader that fails is silent, never wrong
+        return ""
+    return (readout.get("state") or "") if readout.get("observed") else ""
 
 
 #: AX roles that render a form's section headings. A section bar is a heading or a button that

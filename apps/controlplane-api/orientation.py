@@ -346,6 +346,7 @@ def orient(url: str, page_text: str = "", frames: Optional[list[dict]] = None,
            ats_lookup: Optional[Callable[[str], Optional[str]]] = None,
            known_recipe: bool = False,
            recorded_kind: str = "",
+           precise_state: str = "",
            extra_witnesses: Optional[list[Witness]] = None) -> Orientation:
     """Fuse every witness into one verdict: where we are, how sure, and the way out.
 
@@ -387,7 +388,17 @@ def orient(url: str, page_text: str = "", frames: Optional[list[dict]] = None,
     if kind in (al.UNKNOWN, al.UNREADABLE) and kind_votes:
         kind = max(kind_votes, key=lambda w: w.weight).claim
 
-    state = al.landing_state(platform or "company_site", kind)
+    # THE PAGE'S OWN STATEMENT OF ITS STEP BEATS OUR NAME FOR THE KIND. `landing_state` composes
+    # `<platform>_<kind>`, which is as precise as the generic vocabulary gets — an application form
+    # is an application form. But Workday renders its whole stepper ("current step 1 of 8 My
+    # Information"), so the page will tell you exactly which screen it is if asked, and the ladder
+    # walks in that finer vocabulary. Answering only in kinds left the observation permanently
+    # coarser than the record it was supposed to be able to replace.
+    #
+    # `precise_state` is that reading, passed by the caller and ONLY when the platform mapper
+    # actually observed it — a URL-only default is a guess wearing a state's name (b33a14f) and
+    # must never arrive here. The kind stays as read, so the mismatch maths below is unaffected.
+    state = precise_state or al.landing_state(platform or "company_site", kind)
 
     # THE SAFETY CATCH. The rung said what it needs; the page said what it is. Disagreement is
     # surfaced, never resolved silently — resolving it is the plan's job, and the operator's call.

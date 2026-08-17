@@ -5703,3 +5703,23 @@ def test_the_explicit_observer_is_an_override_not_the_source():
     src = _sc_source()
     body = src.split("def _view(", 1)[1]
     assert "observer if observer is not None else obs.get(\"observer\")" in body
+
+
+def test_the_stepper_is_placed_by_the_window_not_the_record():
+    """After a refresh signed the session out, the panel rendered "My Information, 4 screens from
+    Submit" over a sign-in wall (live 2026-08-16). The walk is placed by what was observed."""
+    from types import SimpleNamespace
+    from routers import session_control as sc
+
+    step = SimpleNamespace(platform="workday", landing_state="workday_my_information",
+                           terminal="", done=False)
+    seen = sc._apply_flow(step, {"state": "workday_create_account"})
+    assert seen["state"] == "workday_create_account"
+
+    # A generic kind cannot say WHICH form screen it is, so it must not move the stepper.
+    coarse = sc._apply_flow(step, {"state": "workday_application_form"})
+    assert coarse["state"] == "workday_my_information"
+
+    # No observation at all — the record is still the fallback, not a blank.
+    blind = sc._apply_flow(step, None)
+    assert blind["state"] == "workday_my_information"
