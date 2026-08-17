@@ -8272,3 +8272,80 @@ False negative, the safe direction, but it sends the operator chasing fields tha
 exists, is `active`, its credential is in the vault, and the cockpit now offers "Sign in
 automatically" AT the wall. **Nothing submitted, nothing sent.** MAPFRE's earlier fill was lost to
 the refresh and needs redoing. Tests: controlplane-api **1675**.
+
+### 2026-08-17, fourteenth act — the widget was the evidence, and a long value outlived its own field
+
+Session #30 picked up on Eversource's Application Questions, two screens from Submit, sixteen
+required controls unanswered. The fill plan had **one row in it, and that row was wrong**: the
+planner proposed typing **"Concord"** into *"List three business references (previous supervisors);
+include name, title, company, city,"*. Caught in the preview. Nothing was executed.
+
+**THE SHAPE OF IT.** The census cuts field names at ~90 chars, so the row handed to the planner
+ended on the word `city,`. `field_answer_key` matches on WORD BOUNDARIES — the fix that landed
+after "Ethni-CITY" became the operator's home town — and `city` is a whole word here. The guard
+was doing exactly what it was written to do. What nobody had asked is whether the LABEL IS A
+LABEL: `_FIELD_TO_KEY`'s needles are field names ("City", "State", "Email Address"), and this was
+a sentence. *A needle appearing as a whole word inside a question is not a field name.*
+
+`references_long_form` was sitting in the store holding the operator's three references, and lost
+the same comparison: `location`'s bare "city" pattern scored 3.0 verbatim plus 0.5 on the same
+word (3.5), the references entry only 3.0 on token overlap. **Text could not separate them. The
+widget could, and both scanners already knew** — the DOM census reports `kind: textarea`, and
+`session_control` threw it away flattening census rows to `role: textbox`, because the AX tree
+calls an `<input>` and a `<textarea>` the same thing. So the control's shape became evidence
+(`control_class` / `kind_refuses` / a +1.0 tiebreak that is deliberately < MATCH_THRESHOLD and can
+never carry a match alone).
+
+**THEN THE SECOND SOURCE, WHICH HAD NEVER BEEN CONSULTED AT ALL.** Every stored answer carries
+`question_patterns`, matched by `application_answers.match_question`, reachable at
+`/api/application-answers/match` — and the bunch fill had only ever read the label map. An
+identity form is made of labels; an application QUESTIONNAIRE is made of questions. The two
+never met. `_label_scope` refusing a label-map key now doubles as the HAND-OFF: it is the signal
+that this control is not a short identity box, so the question store gets its turn.
+
+**A QUESTION'S OWN WRAPPER WAS HIDING THE BOX THAT ANSWERS IT — and this is the one to remember.**
+Workday wraps every question in a `role=group` whose accessible name IS the question text. The
+census dedupe suppressed any row whose name already appeared in the AX tree; `form_fill.plan` then
+discarded the group, because a group is not a fillable control. **Claimed by the join, dropped by
+the planner, present in neither.** The asymmetry is what hid it: only the SHORT questions were
+lost, because the census truncation made the three longest fail to match their own group. *Three
+of five textareas were reachable only because of a truncation bug.* "Already known" now means
+"already ADDRESSABLE" — the dedupe is scoped to `form_fill.FILLABLE_ROLES`, exported so the two
+sides cannot drift apart. Same stale-source shape as the 08-16 audit's four, in a sixth place.
+
+    plan before: 1 row,  and it was wrong
+    plan after:  4 rows, all correct, all with selectors
+
+*What the live drive then measured, and it is worse than the planning bug.* The bunch fill
+reported **"Filled 3 field(s) … 1 would not take: List three business references"**. The DOM said
+the opposite: the references textarea held all 340 characters, **byte-identical to the stored
+block**. And the field AFTER it — *"Were you referred by an employee of Eversource Energy?"* — held
+`No-549-0922Hannah Albee — Director of Development, …`: the TAIL of the references text, appended
+after its own answer, on a real employer's form. **A long multi-line value outlived its own
+field.** The executor gave up on a fill that was in fact succeeding, moved on, and the queued
+keystrokes flushed into whatever was focused next. The report was wrong in both directions at
+once — a false "would not take" over a field that took, and silence about a field that was
+corrupted. Repaired live: `clear` on the referral box (verified empty by probe), then `No` typed
+alone. **Do not bunch-type a long multi-line value beside other fields until this is fixed.**
+
+*The read-back was blind here, and honestly so.* It probes by ACCESSIBLE NAME, and every one of
+these five textareas has an empty accessible name — Workday puts the question on the wrapping
+group, not the control. So it returned `4 unreadable, 0 confirmed` about a form that was, in
+fact, correctly filled. It did not claim otherwise, which is the right failure; but the fill types
+by SELECTOR and the read-back cannot, so the two do not address the same page.
+
+*Two more the census under-reports.* `On what date are you available to start work (MM/DD/YYYY)?*`
+is REQUIRED on screen (red asterisk) and its `Month` input is filed under `optional`. And one
+control comes back named **"Application Questions 1 of 2"** — the page heading — so a seventeenth
+question's real text is still unknown.
+
+*And a sentinel collision worth knowing:* `form_fill._resolve` treats the literal string `"None"`
+as ABSENT (`stored not in (None, "", "None")`), so a genuine answer of "None" can never be stored.
+`licenses_certifications` is stored as `"N/A"` for that reason, not by preference.
+
+*Where it stands:* four textareas filled and verified byte-exact. Still open on this screen: twelve
+yes/no choosers (operator: **all No**), the salary-range dropdown (operator: the **65–80k** band
+governs, not the stored 130k, which stays as-is for senior roles), the required availability date,
+and the unemployment account — **the one answer only the operator can write**. This tenant has
+eight steps and an assessment we have never seen; **stop before Take Assessment.** Nothing
+submitted, nothing sent. Tests: controlplane-api **1697**.
