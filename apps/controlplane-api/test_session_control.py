@@ -1260,6 +1260,110 @@ def test_choose_rejects_a_pick_that_is_not_on_the_page_under_review(monkeypatch)
     assert r.status_code == 422 and "indeed:ghost" in r.json()["detail"]
 
 
+def _card(job_id, title, company):
+    """A page_results card as `review_page` writes it — `external_id` is what `check_many` keys on."""
+    return {"job_id": job_id, "external_id": job_id.split(":", 1)[1],
+            "title": title, "company": company}
+
+
+def test_choose_refuses_a_pick_the_database_says_is_already_applied(monkeypatch):
+    """Operator, 2026-08-17, having just picked two jobs already applied to through Indeed: *"when
+    we use the picker we need to start involving the applied database here and in decision making
+    … so we don't waste any time."*
+
+    The verdict was computed on every card at scan time and no decision consulted it. An EXACT
+    match is certain, so this refuses rather than warns — entering an application that already
+    exists is real traffic against a real account for nothing.
+    """
+    bb = _at_start_line()
+    bb.world["page_results"] = [_card("indeed:a1", "Data Analyst", "Acme")]
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb,
+             applied=[_applied_row(None, "indeed:a1", "Data Analyst", "Acme")])
+    try:
+        r = client.post("/api/session_control/1/choose", json={"picks": ["indeed:a1"]})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "Already applied" in detail and "Data Analyst" in detail
+    assert "confirm_reapply" in detail, "a refusal the operator cannot act on is a dead end"
+
+
+def test_choose_lets_a_named_reapply_through(monkeypatch):
+    """The override is per-job, not a blanket flag: "yes, apply again to THIS one" is a judgement
+    about a reposted requisition, and a boolean that waves everything through is not that."""
+    bb = _at_start_line()
+    bb.world["page_results"] = [_card("indeed:a1", "Data Analyst", "Acme")]
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True},
+         "/next_page": {"ok": True, "has_next": True}},
+        blackboard=bb, applied=[_applied_row(None, "indeed:a1", "Data Analyst", "Acme")])
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:a1"], "confirm_reapply": ["indeed:a1"],
+                              "advance": False})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    assert aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0].job_id == "indeed:a1"
+
+
+def test_choose_queues_a_maybe_applied_pick_and_says_so(monkeypatch):
+    """The fuzzy tier NEVER blocks: company+title is right far more often than it is wrong, but a
+    near-miss that silently drops a job the operator picked is worse than one that asks. So it
+    enqueues — and leaves the warning on the record.
+
+    The pair here is the REAL 2026-08-17 shape: the same posting met through two boards, so the
+    ids differ and the employer and role do not. Deliberately NOT "Analyst I" vs "Analyst II" —
+    `job_dedup` separates level numerals on purpose (the 07-30 fix, after the old scorer equated
+    'Financial Analyst II' with 'Financial Analyst III' on the real corpus), so that pair is a
+    non-match and would have pinned nothing.
+    """
+    bb = _at_start_line()
+    bb.world["page_results"] = [_card("indeed:b2", "Clinical Reporting Analyst",
+                                      "Charles River Community Health")]
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True},
+         "/next_page": {"ok": True, "has_next": True}},
+        blackboard=bb,
+        applied=[_applied_row(None, "indeed:a1", "Clinical Reporting Analyst",
+                              "Charles River Community Health")])
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:b2"], "advance": False})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    assert aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0].job_id == "indeed:b2"
+    warned = [e for e in (saved["bb"].events or []) if e.kind == "applied_warning"]
+    assert warned, "a queued maybe-applied pick must leave a trace the operator can read"
+    assert "Clinical Reporting Analyst" in warned[-1].detail
+
+
+def test_choose_is_unbothered_when_nothing_has_been_applied_to(monkeypatch):
+    """The guard must not fire on `not_applied` — the status meaning "nothing on file" is the
+    ordinary answer for almost every card, and treating a non-empty status as a hit is the exact
+    bug `AppliedNote` already carries a comment about."""
+    bb = _at_start_line()
+    bb.world["page_results"] = [_card("indeed:c3", "Data Analyst", "Nowhere Inc")]
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL), "/auth_state": {"ok": True, "logged_in": True},
+         "/next_page": {"ok": True, "has_next": True}},
+        blackboard=bb, applied=[])
+    try:
+        r = client.post("/api/session_control/1/choose",
+                        json={"picks": ["indeed:c3"], "advance": False})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    assert not [e for e in (saved["bb"].events or []) if e.kind == "applied_warning"]
+
+
 def test_choose_refuses_before_the_start_line(monkeypatch):
     _install(monkeypatch,
              {"/list_tabs": _tabs("https://www.indeed.com/"),

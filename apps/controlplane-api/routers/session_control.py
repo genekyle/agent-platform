@@ -7780,6 +7780,13 @@ class ChooseBody(BaseModel):
     #: an unexplained decision is still worth recording, and an invented reason would be worse
     #: than none, so nothing fabricates these.
     reasons: dict[str, str] = {}
+    #: Job ids the operator means to apply to AGAIN despite a CERTAIN match on file. Named one by
+    #: one rather than a blanket boolean, because "yes, re-apply to this one" is a judgement about
+    #: a specific job (the req was reposted, the first attempt died at a wall) and a flag that
+    #: waves through everything is not that judgement. The fuzzy tier never reaches here — it
+    #: warns and enqueues, per `applied_index`: a near-miss that silently skips a job the operator
+    #: picked is worse than one that asks.
+    confirm_reapply: list[str] = []
 
 
 @router.post("/api/session_control/{session_id}/choose")
@@ -7815,6 +7822,57 @@ async def choose(session_id: int, body: ChooseBody,
         raise HTTPException(status_code=422,
                             detail=f"Not on the page under review: {unknown}. Step to re-read the "
                                    f"page before choosing.")
+
+    # ASK THE DATABASE BEFORE SPENDING A DRIVE. The applied check already ran at scan time and
+    # every card carries its verdict, but a stored verdict is a MEMORY: this session's own earlier
+    # submissions, and any other session's, land in `ObservedJob` after the page was read. So the
+    # question is asked again HERE, where it changes what happens, against the live table.
+    #
+    # Operator, 2026-08-17, having just picked two jobs already applied to through Indeed:
+    # *"when we use the picker we need to start involving the applied database here and in
+    # decision making … so we don't waste any time."* The verdict existed on every row and no
+    # surface rendered it and no decision consulted it.
+    #
+    # THE TWO TIERS ARE ANSWERED DIFFERENTLY, which is the whole point of `applied_index` having
+    # tiers at all (its own docstring): `applied` is certain — same job id, or a shared requisition
+    # — so enqueuing it is waste and it REFUSES, naming the match and how it was made. `likely`
+    # is company+title, right far more often than wrong and exactly the match that would wrongly
+    # skip "Data Analyst II" for "Data Analyst I", so it never blocks: it enqueues and says so.
+    # A refusal the operator cannot act on is a dead end, so the refusal carries the override.
+    picked_cards = [by_id_pre for by_id_pre in ((bb.world or {}).get("page_results") or [])
+                    if by_id_pre.get("job_id") in set(body.picks)]
+    verdicts = applied_index.check_many(db, picked_cards, platform=engine["platform"])
+    certain, likely = [], []
+    for card in picked_cards:
+        verdict = verdicts.get(str(card.get("external_id") or ""))
+        if verdict is None:
+            continue
+        if verdict.applied and card.get("job_id") not in set(body.confirm_reapply):
+            certain.append((card, verdict))
+        elif verdict.worth_asking:
+            likely.append((card, verdict))
+    if certain:
+        named = "; ".join(
+            f"{c.get('title') or c.get('job_id')} at {c.get('company') or 'unknown employer'} "
+            f"(applied {str(v.applied_at)[:10]} via {v.platform or 'unknown'}, matched on "
+            f"{v.matched_on})" for c, v in certain)
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Already applied to {len(certain)} of these: {named}. Entering an application "
+                    f"that exists spends real traffic against a real account for nothing. Drop "
+                    f"them from the picks, or name them in `confirm_reapply` if you mean to apply "
+                    f"again."))
+    if likely:
+        bb.log("applied_warning",
+               f"page {page}: {len(likely)} pick(s) look already-applied and were queued anyway: "
+               + "; ".join(f"{c.get('title') or c.get('job_id')} ({'; '.join(v.evidence)})"
+                           for c, v in likely),
+               why="The fuzzy tier matches on employer and role words, which is right far more "
+                   "often than it is wrong but would also skip 'Analyst II' for having applied to "
+                   "'Analyst I'. It warns and never decides.",
+               next_up="Check the posting against the earlier application before driving it; if it "
+                       "is the same requisition, flag the step already-applied rather than filling "
+                       "the form twice.")
 
     approved = list(bb.search_state.approved or [])
     for job_id in body.picks:

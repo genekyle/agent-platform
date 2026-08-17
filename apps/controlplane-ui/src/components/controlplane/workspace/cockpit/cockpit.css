@@ -417,6 +417,9 @@ button[data-status="attention"] .now-path__dot { background: var(--warning); }
   max-width: 68ch;
   line-height: 1.55;
 }
+/* The picker's already-applied count, when one of them is actually in the picks — the only case
+   where this line is about a cost the operator is ABOUT to pay rather than a fact about the page. */
+.work__why.is-warn { color: var(--warning, #d8a657); }
 
 /* THE one primary. Sized so nothing else on the screen can be mistaken for it. */
 .work__actions {

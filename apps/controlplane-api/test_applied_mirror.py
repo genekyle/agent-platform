@@ -79,3 +79,54 @@ def test_record_outcome_writes_both_halves(db):
     assert row.application_status == "applied" and row.applied_at is not None
     app = db.scalar(select(Application))
     assert app is not None and app.search_id == 7
+
+
+def test_a_linkedin_submission_is_filed_under_linkedin(db):
+    """BOTH ENGINES WRITE, and the platform comes from the job_id's own prefix.
+
+    Operator, 2026-08-17: *"make sure both indeed and linkedin have access to it and are writing
+    to."* The read half was proven live that day — three LinkedIn cards matched Indeed
+    applications across three different ATSs — but the WRITE half had never fired from LinkedIn,
+    because nothing has been submitted from LinkedIn yet. Measured on the real table that morning:
+    24 applied rows, every one of them `indeed:`. So this path was correct by inspection and
+    unpinned by any test, which is exactly the combination this log keeps paying for.
+
+    `_record_outcome`'s own comment calls filing a LinkedIn application under Indeed "the kind of
+    wrong that survives forever" — an applied row is what every later drive trusts to skip a job,
+    so a mis-filed platform silently poisons the answer on both engines.
+    """
+    from routers.session_control import _record_outcome
+
+    step = aps.ApplyStep(job_id="linkedin:4451068100", title="Clinical Reporting Analyst",
+                         company="Charles River Community Health")
+    step.terminal = aps.SUBMITTED
+    step.platform = "paylocity"          # the ATS it was actually submitted through
+    out = _record_outcome(db, step, ats_url="https://recruiting.paylocity.com/x/Apply/9", search_id=3)
+
+    assert out["recorded"] is True and out["status"] == "applied"
+    row = db.get(ObservedJob, "linkedin:4451068100")
+    assert row.platform == "linkedin", "the engine that found it comes from the job_id prefix"
+    assert row.application_platform == "paylocity", "the ATS it was submitted through is kept too"
+    assert row.application_status == "applied" and row.applied_at is not None
+    assert db.scalar(select(Application)) is not None
+
+
+def test_a_linkedin_application_is_found_by_the_applied_check(db):
+    """The round trip that makes the two engines one memory: written from LinkedIn, found by a
+    check made from Indeed. `applied_index` never filters by platform — an application is an
+    application whichever board led to it — and this pins that so a future narrowing has to
+    break a test to happen."""
+    import applied_index
+    from routers.session_control import _record_outcome
+
+    step = aps.ApplyStep(job_id="linkedin:4451068100", title="Clinical Reporting Analyst",
+                         company="Charles River Community Health")
+    step.terminal = aps.SUBMITTED
+    _record_outcome(db, step, search_id=3)
+
+    # The same job met again as an INDEED card: different id, same employer and role.
+    verdict = applied_index.check(db, job_id="indeed:890102b652e9bb25",
+                                  title="Clinical Reporting Analyst",
+                                  company="Charles River Community Health")
+    assert verdict.worth_asking, "a LinkedIn application must be visible to an Indeed-side check"
+    assert verdict.job_id == "linkedin:4451068100"

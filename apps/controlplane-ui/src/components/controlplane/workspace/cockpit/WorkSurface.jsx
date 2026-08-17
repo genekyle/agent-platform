@@ -429,9 +429,35 @@ function SetupBody({ focus, panel, form, setForm, busy, call }) {
   return null;
 }
 
+// THE SAME VERDICT, ONE ROW WIDE. `AppliedNote` speaks in sentences because it sits under a
+// single application in flight; a 25-row picker needs the same fact as a glance. Same vocabulary,
+// same source (`applied_index.STATUS_*`), so the two surfaces can never drift into disagreeing —
+// and `not_applied` stays SILENT here, because 22 rows each declaring "never applied" is noise
+// that would bury the three that matter.
+function AppliedCell({ applied }) {
+  const status = applied?.status;
+  if (status !== "applied" && status !== "likely_applied") return <span className="muted">—</span>;
+  const when = applied.applied_at ? applied.applied_at.slice(0, 10) : "";
+  const via = applied.platform ? ` via ${applied.platform}` : "";
+  return (
+    <span className={status === "applied" ? "badge badge--danger" : "badge badge--warn"}
+          title={status === "applied"
+            ? `Applied ${when}${via} — matched on ${applied.matched_on}.`
+            : `${(applied.evidence || []).join("; ")}. Matched on ${applied.matched_on}.`}>
+      {status === "applied" ? "Applied" : "Maybe applied"}
+    </span>
+  );
+}
+
 function DecideBody({ panel, picks, armed, onPick, onClear, note, setNote, busy }) {
   const results = panel.results || [];
   if (results.length === 0) return null;
+  // COUNTED OVER THE WHOLE PAGE, AND OVER THE PICKS SEPARATELY. "3 already applied" is a fact
+  // about the search; "2 of them are in your picks" is the one that costs a drive, and it is the
+  // sentence the operator needed on 2026-08-17 and did not have.
+  const hit = (r) => r.applied?.status === "applied" || r.applied?.status === "likely_applied";
+  const seenBefore = results.filter(hit);
+  const pickedSeen = seenBefore.filter((r) => picks.includes(r.job_id));
   return (
     <>
       <div className="work__section">
@@ -445,6 +471,14 @@ function DecideBody({ panel, picks, armed, onPick, onClear, note, setNote, busy 
             <button className="btn btn-sm btn-ghost" disabled={busy} onClick={onClear}>Clear</button>
           )}
         </div>
+        {seenBefore.length > 0 && (
+          <p className={pickedSeen.length ? "work__why is-warn" : "work__why"}>
+            {seenBefore.length} of these {seenBefore.length === 1 ? "has" : "have"} an application
+            on file{pickedSeen.length > 0 && <> — <strong>{pickedSeen.length} of them
+              {pickedSeen.length === 1 ? " is" : " are"} in your picks</strong></>}.
+            {" "}A certain match is refused when you choose; a maybe is queued with a warning.
+          </p>
+        )}
         {/* The table scrolls INSIDE the surface. A 21-row list is the object of this decision, not
             a reason for the page to become three screens tall. */}
         <div className="work-results__scroll">
@@ -452,7 +486,7 @@ function DecideBody({ panel, picks, armed, onPick, onClear, note, setNote, busy 
             <thead>
               <tr>
                 <th className="work-results__ord">#</th>
-                <th>Role</th><th>Company</th><th>Where</th><th>Pay</th>
+                <th>Role</th><th>Company</th><th>Where</th><th>Pay</th><th>Applied?</th>
               </tr>
             </thead>
             <tbody>
@@ -466,6 +500,7 @@ function DecideBody({ panel, picks, armed, onPick, onClear, note, setNote, busy 
                   <td>{r.company}</td>
                   <td>{r.location}</td>
                   <td>{r.salary || "—"}</td>
+                  <td><AppliedCell applied={r.applied} /></td>
                 </tr>
               ))}
             </tbody>
