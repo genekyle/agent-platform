@@ -378,6 +378,17 @@ WORKDAY_LESSONS = {
         "'Use My Last Application' prefills the whole My Information step from the candidate profile",
         "stale Indeed deep-link ≠ dead req: tenant ?q= search finds the live re-post",
         "page navigations kill the CDP websocket — reconnect and re-discover the target (expected)",
+        "3-spinner DATE widget (dateSectionMonth/Day/Year-input): SOLVED by `POST /set_date` "
+        "(month/day/year), which never TYPES — typing is what scrambled it, because the sub-inputs "
+        "auto-advance mid-sequence ('12//', '//2012'). It writes each segment through the native "
+        "value setter in ONE evaluate and re-reads all three afterwards. Compare NUMERICALLY: we "
+        "write '09' and Workday normalises to '9', so a string compare fails a correct date. "
+        "Measured live on Eversource 2026-08-17 (09/01/2026, on screen, aria-invalid empty) — and "
+        "note this is the ONE place the value-setter is safe on Workday; text fields still need "
+        "trusted typing (see the PROVEN note below).",
+        "yes/no questionnaire dropdowns are plain `aria_listbox` (aria-haspopup), NOT searchable "
+        "prompts — /select_prompt does not apply; drive them with `POST /widget_select` "
+        "(opener_selector + option_label). Three options, commits on select, no footer button.",
     ],
     "prompt_action": [  # reusable atomic action for Workday hierarchical prompts + listboxes
         "SOLVED nested-prompt / listbox selection via the reusable MCP action `POST /select_prompt` "
@@ -392,8 +403,7 @@ WORKDAY_LESSONS = {
     ],
     "gaps": [
         "(was: nested-prompt multiselect — NOW handled by /select_prompt, see works above)",
-        "3-spinner DATE widget (dateSectionMonth/Day/Year-input): inputs are linked and auto-advance; "
-        "CDP click+type+backspace scrambles across sub-fields (got '12//', '//2012'). Operator fills it",
+        "(was: 3-spinner DATE widget — NOW driven by /set_date, see works above)",
         "flow-level auth is separate from tenant-nav auth (sign-in may be needed twice)",
     ],
     # PROVEN full-drive (State Street BA, submitted 2026-07-02): single-select listbox dropdowns,
