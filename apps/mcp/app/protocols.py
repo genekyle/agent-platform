@@ -285,8 +285,14 @@ _TEXT_MENU_PICK_JS = r"""
   // list (50 options): asking for "New Hampshire" tapped the row showing "Alaska". `nearest`
   // rather than `center` so a list that already has the option on screen does not jump under the
   // cursor for no reason.
+  //
+  // SCROLLING AND MEASURING ARE TWO PASSES, and the gap between them is the whole point. Reading
+  // the rect in the same turn as the scroll returns the position the row is LEAVING, so every tap
+  // landed one row off — on the checkbox menu that presented as "the value I asked to remove went
+  // away and its neighbour came on", which on a real employer's form is worse than doing nothing.
+  // `cfg.measureOnly` is the second pass, after the caller has let the scroll settle.
   const boxes = hits.map((h) => { const t = tapTarget(h);
-    t.scrollIntoView({block: "nearest", inline: "nearest"});
+    if (!cfg.measureOnly) t.scrollIntoView({block: "nearest", inline: "nearest"});
     const r = t.getBoundingClientRect();
     return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
             w: Math.round(r.width), h: Math.round(r.height)}; });
@@ -332,6 +338,14 @@ async def text_menu_pick(cdp, *, selector: str, value: str,
 
     cfg = json.dumps({"selector": selector, "value": value})
     hit = await _eval(cdp, f"({_TEXT_MENU_PICK_JS})({cfg})") or {}
+    if hit.get("found"):
+        # Let the scroll the first pass requested actually happen, then re-measure where the row
+        # has come to rest. Same session, so the popover is never blurred (see the module note).
+        await asyncio.sleep(0.25)
+        cfg2 = json.dumps({"selector": selector, "value": value, "measureOnly": True})
+        settled = await _eval(cdp, f"({_TEXT_MENU_PICK_JS})({cfg2})") or {}
+        if settled.get("found"):
+            hit = settled
     steps.append({"step": "open", "n_visible": hit.get("count"), "found": bool(hit.get("found"))})
     if hit.get("ambiguous"):
         return (Outcome.AMBIGUOUS, steps,
