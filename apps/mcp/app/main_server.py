@@ -3354,6 +3354,91 @@ _MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
                 "August", "September", "October", "November", "December"]
 
 
+#: Workday's segmented date: three linked `<input>`s inside one container, each auto-advancing to
+#: the next as soon as it is full. TYPING is what scrambles them — a keystroke lands, the widget
+#: moves focus mid-sequence, and the rest of the digits arrive in the wrong box ("12//", "//2012").
+#: So this never types. It writes each segment through the native value setter and dispatches the
+#: events React listens for — the same primitive the `month_year` year input has always used, which
+#: has no keystrokes to race and therefore nothing for the auto-advance to interfere with.
+#:
+#: ONE ROUND TRIP, for the same reason: three separate `Runtime.evaluate` calls would let the
+#: widget reformat or re-focus between them. And every segment is re-read AFTER all three are
+#: written, never as it is set — setting Day can renormalise Month (a 31 written under a 30-day
+#: month), so a per-segment check would pass on a date the page later changed underneath it.
+_WORKDAY_SEGMENTED_DATE_JS = r"""
+(() => {
+  const container = document.querySelector(SELECTOR);
+  if (!container) return {found: false, detail: 'container not found'};
+  // The sub-inputs are identified by their id SUFFIX, which is Workday's own naming and is stable
+  // across tenants; the container's id prefix varies per questionnaire item. Fall back to document
+  // scope for tenants that render the segments as siblings rather than descendants.
+  const pick = (part) => {
+    const suffix = '-dateSection' + part + '-input';
+    return container.querySelector('input[id$="' + suffix + '"]')
+        || document.querySelector('input[id="' + (container.id || '') + suffix + '"]');
+  };
+  const parts = {Month: pick('Month'), Day: pick('Day'), Year: pick('Year')};
+  const missing = Object.keys(parts).filter((k) => !parts[k]);
+  if (missing.length) return {found: false, detail: 'no ' + missing.join('/') + ' sub-input'};
+
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  const write = (el, v) => {
+    el.focus();
+    setter.call(el, '');
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    setter.call(el, v);
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  };
+  write(parts.Month, MONTH);
+  write(parts.Day, DAY);
+  write(parts.Year, YEAR);
+  parts.Year.dispatchEvent(new Event('blur', {bubbles: true}));
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+
+  // Read every segment back at the DOM value, the ARIA value the widget publishes
+  // (`widget_probe` reads this shape at aria-valuenow, and a segment can carry a stale one), and
+  // ARIA-INVALID — which is the one that matters here. WORKDAY_LESSONS records that on Workday
+  // TEXT fields the React value-setter "leaves aria-invalid=true; must TYPE". If that is true of
+  // these segments too, the value would sit on screen looking right and the form would reject it
+  // at Save and Continue. A date we cannot prove VALID is not a date we set.
+  const read = (el) => ({value: el.value || '',
+                         aria: el.getAttribute('aria-valuenow') || '',
+                         invalid: el.getAttribute('aria-invalid') || ''});
+  return {found: true, month: read(parts.Month), day: read(parts.Day), year: read(parts.Year),
+          container_invalid: container.getAttribute('aria-invalid') || ''};
+})()
+"""
+
+
+def _segment_disagreement(got: dict, *, month: int, day: int, year: int) -> str:
+    """Which segments did not take, phrased for the operator, or '' when the date is on the page.
+
+    Compared NUMERICALLY: Workday pads Month/Day to two digits ("09"), and a string compare would
+    call a correctly-set date a failure. `aria-valuenow` is advisory here — some tenants leave it
+    empty on a freshly written segment — so it is reported but never the thing that fails.
+    """
+    want = {"month": month, "day": day, "year": year}
+    bad = []
+    for part, expected in want.items():
+        seg = got.get(part) or {}
+        raw = seg.get("value", "")
+        try:
+            ok = int(str(raw).strip()) == expected
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            bad.append(f"{part} reads {raw!r}, wanted {expected}")
+        elif str(seg.get("invalid", "")).lower() == "true":
+            # The value is right and the widget is still refusing it — the shape WORKDAY_LESSONS
+            # warns about for the React value-setter. Right-looking and rejected is worse than
+            # empty, because only one of the two is visible to the operator.
+            bad.append(f"{part} holds {raw!r} but is marked aria-invalid")
+    if str(got.get("container_invalid", "")).lower() == "true":
+        bad.append("the date field itself is marked aria-invalid")
+    return "; ".join(bad)
+
+
 @app.post("/set_date")
 @journaled(Intent.SET_DATE)
 async def set_date(body: SetDateRequest):
@@ -3395,15 +3480,46 @@ async def set_date(body: SetDateRequest):
         common["widget_type"] = wt
 
         if wt == WidgetType.SEGMENTED_DATE.value:
-            # Honest refusal, not a silent best-effort. WORKDAY_LESSONS lists this as a live
-            # gap: the sub-fields are linked and auto-advance, and CDP typing scrambles across
-            # them. A protocol that "tries anyway" would produce 12// and report success —
-            # which is the exact bug class this API exists to remove.
-            return {**common, "outcome": Outcome.BLOCKED,
-                    "detail": "Workday segmented date (linked auto-advancing spinbuttons) — CDP "
-                              "typing scrambles across sub-fields ('12//', '//2012'). Unsolved; "
-                              "route to the operator. Do not 'try anyway'.",
-                    "steps": [{"step": "precheck", "widget_type": wt, "known_gap": True}]}
+            # WAS AN HONEST REFUSAL, AND THE REFUSAL WAS RIGHT ABOUT TYPING. The sub-fields are
+            # linked and auto-advance, so CDP click+type+backspace scrambles across them ("12//",
+            # "//2012") — which is why this returned BLOCKED rather than a best-effort that would
+            # report success over a broken date. What it did not have was a path that never types:
+            # writing each segment through the native value setter has no keystrokes for the
+            # auto-advance to race, and it is the primitive the `month_year` year input has used
+            # here since it was written. The old bar still applies — this verifies all three
+            # segments AFTER writing them and refuses to claim a date it cannot read back.
+            if body.day is None:
+                return {**common, "outcome": Outcome.NO_OPTION,
+                        "detail": "a segmented date needs a day — got month/year only"}
+            if not 1 <= body.day <= 31:
+                return {**common, "outcome": Outcome.NO_OPTION,
+                        "detail": f"day {body.day} out of range 1-31"}
+            # SELECTOR is substituted LAST: an earlier injection could contain one of the value
+            # placeholders as literal text and be mangled by the substitution that follows it.
+            js = (_WORKDAY_SEGMENTED_DATE_JS
+                  .replace("MONTH", json.dumps(f"{body.month:02d}"))
+                  .replace("DAY", json.dumps(f"{body.day:02d}"))
+                  .replace("YEAR", json.dumps(str(body.year)))
+                  .replace("SELECTOR", json.dumps(body.selector)))
+            r = await cdp.send("Runtime.evaluate", {"expression": js, "returnByValue": True})
+            got = (r.get("result") or {}).get("value") or {}
+            if not got.get("found"):
+                return {**common, "outcome": Outcome.NOT_FOUND,
+                        "detail": f"segmented date at {body.selector!r}: "
+                                  f"{got.get('detail', 'no sub-inputs')}",
+                        "steps": [{"step": "precheck", "widget_type": wt}]}
+            steps = [{"step": "write", "via": "native value setter (never typed)"},
+                     {"step": "verify", "month": got.get("month"), "day": got.get("day"),
+                      "year": got.get("year")}]
+            bad = _segment_disagreement(got, month=body.month, day=body.day, year=body.year)
+            if bad:
+                return {**common, "outcome": Outcome.NOT_STAGED, "steps": steps,
+                        "detail": f"segments did not all take — {bad}. The date on the page is "
+                                  f"PARTIAL; clear it before retrying."}
+            return {**common, "outcome": Outcome.OK, "steps": steps,
+                    "actions": ["clear", "type", "clear", "type", "clear", "type"],
+                    "detail": f"{body.month:02d}/{body.day:02d}/{body.year} "
+                              f"(all three segments verified at .value)"}
 
         if wt == WidgetType.MONTH_YEAR.value:
             steps: list[dict] = []

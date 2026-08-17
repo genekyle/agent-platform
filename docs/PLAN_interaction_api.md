@@ -271,9 +271,14 @@ The 13 remaining jobs do **not** stop. Each phase is shippable and paid for by t
 - [x] `/describe_widget` (the classifier: **12** `widget_type`s — the plan's 9 plus `native_select`,
       `radio_group` and `number`, all already handled as distinct kinds by the code it replaces)
 - [x] `/select_option` — absorbs `/widget_select` + `/select_prompt` + react-select, dispatching on type
-- [x] `/set_date` — month_year verified at commit; **segmented_date refuses (BLOCKED → operator)**,
-      because CDP typing scrambles across the linked spinbuttons and a protocol that "tried anyway"
-      would emit `12//` and report success
+- [x] `/set_date` — month_year verified at commit; **segmented_date now DRIVES** (2026-08-17). The
+      old refusal was right about TYPING — CDP click+type+backspace scrambles across the linked
+      auto-advancing spinbuttons and emits `12//` — so the protocol never types: it writes each
+      segment through the native value setter in ONE round trip (three would let the widget
+      reformat between them) and re-reads all three afterwards, because setting Day can renormalise
+      Month. Verified at `.value` numerically (Workday pads to `09`) **and at `aria-invalid`**,
+      since WORKDAY_LESSONS records the value-setter leaving Workday text fields marked invalid —
+      right-looking and rejected is worse than empty. A partial date says PARTIAL and sets nothing
 - [x] `/check_group` — required checkbox groups
 - [x] `/scan_required` — `disabled` beats asterisk; groups included
 - [x] `/probe` replaces `/eval` (moved up from Phase 3 — it's ~20 lines and it's the thing that makes

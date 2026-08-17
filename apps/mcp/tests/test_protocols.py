@@ -230,20 +230,82 @@ def test_scan_required_lists_what_is_required_and_unanswered(corpus, monkeypatch
 
 
 # --- /set_date ----------------------------------------------------------------------
-def test_set_date_refuses_the_workday_segmented_gap_instead_of_trying_anyway(corpus, monkeypatch):
-    """WORKDAY_LESSONS lists this as an unsolved live gap.
+def _segmented(reads):
+    """A CDP responder for the segmented-date protocol: classify, then the one write+read call."""
+    def responder(expr):
+        if "dateSection" in expr and "HTMLInputElement" in expr:
+            return {"found": True, **reads}
+        return {"found": True, "widget_type": "segmented_date"}
+    return responder
 
-    The sub-fields are linked and auto-advance; CDP typing scrambles across them ('12//',
-    '//2012'). A protocol that tried anyway would produce garbage and report success.
-    BLOCKED = escalate to the operator, which is the honest answer.
+
+def test_set_date_drives_the_workday_segmented_date_without_typing_a_keystroke(corpus, monkeypatch):
+    """Was BLOCKED, and the refusal was right about TYPING.
+
+    The sub-fields are linked and auto-advance, so CDP click+type+backspace scrambles across them
+    ('12//', '//2012'). Writing each segment through the native value setter has no keystrokes for
+    the auto-advance to race — the same primitive the `month_year` year input has always used here.
     """
-    wire_cdp(monkeypatch, lambda e: {"found": True, "widget_type": "segmented_date"})
+    seen: list[str] = []
+
+    def responder(expr):
+        seen.append(expr)
+        if "dateSection" in expr and "HTMLInputElement" in expr:
+            return {"found": True, "month": {"value": "09"}, "day": {"value": "01"},
+                    "year": {"value": "2026"}}
+        return {"found": True, "widget_type": "segmented_date"}
+
+    wire_cdp(monkeypatch, responder)
     out = asyncio.run(ms.set_date(ms.SetDateRequest(
-        selector="[data-automation-id=dateSectionMonth-input]", month=3, year=2026, ats="workday")))
-    assert out["ok"] is False
-    assert out["outcome"] == "blocked"
-    assert "route to the operator" in out["detail"]
-    assert rows(corpus)[0]["outcome"] == "blocked"
+        selector="#q--date", month=9, day=1, year=2026, ats="workday")))
+    assert out["ok"] is True and out["outcome"] == "ok"
+    assert "09/01/2026" in out["detail"]
+    # The whole point: the segments are WRITTEN, never typed. One call, native setter, no keys.
+    writes = [e for e in seen if "dateSection" in e and "HTMLInputElement" in e]
+    assert len(writes) == 1, "three round trips would let the widget reformat between segments"
+    assert "HTMLInputElement.prototype, 'value'" in writes[0]
+    assert "dispatchKeyEvent" not in writes[0] and "insertText" not in writes[0]
+
+
+def test_a_segmented_date_that_did_not_all_take_is_never_reported_as_set(corpus, monkeypatch):
+    """The old BLOCKED was protecting against '12//' being reported as success. That bar stays:
+    every segment is re-read after all three are written, and a partial date says so."""
+    wire_cdp(monkeypatch, _segmented({"month": {"value": "12"}, "day": {"value": ""},
+                                      "year": {"value": "2026"}}))
+    out = asyncio.run(ms.set_date(ms.SetDateRequest(
+        selector="#q--date", month=9, day=1, year=2026, ats="workday")))
+    assert out["ok"] is False and out["outcome"] == "not_staged"
+    assert "month reads '12'" in out["detail"] and "day reads ''" in out["detail"]
+    assert "PARTIAL" in out["detail"]
+
+
+def test_a_padded_segment_is_the_same_date_not_a_failure(corpus, monkeypatch):
+    """Workday pads Month/Day to two digits; a string compare would fail a correct date."""
+    wire_cdp(monkeypatch, _segmented({"month": {"value": "09"}, "day": {"value": "01"},
+                                      "year": {"value": "2026"}}))
+    out = asyncio.run(ms.set_date(ms.SetDateRequest(
+        selector="#q--date", month=9, day=1, year=2026, ats="workday")))
+    assert out["ok"] is True
+
+
+def test_a_segmented_date_without_a_day_is_refused_rather_than_half_set(corpus, monkeypatch):
+    wire_cdp(monkeypatch, _segmented({}))
+    out = asyncio.run(ms.set_date(ms.SetDateRequest(
+        selector="#q--date", month=9, year=2026, ats="workday")))
+    assert out["ok"] is False and out["outcome"] == "no_option"
+    assert "needs a day" in out["detail"]
+
+
+def test_a_segmented_date_whose_sub_inputs_are_absent_is_not_found(corpus, monkeypatch):
+    def responder(expr):
+        if "dateSection" in expr and "HTMLInputElement" in expr:
+            return {"found": False, "detail": "no Day sub-input"}
+        return {"found": True, "widget_type": "segmented_date"}
+    wire_cdp(monkeypatch, responder)
+    out = asyncio.run(ms.set_date(ms.SetDateRequest(
+        selector="#q--date", month=9, day=1, year=2026, ats="workday")))
+    assert out["ok"] is False and out["outcome"] == "not_found"
+    assert "no Day sub-input" in out["detail"]
 
 
 def test_set_date_translates_a_month_number_to_the_name_the_widget_wants(corpus, monkeypatch):
@@ -293,6 +355,25 @@ def test_set_date_rejects_an_impossible_month_before_touching_the_page(corpus, m
     out = asyncio.run(ms.set_date(ms.SetDateRequest(selector="#m", month=13, year=2015)))
     assert out["ok"] is False and out["outcome"] == "no_option"
 
+
+def test_a_segment_that_holds_the_value_but_is_marked_invalid_is_not_a_set_date(corpus, monkeypatch):
+    """WORKDAY_LESSONS: on Workday text fields the React value-setter "leaves aria-invalid=true;
+    must TYPE". Right-looking and rejected is worse than empty — only one of those is visible."""
+    wire_cdp(monkeypatch, _segmented({"month": {"value": "09", "invalid": "true"},
+                                      "day": {"value": "01"}, "year": {"value": "2026"}}))
+    out = asyncio.run(ms.set_date(ms.SetDateRequest(
+        selector="#q--date", month=9, day=1, year=2026, ats="workday")))
+    assert out["ok"] is False and out["outcome"] == "not_staged"
+    assert "aria-invalid" in out["detail"]
+
+
+def test_the_date_field_itself_being_invalid_fails_even_when_every_segment_reads_right(corpus,
+                                                                                       monkeypatch):
+    wire_cdp(monkeypatch, _segmented({"month": {"value": "09"}, "day": {"value": "01"},
+                                      "year": {"value": "2026"}, "container_invalid": "true"}))
+    out = asyncio.run(ms.set_date(ms.SetDateRequest(
+        selector="#q--date", month=9, day=1, year=2026, ats="workday")))
+    assert out["ok"] is False and "date field itself" in out["detail"]
 
 # --- the text-menu protocol (role-less, tap-driven menus) ----------------------------------------
 class _FakeCDP:
