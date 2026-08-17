@@ -4273,7 +4273,15 @@ def _fill_plan_for(bb: Any, fields: list[dict[str, Any]], db: Session) -> list[d
     from sqlalchemy import select as _select
     rows = db.scalars(_select(ApplicationAnswer).where(ApplicationAnswer.status == "active")).all()
     answers = {r.answer_key: r.value for r in rows}
-    return form_fill.plan(fields, answers=answers, identity=_identity_defaults())
+    # THE FULL ROWS, not just key->value: the planner's second source is the stored
+    # `question_patterns`, which only exist on the row. Same shape `/application-answers/match`
+    # reads, so the bunch fill and the match endpoint answer the same question the same way.
+    answer_rows = [{"answer_key": r.answer_key, "display_name": r.display_name,
+                    "value": r.value, "input_hint": r.input_hint,
+                    "question_patterns": r.question_patterns or [],
+                    "options": r.options or []} for r in rows]
+    return form_fill.plan(fields, answers=answers, identity=_identity_defaults(),
+                          answer_rows=answer_rows)
 
 
 class ApplySectionsBody(BaseModel):

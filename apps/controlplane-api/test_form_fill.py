@@ -334,3 +334,46 @@ def test_a_field_with_no_kind_declared_behaves_as_before():
     rows = ff.plan([{"role": "textbox", "name": "City"}],
                           answers={"city": "Concord"}, identity={})
     assert rows[0]["fillable"] is True
+
+
+# --- the stored question_patterns are the planner's second source (live 2026-08-17) -----------
+_ROWS = [
+    {"answer_key": "city", "display_name": "City", "value": "Concord", "input_hint": "text",
+     "question_patterns": ["city"], "options": []},
+    {"answer_key": "references_long_form", "display_name": "References (long form)",
+     "value": "Alex Wall — Development Database Manager\nAixa Lovezzola — Director of Finance",
+     "input_hint": "textarea",
+     "question_patterns": ["list three references", "professional references"], "options": []},
+]
+_REFS_FIELD = {"role": "textbox", "kind": "textarea",
+               "name": ("List three business references (previous supervisors); "
+                        "include name, title, company, city,")}
+
+
+def test_a_question_the_label_map_cannot_name_reaches_the_pattern_store():
+    rows = ff.plan([_REFS_FIELD], answers={r["answer_key"]: r["value"] for r in _ROWS},
+                   identity={}, answer_rows=_ROWS)
+    assert len(rows) == 1
+    assert rows[0]["answer_key"] == "references_long_form"
+    assert rows[0]["matched_by"] == "question_patterns"
+    assert rows[0]["fillable"] is True
+    assert rows[0]["out_of_scope"] is None      # the label-map guard must not fire on this
+
+
+def test_the_exact_label_map_still_outranks_the_fuzzy_matcher():
+    """'City' is in both sources; the exact one wins and says so."""
+    rows = ff.plan([{"role": "textbox", "kind": "input", "name": "City"}],
+                   answers={"city": "Concord"}, identity={}, answer_rows=_ROWS)
+    assert rows[0]["answer_key"] == "city" and rows[0]["matched_by"] == "label_map"
+
+
+def test_without_answer_rows_the_planner_is_exactly_as_it_was():
+    assert ff.plan([_REFS_FIELD], answers={"city": "Concord"}, identity={}) == \
+           ff.plan([_REFS_FIELD], answers={"city": "Concord"}, identity={}, answer_rows=None)
+
+
+def test_a_question_matching_nothing_is_still_left_out():
+    rows = ff.plan([{"role": "textbox", "kind": "textarea",
+                     "name": "Describe a challenging project you led."}],
+                   answers={}, identity={}, answer_rows=_ROWS)
+    assert rows == []

@@ -178,13 +178,28 @@ def field_answer_key(field_name: str) -> Optional[str]:
 
 
 def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dict[str, str],
-         today: Optional[date] = None) -> list[dict[str, Any]]:
+         today: Optional[date] = None,
+         answer_rows: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
     """One row per fillable field: what we would put in it and why, or why we cannot.
 
     `fields` are the live form fields ({role, name}); `answers` maps answer_key -> stored value;
     `identity` carries the account-derived defaults (first_name, last_name, email) and the apply
     source (how_did_you_hear). Fields we do not recognise are left out entirely — this plans what
     we can speak to, and stays silent on the rest.
+
+    TWO WAYS TO NAME A FIELD, and this used to know only one. `_FIELD_TO_KEY` matches short
+    LABELS ("City", "Email Address") — which is what an identity form is made of, and nothing
+    else. But an application questionnaire asks QUESTIONS, and every stored answer already
+    carries `question_patterns` written for exactly that, matched by `application_answers`. The
+    two never met: the bunch fill only ever consulted the label map, so on Eversource's
+    Application Questions — sixteen required controls — it planned ONE row, and that row was
+    wrong (live 2026-08-17). `references_long_form` was sitting in the store with the right block
+    in it and no way to be reached.
+
+    So `answer_rows` (the full stored answers, patterns and all) is a SECOND source, consulted
+    only where the label map is silent. Order matters and stays this way round: the label map is
+    exact and cheap, the pattern matcher is fuzzy and threshold-guarded, and a fuzzy match must
+    never outrank an exact one.
 
     AMBIGUOUS NAMES ARE NOT FILLABLE. The executor addresses fields by accessible NAME, so when a
     page shows the same name more than once every one of those rows would type into whichever node
@@ -201,18 +216,31 @@ def plan(fields: list[dict[str, Any]], *, answers: dict[str, Any], identity: dic
         role = (f.get("role") or "").lower()
         if not name or role not in ("textbox", "combobox", "checkbox"):
             continue
-        key = field_answer_key(name)
+        kind = (f.get("kind") or "").lower()
+        key, matched_by, confidence = field_answer_key(name), "label_map", 1.0
+        # THE SHAPE GUARD IS ALSO A HAND-OFF. When the label map names a key that cannot land in
+        # this control, that is not the end of the search — it is the signal that this control is
+        # not a short identity box and the QUESTION store should get its turn. Refusing first and
+        # asking second is what turns "Concord into a references box" into the references block.
+        in_scope, why_not = _label_scope(key, kind, role)
+        if (key is None or not in_scope) and answer_rows:
+            m = aa.match_question(name, answer_rows, kind=kind, role=role)
+            if m.get("matched"):
+                # A pattern match has already had its shape checked (`kind_refuses`, plus the
+                # bonus that chose it), so `_label_scope` — a rule about the LABEL map — does not
+                # re-run against it and cannot refuse the one answer written for this widget.
+                key, matched_by = m["answer_key"], "question_patterns"
+                confidence, in_scope, why_not = m.get("confidence", 0.0), True, ""
         if key is None:
             continue
         seen[name] = seen.get(name, 0) + 1
         value, source = _resolve(key, answers=answers, identity=identity, today=today)
-        kind = (f.get("kind") or "").lower()
-        in_scope, why_not = _application_scope(key, name, f.get("section"))
         if in_scope:
-            in_scope, why_not = _label_scope(key, kind, role)
+            in_scope, why_not = _application_scope(key, name, f.get("section"))
         rows.append({
             "field": name, "role": role, "kind": kind, "answer_key": key,
             "value": value, "source": source,
+            "matched_by": matched_by, "confidence": confidence,
             "section": f.get("section"),
             "out_of_scope": None if in_scope else why_not,
             "fillable": in_scope and source in (SRC_WORKING, SRC_STORED, SRC_IDENTITY),
