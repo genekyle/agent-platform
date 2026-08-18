@@ -218,7 +218,10 @@ def test_the_id_convention_is_written_down_exactly_once():
     assert definers == ["app.js_common"], (
         f"__companionSelect is defined in {definers} — it belongs in app.js_common alone"
     )
-    conventioneers = [name for name, src in sources.items() if "'-input'" in src]
+    # Match the RULE, not the bare suffix: Workday's segmented date builds its own
+    # `-dateSectionMonth-input` id in main_server, and that is a different convention that
+    # happens to end the same way. A substring test conflates them and fails on the innocent one.
+    conventioneers = [name for name, src in sources.items() if "slice(-6) === '-input'" in src]
     assert conventioneers == ["app.js_common"], (
         f"the '-input' id convention is spelled out in {conventioneers}; copies drift"
     )
