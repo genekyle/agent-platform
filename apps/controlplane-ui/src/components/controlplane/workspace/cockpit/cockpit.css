@@ -45,6 +45,12 @@
 .cockpit-session-bar__identity strong { font-size: 13.5px; }
 .cockpit-session-bar__identity span { color: var(--text-subtle); font-size: 11px; }
 .cockpit-session-bar__spacer { margin-left: auto; }
+/* The badge is a switch now, so it has to look pressable without shouting — it sits beside a
+   state badge and must not read as the primary action of the bar. */
+.cockpit-session-bar__protect { cursor: pointer; border: 1px solid transparent; font: inherit; }
+.cockpit-session-bar__protect:hover:not(:disabled) { border-color: var(--border-strong, currentColor); }
+.cockpit-session-bar__protect[aria-pressed="false"] { opacity: 0.55; }
+.cockpit-session-bar__protect:disabled { cursor: progress; }
 .cockpit-session-bar__count { color: var(--text-subtle); font-size: 11px; white-space: nowrap; }
 .cockpit-session-bar__picker { display: flex; align-items: center; gap: 7px; color: var(--text-subtle); font-size: 11px; }
 .cockpit-session-bar__picker select {

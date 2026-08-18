@@ -8604,3 +8604,48 @@ already entered truthfully are not the case that preference was written for), an
 Healthcare Data SUBMITTED and confirmed** (100%, "Your application has been submitted"). The
 BrassRing spine is now proven land-to-SUBMITTED. Tests not run this session — the work was live
 drive only, no code changed.
+
+## 2026-08-18 — the badge that stated a condition nobody could act on
+
+**A CLEANUP SWEEP FOUND THE PARITY RULE'S EXACT FAILURE, AND IT COST TWO DEAD ENDS BEFORE I SAW
+IT.** Closing out every session (operator: *"cancel all of the current sessions, and clean them
+up"*) worked on #29 first press and then stopped dead on #30 and #28 with a report that was
+perfectly truthful and perfectly unactionable:
+
+    Closed down. 1 application(s) KEPT on the ledger, resumable. 1 search(es) closed,
+    Chrome NOT stopped — session is protected (human-owned); refusing to stop it
+    without force=true.
+
+`may_touch` refuses every disruptive verb on a protected session, `close_out` calls
+`stop_training_session(force=False)` and does not expose force — both correct, and deliberately
+so: releasing a human-owned session is a *separate named decision*, not a checkbox on the
+shutdown. The gap was that `POST /api/sessions/{id}/protect` had existed all along with **no
+press anywhere in the UI**. `CockpitSessionBar` rendered `{session.protected && <span
+className="badge">protected</span>}` — a badge that states a condition and offers nothing.
+So the only route through was a curl, which is the parity rule (*if the teacher can curl it, the
+operator can click it*) failing in the one place it is most tempting to skip. Now the badge IS
+the switch, reading `protected` / `unprotected` with `aria-pressed`, and it toggles both ways.
+
+**AND THE PERSISTENT PROFILE IS WHY THIS BLOCKS RATHER THAN ANNOYS.** Chrome locks a
+user-data-dir, so #30 holding the `indeed` profile meant **no new Indeed session could start at
+all** until its Chrome actually died. A protected session is not a stale row to route around —
+it is the thing in the doorway, exactly as `StartSession`'s handoff comment says. Unprotect →
+close out → start fresh is the whole sequence, and the first step had no button.
+
+**TWO EXITS, AND THE SAFE ONE WAS RIGHT TWICE.** `CloseOut` offers *Shut down · keep N* against
+*Discard N and close out*, and the confirm names every dying application before anything dies.
+Across #30/#29/#28 that was **22 half-finished applications** — including Eversource Workday
+**one screen from Submit**. Kept, all of them: the ledger stays honest and the work stays
+resumable, which is what "cancel the session" should mean when "discard the applications" is a
+different sentence the operator can still say later.
+
+*Also measured:* merging three session branches put `__companionSelect`'s "id minus `-input`"
+rule in one tree with Workday's `-dateSectionMonth-input` segment ids for the first time, and
+the single-definition guard — matching the bare substring `'-input'` — read the date builder as
+a duplicate of a convention it has nothing to do with. A guard on a naming rule has to match the
+RULE (`slice(-6) === '-input'`), or the next unrelated suffix fails it again.
+
+*Where it stands:* every session on the ledger closed (23), session **#31** live on the Indeed
+persistent profile, `"data analyst"` · Nashua NH · 50 mi, page 1 read — **16 results, 10 new, 6
+already seen, 0 already applied** — parked at the picker awaiting operator picks. Tests:
+controlplane-api **1698**, mcp **146**.

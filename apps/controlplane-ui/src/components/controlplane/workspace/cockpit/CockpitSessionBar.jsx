@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { AppIcon } from "../../../../ui/Icon";
+import { postJSON } from "../api";
 import { DOMAINS_BY_ID } from "../domains";
 
 const STATE_COPY = {
@@ -28,7 +30,30 @@ function optionLabel(session) {
   return `#${session.id} · ${shortDomain(session.domain_id)} · ${STATE_COPY[state]?.label || state}`;
 }
 
-export function CockpitSessionBar({ session, siblings, onChooseSession, onStartFresh, startingFresh }) {
+export function CockpitSessionBar({ session, siblings, onChooseSession, onStartFresh,
+                                   startingFresh, onProtectedChange }) {
+  // THE PROTECT SWITCH — the badge said "protected" and nothing could act on it (2026-08-18).
+  // `protected` means human-owned, and every disruptive verb honours it: close-out closes the
+  // searches and keeps the work but reports "Chrome NOT stopped — refusing without force=true".
+  // That refusal is correct and deliberately not forceable from the close-out; releasing the
+  // session is a SEPARATE, named decision. But the endpoint existed with no press, so the only
+  // way through was a curl — the parity rule's exact failure. The switch belongs here, beside
+  // the badge that states the condition.
+  const [protectBusy, setProtectBusy] = useState(false);
+  const [protectErr, setProtectErr] = useState("");
+  const toggleProtected = async () => {
+    setProtectBusy(true);
+    setProtectErr("");
+    try {
+      await postJSON(`/api/sessions/${session.id}/protect`, { protected: !session.protected });
+      await onProtectedChange?.();
+    } catch (e) {
+      setProtectErr(e.message || "could not change protection");
+    } finally {
+      setProtectBusy(false);
+    }
+  };
+
   const state = stateOf(session);
   const stateCopy = STATE_COPY[state] || { label: state, tone: "muted" };
   const live = siblings.filter((s) => stateOf(s) === "live");
@@ -48,7 +73,19 @@ export function CockpitSessionBar({ session, siblings, onChooseSession, onStartF
       </div>
 
       <span className={`badge badge--${stateCopy.tone}`}>{stateCopy.label}</span>
-      {session.protected && <span className="badge badge--muted">protected</span>}
+      <button type="button" className="badge badge--muted cockpit-session-bar__protect"
+              disabled={protectBusy}
+              aria-pressed={!!session.protected}
+              aria-label={session.protected
+                ? `Release session ${session.id} — allow it to be stopped`
+                : `Protect session ${session.id} — refuse automated stop and reap`}
+              title={session.protected
+                ? "Human-owned: stop, reap and reset refuse while this is on. Release it to close the session down."
+                : "Mark human-owned so automated stop / reap / reset refuse to touch this session."}
+              onClick={toggleProtected}>
+        {protectBusy ? "…" : session.protected ? "protected" : "unprotected"}
+      </button>
+      {protectErr && <span className="badge badge--danger">{protectErr}</span>}
       <span className="cockpit-session-bar__spacer" />
 
       <span className="cockpit-session-bar__count">

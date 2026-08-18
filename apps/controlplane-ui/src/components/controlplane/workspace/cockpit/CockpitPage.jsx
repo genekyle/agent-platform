@@ -203,6 +203,7 @@ export function CockpitPage({ routeSessionId, routeTab }) {
       <CockpitSessionBar session={active} siblings={sessions}
                          onChooseSession={(id) => navigate(pathFor(id))}
                          startingFresh={startingFresh}
+                         onProtectedChange={refreshSessions}
                          onStartFresh={() => setStartingFresh((v) => !v)} />
 
       {startingFresh && (
