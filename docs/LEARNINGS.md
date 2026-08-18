@@ -8649,3 +8649,56 @@ RULE (`slice(-6) === '-input'`), or the next unrelated suffix fails it again.
 persistent profile, `"data analyst"` · Nashua NH · 50 mi, page 1 read — **16 results, 10 new, 6
 already seen, 0 already applied** — parked at the picker awaiting operator picks. Tests:
 controlplane-api **1698**, mcp **146**.
+
+## 2026-08-18 — the census filed a tag name, so a dropdown was offered the typing intent
+
+**A REQUIRED COUNTRY DROPDOWN COULD NOT BE ANSWERED FROM THE COCKPIT AT ALL, AND THE FAILURE
+REPORTED `ok` EVERY TIME.** Live on Indeed quick-apply (Diesel Direct, smartapply questions
+module). `set_text` came back *"→ ok · re-resolved '#single-select-question-…' -> 'Mobile Number …
+Country *' -> node 13025"* and the field stayed **Unanswered** on every re-scan. Three separate
+presses, three honest-looking successes, nothing written.
+
+Measured with `/describe_widget`, which settles it:
+
+    [id^=single-select-question]  ->  tag: label   widget_type: unknown   value_read_at: .value
+    [role=combobox]              ->  tag: div     widget_type: aria_listbox
+                                     options: ["United States (+1)", "Micronesia …", "Saint Vincent …"]
+
+Two faults stacked. The addressed node was the **`<label>`**, not the control — so `set_text`
+found *a* node, wrote `.value` on it, and truthfully reported success at having done nothing. And
+the option label is **"United States (+1)"**, not "United States": the census-typed value would
+not have matched even against the right element.
+
+**THE ROOT CAUSE WAS ONE EXPRESSION, IN THREE PLACES.** `protocols.py` built the census `kind` as
+`__isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase()`. For smartapply's
+`<div role="combobox">` that is **`div`** — and `FormCensus.jsx`'s `intentFor()` routes on kind,
+with `CHOICE_KINDS` already containing `aria_listbox`. So the UI was correct and the *data* was
+wrong: a dropdown described as a `div` falls through every branch to `set_text`. The capability
+existed on both sides and the label in between broke the join — the same shape as the 08-10 audit
+this component's own header describes, one layer further down.
+
+Fixed with `__kindOf(el)` in `js_common.py`, using **DESCRIBE_WIDGET_JS's tells in its order**
+(select → react-select → aria-haspopup/aria-expanded/role=combobox), so the census and the
+classifier cannot name one control two different things. That drift is silent and presents as an
+intent that keeps succeeding at nothing. Verified live: kind flipped `div → aria_listbox`, the
+row's badge went **Div → Dropdown**, its placeholder *"type the answer" → "type the exact option"*,
+its button *Answer → Choose*, and the confirm read **`Teach select_option`**. The field answered
+on the first press.
+
+**AND `set_text` HAS A LENGTH CEILING NOBODY STATES.** An ~850-character screener answer died with
+`ReadTimeout: timed out` — the humanised driver types character by character, so a long free-text
+answer outruns the request. It left **no partial text** (re-scan confirmed the field still empty),
+so the failure is at least clean. Re-sent at ~310 characters, it landed. Worth a real fix; for now,
+keep taught free-text answers short.
+
+*Also:* the classifier halted on `worcesterma.gov` as `company_site_unknown` and was right to —
+City of Worcester runs its own careers page, not an ATS. Labelled `indeed_job_posting →
+company_site_job_posting` (the canonical `landing_state("company_site", "job_posting")`), but **one
+label does not refit the witnesses** — two orients later it still read unrecognised. Teaching is
+how the corpus grows, not how the current step unblocks; the step needs `parked:unknown_ats`, which
+is what it got.
+
+*Where it stands:* session **#31**, `data analyst` / Nashua NH / 50 mi, 16 read (10 new). Worcester
+parked `unknown_ats`. Diesel Direct at the employer screener with 5 of 6 required answers in, the
+sixth (three years of ERP / financial-systems experience, "Explain.") **held for the operator** —
+it is not on the résumé and inventing it is not available. Nothing submitted. Tests: mcp **146**.

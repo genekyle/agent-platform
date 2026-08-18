@@ -311,6 +311,26 @@ WIDGET_TELLS_JS = r"""
     return __attr(el, 'aria-autocomplete') === 'list' && __attr(el, 'role') === 'combobox';
   };
 
+  // WHAT THE CONTROL IS, not what tag it happens to be. The census used to file
+  // `el.tagName.toLowerCase()`, so smartapply's `<div role="combobox">` country picker filed as
+  // kind `div` — and the cockpit's intent chooser routes on kind, so a DROPDOWN was offered the
+  // `set_text` intent. It reported ok (it resolved the right node by accessible name, 13025) and
+  // wrote nothing, because typing at a listbox writes nowhere. Live, Indeed quick-apply,
+  // 2026-08-18: the required Country field could not be answered from the cockpit at all.
+  //
+  // The tells are DESCRIBE_WIDGET_JS's, in its order, so the census and the classifier cannot
+  // drift into naming the same control two different things — that drift is silent and presents
+  // as an intent that keeps succeeding at nothing.
+  const __kindOf = (el) => {
+    if (!el) return '';
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'select') return 'native_select';
+    if (__isReactSelect(el)) return 'react_select';
+    if (__attr(el, 'aria-haspopup') === 'listbox' || __attr(el, 'aria-expanded') !== null ||
+        __attr(el, 'role') === 'combobox') return 'aria_listbox';
+    return tag;
+  };
+
   // THE HIDDEN NATIVE SELECT BEHIND A REACT-SELECT — the fourth shape of the `.value` lie, and
   // the first where the truth is in a DIFFERENT ELEMENT rather than a different property.
   //

@@ -672,7 +672,7 @@ SCAN_REQUIRED_JS = r"""
                        ? q0.question : label;
         optional.push({field: label0.slice(0, 90), selector: __idSel(el) || __cssPath(el),
                        within: (q0.section || '').slice(0, 90), question_source: q0.source,
-                       kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
+                       kind: __kindOf(el),
                        required_via: 'none', value_read_at: t0.read_at,
                        answered: t0.answered, valid: true, value_preview: t0.preview,
                        options: selectOptions(el), ...optionMeta(el)});
@@ -720,7 +720,7 @@ SCAN_REQUIRED_JS = r"""
     const named = ((__isBoilerplate(label) || nameIsValue) && q.question) ? q.question : label;
     const row = {field: named.slice(0, 90), selector: __idSel(el) || __cssPath(el),
                  within: (q.section || '').slice(0, 90), question_source: q.source,
-                 kind: __isReactSelect(el) ? 'react_select' : el.tagName.toLowerCase(),
+                 kind: __kindOf(el),
                  required_via: via, value_read_at: truth.read_at,
                  // `answered` is NOT always false on the unanswered list: a FILLED-but-INVALID
                  // field is reported there too, and the gate needs the distinction
@@ -870,7 +870,7 @@ SCAN_REQUIRED_JS = r"""
     const label = labelFor(el);
     const t = __valueTruth(el);
     out.push({field: label.slice(0, 90), selector: sel,
-              kind: (el.tagName || '').toLowerCase(),
+              kind: __kindOf(el),
               required_via: 'aria-invalid', value_read_at: t.read_at,
               answered: t.answered, valid: false, value_preview: t.preview,
               options: selectOptions(el), ...optionMeta(el)});
