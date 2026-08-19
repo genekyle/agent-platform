@@ -8702,3 +8702,72 @@ is what it got.
 parked `unknown_ats`. Diesel Direct at the employer screener with 5 of 6 required answers in, the
 sixth (three years of ERP / financial-systems experience, "Explain.") **held for the operator** —
 it is not on the résumé and inventing it is not available. Nothing submitted. Tests: mcp **146**.
+
+## 2026-08-19 (later) — the observer described a page whose main feature it could not see
+
+**THE OPERATOR WAS WATCHING THE SCREEN AND I WAS NOT.** Second pick of session #32 (Isabella
+Stewart Gardner Museum, *Community Relations Database Analyst*) turned out to be **cross-site**:
+Indeed's Apply opened **Paylocity**. The form census reported *7 required fields unanswered* and
+listed address inputs. The operator, who could see the window: *"there is a giant module asking to
+upload a resume."* One `ax_scan` found in a single call what the census could not say —
+`button | Select Resume to Upload`, and an `alertdialog | Privacy` cookie banner on top of the page.
+
+**And `ats_registry` had already written it down.** The Paylocity entry, measured 2026-08-14 through
+LinkedIn, says in as many words: *"it opens behind an 'Apply with resume' MODAL offering to autofill
+from an upload — so the modal is the first thing any drive meets, not the form."* The prediction was
+correct, on file, and unread at the moment it mattered. **A note nothing reads at classify time is
+not memory, it is an archive.** That is the same failure as the modal itself: the knowledge existed
+and the seam that needed it never asked.
+
+This is what produced the operator's design note, filed as its own idea: pages need an
+**OBSERVATION profile** — what to look at here — the way they already need an interaction profile.
+A census that enumerates form fields will confidently describe a page whose dominant features are a
+dialog, a consent banner, an upload module and a wizard step counter, and will be silent about all
+four. Silence reads as absence. Sketch: per `(platform, state)`, name the witnesses and their order —
+`paylocity_application_form: [dialogs, upload_modules, wizard_step, required_fields]` — so a page is
+not described by whichever reader happens to speak first.
+
+**UPLOADING THE RÉSUMÉ IS THE PAGE'S OWN ENTRY POINT, AND IT MULTIPLIES THE FORM.** Once
+`GM_Resume.pdf` went in, Paylocity parsed it: `infoFirstName` filled itself, and it
+**auto-generated a work-history entry per employer, each with its own required address block.** The
+required count went **7 → 35** on one upload — one personal block plus five employer blocks, every
+one of them named `Country / Address Line 1 / City / County / State / Zip`. On this page,
+name-addressing is hopeless *by construction*. Also learned from the page rather than the census:
+it is a **six-step wizard** ("Step 1 of 6"), so the shared ATS cadence's "at most 1 screen from
+Submit" was badly optimistic, and **no account gate** stands between the posting and the form.
+
+**THE TEACH SURFACE CANNOT REACH THESE FIELDS AT ALL — THE TWO NAMES CANCEL.** Addressing the
+census's name is refused:
+
+    set_text infoEmail -> TARGET MISMATCH: '#info\.email' resolves to a control for
+    'Email Address (required)' (by proximity), but the caller means 'infoEmail'.
+    Refusing to answer the wrong question.
+
+Addressing the resolver's name is also refused:
+
+    set_text 'Email Address (required)' -> not_found: cannot address field — not in
+    apply_fields nor the live scan (stale recipe or the form changed)
+
+**Each name is rejected in favour of the other, and neither works.** The mismatch guard is right to
+exist — it is the 08-19 correlate-target-to-question rule, and it stopped four confident writes to
+an unverified control — but a guard whose two acceptable answers are mutually exclusive leaves no
+move. The census reports DOM ids for this page because Paylocity's inputs carry no label the census
+recognises; the resolver reads the human label by proximity. **One control, two namings** — the
+`__companionSelect` lesson again, except here they actively cancel. The cockpit's own census ROW
+still lands, because it addresses by *selector* rather than by name: the UI path works where the API
+path deadlocks, which is the exact inverse of this morning's finding that the UI could name a dialog
+it could not press. Both are the same bug wearing different clothes: **addressing a control by a
+human-readable string is the weak link, and selector-or-node identity is the strong one.**
+
+*Also, per the operator, and now the standing rule:* **check for a captcha EARLY on any stall, not
+just at Submit** — *"reduce putting in more input"*. It cost nothing at the HopeWell submit gate
+(detected first probe, escalated, human solved it, submit landed and reached
+`indeed_apply_submitted`) and it was skipped at the resume-selection stall, where I went to
+`ax_scan` first. The diagnosis was right and the ORDER was wrong; detecting late costs input twice.
+
+*Where it stands:* **HopeWell — Data and Impact Analyst: SUBMITTED and confirmed**
+(`indeed_apply_submitted`). Paylocity/Gardner Museum: résumé attached, `City`/`County` answered,
+parked mid-Step-1-of-6 with the identity fields unreachable by name and five auto-generated employer
+address blocks whose street addresses are not data we hold. Third pick (University of New England,
+*Systems Programmer/Analyst*) untouched; results page 2 not yet read. `ats_registry` updated with
+all four Paylocity measurements — tests: controlplane-api aggregator + route inventory **21 passed**.

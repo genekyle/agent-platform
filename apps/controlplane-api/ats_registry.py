@@ -138,8 +138,27 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
               "Type, Salary Range, plus 'How did you hear about us'. "
               "auth stays 'unknown' until a drive MEETS a wall — the form renders without a "
               "sign-in, but whether Submit demands one is unmeasured, and auth is a promise the "
-              "ladder acts on (same rule the Cornerstone entry states).",
-     "seed_companies": ["Charles River Community Health"]},
+              "ladder acts on (same rule the Cornerstone entry states). "
+              "MEASURED AGAIN 2026-08-19 (session #32, Isabella Stewart Gardner Museum, reached "
+              "from INDEED this time — the note above predicted the resume modal and the drive "
+              "walked straight past it into the fields underneath, so this entry needs to be READ "
+              "at classify, not just written). Four things this ATS does that a generic cadence "
+              "gets wrong: (1) it is a SIX-STEP WIZARD — the page says 'Step 1 of 6' — so the "
+              "shared spine's 'at most 1 screen from Submit' is badly optimistic. (2) NO ACCOUNT "
+              "GATE was seen between the posting and the form; Apply goes straight through. "
+              "(3) Uploading the resume AUTO-GENERATES a work-history entry per employer, each "
+              "with its OWN required address block — required-field count went 7 -> 35 on one "
+              "upload (1 personal + 5 employer blocks, every one of them named Country / Address "
+              "Line 1 / City / County / State / Zip), so name-addressing is hopeless on this page "
+              "by construction, not by accident. (4) THE TEACH SURFACE CANNOT REACH THE IDENTITY "
+              "FIELDS AT ALL: the census names them by DOM id (`infoEmail`) while the widget "
+              "resolver reads the human label by proximity ('Email Address (required)'). Teaching "
+              "the census name is refused with TARGET MISMATCH; teaching the label is refused with "
+              "not_found. Each name is rejected in favour of the other and neither works — only "
+              "the cockpit's own census ROW (which addresses by selector) lands. Also present: a "
+              "cookie/privacy alertdialog, and identity fields the page marks '(required)' that "
+              "the census files as voluntary.",
+     "seed_companies": ["Charles River Community Health", "Isabella Stewart Gardner Museum"]},
     {"ats_id": "phenom", "display_name": "Phenom", "icon": "⚫",
      "hosts": ["phenompeople.com", "phenom.com"], "recipe": "seed", "auth": "account",
      "notes": "career-site CMS, not a uniform host: employers run it on their OWN careers subdomain "
