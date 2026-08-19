@@ -2469,14 +2469,25 @@ def test_reconcile_is_idempotent(monkeypatch):
 
 
 # --- orient: check where we are by CONTENT, not just the URL -----------------------------------
-def _wd_step(platform="workday"):
+def _wd_step(platform="workday", *, confirmed=False):
+    """A Workday step mid-application, or — with `confirmed` — sitting on its confirmation page.
+
+    `confirmed` exists because flagging `submitted` is gated on EVIDENCE since 2026-08-19: the
+    window has to actually show a confirmation, or `apply_flag` refuses. A test that flags a
+    submission therefore has to look like one, which is the point — the old fixture flagged
+    "submitted" from a plain job URL, and that is exactly the unevidenced claim the gate exists
+    to stop.
+    """
     bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
     q = aps.Queue.from_dict(bb.world["apply_queue"])
     for r_id in ("open_pane", "verify_identity", "enter_apply"):
         q.steps[0].record(r_id, aps.OK)
     q.steps[0].platform = platform
     bb.world["apply_queue"] = q.as_dict()
-    bb.world["apply_tab"] = {"tab_id": "wd", "url": "https://mfs.wd1.myworkdayjobs.com/job/x"}
+    url = ("https://mfs.wd1.myworkdayjobs.com/job/x/applicationSubmitted" if confirmed
+           else "https://mfs.wd1.myworkdayjobs.com/job/x")
+    bb.world["apply_tab"] = {"tab_id": "wd", "url": url,
+                             "title": "Application Submitted" if confirmed else "Job"}
     return bb
 
 
@@ -3604,11 +3615,11 @@ def test_flagging_a_step_closes_the_application_tab_and_returns_to_the_search(mo
 
     harness, saved = _install(
         monkeypatch,
-        {"/list_tabs": _tabs(SEARCH_URL, "https://jobs-x.icims.com/jobs/1/job?mode=submit_apply"),
+        {"/list_tabs": _tabs(SEARCH_URL, "https://jobs-x.icims.com/jobs/1/job/thank-you"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/close_tab": _close,
          "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
-        blackboard=_wd_step(platform="icims"))
+        blackboard=_wd_step(platform="icims", confirmed=True))
     try:
         r = client.post("/api/session_control/1/apply_flag",
                         json={"job_id": "indeed:a1", "flag": "submitted",
@@ -3896,7 +3907,10 @@ def test_the_cleanup_closes_the_doorways_the_step_opened(monkeypatch):
         q.steps[0].record(r_id, aps.OK)
     q.steps[0].platform = "workday"
     bb.world["apply_queue"] = q.as_dict()
-    bb.world["apply_tab"] = {"tab_id": "t2", "url": "https://bilh.wd1.myworkdayjobs.com/job/x"}
+    # The confirmation URL, not the job URL: this test flags `submitted`, and since 2026-08-19
+    # that is gated on the window actually showing a confirmation.
+    bb.world["apply_tab"] = {"tab_id": "t2",
+                             "url": "https://bilh.wd1.myworkdayjobs.com/job/x/applicationSubmitted"}
     # The landing page was watched appearing during this step: role UNKNOWN, but ours.
     bb.world["apply_tab_census"] = {
         "job_id": "indeed:a1",
@@ -3906,7 +3920,7 @@ def test_the_cleanup_closes_the_doorways_the_step_opened(monkeypatch):
     harness, saved = _install(
         monkeypatch,
         {"/list_tabs": _tabs(SEARCH_URL, "https://jobs.bilh.org/jobs/x/",
-                             "https://bilh.wd1.myworkdayjobs.com/job/x"),
+                             "https://bilh.wd1.myworkdayjobs.com/job/x/applicationSubmitted"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/close_tab": lambda p: (closes.append(p), {"ok": True})[1],
          "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
@@ -4002,11 +4016,12 @@ def test_flagging_submitted_writes_the_durable_record(monkeypatch):
     which is precisely why "check the database" had nothing to check."""
     harness, saved = _install(
         monkeypatch,
-        {"/list_tabs": _tabs(SEARCH_URL, "https://x.wd1.myworkdayjobs.com/job/JR77"),
+        {"/list_tabs": _tabs(SEARCH_URL,
+                              "https://x.wd1.myworkdayjobs.com/job/JR77/applicationSubmitted"),
          "/auth_state": {"ok": True, "logged_in": True},
          "/close_tab": {"ok": True},
          "/ax_scan": {"ok": True, "page_text": "", "candidates": []}},
-        blackboard=_wd_step())
+        blackboard=_wd_step(confirmed=True))
     try:
         r = client.post("/api/session_control/1/apply_flag",
                         json={"job_id": "indeed:a1", "flag": "submitted",
@@ -4478,11 +4493,13 @@ def test_a_submitted_application_is_still_tidied(monkeypatch):
     for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
         q.steps[0].record(r_id, aps.OK)
     bb.world["apply_queue"] = q.as_dict()
-    bb.world["apply_tab"] = {"tab_id": "t1", "url": "https://smartapply.indeed.com/beta/x/done"}
+    # smartapply's real terminal, so the submitted flag has something to verify against.
+    bb.world["apply_tab"] = {"tab_id": "t1",
+                             "url": "https://smartapply.indeed.com/beta/indeedapply/post-apply"}
 
     harness, _ = _install(monkeypatch,
                           {"/list_tabs": _tabs(SEARCH_URL,
-                                               "https://smartapply.indeed.com/beta/x/done"),
+                                               "https://smartapply.indeed.com/beta/indeedapply/post-apply"),
                            "/auth_state": {"ok": True, "logged_in": True},
                            "/close_tab": {"ok": True},
                            "/ax_scan": {"ok": True, "candidates": []}},

@@ -9011,3 +9011,64 @@ wrong lesson entirely.
 *Where it stands:* two submitted today — HopeWell (Indeed quick-apply) and Gardner Museum
 (Paylocity), the latter unrecorded on the ledger pending the operator's press. Third pick
 (University of New England, *Systems Programmer/Analyst*) untouched; results page 2 not yet read.
+
+## 2026-08-19 (sixth) — the guard moves from who pressed it to what was seen
+
+**THE OPERATOR OVERRULED THE PROVENANCE GATE, AND WAS RIGHT.** `apply_flag`'s docstring had said
+`submitted` "is deliberately NOT settable here without the operator saying so." That protects
+against a machine inventing a submission — and on 2026-08-19 it cost us the exact thing it exists
+to prevent: a Paylocity application reached `Jobs/Success/4382310` reading *"Your application has
+been received!"*, the Lens read **Submitted · High Confidence**, and the ledger still said `now`.
+Operator: *"don't let that guard ruin data if i become lazy or miss that step … if there is an
+application sent confirmation or anything of that nature, you … will always have the right to set
+something as applied/done, especially if we have a verifier."*
+
+The correction is not to weaken the gate but to **move it from provenance to evidence**. A human
+pressing a button is not evidence that an application was sent either; a confirmation page is.
+
+**`submission_verifier.py` — shareable, flexible, and it never returns a bare yes.** Pure functions
+over `(url, title, text)`: no browser, no session, no database, so the cockpit, the runtime loop, a
+capture replay and a person with a URL all ask the same question and get the same answer. A
+`Verdict` carries the **signals that fired and the text they matched**, so an application recorded
+as sent can always be argued with. Three properties that were designed in rather than discovered:
+
+* **Generic tier first.** URL path *segments* (`success`, `confirmation`, `thank-you`, `post-apply`),
+  first-person sentences (*"your application has been received"*), title words. This is what runs on
+  an ATS nobody has met, and the verdict says so out loud — *"generic signals only — this platform
+  has no hint entry"*. `ATS_HINTS` is **only ever additive**: it can raise confidence for a measured
+  platform and can never be required, so an unknown host degrades to "scored on the generic signals,
+  and here is that fact" rather than to a refusal. `extra_hints` teaches it a new ATS at the call
+  site without editing the module.
+* **Disqualifiers beat everything.** A page containing *"is required"* or *"please complete"* is not
+  a confirmation whatever else it says — every review step contains the word *submit*, and every
+  validation error can sit under cheerful copy.
+* **Two soft signals do not add up to one.** *"Thank you for your interest"* + *"we will contact
+  you"* is how rejections open, so the threshold needs one STRONG signal, not two supporting ones.
+  Path **segments**, not substrings: `career.successfactors.com` is not a success page.
+
+Exposed as `POST /api/verify/submission`. Nine tests, including the two dangerous near-misses (the
+review step, the validation error) and the 2am case (an ATS with no entry at all).
+
+**AND THE FIRST VERSION OF THE GATE REFUSED A REAL SUBMISSION, WHICH IS THE LESSON INSIDE THE
+LESSON.** It read `bb.world["apply_tab"]` — the recorded hint — and got the **pre-submit** URL,
+because the tab had navigated to `/Success/` on the very act being recorded. `_apply_tab`'s own
+docstring already warns the record "is only a hint, and a treacherous one … it may carry a URL that
+has since navigated". A check whose entire purpose is to look at the window has to observe the
+window **now**; it now calls `_observe` first and verifies against live tabs. Four pinned tests
+failed on the way through and were right to: their fixtures flagged `submitted` from a plain job
+URL, which is precisely the unevidenced claim the gate exists to stop, so the fixtures were made to
+look like real submissions rather than the gate made to look away.
+
+**Recorded, with its argument attached:** *Community Relations Database Analyst — submitted
+[verified: score 3.50 (high) from url_segment='success'; title='application successful';
+hint:paylocity…]*. Queue now `done: 2, submitted: 2`. `override_verifier=true` remains for a receipt
+we cannot read (an emailed confirmation, a tab already closed) and writes the record **UNVERIFIED**
+rather than hiding the gap.
+
+*Two corrections to what I reported an hour ago.* My first `apply_flag` call did not fail on the
+guard — it failed because I omitted the required `job_id`, and I read the empty response as a
+principled refusal. And I do not know why the cockpit's **Submitted** button did not register on two
+presses; the old code had no gate to refuse it. That is still unexplained and still worth chasing.
+
+*Tests:* controlplane-api session_control **252 passed**, submission_verifier **9**, route inventory
+regenerated for the new endpoint.

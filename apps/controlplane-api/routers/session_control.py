@@ -7017,6 +7017,41 @@ class ApplyFlagBody(BaseModel):
     flag: str                      # a terminal flag from apply_steps
     detail: str = ""
     initiator: str = "operator"
+    #: Record `submitted` even though the page does not confirm it. The escape hatch for a
+    #: confirmation we could not read (an emailed receipt, a tab already closed) — never the
+    #: default, and it is written into the record so the claim is marked as unverified forever.
+    override_verifier: bool = False
+
+
+class VerifySubmissionBody(BaseModel):
+    """Anything the caller happens to have seen. All optional — less input, less evidence."""
+    url: str = ""
+    title: str = ""
+    text: str = ""
+    platform: str = ""
+    tabs: list[dict[str, Any]] = []
+    extra_hints: Optional[dict[str, Any]] = None
+
+
+@router.post("/api/verify/submission")
+async def verify_submission(body: VerifySubmissionBody) -> dict[str, Any]:
+    """Was an application actually sent? The shareable form of the question.
+
+    Deliberately session-free and browser-free: it takes what you saw and answers with a verdict
+    plus the signals behind it. That is what lets the same question be asked by the cockpit, the
+    runtime loop, a capture replay, or a person with a URL in their hand and get the same answer —
+    the property the `__kindOf` lesson says to build for, applied to "is it done?".
+
+    Unknown platforms are supported and say so; `extra_hints` teaches it one at the call site
+    without editing the module.
+    """
+    import submission_verifier as sv
+    if body.tabs:
+        verdict = sv.verify_tabs(body.tabs, platform=body.platform)
+    else:
+        verdict = sv.verify(body.url, body.title, body.text,
+                            platform=body.platform, extra_hints=body.extra_hints)
+    return verdict.as_dict()
 
 
 @router.post("/api/session_control/{session_id}/apply_flag")
@@ -7028,8 +7063,21 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     on an account wall or quietly losing an application nobody finished. `submitted` is the only
     flag that means success; the rest record honestly why this one stopped.
 
-    `submitted` is deliberately NOT settable here without the operator saying so, because it is
-    the claim that a real application was sent. Nothing in this system marks that on its own.
+    `submitted` is the claim that a real application was sent, so it is gated — but on EVIDENCE,
+    not on provenance. That changed 2026-08-19 after the guard cost us the thing it exists to
+    protect: a Paylocity application reached `Jobs/Success/4382310` reading "Your application has
+    been received!", every organ of the cockpit agreed, and the ledger still said `now` because a
+    button did not land. Operator's ruling: *"don't let that guard ruin data if i become lazy or
+    miss that step ... if there is an application sent confirmation or anything of that nature,
+    you ... will always have the right to set something as applied/done, especially if we have a
+    verifier."*
+
+    So `submission_verifier` reads the live window and its verdict decides. A confirmed page
+    records `submitted` **with the evidence line attached to the detail**, so the claim can always
+    be checked against the page it came from. An unconfirmed page is refused with what was
+    actually seen — which is a better guard than a provenance check, because a human pressing a
+    button is not evidence that an application was sent either. `override_verifier` remains for a
+    receipt we cannot read, and marks the record UNVERIFIED rather than hiding the gap.
     """
     _check_initiator(body.initiator)
     if body.flag not in aps.TERMINAL_FLAGS:
@@ -7052,8 +7100,38 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     # takes anything typed-but-not-saved with it. Recorded for every terminal (an abandoned step's
     # last page is just as much a fact) and read back by `_parked_all`, which compares it to the
     # live window so the cockpit can say whether stepping back in resumes or starts over.
+    # THE EVIDENCE GATE. Only `submitted` is checked: every other flag records why we stopped,
+    # and being wrong about "account wall" costs a re-visit, while being wrong about "submitted"
+    # costs a job the operator never applied to and will never chase.
+    detail = body.detail
+    if body.flag == "submitted":
+        import submission_verifier as _sv
+        # OBSERVE FIRST. The recorded `apply_tab` is a hint and a treacherous one — `_apply_tab`'s
+        # own docstring says so, and here it was fatally stale: the tab had navigated from
+        # /Jobs/Apply/... to /Jobs/Success/... on the very act we are recording, so the gate read
+        # the pre-submit URL and refused a real submission. The whole point of this check is to
+        # look at the window, so it has to look at the window NOW.
+        _obs = await _observe(_session_browser_url(session), bb, session_id=session.id)
+        _tabs = [{"url": t.get("url", ""), "title": t.get("title", "")}
+                 for t in (_obs.get("tabs") or [])]
+        _live = _apply_tab(bb, _obs)
+        if _live.get("url"):
+            _tabs.append({"url": _live.get("url", ""), "title": _live.get("title", "")})
+        _verdict = _sv.verify_tabs(_tabs, platform=(step.platform or ""))
+        if _verdict.submitted:
+            detail = f"{detail} [verified: {_verdict.evidence_line()}]".strip()
+        elif body.override_verifier:
+            detail = (f"{detail} [UNVERIFIED — operator override; the window did not confirm: "
+                      f"{_verdict.evidence_line()}]").strip()
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"the window does not confirm this application was sent — "
+                        f"{_verdict.evidence_line()}. Open the confirmation page and flag it "
+                        f"again, or pass override_verifier=true to record it as UNVERIFIED."))
+
     step.tab_url = (((bb.world or {}).get("apply_tab") or {}).get("url") or "")
-    step.finish(body.flag, body.detail)
+    step.finish(body.flag, detail)
 
     # THE ATTEMPT IS OVER — take back an account row whose signup never happened. The account rung
     # writes the row on intent and it legitimately outlives a single crank (a filled form waiting on
@@ -7076,7 +7154,7 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     if (bb.world.get("apply_proposal") or {}).get("job_id") == step.job_id:
         bb.world.pop("apply_proposal", None)
     bb.log("apply_flag", f"{body.job_id} -> {body.flag}"
-                         + (f" ({body.detail})" if body.detail else ""))
+                         + (f" ({detail})" if detail else ""))
 
     # THE CLEANUP CREW RUNS ON EVERY TERMINAL, not just on success. An application abandoned at a
     # wall leaves exactly the same orphan tab as one that was submitted, and the next prospect has
