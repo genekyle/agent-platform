@@ -8912,3 +8912,44 @@ the hiring manager as `â€"`; and a single newline inside a paragraph is a rea
 (skills and five work-history entries populated by Paylocity itself), `City`/`County`/`State`
 answered, tailored cover letter written and ready to attach, still on step 1 of 6. Third pick and
 results page 2 untouched.
+
+## 2026-08-19 (fourth) — `not_staged` was wrong twice, and the site said so
+
+Working Paylocity step by step with the operator's press-Next-and-read-the-errors rule turned three
+of our own readings into measured false negatives, all settled by the page rather than by a retry —
+which matters, because a retry on a stateful widget is not idempotent (08-13).
+
+**`select_option` reported `not_staged` on picks that had landed.** SMS consent, then both
+`references.referenceType` selects: outcome `not_staged` — *"clicked 'X' but neither singleValue nor
+a companion select holds a choice — the pick did not take"* — while `describe_widget` read
+`opener.accessible_name` as the chosen value. Pressing **Next Step** settled it: the page rendered
+`Professional` under both references and dropped the SMS error entirely. So the pick took every time
+and `[class*=singleValue]` is the false-negative read point on this ATS. That is the dangerous
+direction (it invites the retry), and it is the same shape as the 08-19 BrassRing
+`companion_select`/`describe_widget` disagreement — **the opener's accessible name is the more
+reliable witness, and the validator is more reliable than both.**
+
+*The good failure, by contrast:* `select_option` with `value="Work"` returned `no_option` and
+enumerated what actually exists — `-- / Personal / Professional`. A refusal that names the real
+options costs one call and teaches the vocabulary; `not_staged` costs a re-verification.
+
+**The census said "all required fields answered" on a step whose only content was a required
+question.** Step 2 is one free-text box — *"Please describe what makes you uniquely qualified for
+this role…(required)"* — and `scan_required` returned `ok · all required fields answered`, seeing
+only a stale résumé file input. Third instance today of the census being confidently silent about
+the thing on the screen.
+
+**The `set_text` ceiling leaves partial text, and our earlier note said it did not.** A 640-character
+answer timed out (the humanised driver types per character). The 08-19 entry recorded that such a
+timeout left *no* partial text — but `describe_widget` showed 40 characters of it sitting in the
+field, so that earlier claim was probably read through `page_content`, **which does not report
+textarea values at all**. A negative result needs its search scope in the sentence: "the field is
+empty" and "innerText does not contain it" are different facts. Clearing and re-typing at ~320
+characters landed first try. Practical bound for now: keep taught free-text under ~350 characters,
+and verify at the widget, never at the page text.
+
+*Where it stands:* step 1 and 2 of 6 cleared. Six identity/consent answers, four per-employer
+`reason_for_leaving_*` keys and a `reason_for_leaving_default` (whose note says an unmatched employer
+must ESCALATE, not take the fallback) are in the answer store. Step 3 (References) has Reference 1
+complete from the store and Reference 2 blocked on one email address we do not hold — asked, not
+guessed.
