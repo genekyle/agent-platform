@@ -8703,6 +8703,96 @@ parked `unknown_ats`. Diesel Direct at the employer screener with 5 of 6 require
 sixth (three years of ERP / financial-systems experience, "Explain.") **held for the operator** —
 it is not on the résumé and inventing it is not available. Nothing submitted. Tests: mcp **146**.
 
+## 2026-08-19 — the ok that clicked nothing, and the block the cockpit did not mention
+
+**A RECIPE `Continue` REPORTED OK, THE URL NEVER MOVED, AND THE REASON WAS A MODAL NOBODY HAD A
+NAME FOR.** Session #32, `report analyst` / Concord NH / 100mi, first pick (HopeWell *Data and
+Impact Analyst*). On `indeed_apply_resume_selection` the rung reported *"clicked 'Continue' to
+advance indeed_apply_resume_selection"* and the tab stayed on
+`/form/resume-selection-module/resume-selection`. `ax_scan` on the apply tab returned exactly four
+nodes and settled it:
+
+    alertdialog | Tailor your resume
+    heading     | Tailor your resume
+    button      | Create tailored resume
+    button      | Continue without tailoring
+
+Indeed interposes an **upsell interstitial** — an AI rewrite of the résumé being submitted —
+between resume-selection and the rest of the spine. Continue does not navigate; it raises this.
+Taught as `indeed_apply_resume_tailor_prompt` and declined: the tailoring branch rewrites the
+document the application sends, which is a content change nobody authorised, and it detours off
+the spine. Declining went **straight to `questions/1`, skipping resume highlights entirely** — so
+the 08-18 "highlights fork" is not on every route.
+
+**AND THE COCKPIT COULD NAME THE PAGE BUT NOT PRESS ANYTHING ON IT.** The form census lists FORM
+FIELDS; a dialog whose whole content is two buttons has none, so `scan_required` truthfully
+reported the page beneath (`All Answered · 2 Not Required` — the résumé file input). There is no
+"press this named control" affordance anywhere in the Now panel, so an unrecognised screen that
+offers only buttons is a screen the operator cannot work. The way through was
+`POST /api/session_control/{id}/apply_teach` with `click {"control": "Continue without
+tailoring"}` — which is right, and journals *"click -> indeed_apply_questions · teacher"* on the
+step trail — but it is a curl for something the operator should be able to click. Same parity rule
+as the protect badge (08-18), one layer in: **the teach surface can name a page and cannot touch
+it.**
+
+**A FILL OVER A TICKED CHECKBOX TOGGLES IT, AND THAT NEARLY UNSIGNED A LEGAL ATTESTATION.**
+HopeWell's screener ends with a Certification — truthfulness, authority to contact every former
+employer, hold-harmless, at-will, CORI + DSS background checks — gated on a required checkbox
+*"Yes, I agree to sign electronically."* Escalated; the operator attested. Ticked at 10:15:32 and
+verified. The very next action, confirmed in the UI as the **AI-review radio**, journalled
+identically as *"check_group ... native autofill by question text (filled=True)"* and afterwards
+the scan read the attestation **unanswered**, with the revealed *"Please type your full name"*
+field gone with it. The radio did land on `No`; the checkbox came off. Re-ticked, then both were
+verified **together** and the name filled through its own row rather than the bunch fill — whose
+other "ready" item was that same checkbox. The rule: *a fill is not idempotent over a stateful
+control, so never re-run one to satisfy a different field, and never verify one control when an
+action could have moved two.*
+
+**THE DEMOGRAPHICS CENSUS GIVES EVERY GROUP THE PAGE HEADING AS ITS ADDRESS, SO REQUIRED GROUPS
+COLLIDE.** Both required groups on `indeed_apply_demographics` came back named *"Voluntary self
+identification questions from the employer Any questions you answer will be"* — the section
+heading, not the legend. `check_group` failed **loudly and correctly**
+(`not_found: cannot address field ... not in apply_fields nor the live scan`), which is the right
+failure, but it left no route: fields are addressed by name and two required fields shared one.
+The AX layer had the correct names the whole time — `radiogroup Protected Veteran Status`,
+`radiogroup Select Disability Status` — so the collision is in the **census label derivation**,
+not the page. Worked around by clicking the radios by their own accessible names
+(`I decline to self-identify.`, `I Don't Wish To Answer`), per the operator's standing decline
+preference. Gender (`Man/Male`) and ethnicity (`Not Hispanic or Latino`) were pre-filled by Indeed
+and left alone — 08-19's rule that a value already entered truthfully is not what the decline
+preference was written for. *This is the same shape as the "Name Repeats" hazard the fill planner
+already warns about for `Phone Number`, except it lands on required fields and the planner's
+"these need their own step" escape does not exist for a radio group.*
+
+**THE SUBMIT IS BLOCKED BY A reCAPTCHA AND THE COCKPIT SAYS NOTHING ABOUT IT.** At 100% on the
+review module, `Submit this application` clicked and the tab stayed on `/form/review-module`.
+Per the captcha-first rule, `/challenge_visibility` **before** diagnosing anything else:
+
+    blocking: true · solved: false · checkbox_visible: true · checkbox_unsolved: true
+    bframe_count: 1 · anchor_count: 2
+
+`/api/session_control/32` carries it correctly —
+`block: {provider: recaptcha, strength: active, reason: "recaptcha challenge frame present
+(a human must solve it — never auto-solve)"}`. But the word *captcha* **appears nowhere in the
+cockpit UI**, and `next_action` still reads `work_rung · "Plan the fill"` while the Now panel keeps
+offering **Submit this application**. So the one screen the operator watches shows a button that
+cannot work, and hides the only fact that explains why. The state payload knowing is not the
+operator knowing — that is the 08-18 lesson again, and it is worth an enforcement point:
+**`block.strength == "active"` must own `next_action` and must render.**
+
+*Also measured:* teacher labels do move the witnesses and still do not flip the verdict. Labelling
+`indeed_apply_resume_selection` took `dom:tfidf` from **0.1186 → 0.402** on the same screen and
+added a `visual:apple` witness at **0.9372** similarity — and the page still read *Unrecognised*,
+because both witnesses abstain on `novelty 1.0` regardless of similarity. The abstain gate is
+keyed to novelty, not agreement, so a single label cannot promote a state no matter how well it
+matches. Two labels are not the fix; the gate is.
+
+*Where it stands:* session **#32**, `report analyst` · Concord NH · 100mi, page 1 read — **15
+results, 9 new, 6 already seen** — operator picked 3. HopeWell *Data and Impact Analyst* is at
+**100%, at the Submit gate, blocked on an unsolved reCAPTCHA checkbox awaiting the human**;
+nothing submitted. Two picks queued behind it (Isabella Stewart Gardner Museum, University of New
+England). Teacher labels this session: 3 page-states (incl. the new
+`indeed_apply_resume_tailor_prompt`) + 5 taught actions. No code changed; tests not run.
 ## 2026-08-19 (later) — the observer described a page whose main feature it could not see
 
 **THE OPERATOR WAS WATCHING THE SCREEN AND I WAS NOT.** Second pick of session #32 (Isabella
