@@ -171,6 +171,29 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
               "considered'. The references step is the one that stalls a drive: it needs THIRD "
               "PARTY emails and phones, which are not inferable and must come from the operator.",
      "seed_companies": ["Charles River Community Health", "Isabella Stewart Gardner Museum"]},
+    {"ats_id": "peopleadmin", "display_name": "PeopleAdmin", "icon": "🟦",
+     "hosts": ["peopleadmin.com"], "recipe": "seed", "auth": "account",
+     "notes": "MEASURED live 2026-08-19 (session #32, University of New England, "
+              "Systems Programmer/Analyst). Reached from INDEED via an apptrkr.com redirect — "
+              "`apptrkr.com/get_redirect.php?id=...` is a HigherEdJobs-style hop, so the landing "
+              "host is not visible in the Indeed link and only the post-redirect URL classifies. "
+              "Tenanted per institution: <tenant>.peopleadmin.com/postings/<posting_id>. Higher-ed "
+              "is its home ground, so expect it wherever a university posts. "
+              "The posting page states its own requirements before any form is opened, in a "
+              "'Documents Needed to Apply' block — here Required: COVER LETTER + RESUME, Optional: "
+              "names and contact information for three professional references. Reading that block "
+              "at classify time is free and tells a drive whether it can finish at all. It also "
+              "declares a 'Supplemental Questions' section with the usual asterisk convention. "
+              "The apply control is a LINK ('Apply for this Job'), not a button. "
+              "auth = ACCOUNT, and the wall was MET, not inferred: 'Apply for this Job' goes "
+              "straight to <tenant>.peopleadmin.com/login — username + password, 'Create an "
+              "Account', 'Log In with Chronicle Vitae' (a higher-ed SSO worth knowing about), and "
+              "a separate current-employee route. No apply form is reachable before it. "
+              "ADDRESS THE APPLY LINK EXACTLY: the posting renders 'Bookmark this Posting', "
+              "'Print Preview' and 'Apply for this Job' inside ONE heading, so a name-based "
+              "resolver matches the heading and lands on /print_preview instead. Drive "
+              "role=link name='Apply for this Job'.",
+     "seed_companies": ["University of New England"]},
     {"ats_id": "phenom", "display_name": "Phenom", "icon": "⚫",
      "hosts": ["phenompeople.com", "phenom.com"], "recipe": "seed", "auth": "account",
      "notes": "career-site CMS, not a uniform host: employers run it on their OWN careers subdomain "

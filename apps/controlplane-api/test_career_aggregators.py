@@ -319,3 +319,19 @@ def test_paylocity_is_recognised_and_arrives_through_linkedin():
     assert reg.get_ats("paylocity")["auth"] == "none"
     # And the host list is what the window classifier uses to call such a tab an application.
     assert any("paylocity" in h for h in reg.off_engine_apply_hosts())
+
+
+def test_peopleadmin_is_recognised_and_arrives_behind_a_redirect():
+    """Higher-ed's ATS, met 2026-08-19 (session #32) on University of New England's
+    Systems Programmer/Analyst — and reached through an `apptrkr.com` hop, so the Indeed link
+    never showed the destination host. Only the POST-redirect URL classifies, which is the
+    argument for classifying the landing rather than the link.
+    """
+    import ats_registry as reg
+    url = "https://une.peopleadmin.com/postings/26341?applicant_id=465AFCAE&ad_id=33FBD081"
+    assert reg.classify_ats(url) == "peopleadmin"
+    # It read as the unmapped catch-all before it was named, which is what halted the drive.
+    assert reg.classify_ats(url) != "company_site"
+    # auth = account, and the wall was MET the same session: 'Apply for this Job' goes straight
+    # to <tenant>.peopleadmin.com/login and no apply form is reachable before it.
+    assert reg.get_ats("peopleadmin")["auth"] == "account"

@@ -9072,3 +9072,43 @@ presses; the old code had no gate to refuse it. That is still unexplained and st
 
 *Tests:* controlplane-api session_control **252 passed**, submission_verifier **9**, route inventory
 regenerated for the new endpoint.
+
+## 2026-08-19 (seventh) — PeopleAdmin, and a heading that swallowed three links
+
+**A THIRD ATS IN ONE SESSION, ARRIVING BEHIND A REDIRECT.** University of New England's *Systems
+Programmer/Analyst* left Indeed through `apptrkr.com/get_redirect.php?id=7227375` and landed on
+**`une.peopleadmin.com/postings/26341`**. The hop matters: the Indeed link never names the
+destination host, so **only the post-redirect URL classifies** — an argument for classifying the
+landing rather than the link. `classify_ats` read `company_site` and the drive **halted rather than
+guessing**, which is the behaviour we want and the reason the gap was visible at all. Registered as
+`peopleadmin` (higher-ed's ATS, tenanted `<tenant>.peopleadmin.com/postings/<id>`), pinned with a
+test.
+
+**IT DECLARES ITS OWN REQUIREMENTS BEFORE ANY FORM IS OPENED.** The posting carries a *"Documents
+Needed to Apply"* block — here **Required: Cover Letter + Resume**, Optional: three professional
+references — plus a *"Supplemental Questions"* section. Reading that block at classify time is free
+and answers the question that cost us most today: *can this application be finished at all with what
+we hold?* Two of three applications today required a cover letter, on the day the base was built.
+
+**A HEADING SWALLOWED THREE LINKS AND THE DRIVE CLICKED THE WRONG ONE.** The recipe's advance
+reported clicking `' Bookmark this Posting  Print Preview |  Apply for this Job'` — one heading
+whose accessible name concatenates **three distinct actions** — and landed on `/print_preview`. The
+resolver matched the container, not the control. Same family as every addressing failure today, in a
+new shape: not two names for one control, but **one name for three controls**. Driving
+`role=link name='Apply for this Job'` exactly went where it should. Written into the registry note,
+because the next PeopleAdmin tenant renders the same header.
+
+**AND THE WALL WAS MET, SO `auth` MOVED.** `Apply for this Job` goes straight to
+`<tenant>.peopleadmin.com/login`: username + password, *Create an Account*, and *Log In with
+Chronicle Vitae* (a higher-ed SSO worth knowing about). No apply form is reachable before it, so
+`auth` = **account**, recorded from the wall rather than from the nav link that hinted at it — the
+standard the Cornerstone and Paylocity entries both set. The accounts system produced the handoff
+itself, and its note states the boundary better than I would: *"Operator creates/logs in with these;
+the agent never types them into the site."* Account row `ats_university_of_new_england_peopleadmin`
+is pending with credentials staged; the step is parked `parked:account_wall` with the cover letter
+already written and named in the detail, so resuming is a login and an upload rather than a rebuild.
+
+*Page 1 is now complete* — `done: 3, submitted: 2, remaining: 0, blocks_page: false`. Two
+applications sent (HopeWell via Indeed quick-apply, Isabella Stewart Gardner Museum via Paylocity),
+one parked at an account wall it cannot cross without the operator. Three ATS met, two of them new
+to the registry. Tests: career aggregators **22 passed**.
