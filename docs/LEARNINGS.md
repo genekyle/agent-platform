@@ -9112,3 +9112,73 @@ already written and named in the detail, so resuming is a login and an upload ra
 applications sent (HopeWell via Indeed quick-apply, Isabella Stewart Gardner Museum via Paylocity),
 one parked at an account wall it cannot cross without the operator. Three ATS met, two of them new
 to the registry. Tests: career aggregators **22 passed**.
+
+## 2026-08-19 (eighth) — the third axis: what it asks for, and when
+
+**FIRST, WHY THE UNE APPLICATION STOPPED, BECAUSE I DESCRIBED IT BADLY.** It was not a judgement
+that PeopleAdmin was too hard. `Apply for this Job` lands on `/login`, and typing credentials or
+creating an account is a boundary I do not cross — the accounts system says the same thing in its
+own note (*"Operator creates/logs in with these; the agent never types them into the site"*). That
+part is genuinely the operator's. **What I got wrong was stopping the INVESTIGATION at the same
+moment I stopped the typing.** Everything short of the password was still available and I parked the
+whole job instead of mining it. Operator: *"there shouldn't be any skips because our system should
+be smart enough to handle it."* Reopened and farmed:
+
+| state | reached by | what it wants |
+|---|---|---|
+| `peopleadmin_job_posting` | — | declares **Documents Needed to Apply**: Cover Letter + Résumé required, three references optional, Supplemental Questions |
+| `peopleadmin_login` | click `link` "Apply for this Job" | username + password · Create an Account · **Log In with Chronicle Vitae** (higher-ed SSO) · separate current-employee route |
+| `peopleadmin_create_account` | click `link` "Create an Account" → `/user/new` | Username (no special chars), Password (≥6), Password Confirmation, Email, Email Confirmation required; First/Last Name optional; **"Upload Your Resume" to prefill the application** |
+
+Two things that only show up by farming: the create-account **fields are invisible to AX until the
+"Create account" tab is clicked** (the first scan returned a heading and two tab links and nothing
+else — the observation-profile problem again, on a signup form), and PeopleAdmin asks for the
+**résumé at account creation, before the application exists at all**.
+
+**THAT LAST FACT IS THE WHOLE ARGUMENT FOR A THIRD AXIS.** Two axes already exist and are right —
+`ats_registry` answers *which platform* from the host, `apply_landing` answers *what kind of page*
+from the content, and the state is their product. Neither answers the question that decides whether
+a drive can finish: **what will this demand, and at which screen?** Three applications through three
+vendors in one day put the same résumé slot in three different places:
+
+    indeed_quick_apply   resume @ application_form   (first screen)
+    paylocity            resume @ application_form   (step 1 of 6)
+    peopleadmin          resume @ account_gate       (before the application exists)
+
+`apply_requirements.py` is that axis: a **closed vocabulary of general steps** (résumé, cover
+letter, references, account, supplemental questions, work/education history, EEO, e-signature, work
+authorisation, salary, availability, assessment, portfolio, transcript, writing sample) and an
+`Observation` pinning one requirement to the `(platform, page-kind)` it was actually seen on.
+Closed on purpose — the operator's own observation is that the demands of a third-party application
+are not unlimited, so a demand outside the list is a real discovery to be added deliberately rather
+than absorbed as "other".
+
+**IT IS AN OBSERVATION LEDGER, NOT A RECIPE BOOK, AND THE TESTS ENFORCE THAT.** The operator's
+worry, in their words: *"i am also scared and wary of over-generalizing … then maybe we might start
+making assumptions we don't want."* So nothing in it ever says "PeopleAdmin requires a cover
+letter". It says **cover_letter · seen 1 · at job_posting · provisional**, and the summary carries
+`1 flow(s) driven; a requirement seen fewer times than that is not a rule`. Without a denominator it
+refuses to pretend at all — `flows: None, confidence: "unknown"` — because a requirement seen once
+out of one flow and once out of twenty look identical without it, and only one of them is a rule.
+`declared` separates a page STATING a requirement from a job description merely containing the word,
+which is the false positive that would poison a planner fastest.
+
+**AND IT ANSWERS THE CHEAP QUESTION BEFORE THE EXPENSIVE ONE.** `blockers(platform="peopleadmin")`
+returns `['account']` — this flow stops on a human — which is exactly what I should have known
+before spending the drive rather than after. Wiring that into the classify rung is the next step and
+is deliberately not done yet.
+
+**ON THE "COLLEGE / DIY ATS" BUCKET — the evidence says no, and says something more useful.** Both
+higher-ed employers we have met run **commercial** ATS, not home-built forms: University of New
+England on PeopleAdmin, Boston College on Cornerstone. PeopleAdmin is genuinely higher-ed-dominant,
+so "a university posting" is a decent *prior* for which vendor to expect — but a vendor bucket keyed
+on sector would be a worse version of `ats_registry`, which already keys on the host that actually
+decides. The grouping that pays is the requirements axis, because it **cuts across vendors**: what
+Paylocity and PeopleAdmin have in common is not that one is corporate and one is academic, it is
+that both demand a cover letter and references while Indeed quick-apply demands neither. *Falsifier,
+so this is not just an opinion:* if we meet colleges on genuinely bespoke forms that no
+`classify_ats` host matches, `company_site` + the requirements ledger will show it, and a sector
+bucket earns its place then. Two data points is not enough to build a taxonomy on.
+
+*Tests:* `apply_requirements` **9 passed**. Seeded with today's three real flows — the summary
+already shows `resume` at three different kinds and `peopleadmin` blocking on `account`.
