@@ -8861,3 +8861,54 @@ parked mid-Step-1-of-6 with the identity fields unreachable by name and five aut
 address blocks whose street addresses are not data we hold. Third pick (University of New England,
 *Systems Programmer/Analyst*) untouched; results page 2 not yet read. `ats_registry` updated with
 all four Paylocity measurements — tests: controlplane-api aggregator + route inventory **21 passed**.
+
+## 2026-08-19 (third) — the census invented thirty requirements and missed the four that blocked us
+
+**THE OPERATOR STEPPED THE FORM BY HAND AND THE SITE ANSWERED THE QUESTION WE HAD BEEN GUESSING AT.**
+Pressing Paylocity's own **Next Step** made the page name its real requirements inline. Set against
+what `scan_required` had been reporting:
+
+| | our census said | the site said |
+|---|---|---|
+| required count | **35** | **~6** on step 1, plus 2 per work-history entry |
+| Email Address | voluntary | **"Email Address is required"** |
+| Mobile Number | voluntary | **"Mobile Number is required"** |
+| SMS permission | not listed at all | **"SMS permission required"** |
+| Cover Letter | voluntary | **"Cover Letter is required"** |
+| Reason for Leaving | not listed at all | **"Reason for Leaving is required"** |
+| the 5 employer address blocks (30 fields) | **required** | not flagged |
+
+**Wrong in both directions at once** — it invented thirty requirements and missed the four that
+actually block the step, including one needing a document that did not exist. I had been about to
+spend the operator's session filling employer street addresses nobody asked for. Now a standing
+strategy: *on a long or unfamiliar form, fill what the profile confidently answers, then press the
+page's own Next and read the errors.* The validator is the authority; the census is a hypothesis.
+Cheap and safe at a **step** boundary, and explicitly NOT a thing to do at a final Submit.
+
+*This also retires my earlier framing.* I reported "35 required fields, 30 of them employer addresses
+we do not hold" as the reason the application was hard. That number was never real. The application
+is small; our reading of it was wrong.
+
+**WHAT THE REAL LIST BOUGHT.** Six answers went into the answer store rather than into one form —
+`first_name`, `last_name` (Paylocity's résumé parse had produced `Aspir Magsipoc`; the surname is
+Magsipoc, which is how the HopeWell attestation was signed the same day), `middle_name`, `email`,
+`county`, and `sms_recruiting_consent = No` (the form itself says *"Selecting No will not remove me
+from consideration"*, so declining costs nothing, and it matches the stored
+`marketing_contact_consent`). Each carries its question patterns, so the next ATS that asks is
+already answered.
+
+**AND COVER LETTERS ARE NOW A DOCUMENT WE HAVE.** `assets/documents/cover_letters/BASE.md` plus
+`scripts/make_cover_letter.py`: one base, four named slots — `{{ROLE}}`, `{{ORG}}`, `{{HOOK}}`,
+`{{BRIDGE}}` — emitting both `.md` (diffable) and `.doc` (what the ATS accepts). The rule written
+into the base matters more than the mechanism: **everything in it is true of `GM_Resume.pdf`, and
+tailoring means choosing which true thing to lead with, never adding a claim.** A diff between two
+tailored letters then shows exactly what was claimed differently, which is the property you want when
+one person applies to twenty places. Two traps paid for on the first run: `textutil` reads UTF-8 as
+Latin-1 without both `<meta charset="utf-8">` and `-inputencoding UTF-8`, so every em-dash reaches
+the hiring manager as `â€"`; and a single newline inside a paragraph is a real line break, or
+"Sincerely," runs into the name.
+
+*Where it stands:* HopeWell **SUBMITTED**. Gardner Museum / Paylocity: résumé attached and parsed
+(skills and five work-history entries populated by Paylocity itself), `City`/`County`/`State`
+answered, tailored cover letter written and ready to attach, still on step 1 of 6. Third pick and
+results page 2 untouched.
