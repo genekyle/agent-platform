@@ -124,7 +124,7 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
      "hosts": ["workforcenow.adp.com", "myjobs.adp.com"], "recipe": "seed", "auth": "account",
      "notes": "", "seed_companies": []},
     {"ats_id": "paylocity", "display_name": "Paylocity Recruiting", "icon": "🟧",
-     "hosts": ["recruiting.paylocity.com", "paylocity.com"], "recipe": "seed", "auth": "unknown",
+     "hosts": ["recruiting.paylocity.com", "paylocity.com"], "recipe": "seed", "auth": "none",
      "notes": "MEASURED live 2026-08-14 (session #29) — the FIRST ATS met through LinkedIn rather "
               "than Indeed, which is the whole point of the registry being engine-agnostic: it "
               "arrives already organised, and the next Paylocity employer reuses everything learned "
@@ -157,7 +157,19 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
               "not_found. Each name is rejected in favour of the other and neither works — only "
               "the cockpit's own census ROW (which addresses by selector) lands. Also present: a "
               "cookie/privacy alertdialog, and identity fields the page marks '(required)' that "
-              "the census files as voluntary.",
+              "the census files as voluntary. "
+              "auth FLIPPED unknown -> none 2026-08-19 ON A MEASUREMENT, not an inference: the "
+              "application was driven end to end and SUBMITTED (Jobs/Success/4382310, 'Your "
+              "application has been received!') without a sign-in ever being asked for. That is "
+              "the standard this entry and the Cornerstone one both demand - a wall MET, or not "
+              "claimed. The six steps in order: 1 Information (identity, address, resume, cover "
+              "letter, work + education history), 2 Additional Questions (one required free text), "
+              "3 References (TWO required, each needing name + email + phone + Personal/"
+              "Professional), 4 EEO, 5 Optional Identity Questions, 6 review + a required "
+              "acknowledgement checkbox and a work-authorisation select. Employer posts can gate "
+              "on the cover letter - this one read 'Only applications with a cover letter will be "
+              "considered'. The references step is the one that stalls a drive: it needs THIRD "
+              "PARTY emails and phones, which are not inferable and must come from the operator.",
      "seed_companies": ["Charles River Community Health", "Isabella Stewart Gardner Museum"]},
     {"ats_id": "phenom", "display_name": "Phenom", "icon": "⚫",
      "hosts": ["phenompeople.com", "phenom.com"], "recipe": "seed", "auth": "account",

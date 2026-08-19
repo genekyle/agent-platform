@@ -312,7 +312,10 @@ def test_paylocity_is_recognised_and_arrives_through_linkedin():
     assert reg.classify_ats(url) == "paylocity"
     # It was reading as the unmapped catch-all before it was named.
     assert reg.classify_ats(url) != "company_site"
-    # auth is UNMEASURED and must stay that way — the ladder acts on this promise.
-    assert reg.get_ats("paylocity")["auth"] == "unknown"
+    # auth was UNMEASURED until 2026-08-19, when session #32 drove a Paylocity application end to
+    # end and SUBMITTED it (Isabella Stewart Gardner Museum, Jobs/Success/4382310) without a
+    # sign-in ever being asked for. A wall MET is the only thing that may move this field, and one
+    # was met — its absence. The assertion stays pinned so the next change is deliberate too.
+    assert reg.get_ats("paylocity")["auth"] == "none"
     # And the host list is what the window classifier uses to call such a tab an application.
     assert any("paylocity" in h for h in reg.off_engine_apply_hosts())

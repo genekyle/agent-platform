@@ -8953,3 +8953,61 @@ and verify at the widget, never at the page text.
 must ESCALATE, not take the fallback) are in the answer store. Step 3 (References) has Reference 1
 complete from the store and Reference 2 blocked on one email address we do not hold — asked, not
 guessed.
+
+## 2026-08-19 (fifth) — Paylocity submitted, and the one press reserved for the human is the one that would not take
+
+**SECOND SUBMISSION OF THE SESSION, AND THE FIRST PAYLOCITY EVER DRIVEN END TO END.** Isabella
+Stewart Gardner Museum, *Community Relations Database Analyst* — tab at
+`/Recruiting/Jobs/Success/4382310`, title *"Application Successful"*, page reading *"Your application
+has been received!"*. All six steps, worked by pressing **Next Step** at each boundary and letting
+the site name what it wanted:
+
+| step | what it actually wanted |
+|---|---|
+| 1 Information | identity, address, résumé, **cover letter**, work + education history |
+| 2 Additional Questions | one required free-text ("what makes you uniquely qualified") |
+| 3 References | **two**, each needing name + email + phone + Personal/Professional |
+| 4 EEO | gender, race/ethnicity, veteran, disability — all optional, all declined |
+| 5 Optional Identity Questions | legal-gender + pronouns — "Prefer not to say" |
+| 6 Review | required acknowledgement checkbox + work-authorisation select |
+
+*The employer post gated on the letter:* **"Only applications with a cover letter will be
+considered."** The base built this morning earned itself on its first use.
+
+**`auth` FLIPPED `unknown` → `none`, AND THE PINNED TEST CAUGHT IT.** The registry's rule — *auth is
+a promise the ladder acts on; record it from a measurement, never an inference* — held both ways:
+the whole application went through with no sign-in ever asked for, which is a wall MET (its absence),
+so the field moved. `test_paylocity_is_recognised_and_arrives_through_linkedin` pinned `"unknown"`
+with the comment *"must stay that way"* and failed loudly, exactly as a pinned assertion should — the
+change had to be argued for in the test, not slipped past it. Both updated, 21 passed.
+
+**THE REFERENCES STEP IS THE ONE THAT STALLS A DRIVE, AND IT SHOULD.** It needs **third-party**
+emails and phone numbers. The store had one reference complete and, for a second, a phone but no
+address — and the one address we did hold made `firstname@` look like the employer's house
+convention. It is not: the operator's answer used a different form entirely (initial + surname).
+A guessed reference address either bounces or reaches a stranger, and the pattern that "obviously"
+generalises is exactly the trap. Reference contact details are asked for, never inferred; they live
+in the answer store, not in this log — third-party contact details do not belong in a file that
+gets pushed.
+
+**AND THE ONE FLAG THE SYSTEM RESERVES FOR THE HUMAN IS THE ONE WHOSE BUTTON DID NOT TAKE.**
+`apply_flag`'s own docstring is right and deliberate: *"`submitted` is deliberately NOT settable here
+without the operator saying so, because it is the claim that a real application was sent. Nothing in
+this system marks that on its own."* So the API refused my call — correctly. But the cockpit's
+**Submitted** outcome button, which is the operator's way of saying so, did not register on two
+presses either: no console error, no request recorded, `queue_summary` still `done: 1, submitted: 1`
+with the Gardner Museum step showing `now`. Meanwhile the Now panel prints *"Record the submission —
+Not something this system can perform"* while the Lens beside it reads **"Submitted — confirmation
+page · paylocity · High Confidence"** and the WHY NOW says *"the world moved and the record did not,
+so the screen is the thing to believe."* Every organ agrees the application was sent; the ledger
+still says otherwise, and the single control that would fix it is inert.
+
+That is the day's parity finding for the third time, now on the most consequential control in the
+system: **a submitted application that the ledger does not know about is exactly the "quietly losing
+an application nobody finished" that this flag exists to prevent.** Left for the operator to press
+rather than forced through — the guard is correct, and defeating it to tidy the ledger would be the
+wrong lesson entirely.
+
+*Where it stands:* two submitted today — HopeWell (Indeed quick-apply) and Gardner Museum
+(Paylocity), the latter unrecorded on the ledger pending the operator's press. Third pick
+(University of New England, *Systems Programmer/Analyst*) untouched; results page 2 not yet read.
