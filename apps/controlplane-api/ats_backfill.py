@@ -24,19 +24,23 @@ import logging
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 import ats_registry as reg
 import ats_tenancy as ten
+from settings import settings
 
 #: A gap longer than this inside one (session, instance) starts a new flow. Chosen to be longer
 #: than any single application takes to drive and shorter than a session's idle stretches.
 FLOW_GAP = timedelta(minutes=45)
 
-_OUTPUT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "apps", "mcp", "output")
+#: Resolved through the SAME seam as every other artifact reader (`settings.observer_artifacts_dir`,
+#: env-overridable as OBSERVER_ARTIFACTS_DIR). The first version computed the root from `__file__`,
+#: which made this the one reader that ignored the data-root envs: served from a worktree it
+#: globbed a directory that does not exist and returned a successful-looking no-op
+#: (`{"rows": 0, ..., "written": true}`) — found 2026-08-20.
+_OUTPUT = settings.observer_artifacts_dir
 DEFAULT_CORPUS = os.path.join(_OUTPUT, "transitions")
 DEFAULT_TRACES = os.path.join(_OUTPUT, "observer-traces")
 
@@ -290,7 +294,11 @@ def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False,
     rows = read_corpus(directory)
     instances, flows = aggregate(rows)
     trace_counts: dict[str, int] = {}
-    if traces_dir and os.path.isdir(traces_dir):
+    # A missing traces dir must be a FACT in the result, not a silent omission — served from a
+    # worktree without the data-root env this used to no-op with every number at zero and
+    # `written: true`, which reads as "the corpus is empty" instead of "I looked nowhere".
+    traces_dir_missing = bool(traces_dir) and not os.path.isdir(traces_dir)
+    if traces_dir and not traces_dir_missing:
         trace_counts = fold_traces(instances, read_traces(traces_dir))
     chars = derive_characteristics(instances, flows)
     for key, n in trace_counts.items():
@@ -302,7 +310,8 @@ def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False,
     if dry_run:
         return {"rows": len(rows), "traces": sum(trace_counts.values()),
                 "instances": len(instances), "flows": len(flows),
-                "characteristics": len(chars), "written": False}
+                "characteristics": len(chars), "written": False,
+                **({"traces_dir_missing": True} if traces_dir_missing else {})}
 
     for inst in instances.values():
         obj = db.get(models.AtsInstance, inst.instance_key)
@@ -313,18 +322,54 @@ def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False,
         obj.host, obj.sample_url = inst.host, inst.sample_url
         obj.first_seen_at, obj.last_seen_at = inst.first_seen, inst.last_seen
 
-    # Flows are replaced wholesale for the sessions being backfilled — re-running the same corpus
-    # must not double the denominator, which is the number everything else reasons from.
+    # Flows this pass authored before are replaced — re-running the same corpus must not double
+    # the denominator, which is the number everything else reasons from. But ONLY the rows the
+    # backfill wrote (job_key and terminal both None, by its own construction): a LIVE row from
+    # `record_flow` carries the job and the outcome, and the first version of this sweep deleted
+    # those too — the next backfill erased the only row in the table that answered "did anyone
+    # ever get through this ATS", one day after the live write shipped (found 2026-08-20).
     sids = {f.session_id for f in flows}
+    live_rows: dict[tuple[Optional[int], str], Any] = {}
     if sids:
-        db.query(models.AtsFlow).filter(models.AtsFlow.session_id.in_(list(sids))).delete(
-            synchronize_session=False)
+        for row in db.query(models.AtsFlow).filter(models.AtsFlow.session_id.in_(list(sids))):
+            if row.terminal is None and row.job_key is None:
+                db.delete(row)
+            else:
+                # `record_flow` is idempotent per (session, instance, job); a collision here is a
+                # re-flag of the same application, and the later write already won on the row.
+                live_rows[(row.session_id, row.instance_key)] = row
+        db.flush()
+
+    # A corpus flow that matches a surviving live row ENRICHES it rather than sitting beside it
+    # and doubling the count: the corpus knows the states walked and the verdict tallies, the live
+    # row knows the job and the terminal — they are two halves of one application. Gap-splitting
+    # can yield several corpus flows per (session, instance); the live row was written at the
+    # terminal, so the LATEST-ended one is its other half and the rest insert as backfill rows.
+    _floor = datetime.min.replace(tzinfo=timezone.utc)
+    latest: dict[tuple[Optional[int], str], Any] = {}
     for f in flows:
-        db.add(models.AtsFlow(instance_key=f.instance_key, ats_id=f.ats_id, session_id=f.session_id,
-                              job_key=None, terminal=None, states=f.states,
-                              transitions=f.transitions, confirmed=f.confirmed,
-                              mismatched=f.mismatched, corrections=f.corrections,
-                              started_at=f.started_at, ended_at=f.ended_at))
+        k = (f.session_id, f.instance_key)
+        if k in live_rows:
+            cur = latest.get(k)
+            if cur is None or ((f.ended_at or f.started_at or _floor)
+                               > (cur.ended_at or cur.started_at or _floor)):
+                latest[k] = f
+    for f in flows:
+        k = (f.session_id, f.instance_key)
+        live = live_rows.get(k) if latest.get(k) is f else None
+        if live is not None:
+            live.states = f.states or live.states
+            live.transitions, live.confirmed = f.transitions, f.confirmed
+            live.mismatched, live.corrections = f.mismatched, f.corrections
+            live.started_at = live.started_at or f.started_at
+            live.ended_at = live.ended_at or f.ended_at
+        else:
+            db.add(models.AtsFlow(instance_key=f.instance_key, ats_id=f.ats_id,
+                                  session_id=f.session_id,
+                                  job_key=None, terminal=None, states=f.states,
+                                  transitions=f.transitions, confirmed=f.confirmed,
+                                  mismatched=f.mismatched, corrections=f.corrections,
+                                  started_at=f.started_at, ended_at=f.ended_at))
 
     for c in chars:
         q = db.query(models.AtsCharacteristic).filter_by(
@@ -340,13 +385,16 @@ def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False,
     return {"rows": len(rows), "traces": sum(trace_counts.values()),
             "instances": len(instances), "flows": len(flows),
             "characteristics": len(chars), "written": True,
+            **({"traces_dir_missing": True} if traces_dir_missing else {}),
             "caveat": "backfilled flows carry job_key=None — the corpus does not record job identity"}
 
 
 # --- the live write --------------------------------------------------------------------------
 def record_flow(db, *, url: str, job_key: Optional[str], terminal: str,
                 session_id: Optional[int] = None, platform: str = "",
-                states: Optional[list[str]] = None) -> Optional[str]:
+                states: Optional[list[str]] = None,
+                started_at: Optional[datetime] = None,
+                ended_at: Optional[datetime] = None) -> Optional[str]:
     """Record one finished application against its ATS instance. Returns the instance key.
 
     Called from `apply_flag`, which is the ONE place that knows all four things at once: the job,
@@ -392,6 +440,11 @@ def record_flow(db, *, url: str, job_key: Optional[str], terminal: str,
         row.terminal = terminal
         if states:
             row.states = list(dict.fromkeys(states))
+        # A live row with no timestamps sorted into an undefined slot and contributed nothing to
+        # any windowed count. `started_at` is the first mini-step when the caller has one; the end
+        # is now by definition — this function runs at the terminal flag.
+        row.started_at = row.started_at or started_at
+        row.ended_at = ended_at or models.utcnow()
         db.flush()
         return key
     except Exception:  # noqa: BLE001 — never let bookkeeping break a recorded terminal

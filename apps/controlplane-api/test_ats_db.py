@@ -235,3 +235,81 @@ def test_record_flow_never_raises_into_the_terminal_it_describes():
                            terminal="submitted") is None
     # And a missing url is a no-op, not an exception.
     assert bf2.record_flow(None, url="", job_key="j", terminal="submitted") is None
+
+
+def _sqlite_db():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from models import Base
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)()
+
+
+def _corpus_dir(tmp_path):
+    """The `_rows()` corpus on disk, the way `read_corpus` finds it."""
+    import json
+    p = tmp_path / "transitions"
+    p.mkdir()
+    (p / "session_1.jsonl").write_text("\n".join(json.dumps(r) for r in _rows()) + "\n")
+    return str(p)
+
+
+def test_backfill_spares_the_live_flow_and_enriches_it_instead(tmp_path):
+    """The two write paths must not destroy each other. `record_flow` wrote the one row carrying a
+    job and an outcome, and the first backfill sweep deleted it and sat a `job_key=None,
+    terminal=None` row in its place (found 2026-08-20, one day after the live write shipped). Now
+    the sweep only reclaims rows it authored, and the corpus flow ENRICHES the live row — states
+    and verdict tallies onto the row that knows the job — rather than doubling the denominator."""
+    import ats_backfill as bf2, models
+
+    db = _sqlite_db()
+    live = bf2.record_flow(db, url="https://recruiting.paylocity.com/Recruiting/Jobs/Details/1/Alpha-Co",
+                           job_key="job_245bff3d331b2b37", terminal="submitted",
+                           session_id=1, platform="paylocity")
+    assert live == "paylocity:alpha-co"
+    db.commit()
+
+    out = bf2.backfill(db, directory=_corpus_dir(tmp_path), traces_dir=None)
+    assert out["written"] is True
+
+    rows = db.query(models.AtsFlow).filter_by(instance_key="paylocity:alpha-co").all()
+    assert len(rows) == 1, "the corpus flow must fold INTO the live row, not sit beside it"
+    row = rows[0]
+    assert row.terminal == "submitted" and row.job_key == "job_245bff3d331b2b37"
+    assert row.transitions == 2 and row.confirmed == 1 and row.mismatched == 1
+    assert "paylocity_job_posting" in (row.states or [])
+    # And the OTHER instance's flow still backfills as before.
+    beta = db.query(models.AtsFlow).filter_by(instance_key="paylocity:beta-co").one()
+    assert beta.terminal is None and beta.job_key is None
+
+    # Idempotent: a second run must not resurrect a duplicate or drop the outcome.
+    bf2.backfill(db, directory=str(tmp_path / "transitions"), traces_dir=None)
+    rows = db.query(models.AtsFlow).filter_by(instance_key="paylocity:alpha-co").all()
+    assert len(rows) == 1 and rows[0].terminal == "submitted"
+
+
+def test_record_flow_stamps_the_window_it_describes():
+    """A live row with no timestamps sorted into an undefined slot and contributed nothing to any
+    windowed count. The end is now by definition — the function runs at the terminal flag."""
+    import datetime as dt
+    import ats_backfill as bf2, models
+
+    db = _sqlite_db()
+    started = dt.datetime(2026, 8, 20, 10, 0, tzinfo=dt.timezone.utc)
+    bf2.record_flow(db, url="https://une.peopleadmin.com/postings/1", job_key="job_x",
+                    terminal="parked:account_wall", session_id=7, platform="peopleadmin",
+                    started_at=started)
+    row = db.query(models.AtsFlow).one()
+    assert row.started_at is not None
+    assert row.ended_at is not None, "the terminal flag IS the end of the flow"
+
+
+def test_backfill_names_a_missing_traces_dir_instead_of_a_clean_zero(tmp_path):
+    """Served from a worktree without the data-root env, the fold used to no-op with every number
+    at zero and `written: true` — a successful-looking answer meaning 'I looked nowhere'."""
+    import ats_backfill as bf2
+
+    out = bf2.backfill(None, directory=str(tmp_path / "empty"), dry_run=True,
+                       traces_dir=str(tmp_path / "definitely-not-there"))
+    assert out.get("traces_dir_missing") is True

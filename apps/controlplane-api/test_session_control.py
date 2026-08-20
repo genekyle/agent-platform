@@ -5969,3 +5969,77 @@ def test_the_stepper_is_placed_by_the_window_not_the_record():
     # No observation at all — the record is still the fallback, not a blank.
     blind = sc._apply_flow(step, None)
     assert blind["state"] == "workday_my_information"
+
+
+def test_apply_flag_records_the_live_url_and_the_canonical_key(monkeypatch):
+    """The flow ledger's two day-one poisons, pinned together (found 2026-08-20).
+
+    (1) `step.tab_url` was stamped from the RECORDED apply_tab hint — five lines below the 08-19
+    fix that re-observes live because that hint had already been fatally stale once. On the very
+    act being recorded the tab navigates (Apply/... -> Success/...), so the ledger's first live
+    row was seeded with the pre-submit URL. (2) `record_flow` got `step.job_id` — the ObservedJob
+    sighting id — while `applications.job_key` is canonical `job_<hash>`, so the join the row
+    exists for matched zero applications. Both facts must come from where they actually live:
+    the window NOW, and the sighting's `canonical_job_key`."""
+    import ats_backfill
+
+    bb = _with_queue(("indeed:a1", "Community Relations Database Analyst", "Gardner Museum"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply", "classify"):
+        q.steps[0].record(r_id, aps.OK)
+    q.steps[0].platform = "paylocity"
+    bb.world["apply_queue"] = q.as_dict()
+    # The hint: where the tab WAS when the record was written.
+    stale = "https://recruiting.paylocity.com/Recruiting/Jobs/Apply/4382310/x"
+    live = "https://recruiting.paylocity.com/Recruiting/Jobs/Success/4382310/x"
+    bb.world["apply_tab"] = {"tab_id": "t1", "url": stale, "title": "Apply"}
+
+    captured = {}
+    real_record_flow = ats_backfill.record_flow
+
+    def _spy(db, **kw):
+        captured.update(kw)
+        return real_record_flow(db, **kw)
+    monkeypatch.setattr(ats_backfill, "record_flow", _spy)
+
+    harness, _ = _install(
+        monkeypatch,
+        {"/list_tabs": {"ok": True, "tabs": [
+             {"tab_id": "t0", "url": SEARCH_URL, "title": "Indeed"},
+             {"tab_id": "t1", "url": live, "title": "Application Successful"}]},
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/close_tab": {"ok": True},
+         "/ax_scan": {"ok": True, "candidates": []}},
+        blackboard=bb)
+
+    # The sighting row carries the canonical key one column away — the fake DB must too.
+    class _SightingDB(_FakeDB):
+        def get(self, model, key):
+            if key == "indeed:a1":
+                row = type("_Row", (), {})()
+                row.title, row.company = "Community Relations Database Analyst", "Gardner Museum"
+                row.canonical_job_key = "job_245bff3d331b2b37"
+                row.application_status = None
+                row.applied_at = None
+                row.notes = None
+                row.url = ""
+                row.application_platform = None
+                return row
+            return super().get(model, key)
+
+    def _override_db():
+        yield _SightingDB()
+    main.app.dependency_overrides[get_db] = _override_db
+
+    try:
+        out = client.post("/api/session_control/1/apply_flag",
+                          json={"job_id": "indeed:a1", "flag": "submitted"}).json()
+    finally:
+        _teardown()
+
+    assert "Success" in captured["url"], (
+        f"the flow must be recorded against the LIVE url, got {captured.get('url')!r}")
+    assert captured["job_key"] == "job_245bff3d331b2b37", (
+        "the flow must carry the canonical job key, not the sighting id")
+    assert captured["started_at"] is not None, "the first mini-step dates the flow"
+    assert (out.get("last_step") or {}).get("terminal") != "now", "the flag must have landed"

@@ -208,6 +208,14 @@ async def _capture_post(path: str, payload: dict, timeout: float = 30.0) -> dict
         return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
 
 
+def _parse_iso(value: Any) -> Optional[datetime]:
+    """A stored ISO timestamp, or None — never a raise over a bookkeeping field."""
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _load(session_id: int, db: Session) -> tuple[TrainingSession, Any, cps.Ledger]:
     import apply_state_store as store
     session = db.get(TrainingSession, session_id)
@@ -7170,18 +7178,23 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     # THE EVIDENCE GATE. Only `submitted` is checked: every other flag records why we stopped,
     # and being wrong about "account wall" costs a re-visit, while being wrong about "submitted"
     # costs a job the operator never applied to and will never chase.
+    # OBSERVE FIRST, FOR EVERY FLAG. The recorded `apply_tab` is a hint and a treacherous one —
+    # `_apply_tab`'s own docstring says so, and it has now been fatally stale twice in the same
+    # ten lines: the verifier gate read the pre-submit URL and refused a real submission (fixed
+    # 08-19), and then `step.tab_url` was stamped from the same stale hint five lines below the
+    # fix — seeding `record_flow`, and through it the ats_flows join, with the URL the tab had
+    # already navigated away from (found 2026-08-20). One live observation serves the verifier,
+    # the record, and the cleanup crew below; an unreachable browser degrades to empty tabs
+    # (`_capture_post` never raises), and the hint is the stated fallback then.
+    obs = await _observe(_session_browser_url(session), bb, session_id=session.id)
+    live_tab = _apply_tab(bb, obs)
+
     detail = body.detail
     if body.flag == "submitted":
         import submission_verifier as _sv
-        # OBSERVE FIRST. The recorded `apply_tab` is a hint and a treacherous one — `_apply_tab`'s
-        # own docstring says so, and here it was fatally stale: the tab had navigated from
-        # /Jobs/Apply/... to /Jobs/Success/... on the very act we are recording, so the gate read
-        # the pre-submit URL and refused a real submission. The whole point of this check is to
-        # look at the window, so it has to look at the window NOW.
-        _obs = await _observe(_session_browser_url(session), bb, session_id=session.id)
         _tabs = [{"url": t.get("url", ""), "title": t.get("title", "")}
-                 for t in (_obs.get("tabs") or [])]
-        _live = _apply_tab(bb, _obs)
+                 for t in (obs.get("tabs") or [])]
+        _live = live_tab
         if _live.get("url"):
             _tabs.append({"url": _live.get("url", ""), "title": _live.get("title", "")})
         _verdict = _sv.verify_tabs(_tabs, platform=(step.platform or ""))
@@ -7197,9 +7210,9 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
                         f"{_verdict.evidence_line()}. Open the confirmation page and flag it "
                         f"again, or pass override_verifier=true to record it as UNVERIFIED."))
 
-    step.tab_url = (((bb.world or {}).get("apply_tab") or {}).get("url") or "")
+    step.tab_url = (live_tab.get("url")
+                    or ((bb.world or {}).get("apply_tab") or {}).get("url") or "")
     step.finish(body.flag, detail)
-
 
     # THE ATTEMPT IS OVER — take back an account row whose signup never happened. The account rung
     # writes the row on intent and it legitimately outlives a single crank (a filled form waiting on
@@ -7226,12 +7239,11 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
 
     # THE CLEANUP CREW RUNS ON EVERY TERMINAL, not just on success. An application abandoned at a
     # wall leaves exactly the same orphan tab as one that was submitted, and the next prospect has
-    # to start from a window that means something.
-    obs = await _observe(_session_browser_url(session), bb, session_id=session.id)
+    # to start from a window that means something. The observation from the top of this handler is
+    # still fresh — nothing between there and here touched the browser.
     # RECORD BEFORE CLOSE — the epilogue's own rule. A closed tab with no record is unrecoverable,
     # and the record is what the NEXT session gets to ask (applied_index).
-    _live_tab_url = _apply_tab(bb, obs).get("url", "")
-    recorded = _record_outcome(db, step, ats_url=_live_tab_url,
+    recorded = _record_outcome(db, step, ats_url=live_tab.get("url", ""),
                                search_id=(bb.world or {}).get("search_id"))
 
     # THE JOIN — job, terminal, session and the tab it ended on, written where all four are known.
@@ -7243,12 +7255,26 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     # a previous terminal popped `apply_tab` — a re-flag after a reopen writes nothing at all, which
     # is exactly what happened the first time this ran and is the same staleness `_apply_tab`'s own
     # docstring warns about. Same source `_record_outcome` uses, one line above, on purpose.
+    #
+    # And the key must be CANONICAL (2026-08-20, the other half of the same day's fix).
+    # `step.job_id` is the ObservedJob sighting id (`platform:external_id`);
+    # `applications.job_key` is `job_<hash>` — the first live row was written with the sighting id
+    # and joined to zero applications. The sighting row carries the canonical key one column away;
+    # the sighting id remains the fallback only until the canonical exists. `started_at` is the
+    # first mini-step; the end is stamped by `record_flow` itself, terminal-flag time by definition.
     import ats_backfill as _ats_backfill
+    _sighting = db.get(ObservedJob, step.job_id)
+    _started = next((_parse_iso(a) for a in
+                     (m.get("at") if isinstance(m, dict) else getattr(m, "at", None)
+                      for m in (step.minis or ())) if a), None)
     if _ats_backfill.record_flow(
-            db, url=_live_tab_url, job_key=step.job_id, terminal=body.flag,
+            db, url=live_tab.get("url", ""),
+            job_key=(getattr(_sighting, "canonical_job_key", None) or step.job_id),
+            terminal=body.flag,
             session_id=session.id, platform=(step.platform or ""),
             states=[m.get("rung") for m in (step.minis or ()) if isinstance(m, dict)
-                    and m.get("rung")]):
+                    and m.get("rung")],
+            started_at=_started):
         # COMMITTED HERE, EXPLICITLY. `record_flow` only flushes — it is a helper and must not
         # decide when a request's transaction ends. But this is the last write in the handler, and
         # `_record_outcome` above has already committed, so a flush with nothing after it is rolled
