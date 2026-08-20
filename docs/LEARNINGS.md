@@ -9428,3 +9428,55 @@ thereafter — the same shape as teacher corrections becoming labels.
 
 *Tests:* canonical certain in both directions, unmerged still warns, the Application row as second
 witness, and the flag-merge round-trip (idempotent).
+## 2026-08-20 (second) — the whole-system audit: the signals exist, the consumers were never attached
+
+Operator-directed step-back over the entire system (four parallel audits + line-level verification;
+the full inventory is `docs/ANALYSIS_system_gaps.md`). The one-sentence result: **we do not have a
+data-scarcity problem, we have four one-line read points that ignore the supervision the system
+already produces.** 146 of 356 transition rows are verdict=confirmed, and the witness trainer reads
+only `teacher_correction` (`perception/dataset.py:123`); 31 of 45 teacher parks cite the novelty
+axis — i.e. undertrained witnesses; 26 of 45 parks are ONE state whose compiled $0 program sat
+marked stale because `compile_all_from_journal` has never had an automatic caller (`mark_stale`
+does — staleness is a one-way door). The proven offline auto-labeler (`suggest_page_state`, plus
+`run_batch → verify_replay → promote_auto`) has no batch runner, while all 633 artifacts the corpus
+references are on disk.
+
+**FOUR OF OUR OWN RECORDED FACTS WERE FALSE, measured this session:** "zero golden state labels" —
+16 labeled edges exist (every teacher correction carries both states); "shadow 47% over 15" — 62.3%
+loose over 239 paired rows now; "Application.ats 6/22" — 13/22 (but analyses still read `jobs.ats`,
+6/569); "teacher inbox idle" — re-wired and healthy, 45 asks / 45 answers.
+
+**THREE BUGS CONFIRMED AT THE LINE, all in the write path of things we trust:**
+
+* `main_server.py:707` — the upload-failure gate has been dead since it was written: it tests
+  `result.action_id` (always the literal `"upload"`) for a prefix that only ever appears in
+  `result.extra["mode"]`, which is discarded. Every upload returns OK, including rejected ones —
+  the exact 2026-08-11 Workday incident the comment above the line cites. The endpoint's test
+  asserts on the driver, not the endpoint, so it passes.
+* `session_control.py:7167` — `apply_flag` stamps `step.tab_url` from the recorded `apply_tab`
+  hint five lines after the 08-19 fix that re-observes live BECAUSE that hint was stale; the stale
+  URL then seeds `record_flow`, poisoning `ats_flows` at its source. Same call passes
+  `job_key=step.job_id` (the `platform:external_id` sighting key), so `ats_flows ⋈ applications`
+  joins **zero rows**; the canonical key sits one column away (`observed_jobs.canonical_job_key`).
+* `ats_backfill.py:318-321` — the backfill deletes flows per-session unfiltered by provenance and
+  re-adds them `job_key=None, terminal=None`: the next `POST /api/ats/backfill` erases the one
+  live-written row carrying an outcome. Gap-1's fix destroys gap-2's.
+
+**AND THE INERT SUBMITTED BUTTON IS EXPLAINED** (open since 08-19): on a parked focus
+`cycle.application` is null, so the cockpit posts `job_id: undefined` — dropped by
+`JSON.stringify` → FastAPI 422 *before the handler* (nothing journals; "no request recorded" was
+literally true server-side) — and `api.js` cannot render list-shaped 422 detail, so the operator
+sees nothing. Second sighting of the shape `lifecycle.js:802-805` documents from 08-10. The
+unwrap() fix removes a blindfold from every cockpit call, not just this button.
+
+The pattern across all four audits is the same one this log has counted before, now with a sharper
+name: **built the producer, never attached the consumer.** Verify verdicts train nothing; the
+selection cache never hears verification (VERIFIER_FAILED is defined with no producer; a bad pick
+is served at confidence 1.0 forever); the supervisor is pure, free, and doesn't run per step (412
+of 427 journal rows have supervisor_class=None), so CERTIFIED — and therefore GREEN — is
+unreachable *by construction* for every transition in the system; `apply_requirements.blockers()`
+and the ats_brief are consulted by no decision point, so the RED takeovers they would have
+predicted all happened; the census reader deliberately `continue`s past "X is required" messages —
+the exact testimony the press-Next strategy exists to harvest. Also ~7,000 removable lines and a
+1.3 GB torch/transformers dependency serving the retired pixel-grounding era, and a capture server
+that advertises `/resolve_answer` at three call sites — an endpoint that does not exist.
