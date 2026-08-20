@@ -9359,3 +9359,36 @@ per-row control before this collects anything at the rate the operator was disli
 *The search that produced all this:* `report analyst` / Concord NH / 100mi ran to exhaustion —
 **4 pages**, 2 submitted (HopeWell via Indeed quick-apply, Isabella Stewart Gardner Museum via
 Paylocity), 1 parked at a PeopleAdmin account wall.
+## 2026-08-20 (fifth) — the LinkedIn catch-up: what already shared, and two fixes the audit shook out
+
+Operator: *"do some catch-up work first to make sure we can be on the same level with our indeed
+domain … use whatever we already have and share things that can be shared and then let's start a
+fresh session."* The audit's headline is that **the sharing mostly already exists, by design, and
+was proven on LinkedIn before it was asked for**: `applied_index` and `classify_ats` take no engine
+parameter (the 08-17 run recognised 20 of 25 LinkedIn results from Indeed drives, across three
+ATSs); the dialect store is keyed on PLATFORM with catch-alls narrowed to HOST; `ats_brief`,
+`record_flow` and the requirements axis key on URL/ATS and never ask which engine; the checkpoint
+ladder ran engine-parameterised in #29 (`radius_set` honestly "not applicable on LinkedIn"); and
+the duplicates merge — the durable end of `abandoned:already_applied` — has endpoints AND a
+cockpit section already. What stays measurement-gated stays gated: `EASY_APPLY` is UNVERIFIED,
+`linkedin` is not in `DRIVEN_PLATFORMS`, and an Easy Apply modal will read through the generic-ATS
+kind join until a live drive measures it.
+
+**THE 08-17 GAP IS CLOSED: `how_did_you_hear` FOLLOWS THE JOB REF.** `_identity_defaults` hardcoded
+`"Indeed"` — named wrong by the LinkedIn run, fixed today by resolving through `apply_source` from
+the OPEN application's job ref (`linkedin:…` → "LinkedIn"), the same table `use_source` already
+reads. No job in hand resolves to **"Other"** — a truthful answer for an application we cannot
+place, never another engine's name. `_fill_plan_for` passes the queue's current step, so the bunch
+fill and the prompt driver now answer this question from the same place.
+
+**AND A GUARD THAT CRASHED ITSELF: `logger.exception` WITH NO `logger`.** The 08-20 "it logs now"
+lesson added logging to `_ats_brief_for_view`'s except-block — in a module that never defines
+`logger`. The NameError rode out of the one handler whose docstring promises *"a hint must never
+take the cockpit down"*, and **82 session_control tests failed** the moment `ats_brief` raised in
+the worktree env; the live view carried the same risk on any brief failure. A fix added to an
+exception path runs only when the exception fires — it was "tested" by a suite whose environment
+happened never to throw there. Fixed to `logging.getLogger(__name__)`, the idiom `record_flow`
+itself uses.
+
+*Tests:* the four touched suites (session_control, form_fill, apply_source, ats_db) — **316
+passed**, from the worktree with import provenance verified.
