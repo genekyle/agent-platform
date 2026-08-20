@@ -703,14 +703,19 @@ async def execute_action(body: ExecuteRequest):
                detail=(f"{'ok' if result.ok else 'FAIL'} · {body.tab_url or ''}"), domain=body.tab_url)
     # An upload that the NODE did not accept is `not_staged`, not ok. The driver confirms from
     # `files.length` and says so in its mode; collapsing that into OK is how a required upload
-    # read as done over a page still demanding the file (live 2026-08-11, Workday).
-    _mode = str(result.action_id or "")
-    _upload_failed = _mode.startswith("upload:not_staged")
+    # read as done over a page still demanding the file (live 2026-08-11, Workday). The verdict
+    # rides in `extra["mode"]` (driver.py:496) — `action_id` echoes the request and is always the
+    # bare word "upload", which is why the original check here never fired (dead 08-11..08-20).
+    _mode = str((result.extra or {}).get("mode") or "")
+    _upload_failed = _mode.startswith(("upload:not_staged", "upload:rejected"))
     return {
         # A driver ok=False got here by catching an exception (driver.py:245), so it is a
         # mechanism failure — ERROR, not a protocol outcome.
         "outcome": (Outcome.NOT_STAGED if _upload_failed
                     else Outcome.OK if result.ok else Outcome.ERROR),
+        # The driver's own account of HOW it acted (element vs coordinate, upload verdicts).
+        # Surfaced because a failure reason that dies in a local variable cannot be journaled.
+        "mode": _mode or None,
         "addressed_by": addressed_by, "target": _tgt or None,
         # WHICH QUESTION THIS ACT ANSWERED, as the page names it — reported whether or not the
         # caller asserted an expectation, because a correlation nobody recorded is a correlation
@@ -721,7 +726,10 @@ async def execute_action(body: ExecuteRequest):
         # this the corpus cannot tell a rehearsal from a performance — the event log can't.
         "executed": result.driver != "record_only",
         "driver": result.driver, "action_id": result.action_id, "css_point": result.css_point,
-        "detail": (note + ("; " if note and result.detail else "") + result.detail),
+        # A failed upload's reason lives only in the mode — put it in `detail` so the JOURNAL
+        # row carries it too, not just the HTTP caller (the corpus is the point).
+        "detail": (note + ("; " if note and (result.detail or _upload_failed) else "")
+                   + (result.detail or ("" if not _upload_failed else _mode))),
     }
 
 
