@@ -9221,3 +9221,48 @@ the registry's promise and is known independently of whether we have been there;
 appends to every headline. This is the answer the UNE drive needed on 08-19 and could not ask for.
 
 *Tests:* ats_db **16**, and 56 across the touched suites; session_control **262**.
+
+## 2026-08-20 (later) — the write that flushed into nothing, and a queue labelled by the wrong page
+
+**GAP #2 CLOSED, AND BOTH ITS BUGS CAME FROM RUNNING IT, NOT FROM TESTING IT.** `record_flow()`
+writes the job↔ATS join at `apply_flag`, the one moment the job, the terminal, the session and the
+tab are all in hand. Nineteen tests passed and the first live call wrote **nothing**, twice, for two
+different reasons:
+
+1. **It read `step.tab_url`** — the recorded hint — which is empty whenever a previous terminal
+   popped `apply_tab`. A re-flag after a reopen therefore had no URL at all. `_apply_tab`'s own
+   docstring warns the record "is only a hint, and a treacherous one"; the same staleness that broke
+   the submission verifier's first gate on 08-19, in a new place. Now reads the LIVE tab, from the
+   same call `_record_outcome` uses one line above.
+2. **It only flushed.** `_record_outcome` has already committed by that point, so a flush with
+   nothing after it is rolled back at request teardown — while the identical call succeeded when
+   driven directly against a session, which is exactly what made it baffling. Committed explicitly
+   at the call site, where it is visible, rather than inside a helper that has no business deciding
+   when a request's transaction ends.
+
+*And the first version of its `except Exception` returned `None` silently for a whole test run while
+an `AttributeError` fired inside.* **A silent no-op is the worst shape a best-effort write can take**
+— nothing downstream can tell "nothing to do" from "broken". It logs now.
+
+**THE FALSE ZERO, FIXED.** The brief reported `submitted_flows: 0` for a vendor driven nine times,
+which reads as *"entered nine times, never finished"* and meant *"we do not record outcomes"*. That
+is silence presenting as absence, on the one surface a drive reads before committing. `None` when
+nothing is recorded, `outcomes_recorded` and `finish_rate` beside it, and three distinct headlines —
+*outcomes not recorded* / *none of 2 finished* / *1 of 2 submitted*. Verified live end to end:
+
+    PeopleAdmin: 2 flow(s) through THIS employer's tenant, none of 1 finished.
+    Expect an account wall — it will stop for you.
+
+**AND A NEW ONE, FOUND BY DOING THE RUN: THE APPLY QUEUE IS LABELLED BY THE CURRENT PAGE, NOT THE
+PAGE ITS PICKS CAME FROM.** After paging forward, `queue.page` stayed **1** while `progress.page`
+read **2**, and the cockpit rendered page 1's three finished steps under a "Page 2 · 3/3 done"
+chip. Because one of them is parked, the panel stays focused on it and **the page-2 picker is
+unreachable from the UI** — the same "no route to the next page" symptom seen earlier, now with a
+cause. Read through the ladder's own `review_page` crank instead. The fix is for the queue to carry
+the page its picks were made on and for the view to render an empty queue when the operator has
+moved on; not attempted here.
+
+*The run:* page 2 read — **15 results, 12 new, 3 already seen**. Notable for triage rather than for
+the system: **7 of 15 are BCBA / behavior-analyst clinical roles**, so Indeed's loose match on
+"analyst" degrades sharply between page 1 (5 of 15) and page 2. Worth remembering that a query's
+useful depth on this engine is roughly one page.
