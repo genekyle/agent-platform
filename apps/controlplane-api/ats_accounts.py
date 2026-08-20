@@ -201,7 +201,13 @@ def next_account_action(company: str, ats_id: str) -> dict[str, Any]:
     # operator's handoff card. iCIMS says "Submit Profile" (it creates the account and commits step
     # 1 of the application at once) and "Log back in!"; the Workday-flavoured pair is the default
     # only because it is the most common, not because it is generic.
-    buttons = {"icims": ("Submit Profile", "Log back in!")}
+    buttons = {"icims": ("Submit Profile", "Log back in!"),
+               # PowerSchool's Auth0 login is identifier-first, so BOTH legs open on an email box
+               # and a "Continue" — there is no "Create Account" control anywhere on the screen the
+               # operator is being sent to. The card is an instruction, and one that names a button
+               # the page does not have reads as "the button is missing" rather than "the label is
+               # wrong", which is the more expensive way round to be mistaken.
+               "schoolspring": ("Continue", "Continue")}
     create_button, signin_button = buttons.get(ats_id, ("Create Account", "Sign In"))
     return {
         "company": company,
