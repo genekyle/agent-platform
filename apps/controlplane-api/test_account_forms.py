@@ -115,3 +115,61 @@ def test_the_program_matches_what_the_driver_actually_does(leg):
                                              "click", "click", "click"])
         assert [s["params"]["field"] for s in steps][-3:] == ["terms", "terms_accept",
                                                               "create_account_submit"]
+
+
+# --- PAGED FORMS ---------------------------------------------------------------------------
+# PowerSchool's Auth0 login is identifier-first, so `schoolspring` is the first leg whose form
+# cannot be described as one screen. These pin the two properties that make a paged spec safe to
+# drive: every page must be FINDABLE before it is filled, and no page may imply an account exists.
+
+def test_a_flat_form_is_a_one_page_form_so_readers_need_not_branch():
+    """`pages_of` is the unification. If a flat form did not answer it, every caller would carry
+    an `if "pages" in form` and the ones that forgot would silently skip paged ATSs."""
+    flat = account_forms.pages_of("workday", "create_account")
+    assert len(flat) == 1
+    assert flat[0] is account_forms.form_for("workday", "create_account")
+    assert [p["id"] for p in account_forms.pages_of("schoolspring", "create_account")] \
+        == ["identifier"]
+
+
+def test_every_page_of_every_paged_leg_can_be_recognised_before_it_is_filled():
+    """`present` is how the driver decides WHICH page it is looking at, and it resolves it through
+    `apply_fields` at act time. A page missing it — or naming a field nobody mapped — raises
+    mid-drive, after the leg has already been entered."""
+    for leg, by_ats in account_forms.ACCOUNT_FORMS.items():
+        for ats, form in by_ats.items():
+            if not form.get("pages"):
+                continue
+            for page in form["pages"]:
+                assert page.get("present"), f"{ats}/{leg}: a page with no `present`"
+                apply_fields.resolve(ats, page["present"])      # raises if unmapped
+                assert page.get("id"), f"{ats}/{leg}: a page with no id is unnameable in a report"
+
+
+def test_an_identifier_screen_never_claims_the_account_was_created():
+    """THE safety property of the paged shape, pinned in the data rather than in the driver.
+
+    `apply_account` calls `mark_created` on a submitted form. PowerSchool's Continue takes an email
+    address and nothing else — marking it would leave a row claiming a login the ATS has never
+    heard of, make the sign-in leg due forever, and turn every later rejection into what reads as a
+    bad password. Only a page that says `completes_leg` may end the leg, and no mapped page of
+    schoolspring says it, because nobody has seen the screen that would.
+    """
+    for leg in ("create_account", "sign_in"):
+        pages = account_forms.pages_of("schoolspring", leg)
+        assert not any(p.get("completes_leg") for p in pages), \
+            "a schoolspring page claims to finish the leg; no such screen has been measured"
+
+
+def test_the_two_schoolspring_legs_cross_toward_opposite_screens():
+    """Apply always lands on the LOGIN identifier and the two screens carry identical controls, so
+    the leg is told only by its cross-link. If both legs toggled the same way one of them would
+    drive the wrong screen — and on the create leg that means asking PowerSchool to sign in an
+    account that does not exist yet."""
+    create = account_forms.pages_of("schoolspring", "create_account")[0]
+    sign_in = account_forms.pages_of("schoolspring", "sign_in")[0]
+    assert create["toggle"] == ("signup_link", "login_link")
+    assert sign_in["toggle"] == ("login_link", "signup_link")
+    # And the proof of arrival is never the control we pressed to get there.
+    for page in (create, sign_in):
+        assert page["toggle"][0] != page["toggle"][1]

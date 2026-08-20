@@ -696,6 +696,46 @@ BRASSRING_FIELDS: dict[str, dict[str, Any]] = {
 }
 
 
+# --- SCHOOLSPRING (PowerSchool) -----------------------------------------------------
+# Measured live 2026-08-20 on the Boston Public Schools posting. SchoolSpring does not own its
+# identity: "Apply for this job!" lands on `auth.powerschool.com/u/login/identifier`, an Auth0
+# universal login shared with the rest of PowerSchool.
+#
+# IDENTIFIER-FIRST, AND THAT IS THE WHOLE REASON THIS ATS NEEDED A NEW FORM SHAPE. Both legs open
+# on one box and one button: sign-in is "Enter your email address to log in", sign-up is "Create
+# Your Account — Sign Up to PowerSchool to continue to SchoolSpring". The password screen does not
+# exist until Continue is pressed, so a flat form spec here would describe a page that is never on
+# screen. See `account_forms.ACCOUNT_FORMS["create_account"]["schoolspring"]["pages"]`.
+#
+# ONE `email` AND ONE `identifier_continue` SERVE BOTH LEGS, because it is genuinely one widget:
+# the two legs differ by URL, not by control. Splitting them per leg would assert a difference the
+# page does not have.
+SCHOOLSPRING_FIELDS: dict[str, dict[str, Any]] = {
+    "email": _f(ats="schoolspring", role="textbox", name="Email address",
+                widget_type=WidgetType.TEXT, answer_key="email",
+                note="the only field on either leg's first screen; Auth0 identifier-first"),
+    "identifier_continue": _f(ats="schoolspring", role="button", name="Continue",
+                              widget_type=WidgetType.UNKNOWN,
+                              note="advances the identifier screen; the password screen is served "
+                                   "only after this and has not been measured yet"),
+    # THE TWO LEGS ARE ONE SCREEN APART AND LOOK IDENTICAL. Apply always lands on the LOGIN
+    # identifier; the signup identifier is one link away and carries the same "Email address" box
+    # and the same "Continue". So the leg cannot be told from its controls — only from these two
+    # cross-links, each of which appears on exactly one of the pair. Without them the create leg
+    # would type the address into the LOGIN form and press Continue, asking PowerSchool to sign in
+    # an account that does not exist yet — the Workday `sign_in_toggle` failure with the legs
+    # reversed (see WORKDAY_FIELDS).
+    "signup_link": _f(ats="schoolspring", role="link", name="Sign up",
+                      widget_type=WidgetType.UNKNOWN,
+                      note="on the LOGIN identifier only — 'Don't have an account? Sign up'. NOT "
+                           "the banner's 'Sign in as an employer'"),
+    "login_link": _f(ats="schoolspring", role="link", name="Log in",
+                     widget_type=WidgetType.UNKNOWN,
+                     note="on the SIGNUP identifier only — 'Already have an account? Log in'. Its "
+                          "presence is what proves we are on the create leg's screen"),
+}
+
+
 _BY_ATS: dict[str, dict[str, dict[str, Any]]] = {
     "brassring": BRASSRING_FIELDS,
     "greenhouse": GREENHOUSE_FIELDS,
@@ -703,6 +743,7 @@ _BY_ATS: dict[str, dict[str, dict[str, Any]]] = {
     "indeed": INDEED_FIELDS,
     "icims": ICIMS_FIELDS,
     "successfactors": SUCCESSFACTORS_FIELDS,
+    "schoolspring": SCHOOLSPRING_FIELDS,
 }
 
 

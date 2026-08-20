@@ -9534,6 +9534,7 @@ endpoint and the superseded `runtime/` loop), so wiring eviction there polishes 
 it becomes worth doing the day the cascade joins the live loop. The promotion-gate split
 (shadow-agreement doc vs maturity code) is recorded in CONTROLLER_PROMOTION.md pending an
 operator decision.
+
 ## 2026-08-20 (seventh) — head-on at the SchoolSpring wall: the modal that ate the click, and the wall behind the wall
 
 Operator, reopening the BPS pick this session: *"we were mistakenly parked … we thought it was too

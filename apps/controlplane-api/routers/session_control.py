@@ -3316,6 +3316,62 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
                           f"{', '.join(sorted(by_ats)) or 'none'}). Scan the form and add it to "
                           f"apply_fields + _ACCOUNT_FORMS — do not drive it blind."}
 
+    # A PAGED FORM IS DRIVEN ONE PAGE PER CALL, and WHICH page is decided by looking at the screen.
+    #
+    # PowerSchool's Auth0 login is identifier-first: an email box and a Continue, with the password
+    # screen served only afterwards. There is no moment at which both are fillable, so the flat
+    # "fill everything, submit once" body below cannot express the leg — it would hunt for a
+    # password box on a page that has none and report a moved field.
+    #
+    # The page is chosen by MEASUREMENT and never by a counter, for the same reason the Workday
+    # toggle is: a counter is a claim about how far a previous call got, and it survives a refresh,
+    # a back button and an abandoned attempt, every one of which puts the browser back on page 1
+    # while the counter says 2. `present` names the field whose presence identifies a page.
+    #
+    # No page matching is a STOP, with a scan of what is actually there — the same refusal an
+    # unmapped ATS gets. The alternative is guessing, and the guess here types a password into
+    # whichever box happens to be first.
+    # DOES FINISHING THIS PAGE FINISH THE LEG? For a flat form, yes by construction — its submit IS
+    # the account. For a paged one it is only true of a page that says so, and the default is the
+    # safe answer: PowerSchool's Continue advances an email screen, and a caller that read it as
+    # "account created" would call `mark_created` on a login that does not exist, which is the
+    # failure this file already calls worse than an outright error.
+    leg_complete = True
+    page_id, page_no, pages_total = "", 0, 0
+    if form.get("pages"):
+        pages = tuple(form["pages"])
+        pages_total = len(pages)
+        picked: Optional[tuple[int, dict]] = None
+        for i, page in enumerate(pages):
+            probe = apply_fields.addressing_for(ats, page.get("present") or "")
+            seen = await _capture_post("/locate", {"browser_url": browser_url, "tab_id": tab_id,
+                                                   "css": probe.get("selector") or "",
+                                                   "text": probe.get("name") or ""})
+            # EXPLICIT presence only. A missing `found` is "we did not look", and treating it as a
+            # match would drive this page's fills into an unknown screen.
+            if seen.get("ok") and seen.get("found") is True:
+                picked = (i, page)
+                break
+        if picked is None:
+            scan = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                       timeout=20.0)
+            on_screen = ", ".join(sorted({f"{c.get('role')} {c.get('name')!r}"
+                                          for c in (scan.get("candidates") or [])
+                                          if c.get("name") and c.get("role") in
+                                          ("textbox", "button", "checkbox", "combobox")})[:12])
+            return {"ok": False, "reason": "unmapped_page", "staged": staged,
+                    "pages_total": pages_total,
+                    "detail": f"{ats}'s {leg} form is paged and none of its mapped pages "
+                              f"({', '.join(p.get('id') or '?' for p in pages)}) is on screen. "
+                              f"Nothing was typed. What IS on screen: "
+                              f"{on_screen or '(no named controls)'}. Add this page to "
+                              f"_ACCOUNT_FORMS + apply_fields before driving it."}
+        page_no, page = picked[0] + 1, picked[1]
+        page_id = page.get("id") or f"page {page_no}"
+        leg_complete = bool(page.get("completes_leg"))
+        # The page's keys stand in for the form's, so everything below runs unchanged.
+        form = {**form, **page}
+
     # Does the password we are about to type satisfy the rules this ATS states? Checked BEFORE a
     # keystroke, and only on the CREATE leg — on sign-in the password is whatever the account was
     # made with, and refusing to type it because a policy has since been read differently would
@@ -3581,9 +3637,13 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
 
     submit_addr = apply_fields.addressing_for(ats, form["submit"])
     button = submit_addr["name"] or submit_addr["selector"]
+    page_note = f" (page {page_no} of {pages_total}, {page_id!r})" if pages_total else ""
     if not submit:
         return {"ok": True, "submitted": False, "button": button, "staged": staged,
-                "detail": f"Filled the create-account form. Confirm to click {button!r}."}
+                "page_id": page_id, "page_no": page_no, "pages_total": pages_total,
+                "leg_complete": leg_complete,
+                "detail": f"Filled the create-account form{page_note}. Confirm to click "
+                          f"{button!r}."}
 
     click_payload = {"browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
                      "target_bbox": {}, "driver": "humanized",
@@ -3653,7 +3713,13 @@ async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
 
     return {"ok": True, "submitted": True, "button": button, "staged": staged,
             "cleared": cleared,
-            "detail": f"Submitted the {leg.replace('_', ' ')} form ({button!r}) and it was taken."
+            "page_id": page_id, "page_no": page_no, "pages_total": pages_total,
+            "leg_complete": leg_complete,
+            "detail": (f"Submitted the {leg.replace('_', ' ')} form ({button!r}) and it was taken."
+                       if leg_complete else
+                       f"Advanced the {leg.replace('_', ' ')} form past {page_id!r} ({button!r} "
+                       f"was taken). This leg is not finished — the next screen decides what "
+                       f"comes next.")
                       + (f" Cleared on the way through: {', '.join(cleared)}." if cleared else "")}
 
 
@@ -3946,6 +4012,34 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                "detail": f"Filled the {action.get('leg')} form with your stored "
                                          f"credentials. Review it in the window, then confirm to "
                                          f"click {drive.get('button') or action.get('button')!r}."})
+
+        # ONE PAGE DOWN, LEG NOT DONE. A paged form's early submit advanced a screen; it did not
+        # make an account. Everything below this — storing the credential, `mark_created`, clearing
+        # the handoff — is a claim that a login now EXISTS on the ATS, and PowerSchool's Continue
+        # has only taken an email address. Marking it here would make the sign-in leg due forever
+        # against an account nobody created, and every later rejection would read as a bad password.
+        #
+        # So it stops and hands back, exactly as the fill-only path does: the step stays open, the
+        # handoff stays up, and the next press drives whatever screen is now on display. That is
+        # also the only honest thing to do about a page we have never seen — the drive cannot know
+        # what page 2 wants until it is looking at it.
+        if not drive.get("leg_complete", True):
+            _seen = f"{drive.get('page_no')} of {drive.get('pages_total')}"
+            step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
+                        f"{action.get('leg')} leg: advanced past "
+                        f"{drive.get('page_id') or 'a page'} ({_seen}) — the leg is not finished",
+                        initiator=body.initiator,
+                        # The credential is not in the page any more (the screen moved on), but the
+                        # signup is a transaction in flight and a reload restarts it.
+                        staged=True)
+            _save_queue(bb, queue); _persist(bb, ledger)
+            obs2 = await _observe(browser_url, bb, session_id=session.id)
+            return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
+                         awaiting="operator_account",
+                         last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                               "verification": _report.verification(),
+                               "detail": f"{drive.get('detail')} No account exists yet — press "
+                                         f"again to drive the next screen."})
 
         # Submitted. Did it land — or is there an email/2FA verification wall (a real gate)?
         after = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},

@@ -122,11 +122,57 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
             "confirms": (("terms", "terms_accept", "Data privacy statement has been accepted."),),
             "submit": "create_account_submit",
         },
+        # THE FIRST PAGED FORM, and the shape exists because a flat one would describe a screen
+        # that is never on display. PowerSchool's Auth0 login is IDENTIFIER-FIRST: one box, one
+        # Continue, and the password screen does not exist until Continue is pressed. A spec that
+        # listed email AND password would send the driver looking for a password box on a page
+        # that has none, and report it as a moved field.
+        #
+        # A PAGE IS CHOSEN BY MEASUREMENT, NEVER BY A COUNTER. `present` names the field whose
+        # presence identifies this page. A counter would be a claim about how far a previous call
+        # got, and it survives a refresh, a back button and an abandoned attempt — all three of
+        # which put the browser back on page 1 while the counter says 2.
+        #
+        # ONLY PAGE 1 IS MAPPED, DELIBERATELY. Page 2 is behind the identifier and nobody has seen
+        # it. An unmatched page stops the drive with `unmapped_page` and a scan of what IS there,
+        # which is the same refusal an unmapped ATS gets — better than a guess that types a
+        # password into whatever box happens to be first.
+        "schoolspring": {
+            "pages": (
+                {
+                    "id": "identifier",
+                    "present": "email",
+                    # Apply lands on the LOGIN identifier, so the create leg has to cross over
+                    # first. Same conditional-on-a-measurement contract as Workday's toggle: the
+                    # link that only the DESTINATION page carries is the proof we are already
+                    # there, so a page that needs no crossing is never touched. Per-PAGE and not
+                    # per-form on purpose — page 2 has no such links, and a form-level toggle
+                    # would fire there and walk the drive back out of the flow.
+                    "toggle": ("signup_link", "login_link"),
+                    "fields": (("email", "username"),),
+                    "submit": "identifier_continue",
+                },
+            ),
+        },
     },
     "sign_in": {
         "brassring": {
             "fields": (("sign_in_username", "username"), ("sign_in_password", "password")),
             "submit": "sign_in_submit",
+        },
+        # The create leg's mirror: same two screens, and the crossing runs the other way because
+        # Apply already lands here. `login_link` is absent on the login page, so the toggle fires
+        # only when a previous press left us on the signup side.
+        "schoolspring": {
+            "pages": (
+                {
+                    "id": "identifier",
+                    "present": "email",
+                    "toggle": ("login_link", "signup_link"),
+                    "fields": (("email", "username"),),
+                    "submit": "identifier_continue",
+                },
+            ),
         },
         "workday": {
             # THE FORM HAS TO BE ON SCREEN BEFORE IT CAN BE FILLED. Workday serves Create Account
@@ -175,6 +221,20 @@ def known_ats(leg: str) -> list[str]:
     return sorted(ACCOUNT_FORMS.get((leg or "").strip().lower()) or {})
 
 
+def pages_of(ats: str, leg: str) -> tuple[dict[str, Any], ...]:
+    """This leg's pages, in order — one entry for a flat form.
+
+    Flat and paged forms are the same thing at different lengths, so callers that walk pages need
+    not branch on which kind they got. A flat form is a one-page form whose page happens to be the
+    whole spec; saying that here keeps the special case in one function instead of at every reader.
+    """
+    form = form_for(ats, leg)
+    if form is None:
+        return ()
+    pages = form.get("pages")
+    return tuple(pages) if pages else (form,)
+
+
 def program_steps(ats: str, leg: str) -> list[dict[str, Any]]:
     """The form as an ordered intent sequence, in the order the driver performs it.
 
@@ -182,10 +242,20 @@ def program_steps(ats: str, leg: str) -> list[dict[str, Any]]:
     the country is chosen, and a refusal has to land before the submit or it refuses nothing. So
     this mirrors `_drive_account_form`'s sequence exactly — fills, selects, refusals, confirms,
     submit — and `test_account_forms` asserts the two stay in step.
+
+    A PAGED FORM RENDERS EVERY PAGE, back to back. The driver walks one page per call, but the
+    PROGRAM is the whole leg: a program that stopped at the identifier would describe a login that
+    never reaches a password, and rung 0 would replay it as if that were the finished job.
     """
-    form = form_for(ats, leg)
-    if form is None:
-        return []
+    steps: list[dict[str, Any]] = []
+    for page in pages_of(ats, leg):
+        steps.extend(_page_steps(page))
+    return steps
+
+
+def _page_steps(form: dict[str, Any]) -> list[dict[str, Any]]:
+    """One page's steps. `form` is a flat spec or one entry of a `pages` tuple — the same keys
+    either way, which is what lets the driver run a page through its existing body unchanged."""
     steps: list[dict[str, Any]] = []
     toggle = form.get("toggle")
     if toggle:
