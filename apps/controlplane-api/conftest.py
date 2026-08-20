@@ -71,3 +71,25 @@ def _isolate_observer_artifacts():
                 os.environ.pop("OBSERVER_ARTIFACTS_DIR", None)
             else:
                 os.environ["OBSERVER_ARTIFACTS_DIR"] = previous_env
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_controller_programs():
+    """The same protection for the rung-0 PROGRAM store — learned the hard way a third time
+    (2026-08-20). `recompile_from_new_evidence` gave programs an automatic writer reachable from
+    background tasks (train-on-label, end of a controller run), and the first full-suite run
+    compiled the session-shared fixture journal into the REAL `programs/` dir — including
+    overwriting the live `indeed_apply_questions` program with guard_fields stripped. Exactly the
+    module docstring's warning: a new append-only writer inherits nothing from this file and must
+    be routed here by hand.
+    """
+    previous = os.environ.get("CONTROLLER_PROGRAMS_DIR")
+    with tempfile.TemporaryDirectory(prefix="controller-programs-test-") as tmp:
+        os.environ["CONTROLLER_PROGRAMS_DIR"] = tmp
+        try:
+            yield tmp
+        finally:
+            if previous is None:
+                os.environ.pop("CONTROLLER_PROGRAMS_DIR", None)
+            else:
+                os.environ["CONTROLLER_PROGRAMS_DIR"] = previous

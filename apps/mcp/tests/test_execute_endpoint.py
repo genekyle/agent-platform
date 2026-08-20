@@ -17,8 +17,10 @@ from app.executor.driver import ExecResult
 
 @pytest.fixture()
 def journal_dir(tmp_path, monkeypatch):
-    # The @journaled wrapper writes the intent journal; keep it out of the real corpus.
+    # The @journaled wrapper writes the intent journal, and the endpoint's _log_event writes the
+    # event log; keep both out of the real corpus.
     monkeypatch.setenv("INTERACTION_ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MCP_OUTPUT_DIR", str(tmp_path))
     return tmp_path
 
 
