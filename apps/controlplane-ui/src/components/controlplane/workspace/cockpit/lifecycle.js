@@ -488,7 +488,39 @@ function executeFocus(p, step, nextAction) {
       ...(nextAction?.secondary ? [actionFrom(nextAction.secondary,
         { demoted: nextAction.secondary.demoted_because })] : []),
       realign,
+      stopThisApplication(step),
     ].filter(Boolean) };
+}
+
+/**
+ * THE SAFE WAY OUT OF AN APPLICATION THAT IS ALREADY UNDER WAY.
+ *
+ * Every other exit in `TERMINAL_CHOICES` is a judgement about the JOB — not a fit, job gone,
+ * account wall, assessment. None of them is a judgement about the ATTEMPT, and until now the only
+ * way to stop a half-driven form was to pick one of those and lie to the decision ledger about
+ * why. That ledger is the thing being trained, so a mis-flagged abort teaches the wrong lesson
+ * twice: once about the employer, once about the platform.
+ *
+ * `parked:operator` is the honest flag for it — "your call, not now" — and the backend already
+ * treats parked as resumable and leaves staged work alone (`leaves_work_open`). What was missing
+ * was a PRESS: it sat eighth in a nine-item disclosure headed "End this application another way",
+ * which is not where anyone looks when a drive has gone sideways and they want out.
+ *
+ * Operator, 2026-08-20: "you need to build a way in the cockpit if we want to abort an in-progress
+ * application we can safely do that." So it stands beside the primary, it says what it costs, and
+ * it keeps the application on the ledger.
+ */
+function stopThisApplication(step) {
+  if (!step || step.done) return null;
+  return {
+    label: "Stop this application",
+    endpoint: "/apply_flag",
+    body: { job_id: step.job_id, flag: "parked:operator",
+            detail: "stopped by the operator from the cockpit" },
+    why: "Ends this attempt and hands the page back. It stays on the ledger and stays resumable — "
+       + "nothing typed is discarded and nothing is sent. Use this rather than 'Not a fit', which "
+       + "records a judgement about the JOB you may not mean.",
+  };
 }
 
 function endFocus(qs) {
@@ -656,9 +688,25 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   // application held the tab open (2026-08-10). Waiting-on-you outranks "pick more".
   const parkedStep = currentStep ? null
     : [...steps].reverse().find((s) => (s.terminal || "").startsWith("parked")) || null;
-  const attentionStep = currentStep || parkedStep;
   const atLine = !!p.progress?.at_start_line;
   const page = p.page ?? 1;
+
+  // A QUEUE BELONGS TO THE PAGE ITS PICKS WERE MADE ON, AND THE SESSION CAN LEAVE THAT PAGE.
+  //
+  // `queue.page` is stamped when the picks are made; `p.page` is where the search is NOW. When the
+  // operator pages forward, the old queue is history — but every step in it is still readable, so
+  // the parked-step rule above kept handing the focus to an application from a page nobody is on.
+  // Measured 2026-08-20: after paging to 2, the cockpit rendered page 1's three finished steps
+  // under a "Page 2 · 3/3 done" chip, held focus on the parked one, and offered NO route to read
+  // page 2 at all. The operator had moved on and the screen had not.
+  //
+  // An UNFINISHED step still outranks the page — a live application holds the tab open wherever
+  // the results went, which is the same exception `resultsGone` makes below. Only the parked
+  // (already-terminal) case is demoted, because "waiting on you" stops being true once you have
+  // walked to another page.
+  const queuePage = p.queue?.page;
+  const queueIsStale = queuePage != null && queuePage !== page;
+  const attentionStep = currentStep || (queueIsStale ? null : parkedStep);
 
   const blocker = p.awaiting && BLOCKERS[p.awaiting]
     ? { ...BLOCKERS[p.awaiting], awaiting: p.awaiting }

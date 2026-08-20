@@ -9266,3 +9266,49 @@ moved on; not attempted here.
 the system: **7 of 15 are BCBA / behavior-analyst clinical roles**, so Indeed's loose match on
 "analyst" degrades sharply between page 1 (5 of 15) and page 2. Worth remembering that a query's
 useful depth on this engine is roughly one page.
+
+## 2026-08-20 (third) — the screen stopped following the work, and there was no safe way out
+
+**TWO COCKPIT GAPS, ONE CAUSE: THE SCREEN HAD NO WAY TO NOTICE THE OPERATOR HAD MOVED ON.**
+Operator: *"you need to build a way in the cockpit if we want to abort an in-progress application we
+can safely do that and our ui follows us and understands what we're doing and should be able to read
+that we closed the session or completed it so go back to the search for the next page."*
+
+**A QUEUE BELONGS TO THE PAGE ITS PICKS WERE MADE ON.** `queue.page` is stamped at pick time;
+`p.page` is where the search is now. `deriveCockpit`'s parked-step rule — *"a parked application is
+attention, not history"*, correct and hard-won on 08-10 — had no idea a page could be left behind,
+so after paging forward it kept handing the focus to an application from a page nobody was on.
+Measured: `queue.page 1` / `progress.page 2`, page 1's three finished steps rendered under a
+**"Page 2 · 3/3 done"** chip, focus held on the parked one, and **no route to read page 2 at all**.
+The fix demotes only the PARKED case when `queue.page !== page`; an unfinished step still outranks
+the page, because a live application holds the tab open wherever the results went — the same
+exception `resultsGone` already makes one branch below.
+
+**AND EVERY EXIT FROM AN APPLICATION WAS A JUDGEMENT ABOUT THE JOB.** `TERMINAL_CHOICES` offers
+*not a fit · job gone · account wall · assessment · already applied* — nine ways to say something
+about the EMPLOYER, and not one about the ATTEMPT. So stopping a half-driven form meant picking one
+of those and lying to the decision ledger about why, and **that ledger is the thing being trained**:
+a mis-flagged abort teaches the wrong lesson twice, once about the employer and once about the
+platform. `parked:operator` was the honest flag all along and the backend already treats parked as
+resumable with staged work untouched — what was missing was a PRESS. It sat eighth inside a
+disclosure headed *"End this application another way"*, which is not where anyone looks when a drive
+has gone sideways. **"Stop this application"** now stands beside the primary and says what it costs:
+*ends this attempt and hands the page back; it stays on the ledger and stays resumable; nothing typed
+is discarded and nothing is sent.*
+
+*Verified live, end to end:* pressing it took the queue to `done: 3 · blocks_page: false`, and the
+cockpit moved by itself from the stuck application to **"Page 2 · 15 results — 2 submitted · all 3
+accounted for — pick more, or advance"**, with `Take none · stay`, `Search something else` and
+**`Nothing here · next page`** — the route to page 3 that did not exist an hour ago.
+
+*Caveat worth recording rather than hiding:* the UI has **no test runner at all** (no vitest/jest in
+`controlplane-ui`), so both changes are verified by driving `deriveCockpit` directly under node and
+by the live cockpit, not by a committed test. That is a real gap in its own right. Lint clean, build
+green.
+
+*And a note about my own surface, not the app's:* cockpit button presses from the automation browser
+pane failed to register three times today (Submitted, Open the posting, Stop this application) while
+`read_page`, `form_input` and JS reads all worked on the same page. The operator pilots the cockpit
+by hand and has not seen it. Each was confirmed by dispatching the exact endpoint and body the button
+carries — but "I could not press it" is not evidence the button is broken, and I reported it as one
+earlier today. It is not.
