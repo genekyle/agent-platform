@@ -141,7 +141,25 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
             "pages": (
                 {
                     "id": "identifier",
-                    "present": "email",
+                    # THE CONTINUE BUTTON, NOT THE EMAIL BOX, AND THAT IS NOT A STYLE CHOICE.
+                    # `present` is probed through `/locate`, which matches VISIBLE TEXT — so a
+                    # control whose accessible name comes from a separate <label> is invisible to
+                    # it. Measured live 2026-08-20 on this very page: text "Email address" →
+                    # found:false while the box was plainly on screen; text "Continue" →
+                    # found:true. A `present` naming the email field would have reported this
+                    # mapped page as unmapped every single time.
+                    #
+                    # It also holds on BOTH sides of the crossing, which is what `present` needs:
+                    # the leg may arrive on either the login or the signup identifier, and the
+                    # toggle below is what settles which. A cross-link would only ever be true on
+                    # one side and would fail to recognise the page from the other.
+                    #
+                    # KNOWN TRAP, unsolved because the screen is unmeasured: if page 2 also
+                    # carries a "Continue", this stops discriminating and page 1 would claim it.
+                    # Whoever maps page 2 must tighten this in the same change — the fill would
+                    # then fail on a missing email box rather than mislead, but the report would
+                    # name the wrong screen.
+                    "present": "identifier_continue",
                     # Apply lands on the LOGIN identifier, so the create leg has to cross over
                     # first. Same conditional-on-a-measurement contract as Workday's toggle: the
                     # link that only the DESTINATION page carries is the proof we are already
@@ -167,7 +185,25 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
             "pages": (
                 {
                     "id": "identifier",
-                    "present": "email",
+                    # THE CONTINUE BUTTON, NOT THE EMAIL BOX, AND THAT IS NOT A STYLE CHOICE.
+                    # `present` is probed through `/locate`, which matches VISIBLE TEXT — so a
+                    # control whose accessible name comes from a separate <label> is invisible to
+                    # it. Measured live 2026-08-20 on this very page: text "Email address" →
+                    # found:false while the box was plainly on screen; text "Continue" →
+                    # found:true. A `present` naming the email field would have reported this
+                    # mapped page as unmapped every single time.
+                    #
+                    # It also holds on BOTH sides of the crossing, which is what `present` needs:
+                    # the leg may arrive on either the login or the signup identifier, and the
+                    # toggle below is what settles which. A cross-link would only ever be true on
+                    # one side and would fail to recognise the page from the other.
+                    #
+                    # KNOWN TRAP, unsolved because the screen is unmeasured: if page 2 also
+                    # carries a "Continue", this stops discriminating and page 1 would claim it.
+                    # Whoever maps page 2 must tighten this in the same change — the fill would
+                    # then fail on a missing email box rather than mislead, but the report would
+                    # name the wrong screen.
+                    "present": "identifier_continue",
                     "toggle": ("login_link", "signup_link"),
                     "fields": (("email", "username"),),
                     "submit": "identifier_continue",

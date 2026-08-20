@@ -144,6 +144,32 @@ def test_every_page_of_every_paged_leg_can_be_recognised_before_it_is_filled():
                 assert page.get("present"), f"{ats}/{leg}: a page with no `present`"
                 apply_fields.resolve(ats, page["present"])      # raises if unmapped
                 assert page.get("id"), f"{ats}/{leg}: a page with no id is unnameable in a report"
+                _assert_locatable(ats, page["present"], f"{ats}/{leg} page {page['id']}")
+                if page.get("toggle"):
+                    # The toggle's PROOF is probed the same way, so it carries the same constraint.
+                    _assert_locatable(ats, page["toggle"][1], f"{ats}/{leg} toggle proof")
+
+
+def _assert_locatable(ats: str, field: str, where: str) -> None:
+    """A field probed through `/locate` must be findable BY ITS OWN TEXT.
+
+    `/locate` matches visible text, not the accessibility tree. A text input's accessible name
+    comes from a separate <label>, so the input itself carries no text and `/locate` returns
+    found:false while the box is plainly on screen — measured on PowerSchool's identifier page,
+    2026-08-20: "Email address" not found, "Continue" found.
+
+    That failure is invisible in every other layer. `apply_fields.resolve` succeeds, the AX scan
+    lists the field, `/execute` can drive it — only the `/locate` probe disagrees, and its verdict
+    is what decides whether a mapped page is recognised at all. So a `present` naming a text box
+    reports every drive as `unmapped_page` and reads like a missing recipe.
+    """
+    addr = apply_fields.resolve(ats, field)
+    if addr.get("selector"):
+        return                       # a CSS probe needs no text
+    assert addr.get("widget_type") != "text", (
+        f"{where}: `{field}` is a text input addressed by accessible name, and /locate cannot see "
+        f"it. Probe a control that renders its own text (its submit button), or give it a selector."
+    )
 
 
 def test_an_identifier_screen_never_claims_the_account_was_created():
