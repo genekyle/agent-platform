@@ -9534,3 +9534,51 @@ endpoint and the superseded `runtime/` loop), so wiring eviction there polishes 
 it becomes worth doing the day the cascade joins the live loop. The promotion-gate split
 (shadow-agreement doc vs maturity code) is recorded in CONTROLLER_PROMOTION.md pending an
 operator decision.
+## 2026-08-20 (seventh) — head-on at the SchoolSpring wall: the modal that ate the click, and the wall behind the wall
+
+Operator, reopening the BPS pick this session: *"we were mistakenly parked … we thought it was too
+hard but i want to go for it head on and learn from this experience."* So this entry is the head-on
+record.
+
+**THE RE-WALK WAS CLEAN, AND THE 08-19 FIXES ALL SHOWED UP FOR IT.** open_pane → verify_identity →
+enter_apply re-walked without tab churn (the left-open SchoolSpring tab was superseded, one tab
+after as before), `classify` now names `schoolspring` — the registry entry landed — and `ats_brief`
+said **"Expect an account wall — it will stop for you"** BEFORE the approach. That sentence is the
+exact answer the UNE drive needed on 08-19 and could not ask for; today it was simply there.
+
+**THE MISMATCH WAS A DIFFERENT DIALOG IN THE SAME SEAT.** First posting-rung crank returned
+`mismatch: nothing observable changed`. Captcha-first check: clean. Screenshot: a **"We Care About
+Your Privacy" consent modal** over the Apply button — NOT 08-19's "Welcome to the new SchoolSpring
+experience" dialog; same seat, different tenant. It cites **New Hampshire SB 255**, so it is
+geo/law-triggered and will appear and vanish by operator location — a state the recipe cannot
+assume present OR absent. All three consent toggles (sale/sharing, targeted ads, sensitive data)
+**default ON**; declined all three and pressed Save Choices per decline-non-essential policy, modal
+gone, Apply clickable.
+
+*Two mechanics found doing it:* the visual toggles are styled labels over **1×1px hidden checkbox
+inputs with empty AX names** (the observation-profile hole again, third sighting); and
+`/dialog_guard` **cannot take over a dialog already on screen** — it only guards dialogs that open
+after it arms. Also operational: `/execute` requires `target_bbox` even when `backend_node_id` is
+given.
+
+**THE WALL BEHIND THE WALL: SCHOOLSPRING'S IDENTITY IS POWERSCHOOL'S, NOT ITS OWN.** Apply lands on
+`auth.powerschool.com/u/login/identifier` — Auth0 universal login, **identifier-first on BOTH
+legs**: login is email → Continue (password screen withheld until then), and Sign up is *"Create
+Your Account — Sign Up to PowerSchool to continue to SchoolSpring"*, also email → Continue. Nothing
+past either screen can be farmed without entering the email; the form census stops at the
+identifier by design of the wall, not by choice of ours.
+
+**AND THE ONE-ACCOUNT-TWO-WALLS HYPOTHESIS IS WEAKENED, NOT CONFIRMED.** UNE (PeopleAdmin) gates on
+`<tenant>.peopleadmin.com/login` — its own form, plus Chronicle Vitae SSO. BPS (SchoolSpring) gates
+on `auth.powerschool.com` — PowerSchool identity, no Chronicle Vitae offered. Same vendor family,
+**two different identity systems on today's evidence.** The definitive test is unchanged: create
+the PowerSchool account, then try it against a PeopleAdmin tenant; SESSION_13's cheap-to-check
+claim was too hopeful.
+
+**THE ACCOUNT MACHINERY RAN ITS WHOLE LOOP UNPROMPTED.** The `account` rung returned
+`human_required`, opened row `ats_boston_public_schools_schoolspring` (pending, leg
+`create_account`), staged username + suggested password, and stated the boundary in its own words:
+*"Operator creates/logs in with these; the agent never types them into the site."* Parked nothing —
+the wall is OPEN in the live tab with the handoff beside it. The difference between today and 08-13
+is the whole lesson: same wall, but this time the stop is one action wide, named, staffed, and the
+drive resumes the moment the operator is through it.
