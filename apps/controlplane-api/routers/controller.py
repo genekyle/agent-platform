@@ -309,6 +309,18 @@ async def run_live(body: RunBody) -> dict[str, Any]:
         on_authority=lambda b, d, v: modes.append(v.mode),
         held_intents=frozenset() if body.allow_submit else CONSEQUENTIAL_INTENTS)
 
+    # THE DRIVE'S WORK COMPOUNDS BEFORE THE RESPONSE RETURNS (2026-08-20). Every verified step
+    # this run journaled is candidate evidence for the $0 rung; `recompile_now`'s new-evidence
+    # rule decides what it may compile or pardon. This is the automatic caller
+    # `compile_all_from_journal` never had — the one-way `mark_stale` door cost 26 of 45 teacher
+    # parks on a single state whose program sat condemned beside fresh proof. Best-effort: a
+    # recompile failure must not fail the drive that earned it.
+    recompiled: dict[str, Any] = {}
+    try:
+        recompiled = await run_in_threadpool(programs_mod.recompile_now)
+    except Exception:  # noqa: BLE001
+        logger.exception("controller run %s: post-drive program recompile failed", run_key)
+
     # The number the whole exercise is for: how much ran without a human.
     acted = [t for t in trail if not t["escalate"]]
     autonomous = [t for t in acted if t["rung"] == "recipe"]
@@ -347,6 +359,10 @@ async def run_live(body: RunBody) -> dict[str, Any]:
             "rung0_share": round(len(autonomous) / len(trail), 3) if trail else 0.0,
         },
         "held_for_operator": held, "reviews": reviews, "trail": trail,
+        # What this drive taught the $0 rung — visible in the run report, because a drive that
+        # compiled a program is a drive that made the next one cheaper.
+        "programs_recompiled": recompiled.get("compiled", []),
+        "programs_skipped": len(recompiled.get("skipped", [])),
     }
 
 

@@ -401,6 +401,20 @@ def train_after_label() -> None:
         perception_train.save(fitted, promote=True)
     except Exception:  # noqa: BLE001
         logger.exception("train_after_label: witness refit failed")
+    # Stage 3 (2026-08-20): the $0 rung learns too. `mark_stale` always fired automatically while
+    # `compile_all_from_journal` had only a manual dry-run endpoint — a one-way door that cost 26
+    # of 45 teacher parks on one state whose program sat condemned beside fresh proof. The
+    # new-evidence rule inside `recompile_now` is what keeps the pardon honest.
+    try:
+        from controller import programs as programs_mod
+
+        out = programs_mod.recompile_now()
+        if out.get("compiled"):
+            logger.info("train_after_label: recompiled %d program(s): %s",
+                        len(out["compiled"]),
+                        [f"{c['task']}/{c['state']}" for c in out["compiled"]])
+    except Exception:  # noqa: BLE001
+        logger.exception("train_after_label: program recompile failed")
 
 
 @router.post("/api/transitions/{key}/correct")

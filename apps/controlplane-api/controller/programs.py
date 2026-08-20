@@ -294,3 +294,57 @@ def compile_all_from_journal(rows: list[dict[str, Any]], *, save: bool = False,
                 continue
         rejected.append({"task": task, "state": state, "reason": reason})
     return {"compiled": compiled, "rejected": rejected, "saved": bool(save)}
+
+
+def recompile_from_new_evidence(rows: list[dict[str, Any]], *,
+                                expected_exit_for: Optional[Any] = None) -> dict[str, Any]:
+    """The AUTOMATIC crank — compile only where the journal holds evidence the program has not seen.
+
+    `compile_all_from_journal` had exactly one caller: a manual endpoint defaulting to a dry run.
+    Meanwhile `mark_stale` fires automatically — so staleness was a one-way door, and the measured
+    cost was 26 of 45 teacher parks on ONE state (`indeed_apply_questions`) whose compiled program
+    sat condemned while the journal held fresh verified teacher steps for it (2026-08-20 audit).
+
+    The safety rule that makes this automatic rather than reckless: a (task, state) recompiles
+    ONLY when a verified-ok row exists with `ts` newer than the program's `verified_at`.
+
+      * no program yet            -> compile (the original crank, now with a caller)
+      * stale + newer evidence    -> recompile — the pardon comes from NEW proof
+      * stale + nothing newer     -> SKIP. Recompiling the same rows would resurrect the exact
+                                     program the world just proved wrong, and rung 0 replays
+                                     without asking anyone.
+      * fresh + nothing newer     -> skip; there is nothing to learn.
+    """
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in rows:
+        task, state = r.get("task"), r.get("state")
+        if task and state:
+            groups.setdefault((task, state), []).append(r)
+
+    out = {"compiled": [], "rejected": [], "skipped": [], "saved": True}
+    for (task, state), rs in groups.items():
+        newest = max((r.get("ts") or "" for r in _compilable_rows(rs)), default="")
+        existing = load_program(task, state)
+        if existing is not None and not (newest and newest > (existing.verified_at or "")):
+            out["skipped"].append({
+                "task": task, "state": state,
+                "reason": ("stale, and no evidence newer than the condemned compile — "
+                           "staleness stands" if existing.stale
+                           else "no evidence newer than the compiled program")})
+            continue
+        one = compile_all_from_journal(rs, save=True, expected_exit_for=expected_exit_for)
+        out["compiled"].extend(one["compiled"])
+        out["rejected"].extend(one["rejected"])
+    return out
+
+
+def recompile_now() -> dict[str, Any]:
+    """`recompile_from_new_evidence` over the live journal with the recipe's edges — the zero-arg
+    form both automatic callers share (train-on-label, and the end of a controller run). Lazy
+    imports because this module is otherwise dependency-free and the callers are background hooks.
+    """
+    import apply_recipe
+    from interaction import decision_journal
+
+    rows = decision_journal.read_rows(limit=1000)
+    return recompile_from_new_evidence(rows, expected_exit_for=apply_recipe.expected_next_for)
