@@ -100,7 +100,8 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 # --- Routers (see docs/PLAN_main-split.md) -----------------------------------
 # Domain routers extracted from main.py; the module-level `router` below holds the CORE routes not
 # yet extracted into a domain module. create_app() (bottom of file) wires all of them into the app.
-from routers import accounts as accounts_router  # noqa: E402
+from routers import accounts as accounts_router
+from routers import ats_db as ats_db_router
 from routers import activity as activity_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
 from routers import career_search as career_search_router  # noqa: E402
@@ -5309,6 +5310,7 @@ def create_app() -> FastAPI:
 
     app.include_router(router)  # core routes not yet extracted into a domain module
     app.include_router(accounts_router.router)
+    app.include_router(ats_db_router.router)
     app.include_router(activity_router.router)
     app.include_router(application_answers_router.router)
     app.include_router(career_search_router.router)

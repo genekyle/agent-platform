@@ -762,3 +762,114 @@ class JobDecision(Base):
     card: Mapped[dict] = mapped_column(JSON, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# --- the ATS database ------------------------------------------------------------------------
+# Added 2026-08-20 after the first pass over the transition corpus (docs/ANALYSIS_ats_corpus.md).
+# Before this, ATS knowledge lived in three places that could not be joined: a hardcoded vendor
+# list in `ats_registry.py`, one denormalised `Application.ats` string, and 356 orphan transition
+# rows keyed by session. The vendor catalogue stays in code — it is small, reviewed, and
+# hand-curated. What had nowhere to live is everything BELOW the vendor: the tenant, the measured
+# characteristic, and the flow that ties a real application to the states it actually passed through.
+
+class AtsInstance(Base):
+    """One employer's tenant of one ATS vendor — `workday:cswg`, `paylocity:isabella-...`.
+
+    The row the system was missing. `classify_ats` names the vendor; nothing named the INSTANCE,
+    and because every vendor encodes tenancy differently (subdomain / path / query / none — see
+    `ats_tenancy`), counting instances by hostname undercounted every path-tenanted vendor. We had
+    driven Paylocity for two employers and the host axis reported one.
+
+    `tenant_source` records WHICH rule produced the tenant, so a wrong instance is traceable to the
+    extractor rather than being an unexplained duplicate.
+    """
+    __tablename__ = "ats_instances"
+
+    instance_key: Mapped[str] = mapped_column(String(160), primary_key=True)  # "<ats_id>:<tenant>"
+    ats_id: Mapped[str] = mapped_column(String(40), index=True)
+    tenant: Mapped[str] = mapped_column(String(120), default="", index=True)
+    #: subdomain | path_index | path_regex | query_param | hostname | none | fallback:hostname
+    tenant_source: Mapped[str] = mapped_column(String(40), default="")
+    #: The employer as we know them (from the job/application), when we know them. Nullable on
+    #: purpose: a tenant slug is often all a URL gives, and inventing the company name from it
+    #: would be exactly the confident-wrong this repo keeps paying for.
+    employer: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, index=True)
+    host: Mapped[str] = mapped_column(String(200), default="")
+    sample_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+
+    first_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AtsCharacteristic(Base):
+    """One MEASURED fact about a vendor or an instance, with the evidence that produced it.
+
+    Replaces the prose in `ats_registry`'s `notes` fields for anything a query or a model should be
+    able to read. The notes stay — they are good prose and a human reads them — but "auth: account"
+    and "the resume slot is at the account gate" are facts, and a fact in a Python string cannot be
+    filtered, counted, or trained on.
+
+    Scope is deliberately two-level: a characteristic can belong to the VENDOR (`instance_key` null
+    — true of every tenant, e.g. "tenancy is path-encoded") or to one INSTANCE (e.g. "this employer
+    requires a cover letter"). Confusing the two is how a single tenant's quirk becomes a rule about
+    the vendor, which is the over-generalisation the operator flagged on 2026-08-19.
+    """
+    __tablename__ = "ats_characteristics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    ats_id: Mapped[str] = mapped_column(String(40), index=True)
+    #: NULL = the characteristic is about the vendor, not one tenant.
+    instance_key: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+
+    #: auth | tenancy | requirement | mismatch_rate | state_seen | quirk | spine
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    key: Mapped[str] = mapped_column(String(120), index=True)
+    value: Mapped[str] = mapped_column(String(600), default="")
+
+    #: measured | assumed | operator. `assumed` exists so a starting guess can be stored WITHOUT
+    #: being mistaken for a measurement — the registry's own standing rule.
+    confidence: Mapped[str] = mapped_column(String(20), default="measured", index=True)
+    #: What was actually seen. A characteristic with no evidence is an opinion.
+    evidence: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    observations: Mapped[int] = mapped_column(Integer, default=1)
+    session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+
+    measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AtsFlow(Base):
+    """One attempted application through one ATS instance — the join that did not exist.
+
+    `Application` knows a job was applied to; the transition corpus knows which screens a session
+    passed through; nothing connected them, so 356 traces sat orphaned from the 22 applications
+    they belonged to. This row is the connection, and it is what gives
+    `apply_requirements.summarise()` the denominator it currently has to be handed by hand: without
+    "we have driven Paylocity twice", a requirement seen once is indistinguishable from a rule.
+
+    `states` is the ordered spine actually walked — the recipe as observed, not as declared.
+    """
+    __tablename__ = "ats_flows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    instance_key: Mapped[str] = mapped_column(String(160), index=True)
+    ats_id: Mapped[str] = mapped_column(String(40), index=True)
+    session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    #: Links to `Job`/`Application` when the flow belongs to a real prospect. Nullable because a
+    #: backfilled flow may predate the ledger that would have recorded the job.
+    job_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    #: submitted | parked:* | abandoned:* | unknown — the apply_steps terminal vocabulary.
+    terminal: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+    #: The ordered distinct states walked, e.g. ["paylocity_job_posting", "paylocity_application_form"].
+    states: Mapped[list] = mapped_column(JSON, default=list)
+    transitions: Mapped[int] = mapped_column(Integer, default=0)
+    confirmed: Mapped[int] = mapped_column(Integer, default=0)
+    mismatched: Mapped[int] = mapped_column(Integer, default=0)
+    corrections: Mapped[int] = mapped_column(Integer, default=0)
+
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
