@@ -24,11 +24,20 @@ to use everything we hold — the id, the requisition id, and the (company, titl
 to say WHICH of those matched, because they are not equally trustworthy.
 
 --------------------------------------------------------------------------------------
-Three tiers, and why the weakest one still earns its place
+Four tiers, and why the weakest one still earns its place
 --------------------------------------------------------------------------------------
-    exact      the same job_id                      — certain
+    exact       the same job_id                      — certain
+    canonical   the same canonical Job (merged)      — certain; the CROSS-ENGINE tier
     requisition a req id shared by both records      — certain enough to act on
-    fuzzy      same company, same role words         — a WARNING, never a decision
+    fuzzy       same company, same role words        — a WARNING, never a decision
+
+The canonical tier exists because exact ids can never match across engines — the platform prefix
+is part of the id — so a job applied through Indeed met again on LinkedIn could only ever fuzzy-
+warn, every search, forever (Joslin did exactly that, 08-17 → 08-20). Once the two sightings are
+folded into one Job — by the matcher, the duplicates queue, or the operator's own already-applied
+call — the answer is CERTAIN from either engine's side. Operator, 2026-08-20: *"indeed can search
+into linkedin's db and vice versa to confirm because reducing errors on if we applied or not
+helps us from wasting time."*
 
 The fuzzy tier exists because company+title is often all we have, and it is right far more often
 than it is wrong. But it is exactly the match that would wrongly skip "Data Analyst II" for having
@@ -58,9 +67,10 @@ from job_dedup import (  # noqa: F401  (re-exported for callers and tests)
     FUZZY_TITLE_THRESHOLD,
     normalize_company,
     requisition_ids,
+    resolve_key,
     title_similarity,
 )
-from models import ObservedJob
+from models import Application, ObservedJob
 
 #: `application_status` values that mean an application exists. `applied` is the only one the
 #: epilogue stamps; the others are historical/manual and treated the same way on purpose — the
@@ -115,6 +125,15 @@ def check(db: Session, *, job_id: str = "", title: str = "", company: str = "",
             if r.job_id == job_id:
                 return _verdict(r, STATUS_APPLIED, "exact", [f"job_id {job_id}"])
 
+    # Tier 1.5 — the same CANONICAL job, applied through another engine's door. Exact ids only
+    # ever match within one engine (the prefix is part of the id), so this is what lets Indeed's
+    # scan see LinkedIn's applications and vice versa: once two sightings are one Job, either
+    # engine's next encounter is CERTAIN instead of a fuzzy warning re-judged every search.
+    if job_id:
+        canonical = _canonical_match(db, job_id, rows)
+        if canonical is not None:
+            return canonical
+
     # Tier 2 — the same requisition, seen through a different door. This is the tier that would
     # have caught BIDMC: applied through Workday, met again as an Indeed jk.
     wanted_reqs = requisition_ids(url, tenant_id, job_id)
@@ -159,6 +178,39 @@ def check_many(db: Session, cards: list[dict[str, Any]], *, platform: str = "ind
         out[ext] = check(db, job_id=f"{platform}:{ext}", title=c.get("title") or "",
                          company=c.get("company") or "", url=c.get("url") or "")
     return out
+
+
+def _canonical_match(db: Session, job_id: str, rows: list[ObservedJob]
+                     ) -> Optional[AppliedVerdict]:
+    """An application on file for the same CANONICAL job as `job_id` — certain, engine-blind.
+
+    Two witnesses, asked in order: an applied SIGHTING whose canonical job resolves to ours
+    (carries the richer provenance — which door, when), then the canonical Application row
+    itself, which survives merges whose applied sighting predates the canonical layer. Both
+    resolve through the tombstone chain, so a reference from before a merge still answers.
+    """
+    me = db.get(ObservedJob, job_id)
+    if me is None or not me.canonical_job_key:
+        return None
+    alive = resolve_key(db, me.canonical_job_key)
+    if not alive:
+        return None
+    for r in rows:
+        if r.job_id == job_id or not r.canonical_job_key:
+            continue
+        if resolve_key(db, r.canonical_job_key) == alive:
+            return _verdict(r, STATUS_APPLIED, "canonical",
+                            [f"one canonical job ({alive})", f"applied as {r.job_id}"])
+    app = db.scalar(select(Application).where(Application.job_key == alive))
+    if app is not None:
+        return AppliedVerdict(
+            status=STATUS_APPLIED, matched_on="canonical", job_id=alive,
+            title=me.title or "", company=me.company or "",
+            applied_at=app.applied_at.isoformat() if app.applied_at else None,
+            platform=app.via_platform,
+            evidence=[f"application on file for canonical job {alive}"
+                      + (f" via {app.via_platform}" if app.via_platform else "")])
+    return None
 
 
 def _applied_rows(db: Session, *, company: str = "") -> list[ObservedJob]:

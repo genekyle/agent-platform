@@ -52,6 +52,86 @@ def test_a_job_merely_seen_is_not_applied(db):
     assert ai.check(db, job_id="indeed:abc123").status == ai.STATUS_NONE
 
 
+# --- tier 1.5: the canonical job — engines confirm against each other's applications ------
+def test_a_merged_job_is_certain_from_either_engine(db):
+    """Operator, 2026-08-20: "indeed can search into linkedin's db and vice versa to confirm."
+
+    Exact ids can never match across engines — the platform prefix is part of the id — so before
+    this tier a job applied through Indeed and met again on LinkedIn could only fuzzy-warn, every
+    search, forever (Joslin, 08-17 → 08-20). Once the two sightings are one canonical Job, the
+    answer is CERTAIN, and in both directions."""
+    import job_dedup
+
+    a = _job(db, "indeed:abc", "Financial Reporting Analyst, US Funds", "Wellington Management",
+             status="applied", applied=True)
+    b = _job(db, "linkedin:4403121229", "Financial Reporting Analyst", "Wellington Management")
+    ja, jb = job_dedup.resolve_sighting(db, a), job_dedup.resolve_sighting(db, b)
+    db.commit()
+    # Different titles, so the sighting resolver rightly kept them apart — this pair is exactly
+    # the fuzzy-forever case the canonical tier exists to end.
+    assert ja.job_key != jb.job_key
+    job_dedup.apply_merge(db, ja.job_key, jb.job_key)
+    db.commit()
+
+    v = ai.check(db, job_id="linkedin:4403121229")
+    assert v.applied and v.matched_on == "canonical"
+    assert "indeed:abc" in " ".join(v.evidence)
+
+
+def test_the_confirmation_runs_in_both_directions(db):
+    """The mirror image: applied through LinkedIn, met again as an Indeed card."""
+    import job_dedup
+
+    a = _job(db, "linkedin:900", "Reporting Analyst, Revenue Strategy", "Ocean Spray",
+             status="applied", applied=True)
+    b = _job(db, "indeed:x1", "Reporting Analyst", "Ocean Spray")
+    ja, jb = job_dedup.resolve_sighting(db, a), job_dedup.resolve_sighting(db, b)
+    db.commit()
+    assert ja.job_key != jb.job_key
+    job_dedup.apply_merge(db, ja.job_key, jb.job_key)
+    db.commit()
+
+    v = ai.check(db, job_id="indeed:x1")
+    assert v.applied and v.matched_on == "canonical"
+    assert v.platform == "linkedin"
+
+
+def test_an_unmerged_cross_engine_pair_still_only_warns(db):
+    """The guard on the new tier: sharing an employer and a similar title is NOT sharing a
+    canonical job. Merging is a decision — the matcher's or the operator's — never an inference,
+    so an undecided pair keeps the fuzzy warning it always had."""
+    import job_dedup
+
+    a = _job(db, "indeed:abc", "Healthcare Data Analyst", "Joslin Diabetes Center",
+             status="applied", applied=True)
+    b = _job(db, "linkedin:4415108981", "Healthcare Data Analyst (Clinic Administration)",
+             "Joslin Diabetes Center")
+    job_dedup.resolve_sighting(db, a), job_dedup.resolve_sighting(db, b)
+    db.commit()
+
+    v = ai.check(db, job_id="linkedin:4415108981",
+                 title="Healthcare Data Analyst (Clinic Administration)",
+                 company="Joslin Diabetes Center")
+    assert v.status == ai.STATUS_LIKELY and not v.applied
+
+
+def test_a_canonical_application_row_is_witness_enough(db):
+    """The second witness: a merge can leave the application only on the canonical Application
+    row (the applied sighting may predate the canonical layer). Existence of the row IS the
+    answer — the question is "is there an application on file", not "who put it there"."""
+    import job_dedup
+    from application_events import ensure_application
+
+    b = _job(db, "linkedin:777", "Data Engineer", "Acme")
+    jb = job_dedup.resolve_sighting(db, b)
+    db.commit()
+    ensure_application(db, jb.job_key, via_platform="indeed")
+    db.commit()
+
+    v = ai.check(db, job_id="linkedin:777")
+    assert v.applied and v.matched_on == "canonical"
+
+
 # --- tier 2: the same requisition through a different door -------------------------------
 def test_a_workday_application_is_found_again_from_the_indeed_card(db):
     """THE case this module exists for. Applied through bilh.wd1.myworkdayjobs.com; met again as

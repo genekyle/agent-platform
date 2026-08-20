@@ -7313,6 +7313,9 @@ def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "",
     Only SUBMITTED stamps `applied_at` — the same rule the epilogue states. A parked step writes
     nothing: parked means not now, and marking it would tell the next session a lie.
     """
+    if (step.terminal or "") == aps.ABANDONED_ALREADY_APPLIED:
+        return _record_already_applied(db, step)
+
     status = _TERMINAL_TO_STATUS.get(step.terminal or "")
     if not status:
         return {"recorded": False, "reason": f"{step.terminal} is not a durable outcome"}
@@ -7351,6 +7354,72 @@ def _record_outcome(db: Session, step: aps.ApplyStep, *, ats_url: str = "",
     db.commit()
     return {"recorded": True, "status": status, "job_id": step.job_id,
             "applied_at": row.applied_at.isoformat() if row.applied_at else None}
+
+
+def _record_already_applied(db: Session, step: aps.ApplyStep) -> dict[str, Any]:
+    """Make the operator's "already applied" durable, so the same judgement is never asked twice.
+
+    The 08-17 run left this open on purpose: the flag wrote nothing (`_TERMINAL_TO_STATUS` has no
+    entry), so Joslin re-surfaced as `likely_applied` on the very next LinkedIn search — and did,
+    on 08-20, page 1. The durable record is NOT a status stamp on this sighting (it was not
+    applied through this door); it is the MERGE: fold this sighting's canonical job into the one
+    that already holds the application — exactly what the duplicates queue would do, decided here
+    because the operator has just decided it. After the merge `applied_index`'s canonical tier
+    answers CERTAIN from either engine, which is the cross-db confirmation the operator asked for
+    (2026-08-20: *"indeed can search into linkedin's db and vice versa to confirm"*).
+
+    Only when the index finds NO application on file does the stamp fall back to this sighting —
+    the operator's own testimony is then the only record there is, and it is mirrored to the
+    canonical Application so the next encounter is certain rather than a memory.
+    """
+    import job_dedup
+    from models import JobMatch
+
+    row = db.get(ObservedJob, step.job_id)
+    if row is None:
+        platform, _, ext = step.job_id.partition(":")
+        row = ObservedJob(job_id=step.job_id,
+                          platform=platform or step.platform or DEFAULT_ENGINE["platform"],
+                          external_id=ext, title=step.title or "", company=step.company or "")
+        db.add(row)
+        db.flush()
+    if step.terminal_detail:
+        row.notes = (step.terminal_detail or "")[:2000]
+
+    verdict = applied_index.check(db, job_id=row.job_id, title=row.title or step.title or "",
+                                  company=row.company or step.company or "", url=row.url or "",
+                                  tenant_id=row.tenant_id or "")
+
+    if verdict.matched_on in ("exact", "canonical"):
+        db.commit()   # the answer is already durable; only the notes needed writing
+        return {"recorded": True, "status": "already_applied", "job_id": row.job_id,
+                "note": f"already durable ({verdict.matched_on})"}
+
+    matched = db.get(ObservedJob, verdict.job_id) if verdict.job_id else None
+    if matched is not None and matched.job_id != row.job_id:
+        mine = job_dedup.resolve_sighting(db, row)
+        theirs = job_dedup.resolve_sighting(db, matched)
+        db.flush()
+        if mine.job_key != theirs.job_key:
+            # The applied side survives: it holds the Application and the history.
+            kept = job_dedup.apply_merge(db, theirs.job_key, mine.job_key)
+            db.add(JobMatch(kept_key=kept.job_key, folded_key=mine.job_key,
+                            tier="already_applied", score=1.0,
+                            evidence=[*verdict.evidence,
+                                      f"operator flagged already-applied on {row.job_id}"],
+                            status="merged", decided_by="human",
+                            decided_at=datetime.now(timezone.utc)))
+        db.commit()
+        return {"recorded": True, "status": "already_applied", "job_id": row.job_id,
+                "merged_into": theirs.job_key, "matched": matched.job_id}
+
+    row.application_status = "applied"
+    from application_events import mirror_application
+    mirror_application(db, row)
+    db.commit()
+    return {"recorded": True, "status": "already_applied", "job_id": row.job_id,
+            "note": "no application on file matched; recorded the operator's testimony "
+                    "on this sighting and mirrored it to the canonical job"}
 
 
 def _note_tab_drift(bb: Any, obs: dict[str, Any], step: aps.ApplyStep) -> dict[str, Any]:

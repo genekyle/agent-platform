@@ -5830,6 +5830,54 @@ def test_identity_how_did_you_hear_follows_the_job_ref_not_a_constant():
     assert sc._identity_defaults("companysite:xyz")["how_did_you_hear"] == "Other"
 
 
+def test_already_applied_flag_writes_the_merge_and_ends_the_rejudgement():
+    """`abandoned:already_applied` wrote nothing durable (the 08-17 gap), so the same two jobs
+    re-surfaced as `likely_applied` on every future search — and did, 08-20, page 1. The flag now
+    merges this sighting's canonical job into the one holding the application, with a decided
+    JobMatch as the audit record, so `applied_index`'s canonical tier answers CERTAIN from either
+    engine next time. Re-flagging finds the answer already durable and writes nothing twice."""
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker as _sm
+
+    import applied_index as ai
+    from models import Base, JobMatch, ObservedJob, utcnow
+
+    engine = _ce("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = _sm(bind=engine)()
+    try:
+        db.add_all([
+            ObservedJob(job_id="indeed:abc", platform="indeed", external_id="abc",
+                        title="Healthcare Data Analyst", company="Joslin Diabetes Center",
+                        application_status="applied", applied_at=utcnow()),
+            ObservedJob(job_id="linkedin:4415108981", platform="linkedin",
+                        external_id="4415108981",
+                        title="Healthcare Data Analyst (Clinic Administration)",
+                        company="Joslin Diabetes Center"),
+        ])
+        db.commit()
+
+        step = aps.ApplyStep(job_id="linkedin:4415108981",
+                             title="Healthcare Data Analyst (Clinic Administration)",
+                             company="Joslin Diabetes Center")
+        step.finish(aps.ABANDONED_ALREADY_APPLIED, "operator: applied via Indeed on 08-11")
+        out = sc._record_outcome(db, step)
+        assert out["recorded"] and out["status"] == "already_applied"
+        assert out.get("merged_into")
+
+        v = ai.check(db, job_id="linkedin:4415108981")
+        assert v.applied and v.matched_on == "canonical"
+
+        m = db.query(JobMatch).one()
+        assert (m.status, m.decided_by, m.tier) == ("merged", "human", "already_applied")
+
+        out2 = sc._record_outcome(db, step)
+        assert out2["recorded"] and "durable" in out2.get("note", "")
+        assert db.query(JobMatch).count() == 1
+    finally:
+        db.close()
+
+
 # --- the observer is the basis of the panel, not a decoration ---------------------------------
 #
 # `_view` documented itself as rendering the observer's verdict "INSTEAD of trusting the recipe

@@ -9392,3 +9392,39 @@ itself uses.
 
 *Tests:* the four touched suites (session_control, form_fill, apply_source, ats_db) — **316
 passed**, from the worktree with import provenance verified.
+
+## 2026-08-20 (sixth) — the canonical tier: engines confirm against each other's applications
+
+Operator, before resuming the LinkedIn drive: *"they need to both be aware of what they applied to
+and so indeed can search into linkedin's db and vice versa to confirm because reducing errors on if
+we applied or not helps us from wasting time."*
+
+**THE HOLE WAS PRECISE: A MERGED PAIR STILL ONLY WARNED.** `applied_index` was already engine-blind
+at every tier, but exact ids can never match across engines (the platform prefix is part of the id),
+so a job applied through Indeed and met again on LinkedIn could only ever reach the fuzzy tier — a
+warning re-judged on every search, forever. Joslin proved it on schedule: flagged
+`abandoned:already_applied` on 08-17, back as `likely_applied` on 08-20's page 1, exactly as that
+entry predicted. Worse, even doing the durable thing — merging the two sightings into one canonical
+Job — changed nothing, because `check()` never consulted the canonical layer at all.
+
+**TWO CHANGES, ONE SEAM EACH:**
+
+1. **Tier 1.5 in `applied_index.check` — `canonical`.** Resolve the queried sighting's
+   `canonical_job_key` through the tombstone chain; CERTAIN when an applied sighting resolves to
+   the same alive Job (richer provenance — which door, when) or when the canonical `Application`
+   row itself exists (*"the question is whether an application is on file, not who put it
+   there"*). Guard kept from the old order: an UNDECIDED cross-engine pair still only warns —
+   merging is a decision, the matcher's or the operator's, never an inference.
+2. **`abandoned:already_applied` now writes the merge.** The flag wrote nothing durable
+   (`_TERMINAL_TO_STATUS` has no entry — the 08-17 deferral). `_record_already_applied` re-asks
+   the index at flag time, folds this sighting's canonical job into the one holding the
+   application, and records a decided `JobMatch` (`tier=already_applied, decided_by=human`) so
+   the duplicates queue is the audit log. No match on file → the operator's testimony is the only
+   record there is: stamp THIS sighting and mirror it to a canonical Application. Re-flagging
+   finds the answer `already durable` and writes nothing twice.
+
+The judgement is now paid ONCE, at the moment the operator makes it, and both engines read it
+thereafter — the same shape as teacher corrections becoming labels.
+
+*Tests:* canonical certain in both directions, unmerged still warns, the Application row as second
+witness, and the flag-merge round-trip (idempotent).
