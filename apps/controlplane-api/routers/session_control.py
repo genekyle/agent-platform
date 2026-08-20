@@ -7167,16 +7167,6 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     step.tab_url = (((bb.world or {}).get("apply_tab") or {}).get("url") or "")
     step.finish(body.flag, detail)
 
-    # THE JOIN, WRITTEN AT THE ONE MOMENT ALL FOUR FACTS ARE IN HAND — job, terminal, session, tab.
-    # Reconstructing it later has failed on the same missing column every time: the transition
-    # corpus records states without job identity, which is why 63 backfilled flows carry no outcome
-    # and the pre-flight brief could not say whether anyone had ever finished an application on a
-    # given ATS. From here on it can.
-    import ats_backfill as _ats_backfill
-    _ats_backfill.record_flow(
-        db, url=step.tab_url, job_key=step.job_id, terminal=body.flag,
-        session_id=session.id, platform=(step.platform or ""),
-        states=[m.get("rung") for m in (step.minis or ()) if isinstance(m, dict) and m.get("rung")])
 
     # THE ATTEMPT IS OVER — take back an account row whose signup never happened. The account rung
     # writes the row on intent and it legitimately outlives a single crank (a filled form waiting on
@@ -7207,8 +7197,31 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     obs = await _observe(_session_browser_url(session), bb, session_id=session.id)
     # RECORD BEFORE CLOSE — the epilogue's own rule. A closed tab with no record is unrecoverable,
     # and the record is what the NEXT session gets to ask (applied_index).
-    recorded = _record_outcome(db, step, ats_url=_apply_tab(bb, obs).get("url", ""),
+    _live_tab_url = _apply_tab(bb, obs).get("url", "")
+    recorded = _record_outcome(db, step, ats_url=_live_tab_url,
                                search_id=(bb.world or {}).get("search_id"))
+
+    # THE JOIN — job, terminal, session and the tab it ended on, written where all four are known.
+    # Reconstructing it afterwards failed on the same missing column every time: the transition
+    # corpus records states without job identity, which is why 63 backfilled flows carry no outcome
+    # and the pre-flight brief could not say whether anyone had ever finished on a given ATS.
+    #
+    # It reads the LIVE tab (`_apply_tab`), not `step.tab_url`. The recorded hint is empty whenever
+    # a previous terminal popped `apply_tab` — a re-flag after a reopen writes nothing at all, which
+    # is exactly what happened the first time this ran and is the same staleness `_apply_tab`'s own
+    # docstring warns about. Same source `_record_outcome` uses, one line above, on purpose.
+    import ats_backfill as _ats_backfill
+    if _ats_backfill.record_flow(
+            db, url=_live_tab_url, job_key=step.job_id, terminal=body.flag,
+            session_id=session.id, platform=(step.platform or ""),
+            states=[m.get("rung") for m in (step.minis or ()) if isinstance(m, dict)
+                    and m.get("rung")]):
+        # COMMITTED HERE, EXPLICITLY. `record_flow` only flushes — it is a helper and must not
+        # decide when a request's transaction ends. But this is the last write in the handler, and
+        # `_record_outcome` above has already committed, so a flush with nothing after it is rolled
+        # back at request teardown. That is exactly how the first live run wrote nothing while the
+        # same call succeeded when driven directly against the session.
+        db.commit()
     # DOES THE TAB HAVE TO SURVIVE? Terminal for the ladder is not finished in the world.
     # Measured live 2026-08-04: an application sitting on smartapply's review step — complete,
     # one click from sent — was parked because Submit is the operator's gate, and the cleanup
