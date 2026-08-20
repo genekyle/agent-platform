@@ -58,8 +58,14 @@ def brief(url: str, db) -> dict[str, Any]:
     inst_rate, inst_acts = rate(inst_flows)
     vend_rate, vend_acts = rate(vendor_flows)
 
+    # OUTCOMES: "none recorded" and "none succeeded" are different sentences and must not render
+    # alike. Until 2026-08-20 every flow carried `terminal = NULL`, so the brief reported
+    # `submitted_flows: 0` for a vendor driven nine times — which reads as "tried nine times, never
+    # finished" and meant "we do not record outcomes". Silence presenting as absence, on the one
+    # surface a drive reads before it commits.
     terminals = [f.terminal for f in vendor_flows if f.terminal]
     submitted = sum(1 for t in terminals if t == "submitted")
+    outcomes_known = len(terminals)
 
     # `auth` is the registry's promise and the ladder acts on it, so it is repeated verbatim rather
     # than re-derived here. `account` means this flow WILL stop for the operator.
@@ -92,7 +98,10 @@ def brief(url: str, db) -> dict[str, Any]:
             "mismatch_rate": round(vend_rate, 3) if vend_rate is not None else None,
             "confidence": ("measured" if vend_acts >= MEASURED_AT
                            else "provisional" if vend_acts else "never driven"),
-            "submitted_flows": submitted,
+            # None, never 0, when nothing is recorded — the caller must be able to tell them apart.
+            "submitted_flows": submitted if outcomes_known else None,
+            "outcomes_recorded": outcomes_known,
+            "finish_rate": (round(submitted / outcomes_known, 3) if outcomes_known else None),
             "auth": auth,
         },
         "blockers": blockers,
@@ -117,9 +126,15 @@ def _headline(ats_id, entry, instance, inst_flows, vendor_flows, auth, known) ->
     if not known:
         return f"{name}: never driven here. Nothing to expect — capture everything.{wall}"
     if instance is not None and inst_flows:
-        subs = sum(1 for f in inst_flows if f.terminal == "submitted")
-        been = (f"{len(inst_flows)} flow(s) through THIS employer's tenant"
-                + (f", {subs} submitted" if subs else ""))
+        known = [f for f in inst_flows if f.terminal]
+        subs = sum(1 for f in known if f.terminal == "submitted")
+        if not known:
+            tail = ", outcomes not recorded"
+        elif subs:
+            tail = f", {subs} of {len(known)} submitted"
+        else:
+            tail = f", none of {len(known)} finished"
+        been = f"{len(inst_flows)} flow(s) through THIS employer's tenant{tail}"
     elif instance is not None:
         been = "this tenant has been observed but never driven end to end"
     else:

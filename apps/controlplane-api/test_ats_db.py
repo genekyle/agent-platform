@@ -170,3 +170,68 @@ def test_the_brief_resolves_the_tenant_not_just_the_vendor():
         "https://recruiting.paylocity.com/Recruiting/Jobs/Details/1/Alpha-Co", _FakeDb())
     assert b["instance_key"] == "paylocity:alpha-co"
     assert b["tenant_source"] == "path_regex"
+
+
+def test_none_recorded_and_none_succeeded_are_different_sentences():
+    """The bug this fixed: a vendor driven nine times with no outcomes recorded rendered
+    `submitted_flows: 0`, which reads as 'never finished' and meant 'never recorded'."""
+    import ats_brief
+
+    class _Flow:
+        def __init__(self, terminal=None):
+            self.terminal, self.confirmed, self.mismatched, self.states = terminal, 3, 1, []
+
+    no_outcomes = ats_brief.brief("https://x.wd1.myworkdayjobs.com/job/1",
+                                  _FakeDb(instance=object(), flows=[_Flow(), _Flow()]))
+    assert no_outcomes["vendor"]["submitted_flows"] is None
+    assert no_outcomes["vendor"]["outcomes_recorded"] == 0
+    assert "outcomes not recorded" in no_outcomes["headline"]
+
+    tried_and_failed = ats_brief.brief(
+        "https://x.wd1.myworkdayjobs.com/job/1",
+        _FakeDb(instance=object(), flows=[_Flow("parked:account_wall"), _Flow("abandoned:operator")]))
+    assert tried_and_failed["vendor"]["submitted_flows"] == 0
+    assert "none of 2 finished" in tried_and_failed["headline"]
+
+    won = ats_brief.brief("https://x.wd1.myworkdayjobs.com/job/1",
+                          _FakeDb(instance=object(), flows=[_Flow("submitted"), _Flow("parked:operator")]))
+    assert won["vendor"]["finish_rate"] == 0.5
+    assert "1 of 2 submitted" in won["headline"]
+
+
+def test_record_flow_is_idempotent_per_session_instance_and_job():
+    """A terminal re-flagged must not double the denominator everything else reasons from."""
+    import ats_backfill as bf2, models
+
+    class _Db:
+        def __init__(self): self.added, self._flow = [], None
+        def get(self, m, k): return object()
+        def query(self, m):
+            outer = self
+            class Q:
+                def filter_by(self, **kw): return self
+                def first(self): return outer._flow
+            return Q()
+        def add(self, o):
+            self.added.append(o)
+            if isinstance(o, models.AtsFlow): self._flow = o
+        def flush(self): pass
+
+    db = _Db()
+    args = dict(url="https://une.peopleadmin.com/postings/1", job_key="indeed:a1",
+                terminal="parked:account_wall", session_id=7, platform="peopleadmin")
+    assert bf2.record_flow(db, **args) == "peopleadmin:une"
+    bf2.record_flow(db, **args)
+    assert sum(1 for o in db.added if isinstance(o, models.AtsFlow)) == 1
+
+
+def test_record_flow_never_raises_into_the_terminal_it_describes():
+    """Bookkeeping must not be able to fail the flag it is recording."""
+    import ats_backfill as bf2
+
+    class _Broken:
+        def get(self, *a, **k): raise RuntimeError("db is down")
+    assert bf2.record_flow(_Broken(), url="https://x.test/y", job_key="j",
+                           terminal="submitted") is None
+    # And a missing url is a no-op, not an exception.
+    assert bf2.record_flow(None, url="", job_key="j", terminal="submitted") is None

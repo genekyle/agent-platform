@@ -7167,6 +7167,17 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
     step.tab_url = (((bb.world or {}).get("apply_tab") or {}).get("url") or "")
     step.finish(body.flag, detail)
 
+    # THE JOIN, WRITTEN AT THE ONE MOMENT ALL FOUR FACTS ARE IN HAND — job, terminal, session, tab.
+    # Reconstructing it later has failed on the same missing column every time: the transition
+    # corpus records states without job identity, which is why 63 backfilled flows carry no outcome
+    # and the pre-flight brief could not say whether anyone had ever finished an application on a
+    # given ATS. From here on it can.
+    import ats_backfill as _ats_backfill
+    _ats_backfill.record_flow(
+        db, url=step.tab_url, job_key=step.job_id, terminal=body.flag,
+        session_id=session.id, platform=(step.platform or ""),
+        states=[m.get("rung") for m in (step.minis or ()) if isinstance(m, dict) and m.get("rung")])
+
     # THE ATTEMPT IS OVER — take back an account row whose signup never happened. The account rung
     # writes the row on intent and it legitimately outlives a single crank (a filled form waiting on
     # the operator's click is still live work), but a step reaching a TERMINAL flag is the moment

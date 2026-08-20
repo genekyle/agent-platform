@@ -1,7 +1,13 @@
-"""Fill the ATS tables from the transition corpus — and be honest about what the corpus cannot say.
+"""Get rows INTO the ATS tables — historically from the corpus, and live as flows end.
+
+Two entry points, one module because they write the same rows:
+  * `backfill(db)` — the historical pass over the transition corpus and the observer traces;
+  * `record_flow(db, ...)` — the LIVE write, called when an application reaches a terminal flag.
+
+The live path is what closes the gap the backfill has to apologise for.
 
 The corpus is 356 append-only rows keyed by `session_id`, carrying before/after URL + belief +
-verdict. It does NOT carry a job id, so a backfilled flow cannot be attributed to the application it
+verdict. It does NOT carry a job id, so a BACKFILLED flow cannot be attributed to the application it
 belonged to. That is a finding, not a workaround: **job identity is missing at the point where the
 states are recorded**, which is precisely why 356 traces and 22 applications never joined. Backfill
 writes `job_key = None` and says so rather than guessing from timing.
@@ -14,6 +20,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -334,3 +341,63 @@ def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False,
             "instances": len(instances), "flows": len(flows),
             "characteristics": len(chars), "written": True,
             "caveat": "backfilled flows carry job_key=None — the corpus does not record job identity"}
+
+
+# --- the live write --------------------------------------------------------------------------
+def record_flow(db, *, url: str, job_key: Optional[str], terminal: str,
+                session_id: Optional[int] = None, platform: str = "",
+                states: Optional[list[str]] = None) -> Optional[str]:
+    """Record one finished application against its ATS instance. Returns the instance key.
+
+    Called from `apply_flag`, which is the ONE place that knows all four things at once: the job,
+    the terminal, the session, and the tab it ended on. Every earlier attempt to reconstruct this
+    join after the fact failed on the same missing column — the transition corpus records states
+    without job identity, so 63 backfilled flows carry `job_key = None` and no outcome at all.
+
+    That absence had a cost the day it was measured: the brief reported `submitted_flows: 0` for a
+    vendor driven nine times, which reads as "never finished" and meant "never recorded". A flow
+    written here carries its outcome, so the next drive's pre-flight can say whether anyone has ever
+    got through this ATS — the single most decision-relevant fact before entering one.
+
+    Best-effort and idempotent per (session, instance, job): a bookkeeping row must never be able to
+    fail the terminal it is describing.
+    """
+    import models
+
+    if not url or not terminal:
+        return None
+    try:
+        ats_id = platform or reg.classify_ats(url) or "unknown"
+        tenant, source = ten.tenant_of(url, ats_id)
+        key = ten.instance_key(ats_id, tenant)
+
+        inst = db.get(models.AtsInstance, key)
+        if inst is None:
+            from urllib.parse import urlparse
+            inst = models.AtsInstance(instance_key=key, ats_id=ats_id, tenant=tenant,
+                                      tenant_source=source,
+                                      host=(urlparse(url).hostname or "").lower(),
+                                      sample_url=url[:1000])
+            db.add(inst)
+        if hasattr(inst, "last_seen_at"):
+            inst.last_seen_at = models.utcnow()
+
+        row = (db.query(models.AtsFlow)
+               .filter_by(instance_key=key, session_id=session_id, job_key=job_key)
+               .first())
+        if row is None:
+            row = models.AtsFlow(instance_key=key, ats_id=ats_id, session_id=session_id,
+                                 job_key=job_key)
+            db.add(row)
+        row.terminal = terminal
+        if states:
+            row.states = list(dict.fromkeys(states))
+        db.flush()
+        return key
+    except Exception:  # noqa: BLE001 — never let bookkeeping break a recorded terminal
+        # LOGGED, not swallowed. The first version of this catch hid an AttributeError for a full
+        # test run and the function simply returned None — a silent no-op is the worst shape a
+        # best-effort write can take, because nothing downstream can tell "nothing to do" from
+        # "broken". Make failures loud even when they are non-fatal.
+        logging.getLogger(__name__).exception("record_flow failed for %s (job=%s)", url, job_key)
+        return None
