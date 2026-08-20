@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -119,6 +120,45 @@ async def ats_detail(ats_id: str, db: Session = Depends(get_db)) -> dict[str, An
         "caveat": ("spine_observed is per-flow on purpose — merging flows into one canonical path "
                    "is where a single tenant's quirk becomes a rule about the vendor"),
     }
+
+
+class DislikeBody(BaseModel):
+    """One "do not show me this again", with the card that prompted it."""
+    job_id: str
+    reason: str = ""
+    decided_by: str = "operator"
+    session_id: Optional[int] = None
+    query: str = ""
+    platform: str = ""
+    card: Optional[dict[str, Any]] = None
+
+
+@router.post("/api/job-decisions/dislike")
+async def dislike_job(body: DislikeBody, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Record a job the operator does not want to see again.
+
+    A third verdict beside picked/passed, not a louder pass — see `job_decisions.DISLIKED` for why
+    collapsing them poisons the boundary. Indeed's own thumbs-down teaches Indeed's model; this is
+    the half we keep, and the half a future triage witness can be trained against.
+    """
+    import job_decisions
+    row = job_decisions.record_dislike(
+        db, job_id=body.job_id, reason=body.reason, decided_by=body.decided_by,
+        session_id=body.session_id, query=body.query, platform=body.platform, card=body.card)
+    return {"ok": True, "job_id": row.job_id, "job_key": row.job_key,
+            "decision": row.decision, "reason": row.reason}
+
+
+@router.get("/api/job-decisions/dislikes")
+async def list_dislikes(limit: int = 200, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """What the operator has said they do not want to see — newest first."""
+    import job_decisions
+    rows = job_decisions.dislikes(db, limit=limit)
+    return {"total": len(rows), "dislikes": [
+        {"job_id": r.job_id, "job_key": r.job_key, "reason": r.reason, "query": r.query,
+         "platform": r.platform, "decided_at": r.decided_at,
+         "title": (r.card or {}).get("title"), "company": (r.card or {}).get("company")}
+        for r in rows]}
 
 
 @router.post("/api/ats/backfill")

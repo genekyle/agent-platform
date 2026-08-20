@@ -869,6 +869,9 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # HOW FAR THIS APPLICATION IS FROM SUBMIT, and the screens between here and there. The
         # ladder's tail, rendered — so "what is left" stops being something only the recipe knows.
         "apply_flow": _apply_flow(queue.current() or _parked_step(queue), observer),
+        # WHETHER THIS SEARCH HAS ANOTHER PAGE, read off the results page itself rather than
+        # guessed from the count. Tri-state — `has_next: null` means the reader did not say.
+        "page_meta": (bb.world or {}).get("page_meta"),
         # WHAT WE ALREADY KNOW ABOUT WHERE WE LANDED — the ATS tables, read rather than merely
         # written. Added 2026-08-20: instance history, the vendor's measured mismatch rate, and
         # whether this flow will stop on a human, all with their denominators. The PeopleAdmin
@@ -2416,6 +2419,27 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
                 "detail": f"Could not read the results ({ex.get('detail') or 'extractor said no'})."}
 
     cards = ex.get("jobs") or []
+
+    # IS THERE A PAGE AFTER THIS ONE? The extractor has read it on every page since it was written
+    # — `meta.has_next` is the presence of Indeed's own `pagination-page-next` link — and it was
+    # thrown away here. So the cockpit kept offering "Nothing here · next page" on the LAST page of
+    # a search, which is a button whose only outcome is a refusal (operator, 2026-08-20: "our ui
+    # has a button still that says 'nothing here, next page' which is incorrect, it should know
+    # that there's no other pages").
+    #
+    # Stored as a tri-state: `None` when the reader did not say, because "we did not look" and
+    # "there is no next page" must not render alike — the same rule `_parked_all` keeps for
+    # `tab_open`.
+    _meta = ex.get("meta") or {}
+    bb.world = dict(bb.world or {})
+    bb.world["page_meta"] = {
+        "page": page,
+        "has_next": _meta.get("has_next"),
+        "total_results": _meta.get("total_results"),
+        "visible_pages": _meta.get("visible_pages") or [],
+        "read_count": len(cards),
+    }
+
     # The search is the query, the session is the browser (2026-08-10): recording a page is the
     # moment a search becomes real, so the row is ensured here — same tuple reuses, a new query
     # in the same session mints a sibling — and every card on the page joins it.

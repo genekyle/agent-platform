@@ -29,6 +29,24 @@ logger = logging.getLogger("job_decisions")
 PICKED = "picked"
 PASSED = "passed"
 
+#: A THIRD VERDICT, AND IT IS NOT A STRONGER `passed`.
+#:
+#: Passing is weak and situational — "not this one, out of these fifteen, today". Disliking is
+#: durable and about the KIND — "do not show me this again". Collapsing them would poison the
+#: boundary in the direction that costs most: a model trained on passes-as-dislikes learns to
+#: reject the eleven jobs that merely lost a comparison, and one trained on dislikes-as-passes
+#: never learns the boundary at all.
+#:
+#: Recorded 2026-08-20, after the operator disliked several results on Indeed by hand and asked
+#: for it to enter our system too: "maybe something i should instantiate into our system so it
+#: learns that there are jobs we don't want to see". Indeed's own thumbs-down teaches Indeed; this
+#: is the half we keep.
+DISLIKED = "disliked"
+
+#: Every verdict a decider may write. Anything else is a caller bug and is refused rather than
+#: stored — an unrecognised verdict in a training ledger is worse than a missing row.
+DECISIONS = (PICKED, PASSED, DISLIKED)
+
 
 def _canonical_key(db: Session, job_id: str) -> Optional[str]:
     """The live canonical key for a sighting, following any merge tombstone. None when the job
@@ -138,3 +156,37 @@ def summary(db: Session) -> dict[str, Any]:
         "by_decider": by_decider,
         "distinct_jobs": len({r.job_key or r.job_id for r in rows}),
     }
+
+
+def record_dislike(db: Session, *, job_id: str, reason: str = "", decided_by: str = "operator",
+                   session_id: Optional[int] = None, query: str = "", platform: str = "",
+                   search_id: Optional[int] = None, card: Optional[dict[str, Any]] = None
+                   ) -> JobDecision:
+    """Record "do not show me this again", as its own verdict rather than a loud `passed`.
+
+    One row, same table, same joins — the decision ledger was built for the negatives (its own
+    docstring calls them "the perishable half"), and this is the strongest negative there is. It
+    carries the CARD, so what the job actually said at the time survives the page moving on; a
+    dislike whose text is gone can never teach why.
+
+    Deliberately does NOT touch `Job.status`. Status is what we intend to do about a requisition;
+    a dislike is about the KIND, and conflating them would make un-disliking a role mean
+    resurrecting a dead requisition.
+    """
+    row = JobDecision(
+        job_id=job_id, job_key=_canonical_key(db, job_id), decision=DISLIKED,
+        decided_by=decided_by, reason=(reason or "").strip()[:500],
+        session_id=session_id, query=query, platform=platform, search_id=search_id,
+        card=card or {},
+    )
+    db.add(row)
+    db.commit()
+    logger.info("disliked %s (%s)", job_id, reason or "no reason given")
+    return row
+
+
+def dislikes(db: Session, *, limit: int = 200) -> list[JobDecision]:
+    """Everything the operator has said they do not want to see, newest first."""
+    return list(db.scalars(
+        select(JobDecision).where(JobDecision.decision == DISLIKED)
+        .order_by(JobDecision.decided_at.desc()).limit(limit)))

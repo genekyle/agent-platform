@@ -265,6 +265,10 @@ function decideFocus(p, results, picks, qs) {
   // time — the STANDING select rung allows adding picks — but the subtitle carries the record
   // forward so "pick more or advance" doesn't read like nothing happened.
   const allDone = qs.total > 0 && qs.done === qs.total;
+  // ONLY AN EXPLICIT `false` RETIRES THE NEXT-PAGE MOVE. `has_next: null` means the reader did not
+  // report, and "we did not look" must not render as "there is nothing there" — the same tri-state
+  // discipline `_parked_all` keeps for `tab_open`.
+  const exhausted = p.page_meta?.has_next === false;
   return {
     kind: "choose",
     title: `Page ${p.page ?? 1} · ${results.length} result${results.length === 1 ? "" : "s"}`,
@@ -276,14 +280,31 @@ function decideFocus(p, results, picks, qs) {
     // Same move as on the read focus: a query that is not yielding is abandoned here, and it
     // costs the query rather than the signed-in session.
     searchAgain: true,
+    exhausted,
     // Neither is disabled at 0 picks: "nothing on this page" is a real answer and the page still
     // counts as reviewed. Taking that away strands a page of nothing-for-me behind a refusal.
     primary: { label: picks.length ? `Take ${picks.length} · apply here` : "Take none · stay",
       endpoint: "/choose", body: { advance: false },
       why: "Queue these applications and stay on this page to work them." },
-    alternates: [{ label: picks.length ? `Take ${picks.length} · next page` : "Nothing here · next page",
-      endpoint: "/choose", body: { advance: true },
-      why: "Record the picks and turn to the next page of results." }],
+    // THE LAST PAGE HAS NO NEXT PAGE, AND THE BUTTON USED TO CLAIM OTHERWISE.
+    //
+    // `page_meta.has_next` is Indeed's own pagination-next link, read on every page and thrown
+    // away until 2026-08-20. Without it the cockpit offered "Nothing here · next page" on the
+    // final page of a search — an affordance whose only outcome is a refusal, which is the same
+    // lie-shaped control the `realign` guard above exists to prevent.
+    //
+    // Tri-state on purpose: only an explicit `false` retires the button. `null` means the reader
+    // did not say, and a page we did not look at must keep offering the move.
+    alternates: [exhausted
+      ? { label: picks.length ? `Take ${picks.length} · finish this search`
+                              : "No more pages · finish this search",
+          endpoint: "/choose", body: { advance: false, complete: true },
+          why: "This was the last page of results — Indeed offers no next page. Recording the "
+             + "picks closes the search out; every job it showed us stays on the ledger under "
+             + "this query." }
+      : { label: picks.length ? `Take ${picks.length} · next page` : "Nothing here · next page",
+          endpoint: "/choose", body: { advance: true },
+          why: "Record the picks and turn to the next page of results." }],
   };
 }
 
@@ -368,14 +389,38 @@ function executeFocus(p, step, nextAction) {
   // Declaring the next search leaves the park exactly as it is; the backend harvests it into
   // the session-level parked list, where Step back in still reaches it.
   if ((step.terminal || "").startsWith("parked")) {
+    // DOES THE TAB IT PROMISED TO COME BACK TO STILL EXIST?
+    //
+    // The backend has answered this since 2026-08-13 — `_parked_all` compares each parked step's
+    // recorded `tab_url` against the LIVE window and publishes `tab_open`, tri-state, precisely
+    // because "a shutdown closes the tab and anything typed into it goes with it". The focus never
+    // asked. So the cockpit kept offering "Step back in" over a tab that no longer existed, which
+    // is the fact existing and the seam that needs it not consulting it (operator, 2026-08-20:
+    // "we actually have stale ui in our controller asking us if we want to step back in ... make
+    // sure that never happens again like checking to see if the tab exists").
+    //
+    // It is NOT removed when the tab is gone — reopening still works, it just starts the page's
+    // ladder over instead of resuming. The button tells the truth about which one you are getting,
+    // because an affordance that silently means something else is worse than one that is absent.
+    const parkedRow = (p.parked || []).find((r) => r.job_id === step.job_id) || null;
+    const tabGone = parkedRow?.tab_open === false;
     return { ...base, kind: "application", parked: step.terminal,
       flow: p.apply_flow || null, applied,
       searchAgain: true,
-      why: step.terminal_detail
-        || "This application parked for you. Stepping back in resumes it where the page really is.",
-      primary: { label: "Step back in", endpoint: "/apply_reopen",
+      tabGone,
+      why: tabGone
+        ? "The tab this application parked on is gone — closed with the session or by a cleanup. "
+          + "Anything typed into it that was never saved on the employer's side went with it, so "
+          + "this starts the page's ladder over rather than resuming where it stopped."
+        : (step.terminal_detail
+           || "This application parked for you. Stepping back in resumes it where the page really is."),
+      primary: { label: tabGone ? "Start this application over" : "Step back in",
+        endpoint: "/apply_reopen",
         body: { job_id: step.job_id, reason: "operator stepped back in from the cockpit" },
-        why: "Reopen the parked application and re-walk this page's ladder from the top." },
+        why: tabGone
+          ? "Its tab is closed, so there is nothing to resume — this re-walks the page's ladder "
+            + "from the top."
+          : "Reopen the parked application and re-walk this page's ladder from the top." },
       alternates: [] };
   }
 

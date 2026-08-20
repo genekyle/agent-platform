@@ -9312,3 +9312,50 @@ pane failed to register three times today (Submitted, Open the posting, Stop thi
 by hand and has not seen it. Each was confirmed by dispatching the exact endpoint and body the button
 carries — but "I could not press it" is not evidence the button is broken, and I reported it as one
 earlier today. It is not.
+
+## 2026-08-20 (fourth) — three affordances that lied, and a verdict we never had
+
+**ALL THREE UI BUGS WERE THE SAME SHAPE: THE FACT EXISTED AND THE SEAM THAT NEEDED IT DID NOT ASK.**
+
+**"Step back in" over a tab that is gone.** `_parked_all` has published `tab_open` — tri-state,
+judged against the LIVE window — since 2026-08-13, written for exactly this ("a shutdown closes the
+tab, and anything typed into it that was never saved server-side goes with it"). The cockpit's
+parked focus never read it, so it kept offering to resume a page that no longer existed. Now the
+button tells the truth about which thing you are getting: **"Step back in"** when the tab is there,
+**"Start this application over"** when it is not, with the cost stated. Not removed — reopening
+still works, it just re-walks the ladder instead of resuming, and an affordance that silently means
+something else is worse than one that is absent.
+
+**"Nothing here · next page" on the last page.** Indeed's own `pagination-page-next` link has been
+read into `meta.has_next` on every page since the extractor was written, and `_review_page` threw
+the whole `meta` away. So the final page of a search offered a button whose only outcome is a
+refusal. `page_meta` now rides on the panel and the alternate becomes **"No more pages · finish this
+search"**. Tri-state again, and the reason is the same one `_parked_all` gives: only an explicit
+`false` retires the move, because *"we did not look"* and *"there is nothing there"* must not render
+alike.
+
+*Both are the week's recurring failure in its purest form.* The registry note that predicted the
+Paylocity modal, the URL buried at `.acquisition.page_identity.url`, `tab_open`, `has_next` — four
+times now, the system already knew and nothing asked.
+
+**AND A VERDICT THE LEDGER NEVER HAD.** The operator disliked several results on Indeed by hand:
+*"maybe something i should instantiate into our system so it learns that there are jobs we don't
+want to see."* `JobDecision` had `picked` and `passed`, and **`passed` is not a weak dislike** —
+passing is situational ("not this one, out of these fifteen, today"), disliking is durable and about
+the KIND. Collapsing them fails in whichever direction you choose: passes-as-dislikes teaches a
+model to reject the eleven jobs that merely lost a comparison; dislikes-as-passes never teaches the
+boundary at all. `DISLIKED` is now its own value with a closed vocabulary, `POST
+/api/job-decisions/dislike`, and the CARD stored beside it — a dislike whose text is gone can never
+teach why, which is the same argument the decision ledger was built on. It deliberately does not
+touch `Job.status`: status is what we intend to do about a requisition, a dislike is about the kind,
+and conflating them would make un-disliking a role mean resurrecting a dead one. Indeed's thumbs-down
+teaches Indeed; this is the half we keep.
+
+*Still open, and worth saying:* the dislike has an endpoint and no button. The picker needs a
+per-row control before this collects anything at the rate the operator was disliking by hand, and
+`controlplane-ui` still has no test runner, so all three UI changes are verified by driving
+`deriveCockpit` under node and by the live cockpit rather than by committed tests.
+
+*The search that produced all this:* `report analyst` / Concord NH / 100mi ran to exhaustion —
+**4 pages**, 2 submitted (HopeWell via Indeed quick-apply, Isabella Stewart Gardner Museum via
+Paylocity), 1 parked at a PeopleAdmin account wall.
