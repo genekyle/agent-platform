@@ -2,10 +2,29 @@
 // JSON plumbing so every workspace panel talks to the API the same way.
 export const API = import.meta.env.VITE_API_BASE_URL;
 
+// FastAPI's 422 `detail` is a LIST of {loc, msg} dicts, not a string. Interpolating it raw
+// rendered `[object Object]` in every error box, which is how a validation failure read to the
+// operator as "nothing happened" — including the inert Submitted button (found 2026-08-19,
+// explained 2026-08-20: job_id undefined -> pre-handler 422 -> unreadable detail).
+function describeDetail(detail) {
+  if (!detail) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        if (typeof d === "string") return d;
+        const loc = (d?.loc || []).filter((p) => p !== "body").join(".");
+        return loc ? `${loc}: ${d?.msg || JSON.stringify(d)}` : d?.msg || JSON.stringify(d);
+      })
+      .join("; ");
+  }
+  try { return JSON.stringify(detail); } catch { return String(detail); }
+}
+
 async function unwrap(r) {
   if (!r.ok) {
     const detail = (await r.json().catch(() => ({})))?.detail;
-    throw new Error(detail || `HTTP ${r.status}`);
+    throw new Error(describeDetail(detail) || `HTTP ${r.status}`);
   }
   return r.json();
 }

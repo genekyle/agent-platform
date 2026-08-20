@@ -211,6 +211,22 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
     setViewMoment(sel.kind === "rung" && sel.id === `select:${p.page ?? 1}` ? "choose" : null);
   };
 
+  // ONE flag handler, and it refuses out loud when no job is in focus. On a parked focus
+  // `cycle.application` is null, so the old inline closures posted `job_id: undefined` — which
+  // JSON.stringify DROPS, FastAPI rejects at validation before the handler (nothing journals),
+  // and the operator saw nothing. That inert press sat on the single most consequential button
+  // in the system for a day (the Gardner Museum submission, 2026-08-19; explained 2026-08-20).
+  // Same shape as the 2026-08-10 finding in lifecycle.js — third sighting pins it here for good.
+  const flagJob = (flag, detail, jobId) => {
+    const jid = jobId || cockpit.cycle.application?.job_id;
+    if (!jid) {
+      setError(`Cannot record "${flag}" — no application is in focus to flag. Open the job's own `
+               + "row (its More menu names the job) so the flag carries a job_id.");
+      return null;
+    }
+    return call("/apply_flag", { job_id: jid, flag, detail });
+  };
+
   return (
     <div ref={rootRef} className="cockpit-now">
       <div className="cockpit-now__heading">
@@ -309,17 +325,13 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
           // The job defaults to the ATTENTION step (the focus's own More menu), but any caller
           // may name one — which is what lets a queued step further down the list be ended
           // without touching the application in flight.
-          onFlag={(flag, detail, jobId) => call("/apply_flag", {
-            job_id: jobId || cockpit.cycle.application?.job_id, flag, detail,
-          })}
+          onFlag={flagJob}
           picks={picks} armed={armed} onPick={pick} onClear={clearPicks}
           note={note} setNote={setNote}
           form={form} setForm={setForm}
         />
         <NowContext panel={p} cockpit={cockpit} selection={selection} busy={busy}
-                    onFlag={(flag, detail, jobId) => call("/apply_flag", {
-                      job_id: jobId || cockpit.cycle.application?.job_id, flag, detail,
-                    })}
+                    onFlag={flagJob}
                     onOpenLens={onOpenLens} onOpenTrace={onOpenTrace} />
       </div>
 
