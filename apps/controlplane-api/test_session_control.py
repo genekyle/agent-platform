@@ -5818,6 +5818,18 @@ def test_use_source_refuses_a_field_that_is_not_the_how_did_you_hear_question():
     assert _ff.answers_how_did_you_hear("How did you hear about this position?")
 
 
+def test_identity_how_did_you_hear_follows_the_job_ref_not_a_constant():
+    """The bunch fill's identity default answered "Indeed" regardless of which engine the
+    application came from — named wrong by the 2026-08-17 LinkedIn run, where every LinkedIn-sourced
+    fill would have claimed Indeed. The default now resolves from the job ref's engine prefix
+    through `apply_source`, and with no job in hand it says "Other" — a truthful answer for an
+    application we cannot place, never another engine's name."""
+    assert sc._identity_defaults("indeed:abc123")["how_did_you_hear"] == "Indeed"
+    assert sc._identity_defaults("linkedin:4012345678")["how_did_you_hear"] == "LinkedIn"
+    assert sc._identity_defaults(None)["how_did_you_hear"] == "Other"
+    assert sc._identity_defaults("companysite:xyz")["how_did_you_hear"] == "Other"
+
+
 # --- the observer is the basis of the panel, not a decoration ---------------------------------
 #
 # `_view` documented itself as rendering the observer's verdict "INSTEAD of trusting the recipe

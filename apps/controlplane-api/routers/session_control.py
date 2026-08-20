@@ -4189,16 +4189,21 @@ def form_fill_slug(name: str) -> str:
     return "_".join("".join(c if c.isalnum() else " " for c in (name or "").lower()).split())[:40]
 
 
-def _identity_defaults() -> dict[str, str]:
+def _identity_defaults(job_id: Optional[str] = None) -> dict[str, str]:
     """Account-derived values that fill identity fields without a stored answer, plus the apply
-    source. `how_did_you_hear` is Indeed with high confidence — the application literally arrived
-    from Indeed."""
+    source. `how_did_you_hear` is resolved from WHERE THIS APPLICATION CAME FROM — the engine
+    prefix of the job ref — through the same `apply_source` table the prompt driver reads. It was
+    the constant "Indeed" until 2026-08-20, which the 08-17 LinkedIn run named as wrong on every
+    LinkedIn-sourced application; with no job in hand it resolves to "Other", a truthful answer
+    for an application we cannot place, never another engine's name."""
+    import apply_source
     import ats_accounts
     return {
         "first_name": ats_accounts.default_first_name(),
         "last_name": ats_accounts.default_last_name(),
         "email": ats_accounts.default_username(),
-        "how_did_you_hear": "Indeed",
+        "how_did_you_hear": apply_source.source_candidates(
+            apply_source.source_from_job_id(job_id))[0],
     }
 
 
@@ -4309,7 +4314,11 @@ def _fill_plan_for(bb: Any, fields: list[dict[str, Any]], db: Session) -> list[d
                     "value": r.value, "input_hint": r.input_hint,
                     "question_patterns": r.question_patterns or [],
                     "options": r.options or []} for r in rows]
-    return form_fill.plan(fields, answers=answers, identity=_identity_defaults(),
+    # The identity carries the apply source, so it must know WHICH application is open — the
+    # queue's current step names the job ref this fill is for.
+    step = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
+    return form_fill.plan(fields, answers=answers,
+                          identity=_identity_defaults(step.job_id if step else None),
                           answer_rows=answer_rows)
 
 
@@ -6144,7 +6153,7 @@ def _ats_brief_for_view(bb: Any, observer: Any) -> Optional[dict[str, Any]]:
         db = SessionLocal()
         return ats_brief.brief(url, db)
     except Exception:  # noqa: BLE001 — a hint must never take the cockpit down
-        logger.exception("ats_brief failed for the session view")
+        logging.getLogger(__name__).exception("ats_brief failed for the session view")
         return None
     finally:
         if db is not None:
