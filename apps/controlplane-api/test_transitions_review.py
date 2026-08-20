@@ -264,3 +264,32 @@ def test_the_train_on_label_flag_really_gates(corpus, monkeypatch):
     assert out.status_code == 200
     assert out.json()["training_queued"] is False
     assert calls == []
+
+
+def test_a_mismatched_act_does_not_train_an_edge_however_confident_the_witnesses(corpus, tmp_path,
+                                                                                 monkeypatch):
+    """The verdict is read, not ignored (2026-08-20). A `mismatch` is the world disagreeing with
+    the act's declared expectation; confident witnesses over a mismatched act used to train the
+    edge exactly as hard as a confirmed one — teaching the planner the roads we most doubt. Only
+    a teacher label can rehabilitate such a row."""
+    monkeypatch.setattr(tr, "_artifacts_root", lambda: tmp_path)
+
+    def _seed(verdict, n):
+        for _ in range(n):
+            before = sr.Observation(ts="t0", ok=True, url="https://a.test/1")
+            before.belief = {"state": "search_results", "uncertainty": {"state": 0.2},
+                             "rationale": "r"}
+            after = sr.Observation(ts="t1", ok=True, url="https://a.test/2")
+            after.belief = {"state": "job_posting", "uncertainty": {"state": 0.2},
+                            "rationale": "r"}
+            sr.record_transition(session_id=62, rung_id="open_pane", action={"rung": "open_pane"},
+                                 expect=sr.Expectation(kind="content_changed"), before=before,
+                                 after=after, changes=sr.diff(before, after), verdict=verdict,
+                                 evidence="e", claimed="ok")
+
+    _seed(sr.CONFIRMED, 3)
+    _seed(sr.MISMATCH, 2)
+    out = client.post("/api/transitions/train").json()
+    assert out["ok"] is True
+    assert out["eligible"] == 3
+    assert out["skipped"]["mismatched_act"] == 2

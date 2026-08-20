@@ -33,6 +33,17 @@ def artifacts_root() -> Path:
     return base
 
 
+#: Self-supervision gate: a transition half may label ITSELF when the step's verdict is
+#: `confirmed` (the act declared where it would land and the world agreed) AND the witnesses'
+#: own state-uncertainty is under this ceiling. Same number as the transition trainer's
+#: MAX_TRAIN_UNCERTAINTY (routers/transitions.py) and for the same reason: the observer clamps a
+#: witness split to >= 0.5, so `< 0.5` admits only rows where the witnesses actually agreed.
+#: Three independent sources concurring — declared expectation, observed world, witness belief —
+#: is a label nobody had to write. Found 2026-08-20: 146 confirmed rows sat beside 16 teacher
+#: labels, and the trainer read only the teacher's.
+MAX_SELF_LABEL_UNCERTAINTY = 0.5
+
+
 @dataclass
 class Row:
     filename: str
@@ -47,6 +58,12 @@ class Row:
     #: Kept per-row so the census can report drift in EVERY source — a path that resolves only
     #: by fallback is provenance rot worth seeing, wherever the row came from (module header).
     screenshot_how: str = ""
+
+    #: Who authored the label: "db" (TrainingCapture), "teacher" (a correction written by someone
+    #: who watched the drive), or "self" (the confirmed-verdict gate above). Provenance rides
+    #: with the row so the census can A/B the corpora — a self-supervised corpus that cannot be
+    #: compared against the teacher-only one is a corpus you cannot argue with.
+    label_source: str = "db"
 
     _artifact: Optional[dict[str, Any]] = None
 
@@ -91,8 +108,26 @@ def _resolve_screenshot(raw: Optional[str]) -> tuple[Optional[Path], str]:
     return None, ""
 
 
-def transition_label_rows() -> list[Row]:
-    """Teacher-labeled transition halves as witness training rows.
+def _self_label(row: dict[str, Any], half: str) -> str:
+    """The state this half may claim for ITSELF, or "" — the MAX_SELF_LABEL_UNCERTAINTY gate.
+
+    Strictly `verdict == "confirmed"`: a `read_only` row never declared an expectation, so there
+    is no third witness to concur, and a `mismatch` is the world disagreeing — the one row that
+    must never label itself.
+    """
+    if row.get("verdict") != "confirmed":
+        return ""
+    belief = ((row.get(half) or {}).get("belief")) or {}
+    state = (belief.get("state") or "").strip()
+    unc = (belief.get("uncertainty") or {}).get("state")
+    if not state or unc is None or unc >= MAX_SELF_LABEL_UNCERTAINTY:
+        return ""
+    return state
+
+
+def transition_label_rows(*, include_self_supervised: bool = True) -> list[Row]:
+    """Labeled transition halves as witness training rows — teacher corrections first, and then
+    (2026-08-20) the corpus labeling ITSELF where the evidence concurs.
 
     The transition corpus is the spine (2026-08-09 refocus): it is the only corpus that grows
     during drives, every row carries its screenshots, and a teacher correction stamps BOTH
@@ -101,12 +136,16 @@ def transition_label_rows() -> list[Row]:
     and the witnesses stayed frozen on the pre-2026-07-30 DB corpus — the cold-start circle
     (labels can't accrue because witnesses are uncertain because labels don't accrue) closed
     only on paper. One labeled transition is two witness examples; this is where they enter.
+
+    The self-supervised tier (`_self_label`) runs strictly BELOW the teacher: an artifact the
+    teacher has spoken about never takes a self label, in either direction — a correction is a
+    disagreement with the belief by construction, so letting the belief also train would feed
+    the witness both sides of an argument the teacher already settled.
     """
     root = artifacts_root() / "transitions"
     if not root.exists():
         return []
-    seen: set[tuple[str, str]] = set()
-    rows: list[Row] = []
+    raw: list[dict[str, Any]] = []
     for path in sorted(root.glob("session_*.jsonl")):
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -117,32 +156,56 @@ def transition_label_rows() -> list[Row]:
             if not line:
                 continue
             try:
-                row = json.loads(line)
+                raw.append(json.loads(line))
             except Exception:
                 continue
-            correction = row.get("teacher_correction") or {}
-            for half, label_key in (("before", "before_state"), ("after", "after_state")):
-                state = (correction.get(label_key) or "").strip()
-                obs = row.get(half) or {}
-                artifact_name = obs.get("artifact") or ""
-                if not state or not artifact_name:
-                    continue
-                key = (artifact_name, state)
-                if key in seen:      # an after-half is often the next row's before-half
-                    continue
-                seen.add(key)
-                artifact_path = artifacts_root() / "observer-traces" / artifact_name
-                shot, how = _resolve_screenshot(obs.get("screenshot"))
-                rows.append(Row(
-                    filename=artifact_name,
-                    state=state,
-                    url=obs.get("url") or "",
-                    domain_id="",
-                    artifact_path=artifact_path if artifact_path.exists() else None,
-                    screenshot_path=shot,
-                    facets=facets_for(state, url=obs.get("url") or "", domain_id=""),
-                    screenshot_how=how,
-                ))
+
+    seen: set[tuple[str, str]] = set()
+    teacher_spoke: set[str] = set()      # artifacts whose label the teacher owns
+    rows: list[Row] = []
+
+    def _emit(row: dict[str, Any], half: str, state: str, source: str) -> None:
+        obs = row.get(half) or {}
+        artifact_name = obs.get("artifact") or ""
+        if not state or not artifact_name:
+            return
+        if source == "self" and artifact_name in teacher_spoke:
+            return
+        key = (artifact_name, state)
+        if key in seen:      # an after-half is often the next row's before-half
+            return
+        if source == "self" and any(a == artifact_name for a, _ in seen):
+            return           # a different state already claimed this artifact — do not contradict
+        seen.add(key)
+        if source == "teacher":
+            teacher_spoke.add(artifact_name)
+        artifact_path = artifacts_root() / "observer-traces" / artifact_name
+        shot, how = _resolve_screenshot(obs.get("screenshot"))
+        rows.append(Row(
+            filename=artifact_name,
+            state=state,
+            url=obs.get("url") or "",
+            domain_id="",
+            artifact_path=artifact_path if artifact_path.exists() else None,
+            screenshot_path=shot,
+            facets=facets_for(state, url=obs.get("url") or "", domain_id=""),
+            screenshot_how=how,
+            label_source=source,
+        ))
+
+    # Pass 1 — the teacher's word, and the full set of artifacts it covers.
+    for row in raw:
+        correction = row.get("teacher_correction") or {}
+        for half, label_key in (("before", "before_state"), ("after", "after_state")):
+            _emit(row, half, (correction.get(label_key) or "").strip(), "teacher")
+
+    # Pass 2 — the corpus's own confirmed rows, strictly beneath the teacher.
+    if include_self_supervised:
+        for row in raw:
+            if row.get("teacher_correction"):
+                continue      # the teacher looked at this row; its beliefs are sub judice
+            for half in ("before", "after"):
+                _emit(row, half, _self_label(row, half), "self")
     return rows
 
 
@@ -202,12 +265,18 @@ def load_rows(*, require_screenshot: bool = False,
 
     if include_transitions:
         census["superseded_by_teacher"] = 0
+        census["from_self_supervision"] = 0
         known = {(r.filename, r.state) for r in rows}
         by_filename = {r.filename: i for i, r in enumerate(rows)}
         for row in transition_label_rows():
             if (row.filename, row.state) in known:
                 continue
             if row.filename in by_filename:
+                if row.label_source != "teacher":
+                    # A SELF label never overrules a human-written DB label — the ranking is
+                    # teacher > db > self, and a contradiction between the lower two is exactly
+                    # the case where somebody once bothered to write the label down.
+                    continue
                 # SAME capture, DIFFERENT label: the teacher who watched the drive outranks the
                 # older DB label — training both would feed the witness contradictory ground
                 # truth on exactly the states someone bothered to correct. The DB row is
@@ -221,6 +290,8 @@ def load_rows(*, require_screenshot: bool = False,
                 continue
             census["labeled"] += 1
             census["from_transitions"] += 1
+            if row.label_source == "self":
+                census["from_self_supervision"] += 1
             if row.artifact_path:
                 census["with_artifact"] += 1
             else:

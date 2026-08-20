@@ -308,7 +308,7 @@ def train_from_corpus() -> dict[str, Any]:
     import state_transition
 
     eligible: list[_CorpusEdge] = []
-    skipped = {"no_belief": 0, "uncertain": 0}
+    skipped = {"no_belief": 0, "uncertain": 0, "mismatched_act": 0}
     taught = 0
     for c in sr.list_corpora():
         for row in sr.read_transitions(c["key"], limit=1000):
@@ -329,6 +329,14 @@ def train_from_corpus() -> dict[str, Any]:
                     from_state=t_before, to_state=t_after,
                     action=str(row.get("rung") or "any")))
                 taught += 1
+                continue
+            # THE VERDICT IS READ, NOT IGNORED (2026-08-20). A `mismatch` row is the world
+            # disagreeing with the act's declared expectation — confident witnesses over a
+            # mismatched act trained the edge exactly as hard as a confirmed one, which teaches
+            # the planner the roads we most doubt. Only a teacher label (above) can rehabilitate
+            # such a row; the witness-confidence tier below never sees it.
+            if row.get("verdict") == "mismatch":
+                skipped["mismatched_act"] += 1
                 continue
             b_state, a_state = before.get("state"), after.get("state")
             if not b_state or not a_state:

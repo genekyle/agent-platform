@@ -152,3 +152,103 @@ def test_a_teacher_label_supersedes_a_conflicting_db_label(spine, monkeypatch):
     states_for_a1 = [r.state for r in rows if r.filename == "a1.json"]
     assert states_for_a1 == ["indeed_search_results"], "the teacher's label replaced the DB's"
     assert census["superseded_by_teacher"] == 1
+
+
+def _belief(state, unc=0.2):
+    return {"state": state, "uncertainty": {"state": unc}}
+
+
+def _confirmed_row(**kw):
+    """A confirmed, teacher-untouched row whose witnesses agreed — the self-supervision shape."""
+    row = _labeled_row(**{k: v for k, v in kw.items() if k not in ("b_unc", "a_unc", "verdict")})
+    del row["teacher_correction"]
+    row["verdict"] = kw.get("verdict", "confirmed")
+    row["before"]["belief"] = _belief("indeed_serp", kw.get("b_unc", 0.2))
+    row["after"]["belief"] = _belief("indeed_apply_contact", kw.get("a_unc", 0.2))
+    return row
+
+
+def test_a_confirmed_row_with_agreeing_witnesses_labels_itself(spine):
+    """The 2026-08-20 finding: 146 confirmed rows sat beside 16 teacher labels and the trainer
+    read only the teacher's. Declared expectation + observed world + witness agreement is three
+    sources concurring; that row is a label nobody had to write — tagged `self`, never `teacher`,
+    so the two corpora stay separable."""
+    for name in ("a1.json", "a2.json"):
+        (spine / "observer-traces" / name).write_text("{}")
+    (spine / "transitions" / "session_9.jsonl").write_text(json.dumps(_confirmed_row()) + "\n")
+
+    rows = dataset.transition_label_rows()
+    assert [(r.state, r.filename, r.label_source) for r in rows] == [
+        ("indeed_serp", "a1.json", "self"), ("indeed_apply_contact", "a2.json", "self")]
+
+
+def test_only_a_confirmed_verdict_may_self_label(spine):
+    """`mismatch` is the world disagreeing — the one row that must never label itself — and
+    `read_only` declared no expectation, so there is no third witness to concur."""
+    rows = [_confirmed_row(verdict="mismatch"),
+            _confirmed_row(verdict="read_only"),
+            _confirmed_row(verdict="unobserved")]
+    (spine / "transitions" / "session_10.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n")
+    assert dataset.transition_label_rows() == []
+
+
+def test_split_witnesses_do_not_self_label(spine):
+    """The observer clamps a witness split to uncertainty >= 0.5; such a half stays unlabeled."""
+    (spine / "transitions" / "session_11.jsonl").write_text(
+        json.dumps(_confirmed_row(b_unc=0.5, a_unc=0.5)) + "\n")
+    assert dataset.transition_label_rows() == []
+
+
+def test_the_teacher_owns_any_artifact_it_ever_spoke_about(spine):
+    """A correction is a disagreement with the belief by construction. If the teacher called this
+    artifact something else on ANY row, the belief's claim on it must not train — feeding both
+    sides of a settled argument is how a witness unlearns its corrections."""
+    taught = _labeled_row(before_state="indeed_home", after_state="indeed_serp")
+    # The same after-artifact appears in a later confirmed row whose belief disagrees.
+    disputed = _confirmed_row(before_artifact="a2.json", after_artifact="a3.json")
+    disputed["before"]["belief"] = _belief("somewhere_else", 0.1)
+    (spine / "transitions" / "session_12.jsonl").write_text(
+        json.dumps(taught) + "\n" + json.dumps(disputed) + "\n")
+
+    rows = dataset.transition_label_rows()
+    by_file = {r.filename: r for r in rows}
+    assert by_file["a2.json"].state == "indeed_serp"           # the teacher's word
+    assert by_file["a2.json"].label_source == "teacher"
+    assert by_file["a3.json"].label_source == "self"           # the untouched half still enters
+
+
+def test_a_corrected_rows_beliefs_are_sub_judice(spine):
+    """Even a half the correction did not rename: the teacher looked at this ROW, so its beliefs
+    do not self-label."""
+    row = _labeled_row()
+    row["before"]["belief"] = _belief("indeed_serp", 0.1)
+    row["after"]["belief"] = _belief("indeed_apply_contact", 0.1)
+    row["teacher_correction"] = {"by": "claude-teacher", "note": "half a label",
+                                 "before_state": "indeed_serp", "after_state": ""}
+    (spine / "transitions" / "session_13.jsonl").write_text(json.dumps(row) + "\n")
+
+    rows = dataset.transition_label_rows()
+    assert [(r.filename, r.label_source) for r in rows] == [("a1.json", "teacher")]
+
+
+def test_the_census_counts_self_supervision_separately(spine, monkeypatch):
+    """A self-supervised corpus that cannot be A/B'd against the teacher-only one is a corpus
+    you cannot argue with — `from_self_supervision` is the number that keeps them separable."""
+    for name in ("a1.json", "a2.json"):
+        (spine / "observer-traces" / name).write_text("{}")
+    (spine / "transitions" / "session_14.jsonl").write_text(json.dumps(_confirmed_row()) + "\n")
+
+    class _NoDB:
+        def query(self, *a):
+            class _Q:
+                def filter(self, *a): return self
+                def all(self): return []
+            return _Q()
+        def close(self): pass
+    monkeypatch.setattr("db.SessionLocal", lambda: _NoDB())
+
+    rows, census = dataset.load_rows()
+    assert census["from_self_supervision"] == 2
+    assert census["from_transitions"] == 2
+    assert {r.label_source for r in rows} == {"self"}
