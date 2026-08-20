@@ -293,3 +293,41 @@ def test_a_mismatched_act_does_not_train_an_edge_however_confident_the_witnesses
     assert out["ok"] is True
     assert out["eligible"] == 3
     assert out["skipped"]["mismatched_act"] == 2
+
+
+def test_the_label_queue_serves_only_what_selfsupervision_cannot_claim(corpus):
+    """The split matches who pays (2026-08-20): a confirmed row with agreeing witnesses labels
+    itself and never bills the teacher; the queue holds the remainder, mismatches first — one
+    label there corrects the witnesses AND explains a failed act."""
+    # Self-claimable: confirmed + both sides confident — must NOT queue.
+    _seed_belief_row(70, b_state="indeed_serp", a_state="indeed_apply", b_unc=0.2, a_unc=0.2)
+    # Teacher-worthy: confident witnesses, but the world disagreed.
+    before = sr.Observation(ts="t0", ok=True, url="https://a.test/1")
+    before.belief = {"state": "indeed_serp", "uncertainty": {"state": 0.2}, "rationale": "r"}
+    after = sr.Observation(ts="t1", ok=True, url="https://a.test/1")
+    after.belief = {"state": "indeed_serp", "uncertainty": {"state": 0.2}, "rationale": "r"}
+    sr.record_transition(session_id=70, rung_id="advance", action={"rung": "advance"},
+                         expect=sr.Expectation(kind="content_changed"), before=before,
+                         after=after, changes=sr.diff(before, after), verdict=sr.MISMATCH,
+                         evidence="nothing moved", claimed="ok")
+    # Teacher-worthy: the witnesses were blind.
+    blind_b = sr.Observation(ts="t2", ok=True, url="https://a.test/2")
+    blind_a = sr.Observation(ts="t3", ok=True, url="https://a.test/3")
+    sr.record_transition(session_id=70, rung_id="open", action={"rung": "open"},
+                         expect=sr.Expectation(kind="content_changed"), before=blind_b,
+                         after=blind_a, changes=sr.diff(blind_b, blind_a), verdict=sr.CONFIRMED,
+                         evidence="url moved", claimed="ok")
+
+    out = client.get("/api/transitions/label_queue").json()
+    assert out["remaining"] == 2
+    assert [q["why_queued"] for q in out["queue"]] == ["mismatch", "no_belief"]
+    assert "correct" in out["answer_with"]
+
+    # Answering one drains the queue — the label write is the crank, as everywhere. The queue
+    # entry itself carries the address (key + index + ts); correct THAT row, not rows[0], which
+    # is the self-claimable one and was never queued.
+    q0 = out["queue"][0]
+    client.post(f"/api/transitions/{q0['key']}/correct", json={
+        "index": q0["index"], "ts": q0["ts"], "before_state": "indeed_serp",
+        "after_state": "indeed_serp_blocked", "note": "the page refused; both looks were serp"})
+    assert client.get("/api/transitions/label_queue").json()["remaining"] == 1

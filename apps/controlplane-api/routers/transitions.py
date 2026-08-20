@@ -258,6 +258,62 @@ def _shot_names(row: dict[str, Any]) -> dict[str, Optional[str]]:
     return out
 
 
+# Registered BEFORE /api/transitions/{key}: FastAPI matches in registration order, and
+# the {key} route would otherwise capture "label_queue" as a corpus key (caught by the
+# endpoint's own test on first run, 2026-08-20).
+@router.get("/api/transitions/label_queue")
+def label_queue(limit: int = 20) -> dict[str, Any]:
+    """The teacher's worklist — the rows self-supervision CANNOT claim, ranked by what a label
+    buys (2026-08-20).
+
+    The split is deliberate and matches who pays: a `confirmed` row whose witnesses agreed labels
+    ITSELF (`perception.dataset._self_label`) and never reaches this queue; what remains is
+    exactly where a teacher matters — the world disagreed (`mismatch`, ranked first: one label
+    both corrects the witnesses AND explains a failed act), the witnesses were blind
+    (`no_belief`), or they split (`witness_split`). The teacher here is the operator's own
+    session-Claude (2026-08-09 economics: the attended session is already paid for), answering
+    through `POST /api/transitions/{key}/correct` — which train-on-label then turns into a refit
+    and a possible program recompile, so a label written from this queue teaches three organs at
+    once. `remaining` carries the full backlog size so a shrinking queue is a visible number.
+    """
+    order = {"mismatch": 0, "no_belief": 1, "witness_split": 2}
+    queue: list[dict[str, Any]] = []
+    for c in sr.list_corpora():
+        for row in sr.read_transitions(c["key"], limit=1000):
+            if row.get("teacher_correction"):
+                continue
+            before = (row.get("before") or {}).get("belief") or {}
+            after = (row.get("after") or {}).get("belief") or {}
+            b_state, a_state = before.get("state"), after.get("state")
+            b_unc = (before.get("uncertainty") or {}).get("state")
+            a_unc = (after.get("uncertainty") or {}).get("state")
+            confident = (b_unc is not None and a_unc is not None
+                         and b_unc < MAX_TRAIN_UNCERTAINTY and a_unc < MAX_TRAIN_UNCERTAINTY)
+            verdict = row.get("verdict")
+            if verdict == "confirmed" and b_state and a_state and confident:
+                continue                          # self-supervision owns this row
+            if verdict == "mismatch":
+                why = "mismatch"
+            elif not b_state or not a_state:
+                why = "no_belief"
+            else:
+                why = "witness_split"
+            queue.append({
+                "key": c["key"], "index": row.get("index"), "ts": row.get("ts"),
+                "rung": row.get("rung"), "verdict": verdict, "why_queued": why,
+                "before": {"url": (row.get("before") or {}).get("url"),
+                           "state": b_state, "uncertainty": b_unc},
+                "after": {"url": (row.get("after") or {}).get("url"),
+                          "state": a_state, "uncertainty": a_unc},
+                "page_says": (row.get("changes") or {}).get("page_says") or [],
+                "screenshots": _shot_names(row),
+            })
+    queue.sort(key=lambda q: (order.get(q["why_queued"], 9), str(q.get("ts") or "")))
+    return {"remaining": len(queue), "queue": queue[:limit],
+            "answer_with": "POST /api/transitions/{key}/correct "
+                           "{index, ts, before_state, after_state, note}"}
+
+
 @router.get("/api/transitions/{key}")
 def read_corpus(key: str, limit: int = 200) -> dict[str, Any]:
     """One corpus, oldest first, each row narrated. The raw row rides along untouched —

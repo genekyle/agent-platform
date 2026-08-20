@@ -255,7 +255,28 @@ def diff(before: Observation, after: Observation, *,
                                      expected_new_tab=(expect_new_tab)),
         "window_before": (before.window or {}).get("roles"),
         "window_after": (after.window or {}).get("roles"),
+        # THE PAGE'S OWN EXPLANATION (2026-08-20). A mismatch row used to record that the world
+        # disagreed and throw away the page's stated reason — the one fact that turns "the recipe
+        # is wrong about this page" into "the page is refusing, and it says why". Pure over the
+        # AX candidates both looks already hold: fresh alert-role text the AFTER shows and the
+        # BEFORE did not. Costs nothing; rides into every corpus row.
+        "page_says": _page_says(before, after),
     }
+
+
+_ERROR_ROLES = frozenset({"alert", "alertdialog"})
+
+
+def _page_says(before: Observation, after: Observation) -> list[str]:
+    """Fresh error/alert text the AFTER look shows that the BEFORE did not — capped, deduped."""
+    b = {(c.get("role"), c.get("name")) for c in before.candidates}
+    out: list[str] = []
+    for c in after.candidates:
+        name = str(c.get("name") or "").strip()
+        if (c.get("role") in _ERROR_ROLES and name
+                and (c.get("role"), c.get("name")) not in b and name not in out):
+            out.append(name)
+    return out[:6]
 
 
 def _visual_agreement(b: Optional[dict], a: Optional[dict]) -> Optional[bool]:

@@ -467,3 +467,24 @@ def test_it_still_catches_a_different_job_being_open():
     ex = sr.expectation_for("open_pane", external_id="4451068100", platform="linkedin")
     after = _obs(url="https://www.linkedin.com/jobs/search-results/?currentJobId=9999999999")
     assert sr.verify(ex, sr.diff(_obs(url="https://www.linkedin.com/jobs/"), after), after)[0] == sr.MISMATCH
+
+
+def test_the_diff_keeps_the_pages_own_words():
+    """A mismatch row used to record that the world disagreed and throw away the page's stated
+    reason (2026-08-20). Fresh alert-role text in the AFTER look is the page explaining itself —
+    pure over candidates both looks already hold, so it costs nothing and rides in every row."""
+    import step_runner as sr
+
+    before = sr.Observation(ts="t0", ok=True, url="https://a.test/form", candidates=[
+        {"role": "alert", "name": "Session expires in 5 minutes"},   # pre-existing: not fresh
+        {"role": "button", "name": "Continue"}])
+    after = sr.Observation(ts="t1", ok=True, url="https://a.test/form", candidates=[
+        {"role": "alert", "name": "Session expires in 5 minutes"},
+        {"role": "alert", "name": "Cover Letter is required"},
+        {"role": "alertdialog", "name": "Email Address is required"},
+        {"role": "button", "name": "Continue"}])
+    d = sr.diff(before, after)
+    assert d["page_says"] == ["Cover Letter is required", "Email Address is required"]
+
+    quiet = sr.diff(before, before)
+    assert quiet["page_says"] == []
