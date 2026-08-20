@@ -9480,3 +9480,57 @@ predicted all happened; the census reader deliberately `continue`s past "X is re
 the exact testimony the press-Next strategy exists to harvest. Also ~7,000 removable lines and a
 1.3 GB torch/transformers dependency serving the retired pixel-grounding era, and a capture server
 that advertises `/resolve_answer` at three call sites — an endpoint that does not exist.
+
+## 2026-08-20 (third) — Tier 0 and the self-teaching plumbing, built and cranked once
+
+The audit's build-out, operator-approved ("tier 0 fixes first then the self-teaching plumbing…
+i'll leave the labeling to my claude that i pay for monthly"). All committed with pinned tests;
+controlplane-api 1751 green, mcp 149 green.
+
+**TIER 0 — all six closed.** The dead upload gate reads `extra["mode"]` and treats `rejected`
+like `not_staged`, pinned AT THE ENDPOINT (the driver-level test passed over the bug for nine
+days — where the assertion sits is part of the fix). `apply_flag` observes live once and uses it
+for the verifier, `step.tab_url`, `_record_outcome` and the flow write; `record_flow` gets the
+canonical `job_<hash>` from the sighting row plus the flow's window (first mini → now). The
+backfill deletes only rows it authored and ENRICHES a surviving live row from its latest corpus
+half instead of doubling the denominator. `ats_backfill` resolves its root through
+`settings.observer_artifacts_dir` and reports `traces_dir_missing` instead of a clean-looking
+no-op. The cockpit refuses a flag with no job in focus out loud, and `describeDetail()` flattens
+FastAPI's list-shaped 422s — the blindfold was every cockpit call, not one button.
+
+**SELF-TEACHING — the consumers are attached.** `transition_label_rows()` grew a self-supervision
+tier: `verdict=confirmed` + witness uncertainty < 0.5 labels the half itself (`label_source=
+"self"`), strictly beneath the teacher — an artifact the teacher ever spoke about never takes a
+self label, a corrected row's beliefs are sub judice, and a self row never supersedes a DB label.
+The edge table now skips `mismatch` rows unless teacher-labeled (`skipped.mismatched_act`).
+`recompile_from_new_evidence` closes the one-way stale door with the rule that keeps the pardon
+honest: a (task,state) recompiles ONLY from journal rows newer than the program's `verified_at` —
+stale + the same old rows STANDS. Wired at train-on-label stage 3 and the end of every
+`/api/controller/run` (the run report shows `programs_recompiled`). `GET /api/transitions/
+label_queue` is the teacher's ranked worklist, serving ONLY what self-supervision cannot claim —
+mismatches first, then blind rows, then splits — answered through the existing correct endpoint,
+so one label refits the table, the witnesses, and possibly a program. And `changes.page_says`
+keeps the page's own alert text on every row, pure over candidates both looks already hold.
+
+**CRANKED ONCE ON THE REAL CORPUS, measured.** Witnesses: 343 rows (194 DB + 34 teacher + **115
+self-supervised**; drive-grown half 34 → 149), both witnesses now over **82 states**; promoted,
+previous pointer backed up as `perception_current.json.pre-selfsupervision-2026-08-20`. Edge
+table: 117 eligible (**64 mismatched acts newly excluded**), top-1 0.9 held out.
+
+**TWO LESSONS PAID FOR EN ROUTE.** (1) The conftest's own warning bit a third time: giving
+programs an automatic writer (recompile) let the first full-suite run compile the session-shared
+fixture journal into the REAL `programs/` store — overwriting the live `indeed_apply_questions`
+program with `guard_fields` stripped. `CONTROLLER_PROGRAMS_DIR` now gets the same session-scoped
+conftest redirect as the journal and observer roots; a new append-only writer inherits nothing
+and must be routed by hand. (2) The audit overstated two "unreachable" claims: the supervisor
+HAS run per acting step since S12 and `control_mode` journals whenever authority is wired
+(progressive defaults on) — the 412/427 and 394/427 Nones are dominated by pre-wiring history,
+so the ladder can climb on NEW progressive drives; what was genuinely missing was the refusal
+text (now `page_says`). Measured against docs is not measured against code.
+
+**DEFERRED, with its reason written down:** verify→cache feedback for the select cascade. The
+live apply path does not consult `select_stage` at all (its callers are the manual select
+endpoint and the superseded `runtime/` loop), so wiring eviction there polishes a parked organ —
+it becomes worth doing the day the cascade joins the live loop. The promotion-gate split
+(shadow-agreement doc vs maturity code) is recorded in CONTROLLER_PROMOTION.md pending an
+operator decision.

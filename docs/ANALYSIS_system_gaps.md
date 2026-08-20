@@ -223,3 +223,22 @@ and 45 answered parks are already banked, and every Tier-1 item converts banked 
 labels, programs, or evictions **offline**. New drives keep landing on the same unwired seams and
 re-billing the teacher for pages the system has already paid for. Wire first; the next drive then
 tests the wiring instead of re-purchasing the lesson.
+
+---
+
+## Addendum, same day: what the operator green-lit and what landed
+
+Tier 0: **all six fixed and pinned** (upload gate at the endpoint; live-URL + canonical-key +
+windowed `record_flow`; provenance-scoped backfill delete with live-row enrichment; env-resolved
+data root with `traces_dir_missing`; cockpit `flagJob` guard + readable 422s). Tier 1: the
+self-supervision tier (`label_source="self"`, teacher > db > self), the verdict-aware edge
+trainer (`skipped.mismatched_act`), the new-evidence program recompile at both automatic seams,
+the teacher `label_queue` (mismatches first — session-Claude is the labeler, per the operator),
+and `changes.page_says`. Cranked once on the real corpus: witnesses 343 rows / 82 states with
+115 self-labels, edge table 117 eligible with 64 mismatched acts excluded, top-1 0.9 held out.
+
+Two audit claims corrected against code (see LEARNINGS 2026-08-20 third): the supervisor DOES run
+per acting step and `control_mode` journals on progressive runs — the zero-counts were dominated
+by pre-wiring history; and verify→cache feedback is DEFERRED because the live path does not
+consult the select cascade at all. Tier 2, Tier 3 (dead code), and the Gmail matcher remain open,
+in that order.

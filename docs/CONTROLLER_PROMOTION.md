@@ -63,3 +63,29 @@ what the teacher can see that `bundle_to_prompt` does not encode, and add that f
 - The Controller cockpit panel (Lab → 🧠 Controller) — the operator-facing scoreboard.
 - `docs/PROJECT_STATUS.md` — the status doc states corpus **numbers**, not intentions; the first
   real per-scenario agreement figures belong there once a shadow drive has produced them.
+
+## 2026-08-20 — the two gates do not agree, and only one is enforced (operator decision pending)
+
+The audit measured what this document promises against what the code does:
+
+* **This document's gate (shadow agreement ≥ 90% over ≥ 25 steps) is computed and displayed,
+  enforced nowhere.** No code branches on it — promotion via this gate is a human reading
+  `GET /api/controller/summary`.
+* **The enforced gate is `controller/maturity.py`** (`authority()` grades every progressive
+  turn): CERTIFIED needs 5 verified OKs + a 3-row supervisor-clean tail + 1 approved-uncorrected
+  YELLOW review, and `GREEN_AT = CERTIFIED`. Different units, different evidence, different
+  thresholds.
+* **The two scenarios that clear this document's N ≥ 25 bar are both `*_job_posting` states**,
+  which `TARGET_PARAMETERISED_STATES` hard-caps below autonomy regardless of agreement — under
+  the code's gate they are permanently ineligible, correctly (the action depends on which job is
+  being pursued).
+
+Current measured agreement (loose, 239 paired rows): indeed_job_posting 0.67/60,
+workday_job_posting 0.68/40, indeed_apply_questions 0.80/15. None passes this document's bar
+either.
+
+**The decision to make:** either this document's agreement gate becomes an enforced input to
+`maturity.grade()` (e.g. a floor below TESTING), or this document is rewritten to describe the
+maturity ladder as the single promotion mechanism and shadow agreement as its dashboard metric.
+Until then, the ladder is the truth the loop acts on; nothing here should be quoted as an
+enforcement claim.

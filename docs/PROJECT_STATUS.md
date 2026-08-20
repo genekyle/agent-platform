@@ -75,6 +75,18 @@ is structural — the work IS the drive, and everything below exists to make one
 Tests: controlplane-api 1476 → **1485**, interaction 241 → **244**, mcp 84, controller-evals 7 —
 all green from the worktree with import provenance verified.
 
+## What landed 2026-08-20 (the audit, Tier 0, and the self-teaching plumbing)
+
+The whole-system audit (`ANALYSIS_system_gaps.md`) and its first two build tiers. Six verified
+bugs fixed with pinned tests (dead upload gate; stale-URL/wrong-key/self-destroying writes around
+the day-old `ats_flows`; the cockpit's unreadable 422s and the inert Submitted press). And the
+self-teaching consumers attached: confirmed transitions now label themselves beneath the teacher
+(343 witness rows / 82 states, 115 self-supervised, from zero new drives), the edge table refuses
+mismatched acts, stale programs are pardoned only by new journal evidence — automatically, at
+label-write and drive-end — and `GET /api/transitions/label_queue` hands the session-Claude
+teacher only the rows self-supervision cannot claim, mismatches first. The measure stands: rows
+banked, labels written, parks answered — but each now feeds three organs instead of zero.
+
 ## The per-step loop — status
 
 | Stage | Status | Where | Note |
