@@ -9182,3 +9182,42 @@ bucket earns its place then. Two data points is not enough to build a taxonomy o
 
 *Tests:* `apply_requirements` **9 passed**. Seeded with today's three real flows — the summary
 already shows `resume` at three different kinds and `peopleadmin` blocking on `account`.
+
+## 2026-08-20 — the silo was unjoined, not unjoinable; and the data finally reads
+
+**GAP #1, CLOSED: 675MB OF OBSERVER TRACES NOW RESOLVE TO ATS INSTANCES.** The traces read as
+"no join key" for months because a top-level `.get("url")` returns `None` on **1141 of 1141** files.
+The URL was never missing — captures put it at `.acquisition.page_identity.url`, and the path
+differs by trace kind, so nothing had looked below the top level. One deep search finds one on
+**1093 (96%)**. Instances went **19 → 39** on the fold: Workday 3 → 8, `company_site` 6 → 17,
+Paylocity 2 → 3, plus a Greenhouse tenant the transition corpus had never seen. Characteristics
+20 → 59.
+
+*Traces widen instances and deliberately do NOT create flows.* A trace says "we looked at this
+page"; a flow says "we drove an application here". Folding page views into the flow denominator is
+exactly how a sighting would become a driven application — the same over-generalisation guard as
+everywhere else today, and it has its own test.
+
+**AND THE POINT WAS NOT THE TABLE, IT WAS THAT SOMETHING READS IT.** Operator: *"maximize it in
+terms of usage in our system so we can take advantage of our data rather than silo it and keep it
+from doing nothing … we've built a lot but haven't taken a step back to look at truly what we have."*
+Fair — the ATS tables were a day old and read by nobody. `ats_brief.brief(url, db)` is the consumer,
+wired into `GET /api/ats/brief` **and into the session view itself**, so it appears beside
+`apply_flow` on every crank rather than waiting for someone to query it:
+
+    PeopleAdmin: 1 flow(s) through THIS employer's tenant. Expect an account wall — it will stop for you.
+    Paylocity Recruiting: new tenant of a platform we have driven.
+    Greenhouse: never driven here. Nothing to expect — capture everything.
+
+Three rules it keeps, all learned expensively: **never answer without a denominator** (thin numbers
+render `provisional`, and `never driven` is its own word); **instance before vendor**, with each
+fact labelled by scope, because collapsing them is how one tenant's quirk becomes a rule; and **say
+what is not known** — an empty brief that reads like a clean bill of health is worse than no brief.
+
+**A TEST CAUGHT THE ONE BUG THAT MATTERED.** The first `_headline` dropped the account-wall warning
+whenever `known` was False — so the platforms we have *never driven*, exactly the ones whose wall we
+most want announced before someone spends the approach, were the ones that got no warning. `auth` is
+the registry's promise and is known independently of whether we have been there; the wall now
+appends to every headline. This is the answer the UNE drive needed on 08-19 and could not ask for.
+
+*Tests:* ats_db **16**, and 56 across the touched suites; session_control **262**.

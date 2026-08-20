@@ -869,6 +869,11 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # HOW FAR THIS APPLICATION IS FROM SUBMIT, and the screens between here and there. The
         # ladder's tail, rendered — so "what is left" stops being something only the recipe knows.
         "apply_flow": _apply_flow(queue.current() or _parked_step(queue), observer),
+        # WHAT WE ALREADY KNOW ABOUT WHERE WE LANDED — the ATS tables, read rather than merely
+        # written. Added 2026-08-20: instance history, the vendor's measured mismatch rate, and
+        # whether this flow will stop on a human, all with their denominators. The PeopleAdmin
+        # account wall on 08-19 was predictable from the posting page and nothing was asking.
+        "ats_brief": _ats_brief_for_view(bb, observer),
         # WHAT THE INNER LAYERS ARE GETTING RIGHT. Both are measured on every crank and neither had
         # a surface: the operator asked for the orienter to practise, and practice nobody can see
         # is indistinguishable from no practice at all.
@@ -6091,6 +6096,35 @@ async def apply_teach(session_id: int, body: ApplyTeachBody,
     # the scan) — and "did my answer take?" is the question a correction exists to answer.
     view["last_step"]["form_scan"] = await _form_census(_session_browser_url(session), tab_id)
     return view
+
+
+def _ats_brief_for_view(bb: Any, observer: Any) -> Optional[dict[str, Any]]:
+    """The pre-flight brief for whatever tab the application is on, or None off-application.
+
+    Opens its own short-lived session rather than threading `db` through `_view` and its callers:
+    this is a read-only hint on a view that already does several reads, and widening a signature
+    used in a dozen places to carry it would be the larger change.
+
+    Best-effort by design: a view that 500s because a lookup table was empty would be a worse
+    surface than one that omits a hint, and this is a hint.
+    """
+    from db import SessionLocal
+    db = None
+    try:
+        url = (((bb.world or {}).get("apply_tab") or {}).get("url") or "")
+        if not url and isinstance(observer, dict):
+            url = observer.get("url") or ""
+        if not url:
+            return None
+        import ats_brief
+        db = SessionLocal()
+        return ats_brief.brief(url, db)
+    except Exception:  # noqa: BLE001 — a hint must never take the cockpit down
+        logger.exception("ats_brief failed for the session view")
+        return None
+    finally:
+        if db is not None:
+            db.close()
 
 
 def _apply_tab(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:

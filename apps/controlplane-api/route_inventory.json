@@ -20,6 +20,7 @@
   "GET /api/assets",
   "GET /api/assets/documents",
   "GET /api/ats",
+  "GET /api/ats/brief",
   "GET /api/ats/instances",
   "GET /api/ats/{ats_id}",
   "GET /api/career_search/accounts",

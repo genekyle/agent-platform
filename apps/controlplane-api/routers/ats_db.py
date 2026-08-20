@@ -61,6 +61,16 @@ async def list_ats(db: Session = Depends(get_db)) -> dict[str, Any]:
             "note": "instances/flows are what we DROVE; the catalogue is what we know OF."}
 
 
+@router.get("/api/ats/brief")
+async def ats_brief_for(url: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """What we already know about the ATS behind this URL — the pre-flight, before a drive spends.
+
+    Declared BEFORE `/api/ats/{ats_id}` so the path parameter cannot swallow the literal `brief`.
+    """
+    import ats_brief
+    return ats_brief.brief(url, db)
+
+
 @router.get("/api/ats/instances")
 async def list_instances(ats_id: Optional[str] = None, db: Session = Depends(get_db)) -> dict[str, Any]:
     """One row per employer tenant — the axis a hostname cannot carry."""

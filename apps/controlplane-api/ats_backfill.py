@@ -27,9 +27,70 @@ import ats_tenancy as ten
 #: than any single application takes to drive and shorter than a session's idle stretches.
 FLOW_GAP = timedelta(minutes=45)
 
-DEFAULT_CORPUS = os.path.join(
+_OUTPUT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "apps", "mcp", "output", "transitions")
+    "apps", "mcp", "output")
+DEFAULT_CORPUS = os.path.join(_OUTPUT, "transitions")
+DEFAULT_TRACES = os.path.join(_OUTPUT, "observer-traces")
+
+#: Sidecars — `.ax`, `.meta`, `.vision` — carry no key of their own and belong to the primary trace
+#: whose filename they share. Skipped here; the convention is noted in ANALYSIS_data_silos.md as an
+#: unenforced relationship worth making explicit.
+_SIDECAR_MARKERS = (".ax.", ".meta.", ".vision.")
+
+
+def _deep_url(node: Any, depth: int = 0) -> str:
+    """The first http(s) URL anywhere in a trace.
+
+    THIS FUNCTION IS THE WHOLE POINT OF THE TRACE BACKFILL. 675MB of observer traces read as
+    "no join key" for months because the URL is not at the top level — captures put it at
+    `.acquisition.page_identity.url`, and the path differs by trace kind. A top-level `.get("url")`
+    returns None on 1141 of 1141 files; searching nested finds one on 1093 of them (96%).
+    A negative result needs its search scope in the sentence, or it reads as universal.
+    """
+    if depth > 5:
+        return ""
+    if isinstance(node, dict):
+        for key in ("url", "page_url", "tab_url"):
+            val = node.get(key)
+            if isinstance(val, str) and val.startswith("http"):
+                return val
+        for val in node.values():
+            got = _deep_url(val, depth + 1)
+            if got:
+                return got
+    elif isinstance(node, list):
+        for val in node[:3]:
+            got = _deep_url(val, depth + 1)
+            if got:
+                return got
+    return ""
+
+
+def read_traces(directory: str = DEFAULT_TRACES) -> list[dict[str, Any]]:
+    """Primary observer traces as `{url, kind, ts, session_id}` — the silo, opened.
+
+    Returns the thin projection rather than the trace bodies: this pass exists to establish WHICH
+    ATS instances we have observed, and holding 675MB in memory to learn that would be silly.
+    """
+    out: list[dict[str, Any]] = []
+    for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
+        base = os.path.basename(path)
+        if any(marker in base for marker in _SIDECAR_MARKERS):
+            continue
+        try:
+            with open(path) as fh:
+                body = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            continue
+        url = _deep_url(body)
+        if not url:
+            continue
+        out.append({"url": url,
+                    "kind": base.split("__")[-1].replace(".json", ""),
+                    "ts": base.split("__")[0].replace("-00-00", "+00:00"),
+                    "session_id": body.get("session_id")})
+    return out
 
 
 def _ts(row: dict[str, Any]) -> Optional[datetime]:
@@ -182,15 +243,58 @@ def derive_characteristics(instances: dict[str, InstanceAgg], flows: list[FlowAg
     return out
 
 
-def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False) -> dict[str, Any]:
+def fold_traces(instances: dict[str, InstanceAgg], traces: Iterable[dict[str, Any]]) -> dict[str, int]:
+    """Add instances the observer traces saw but the transition corpus never did.
+
+    Traces are OBSERVATIONS, not flows: a trace says "we looked at this page", not "we drove an
+    application here". So they widen the instance table and the first/last-seen window, and they
+    deliberately do NOT create `AtsFlow` rows — inflating the flow denominator with page views is
+    how a sighting would become a driven application.
+    """
+    from urllib.parse import urlparse
+    seen: dict[str, int] = {}
+    for t in traces:
+        url = t.get("url") or ""
+        ats_id = reg.classify_ats(url) or "unknown"
+        tenant, source = ten.tenant_of(url, ats_id)
+        key = ten.instance_key(ats_id, tenant)
+        seen[key] = seen.get(key, 0) + 1
+        inst = instances.get(key)
+        if inst is None:
+            inst = instances[key] = InstanceAgg(key, ats_id, tenant, source,
+                                                host=(urlparse(url).hostname or "").lower(),
+                                                sample_url=url[:1000])
+        when = None
+        try:
+            when = datetime.fromisoformat(str(t.get("ts")))
+        except Exception:
+            pass
+        if when:
+            inst.first_seen = min(inst.first_seen or when, when)
+            inst.last_seen = max(inst.last_seen or when, when)
+    return seen
+
+
+def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False,
+             traces_dir: Optional[str] = DEFAULT_TRACES) -> dict[str, Any]:
     """Write instances, flows and derived characteristics. Idempotent by key."""
     import models
 
     rows = read_corpus(directory)
     instances, flows = aggregate(rows)
+    trace_counts: dict[str, int] = {}
+    if traces_dir and os.path.isdir(traces_dir):
+        trace_counts = fold_traces(instances, read_traces(traces_dir))
     chars = derive_characteristics(instances, flows)
+    for key, n in trace_counts.items():
+        inst = instances[key]
+        chars.append({"ats_id": inst.ats_id, "instance_key": key, "kind": "state_seen",
+                      "key": "observer_traces", "value": str(n), "confidence": "measured",
+                      "evidence": f"{n} observer trace(s) resolved to this instance by URL",
+                      "observations": n})
     if dry_run:
-        return {"rows": len(rows), "instances": len(instances), "flows": len(flows),
+        return {"rows": len(rows), "traces": sum(trace_counts.values()),
+                "instances": len(instances), "flows": len(flows),
                 "characteristics": len(chars), "written": False}
 
     for inst in instances.values():
@@ -226,6 +330,7 @@ def backfill(db, directory: str = DEFAULT_CORPUS, *, dry_run: bool = False) -> d
         obj.value, obj.confidence = c["value"], c["confidence"]
         obj.evidence, obj.observations = c["evidence"], c["observations"]
     db.commit()
-    return {"rows": len(rows), "instances": len(instances), "flows": len(flows),
+    return {"rows": len(rows), "traces": sum(trace_counts.values()),
+            "instances": len(instances), "flows": len(flows),
             "characteristics": len(chars), "written": True,
             "caveat": "backfilled flows carry job_key=None — the corpus does not record job identity"}

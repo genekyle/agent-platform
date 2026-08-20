@@ -93,3 +93,80 @@ def test_derived_characteristics_always_carry_their_evidence():
     for c in bf.derive_characteristics(instances, flows):
         assert c["evidence"], f"{c['kind']}/{c['key']} has no evidence"
         assert c["observations"] >= 0
+
+
+# --- the brief: the data actually being READ ---------------------------------------------------
+
+def test_the_trace_url_is_nested_and_a_top_level_get_finds_nothing():
+    """675MB read as 'no join key' for months because nothing looked below the top level.
+    `_deep_url` is the whole trace backfill; this pins the shape that defeated the naive read."""
+    trace = {"acquisition": {"page_identity": {"url": "https://une.peopleadmin.com/postings/1"}}}
+    assert trace.get("url") is None
+    assert bf._deep_url(trace) == "https://une.peopleadmin.com/postings/1"
+
+
+def test_deep_url_gives_up_rather_than_descending_forever():
+    deep = {"a": {"b": {"c": {"d": {"e": {"f": {"url": "https://x.test/y"}}}}}}}
+    assert bf._deep_url(deep) == ""
+
+
+def test_folding_traces_widens_instances_without_inventing_flows():
+    """A trace says 'we looked at this page', not 'we drove an application here'. Inflating the
+    flow denominator with page views is how a sighting would become a driven application."""
+    instances, flows = bf.aggregate(_rows())
+    before_flows = len(flows)
+    counts = bf.fold_traces(instances, [
+        {"url": "https://recruiting.paylocity.com/Recruiting/Jobs/Details/9/Gamma-Co",
+         "ts": "2026-08-20T11:00:00+00:00"}])
+    assert "paylocity:gamma-co" in instances       # widened
+    assert counts["paylocity:gamma-co"] == 1
+    assert len(flows) == before_flows              # and no flow invented
+
+
+def test_sidecars_are_skipped_so_one_page_is_not_counted_four_times():
+    assert bf._SIDECAR_MARKERS == (".ax.", ".meta.", ".vision.")
+
+
+class _FakeQuery:
+    def __init__(self, rows): self._rows = rows
+    def filter_by(self, **kw): return self
+    def all(self): return self._rows
+    def scalar(self): return len(self._rows)
+
+
+class _FakeDb:
+    """Enough of a Session for the brief — it only reads."""
+    def __init__(self, instance=None, flows=(), chars=()):
+        self._instance, self._flows, self._chars = instance, list(flows), list(chars)
+    def get(self, model, key): return self._instance
+    def query(self, *args):
+        name = getattr(args[0], "__name__", "")
+        if "Flow" in str(args[0]) or name == "AtsFlow": return _FakeQuery(self._flows)
+        if "Characteristic" in str(args[0]): return _FakeQuery(self._chars)
+        return _FakeQuery([])
+
+
+def test_a_platform_we_have_never_driven_says_so_instead_of_looking_clean():
+    """An empty brief that renders like a clean bill of health is worse than no brief."""
+    import ats_brief
+    b = ats_brief.brief("https://boards.greenhouse.io/acme/jobs/1", _FakeDb())
+    assert b["known"] is False
+    assert "never driven" in b["headline"]
+    assert b["vendor"]["confidence"] == "never driven"
+    assert "unverified" in b["caveat"]
+
+
+def test_an_account_gated_vendor_is_flagged_as_stopping_on_a_human():
+    """The one-line answer the UNE drive needed before it spent twenty minutes."""
+    import ats_brief
+    b = ats_brief.brief("https://une.peopleadmin.com/postings/26341", _FakeDb())
+    assert b["blockers"] == ["account"]
+    assert "stop for you" in b["headline"]
+
+
+def test_the_brief_resolves_the_tenant_not_just_the_vendor():
+    import ats_brief
+    b = ats_brief.brief(
+        "https://recruiting.paylocity.com/Recruiting/Jobs/Details/1/Alpha-Co", _FakeDb())
+    assert b["instance_key"] == "paylocity:alpha-co"
+    assert b["tenant_source"] == "path_regex"
