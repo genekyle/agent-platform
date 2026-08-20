@@ -171,6 +171,28 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
               "considered'. The references step is the one that stalls a drive: it needs THIRD "
               "PARTY emails and phones, which are not inferable and must come from the operator.",
      "seed_companies": ["Charles River Community Health", "Isabella Stewart Gardner Museum"]},
+    {"ats_id": "schoolspring", "display_name": "SchoolSpring (PowerSchool)", "icon": "🟩",
+     "hosts": ["schoolspring.com", "auth.powerschool.com"], "recipe": "seed", "auth": "account",
+     "notes": "K-12's job board and ATS, MEASURED live 2026-08-20 (session #32, Boston Public "
+              "Schools, Data Analyst for Strategic Initiatives). Reached from Indeed's 'Apply on "
+              "company site', which lands on schoolspring.com/jobdetail?jobId=<id> — one shared "
+              "host, so the tenant is the EMPLOYER named on the posting, not the URL. "
+              "AND IT IS THE SAME VENDOR AS PEOPLEADMIN: 'Apply for this job!' redirects to "
+              "auth.powerschool.com/u/login/identifier (email, then Continue; a separate Sign up). "
+              "PowerSchool owns both, which is why `auth.powerschool.com` is listed here — the "
+              "login host is shared across the family and classifying it as SchoolSpring is only "
+              "right while SchoolSpring is the only PowerSchool product we drive. Split the host "
+              "out the moment a second one appears. "
+              "auth = ACCOUNT, the wall MET: no application form is reachable before the login. "
+              "OBSERVATION NOTE: the posting opens behind a `dialog` — 'Welcome to the new "
+              "SchoolSpring experience' with a Close button — which the form census cannot see and "
+              "which sits over the apply control. Close it BEFORE pressing Apply. "
+              "SECTOR = EDUCATION (K-12), and that is a real characteristic rather than trivia: "
+              "PowerSchool owns SchoolSpring AND PeopleAdmin, so the two ATS we have met through "
+              "schools share a vendor and a login stack. The operator's hypothesis that education "
+              "might run on a common platform was closer than the first answer this registry gave "
+              "it — see the `education` note on peopleadmin.",
+     "seed_companies": ["Boston Public Schools"]},
     {"ats_id": "peopleadmin", "display_name": "PeopleAdmin", "icon": "🟦",
      "hosts": ["peopleadmin.com"], "recipe": "seed", "auth": "account",
      "notes": "MEASURED live 2026-08-19 (session #32, University of New England, "
@@ -189,6 +211,12 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
               "straight to <tenant>.peopleadmin.com/login — username + password, 'Create an "
               "Account', 'Log In with Chronicle Vitae' (a higher-ed SSO worth knowing about), and "
               "a separate current-employee route. No apply form is reachable before it. "
+              "SECTOR = EDUCATION (higher-ed), and the same vendor as SchoolSpring: PowerSchool "
+              "owns both, and SchoolSpring's apply redirects to auth.powerschool.com. So 'is there "
+              "an education-specific ATS' has a better answer than the first one this registry "
+              "gave: not one product, but ONE VENDOR FAMILY across K-12 and higher-ed, with a "
+              "shared identity provider. Worth carrying as a prior when a school or university "
+              "posting routes off Indeed. "
               "ADDRESS THE APPLY LINK EXACTLY: the posting renders 'Bookmark this Posting', "
               "'Print Preview' and 'Apply for this Job' inside ONE heading, so a name-based "
               "resolver matches the heading and lands on /print_preview instead. Drive "
