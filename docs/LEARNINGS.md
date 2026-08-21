@@ -9583,3 +9583,76 @@ claim was too hopeful.
 the wall is OPEN in the live tab with the handoff beside it. The difference between today and 08-13
 is the whole lesson: same wall, but this time the stop is one action wide, named, staffed, and the
 drive resumes the moment the operator is through it.
+
+## 2026-08-20 (eighth) — the button existed; the FORM SHAPE did not
+
+Operator: *"can we step-by-step create a 'create an account' button with the ui for this drive …
+it fills, then clicks next, we pause and you keep creating … then we create a 'login with account
+credentials' … we make both sides but i press the button."*
+
+**FIFTH TIME THIS WEEK: THE SYSTEM ALREADY KNEW AND NOTHING ASKED.** Both buttons were already
+built. `lifecycle.js` has rendered an `account_handoff` focus with **Create it automatically** /
+**Fill, I'll submit** / **I created it** since before this session, and the sign-in half —
+**Sign in automatically** — appears *by itself* the moment `account.leg === "sign_in" && has_creds`.
+The backend behind them (`/apply_account` with auto/fill/handoff, `_drive_account_form`,
+`ACCOUNT_FORMS` keyed by leg then ATS) was complete too. **Nothing about the UI needed building.**
+The check that found this cost one grep; building the button again would have cost the session.
+
+**THE ACTUAL GAP WAS THAT THE FORM TABLE COULD ONLY DESCRIBE ONE SCREEN.** PowerSchool's Auth0
+login is **identifier-first**: an email box and a Continue, with the password screen not rendered
+until Continue is pressed. `ACCOUNT_FORMS` said *fill every field, then submit*, so the leg could
+not be expressed at all — it would hunt for a password box on a page that has none and report a
+moved field. A form may now carry **`pages`**, and the driver walks **one page per call**, which is
+the operator's *"it fills, clicks next, we pause"* exactly — not a concession to supervision but
+the shape the wall actually has.
+
+**THE PAGE IS CHOSEN BY MEASUREMENT, NEVER BY A COUNTER.** A counter is a claim about how far a
+previous call got, and it survives a refresh, a back button and an abandoned attempt — all three of
+which put the browser back on page 1 while the counter says 2. An unmatched page stops with a scan
+of what IS on screen, the same refusal an unmapped ATS gets.
+
+**AND THE SAFETY PROPERTY: ONLY A PAGE DECLARING `completes_leg` MAY END THE LEG.** `apply_account`
+calls `mark_created` on a submitted form — and PowerSchool's Continue has taken an email address.
+Marking it there would leave a row claiming a login the ATS has never heard of, make the sign-in leg
+due forever, and turn every later rejection into what reads as a bad password. The default is the
+safe answer, and no mapped schoolspring page claims it, because nobody has seen the screen that
+would.
+
+**THE BUG THAT WOULD HAVE BROKEN THE BUTTON, CAUGHT BY PROBING THE LIVE PAGE BEFORE HANDING IT
+OVER: `/locate` MATCHES VISIBLE TEXT, NOT ACCESSIBLE NAMES.** The page-picker asks `/locate` whether
+a page's `present` field is on screen. Measured on the identifier page itself:
+
+    text "Email address"  -> found: false      (the box was plainly on screen)
+    text "Continue"       -> found: true
+    css  input[type=email]-> found: false
+
+A text input takes its accessible name from a separate `<label>`, so the input carries no text of
+its own. **`present: "email"` would have reported this mapped page as unmapped on every press** and
+read like a missing recipe. It is the submit control now — which also holds on BOTH sides of the
+login/signup crossing, the property `present` actually needs. *The failure is invisible in every
+other layer* — `resolve` succeeds, the AX scan lists the field, `/execute` drives it fine — and only
+the `/locate` probe disagrees. Pinned by a test: a `present` or toggle-proof addressed by accessible
+name may not be a text widget. **Note the Workday toggle survived this only by accident** — its
+`showing_field` is addressed by CSS selector, so it never exercised the text path.
+
+**TWO LABELS THAT LIED, SAME ROOT AS THE THREE FIXED ON 08-20.** `next_account_action` defaults its
+button pair to Workday's *("Create Account", "Sign In")*, and the card is an INSTRUCTION — naming a
+control the page does not have reads as *"the button is missing"* rather than *"the label is
+wrong"*, the more expensive way round. Both legs of PowerSchool say **Continue**. Then the cockpit
+turned out to spell "Create Account" into its prose while the `account` branch one block below
+interpolated `account.button` correctly; the handoff branch now interpolates too.
+
+*Also worth knowing:* `account_handoff` is a **snapshot on the blackboard**, not a live read, so it
+kept the old label until the account rung was cranked again — while its sibling `account_state`
+already read correctly. The cockpit prefers the handoff, so the stale one is the one that shows.
+
+**THE BOUNDARY, STATED PLAINLY, BECAUSE IT IS THE POINT OF THE ASK.** Both sides are built and the
+operator presses. The agent never types the credential — and here that is not merely policy: the
+one thing the drive cannot do is also the one thing the operator explicitly wanted to keep,
+*"i press the button"*. There is no skipping ahead to the sign-in leg, because the sign-in leg is
+`has_creds`-gated on an account that does not exist until the create leg finishes. **It appears on
+its own; it cannot be summoned early.**
+
+*Tests:* session_control, apply_fields, account_forms, accounts, cockpit_reach — **347 passed**,
+from the worktree with import provenance verified. UI still has no test runner: `deriveCockpit`
+driven under node against the live panel, lint clean on the touched file, build green.
