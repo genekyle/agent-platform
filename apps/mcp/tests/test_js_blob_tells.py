@@ -176,3 +176,28 @@ def test_capped_census_lists_say_they_are_capped():
     src = protocols.SCAN_REQUIRED_JS
     for flag in ("optional_truncated", "page_errors_truncated", "field_errors_truncated"):
         assert flag in src, f"{flag} missing from the census return"
+
+
+_PEOPLEADMIN_POSTING = [
+    {"role": "heading", "backend_node_id": 10,
+     "name": " Bookmark this Posting  Print Preview |  Apply for this Job"},
+    {"role": "link", "name": "Print Preview", "backend_node_id": 11},
+    {"role": "link", "name": "Apply for this Job", "backend_node_id": 12},
+]
+
+
+def test_the_control_beats_its_container(monkeypatch):
+    """PeopleAdmin's posting header is ONE candidate wearing THREE controls' names — a click at
+    its centre landed on /print_preview (live 2026-08-19). Inside a tier, interactive candidates
+    outrank containers; the leaf link wins even though the heading's name also matches."""
+    assert _resolve("Apply for this Job", cands=_PEOPLEADMIN_POSTING) == 12
+    # And with the role stated, exactly as the recipe drives it:
+    assert _resolve("Apply for this Job", role="link", cands=_PEOPLEADMIN_POSTING) == 12
+
+
+def test_a_tier_of_only_containers_answers_nothing(monkeypatch):
+    """When the only match is a heading, handing it back invites the centre-click coin flip —
+    unless the caller EXPLICITLY asked for that role, which is them owning an unusual target."""
+    only_heading = [{"role": "heading", "name": "Apply for this Job", "backend_node_id": 20}]
+    assert _resolve("Apply for this Job", cands=only_heading) is None
+    assert _resolve("Apply for this Job", role="heading", cands=only_heading) == 20

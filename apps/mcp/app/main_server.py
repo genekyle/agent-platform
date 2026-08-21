@@ -217,8 +217,25 @@ async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Opt
     # under them — which re-rendered the whole form localized. A tier with more than one candidate
     # means the caller's name does not identify a control, and answering anyway is how you act on
     # the wrong one.
+    # PREFER THE CONTROL OVER ITS CONTAINER. A heading's accessible name concatenates every link
+    # under it — PeopleAdmin's ' Bookmark this Posting  Print Preview |  Apply for this Job' is
+    # ONE candidate wearing THREE controls' names, and a click at its measured centre lands on
+    # whichever link happens to sit in the middle (/print_preview, live 2026-08-19). So inside a
+    # tier: when interactive candidates exist, non-interactive ones (heading/text/generic) are
+    # dropped; a tier whose ONLY matches are non-interactive answers nothing rather than handing
+    # back a container to click — unless the caller EXPLICITLY asked for that role, which is them
+    # taking responsibility for an unusual target.
+    from app.observer.ax_proposer import INTERACTIVE_ROLES
+
+    def _clickable(c: dict) -> bool:
+        return (c.get("role") or "").strip().lower() in INTERACTIVE_ROLES
+
     def tier(pred, gated: bool = True) -> list[dict]:
-        return [c for c in cands if (role_ok(c) if gated else True) and pred(nm(c))]
+        found = [c for c in cands if (role_ok(c) if gated else True) and pred(nm(c))]
+        if want_role and gated:
+            return found               # the caller named the role; their discrimination stands
+        inter = [c for c in found if _clickable(c)]
+        return inter if inter else []
 
     _preds = ((lambda n: n == want),
               (lambda n: bool(want) and n.startswith(want)),
