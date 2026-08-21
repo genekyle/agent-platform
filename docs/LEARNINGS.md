@@ -9734,3 +9734,46 @@ run_batch→verify_replay→promote_auto pattern first), and the Florence/OmniPa
 Merged to main four times across the two days; the live session and this one independently fixed
 the same apply_flag staleness (theirs caught the missing commit; ours the canonical key) — the
 worktree discipline held, and the merge made both fixes whole.
+## 2026-08-21 — the first LinkedIn-sourced application, driven to Workday's Submit gate
+
+Session #33's first pick (Ocean Spray, met through LinkedIn, landed on their branded Workday
+tenant) is standing on **Review** with every section green and Submit held: the loop's own refusal
+— *"'teacher' may not submit an application"* — is the last mini on the ledger. The review page's
+first line is **"How Did You Hear About Us? → LinkedIn"**: yesterday's source-aware answer, live,
+on a real application. Account auto-created (create leg), the flow re-entered next morning through
+the sign-in leg with the stored credential. Nothing sent; the operator presses Submit.
+
+**A THIRD COPY OF "HOW DID YOU HEAR" WAS HIDING IN THE ANSWERS STORE.** `_identity_defaults` was
+fixed yesterday, the prompt driver's `use_source` was always right — and a STORED row
+`how_did_you_hear = "Indeed"` outranked both, because `_resolve` reads stored before identity.
+Deactivated: a constant engine name in a per-application question is the same wrong the other two
+copies had. When a value is a FUNCTION of context, every stored constant version of it is a bug
+with a delay on it.
+
+**WHAT AN OVERNIGHT GAP DOES TO A WORKDAY FORM.** The tab looked fine in the morning: fields
+held their text, the census read them back, typing worked. But the SESSION had expired — so every
+prompt opened an EMPTY panel (options are a server fetch), the typed filter matched nothing, and
+the driver's search text sat in the box looking like a stuck widget. The tell that finally said it
+plainly was the RELOAD: straight to Create Account/Sign In. *An expired session renders a form
+that works locally and fails silently at every fetch.* Refresh-first, sign-in leg, re-fill (the
+bunch fill re-staged 8 fields in one call) — cheaper than one more diagnosis of a "broken" widget.
+
+**THE SEGMENTED DATE LEARNED THE PAGE DECIDES ITS SHAPE.** Workday renders MM/DD/YYYY *and*
+MM/YYYY (work-experience From/To: dateSectionMonth + Year, no Day — measured on this tenant) under
+one widget family, and `/set_date` demanded a day before looking. Now the JS reads which sections
+exist: Month/Year are the floor, a Day section left unfed refuses, an absent Day is the shape.
+Both variants verified live the same hour (From = 03/2026; the CC-305's dateSignedOn = 08/21/2026).
+Two address lessons rode along: `[id$='--startDate']` matches the field's **helpText div** first
+(compound with `[data-automation-id=dateInputWrapper]`), and the actuator's set_date dispatch
+dropped the recipe's widget hint that select_option has always carried — a container div
+classifies `unknown` without it.
+
+**THE TEACH SEAM CARRIED THE WHOLE DRIVE.** Every field the loop could not fill itself went
+through `apply_teach` with a rationale — set_text, select_option, check_group, upload, click,
+set_date — so the golden rows for LinkedIn→Workday now exist end to end. The two questionnaire
+items whose label the census can only call "Application Questions" (their text lives in a
+richText block it cannot attach) were driven by measured id at tier 2; per-item addressing for
+those is the remaining gap this drive names.
+
+*Also banked:* `previously_employed_here` gained the "ever worked for … in the past" pattern this
+tenant used; demographic pages answered by standing preference (declines) with the CC-305 signed.
