@@ -197,12 +197,14 @@ WORKDAY_FIELDS: dict[str, dict[str, Any]] = {
     # so they are matched by SUFFIX — which also means these address the FIRST block only; a
     # second Add-Experience block needs per-block addressing this table cannot express yet.
     "work_start_date": _f(ats="workday",
-                          selector="[id$='--startDate']",
+                          selector="[data-automation-id=dateInputWrapper][id$='--startDate']",
                           widget_type=WidgetType.SEGMENTED_DATE,
-                          note="the dateInputWrapper CONTAINER (the protocol finds the "
-                               "dateSection sub-inputs inside it); MM/YYYY — no Day section"),
+                          note="the dateInputWrapper CONTAINER (the protocol finds the dateSection "
+                               "sub-inputs inside it); MM/YYYY — no Day section. The automation-id "
+                               "is compounded because a bare [id$=--startDate] matches the field's "
+                               "helpText div FIRST (measured 2026-08-21)"),
     "work_end_date": _f(ats="workday",
-                        selector="[id$='--endDate']",
+                        selector="[data-automation-id=dateInputWrapper][id$='--endDate']",
                         widget_type=WidgetType.SEGMENTED_DATE,
                         note="drops off the required census once 'I currently work here' is "
                              "ticked (the checkbox is `[id$='--currentlyWorkHere']`)"),
