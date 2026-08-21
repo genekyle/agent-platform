@@ -95,6 +95,13 @@ ATS_HINTS: dict[str, dict[str, Any]] = {
         "text_re": r"your application has been submitted",
         "why": "the smartapply terminal; matches the indeed_apply_submitted page state",
     },
+    "workday": {
+        "url_re": r"/jobTasks/completed/application",
+        "text_re": r"application submitted|we have received your application submission",
+        "why": "the post-submit candidate-home modal; measured live 2026-08-21 (Ocean Spray): "
+               "/en-US/<tenant>/jobTasks/completed/application?source=LinkedIn with an "
+               "'Application Submitted — Thank you for applying!' dialog",
+    },
 }
 
 #: Below this a page is not called submitted. One STRONG signal clears it; two SUPPORTING ones do
