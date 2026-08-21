@@ -9837,3 +9837,72 @@ account_forms, cockpit_reach — **324 passed** (321 before), from the worktree 
 provenance verified. UI: `deriveCockpit` driven under node on both legs, lint clean, build green —
 note the worktree has **no `node_modules`** either (the same wrong-module trap as the venv);
 symlinked from the main checkout.
+
+## 2026-08-21 — through the wall and into the form: three silent wrongs, and the ad that ate a button
+
+The operator created the PowerSchool account by hand (email verification included) and handed the
+drive back. Everything below is from the first end-to-end walk of a **SchoolSpring/PowerSchool
+application** — Boston Public Schools, 12 sections, reached section 7 before a question only the
+operator can answer.
+
+**FIRST, THE SHAPE OF THE THING, BECAUSE IT IS NOT WHAT THE WALL SUGGESTED.** Past the account gate
+there is no application yet: PowerSchool wants a **profile** first (`/linkaccount?ProfileMissing=
+true`) — name, phone, ToU consent — and on saving it **redirects to `/`, losing the job entirely**.
+The way back is Indeed's own apply link, which re-enters the posting authenticated; the second
+`Apply for this job!` then raises a **Pre-Screening modal** ("Do you have a Bachelor's Degree?")
+before finally landing on `/jobApplication/ats?jobId=…`. So the real spine is *account gate →
+profile → re-entry → pre-screen → 12-section form*, and only the first of those was visible from
+the wall.
+
+**THE ONE THAT WOULD HAVE COST THE JOB: A SILENT WRONG ANSWER ON A DISQUALIFYING QUESTION.**
+`/select_option` on a `radio_group` whose selector names `…-option-0` **clicks option-0 regardless
+of the value asked for**. Asked for `No` on *"Will you now or in the future require sponsorship…"*,
+it returned `no_option` — and left **Yes** selected. The operator's stored answer is
+`sponsorship_required = No`. Answering Yes there is disqualifying at most employers.
+
+*And the census cheerfully agreed the page was done*: `all required fields answered`. **A census
+confirms ANSWEREDNESS, not CORRECTNESS** — it cannot know a radio holds the opposite of the
+operator's recorded answer. Caught only by screenshotting the section. Radios are clicked by
+backend_node_id from now on (the way the Pre-Screening radio was), never through a `-option-0`
+selector, and any answer that could disqualify gets a screenshot before the section is advanced.
+
+**THE SECOND SILENT WRONG: A CONSENT CHECKBOX FILLED AS TEXT.** `apply_fill`'s plan classified the
+ToU checkbox as `widget: "text"` with `value: "Yes"`, typed "Yes" at it, and reported *"Filled 6
+field(s)"*. The box stayed unticked. A no-op that reports success is bad anywhere; on a **consent**
+field it is the shape this repo already calls the worst — nothing downstream can tell "declined"
+from "never touched". (Worth noting the answer store DID have `terms_acknowledgment = Yes`, matched
+at confidence 1.0: the decision was recorded, only the mechanism failed.)
+
+**THE THIRD: AN AD OVERLAY THAT MADE AN ENABLED BUTTON LOOK AND BEHAVE DISABLED.** Four presses of
+*Save and continue* did nothing — `/execute` returned `ok` every time, the census said complete, the
+page carried no validation text, and the AX tree showed **nothing** overlaying the control (an
+overlay div is not an AX candidate). The tell was in the pixels: **Cancel was greyed too**, and no
+form disables its own Cancel for validation. A translucent ad container was sitting over the sticky
+footer; dismissing it turned both buttons vivid blue and the next press advanced the section.
+
+*The general rule, a sibling of captcha-first:* **a click that reports ok and changes nothing means
+LOOK AT THE PIXELS.** The layers disagree by design here — `/execute` reports dispatch, not effect;
+AX reports semantics, not paint. And the specific tell is cheap: *if a control that should never be
+disabled is also greyed, it is an overlay, not validation.*
+
+**WHAT WENT RIGHT, AND CHEAPLY.** The answer store carried nearly everything: address, phone,
+identity, `work_authorization`, `sponsorship_required`, `education_*`, and the EEO decline. The
+site's own instructions answered the rest — *"If you have never been employed by BPS… please write
+**n/a** for each item below"* is the form telling us its own convention, the 08-20 lesson again.
+And two list traps worth recording: `scan_required` **truncates option lists at 24 while reporting
+the true `option_count`** (52 states looked like 24 with New Hampshire missing), and a 4,983-entry
+school list with no *University of Santo Tomas* nonetheless ends with **"Other Foreign Educational
+Institution"** — the honest answer was in the list, twelve entries past where the sample stopped.
+
+**PARKED, HONESTLY, ON A QUESTION THAT IS NOT OURS.** Section 7 asks *"Are you proficient in a
+language other than English?"*. The store holds `primary_language = English` and
+`additional_languages = ` **empty** — and an empty field is *"not recorded"*, never *"none"*. Given
+the operator's degree is from a Philippine university, guessing No may understate a real
+qualification that this employer explicitly values (it offers bilingual endorsements); guessing Yes
+would fabricate proficiency levels. So it goes to the operator, along with one mapping they should
+check: `education_discipline = "Sports Science"` was entered as **"Sports Medicine/Exercise Science/
+Athletic Training/Recreational Exercise"**, the closest of 57 options, but it is their academic
+record and not ours to round off.
+
+*State at hand-off:* sections 1–6 complete and green; **nothing submitted**; Review and Submit
+remains the operator's gate, as on every platform, always.
