@@ -9710,3 +9710,27 @@ to an empty table would be the audit's anti-pattern in reverse.
 apply_flag staleness fix independently, PLUS the missing `db.commit()` — record_flow only
 flushes, and on a parked flag nothing commits after it, which my version had missed; the merge
 keeps their position and commit with my canonical key and timestamps).
+
+## 2026-08-21 (second) — Tier 3 begins: what deletes cleanly, and what turned out to be load-bearing
+
+Steps 1–2 of the audit's removal order, each importer-verified then gated on the full suites and
+a real vite build: ten zero-importer files (~900 lines — the smoke scripts, autopilot_step, the
+train_grounding CLI, run.py, debug_runner, dev_worker, the empty skills/ package) and the
+unreachable React subtree (~800 lines — workers/chat/models branches, seven components, and the
+`GET /api/runs` poll that ran on every refresh to feed a view `parseAppPath` could never route
+to). The `/resolve_answer` advertisements now point at what exists (the answer store or the
+teacher), with the protocol test re-pinned to assert the remedy is REACHABLE.
+
+**TWO DEFERRALS, EACH WITH ITS REASON WRITTEN DOWN.** The audit's §6a "orphaned endpoints" list
+went stale in one day — `/api/ats/backfill` and friends became load-bearing THIS WEEK — so the
+endpoint pass needs fresh verification per route, not a batch delete from a day-old list. And
+`resolve_answer.py`/`teach_session.py`/`local_reasoner.py` stay: resolve_answer is load-bearing
+as a NAME (a closed-vocabulary intent and the cascade's cited design template), and the other
+two are woven into three modules' docstrings — removing them is a decision about how the
+architecture documents itself, not a cleanup. Still queued: the runtime/ loop (port the
+run_batch→verify_replay→promote_auto pattern first), and the Florence/OmniParser stack with its
+1.3 GB of torch — the biggest win, scheduled deliberately, never at the tail of a long session.
+
+Merged to main four times across the two days; the live session and this one independently fixed
+the same apply_flag staleness (theirs caught the missing commit; ours the canonical key) — the
+worktree discipline held, and the merge made both fixes whole.
