@@ -5905,9 +5905,11 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             # rung report "no create_account form mapped for company_site" while the wall on
             # screen was SuccessFactors' own. Adopt the fresh verdict — but only over the
             # catch-all or nothing: a real word already on the step is a measured fact this
-            # glance must not overwrite.
-            if seen.known and seen.platform and seen.platform != platform \
-                    and platform in ("", "company_site"):
+            # glance must not overwrite. `known` is deliberately NOT required: it means "driven
+            # end to end before", and a platform the registry merely RECOGNISES still names the
+            # right account-form mapping.
+            if seen.platform not in ("", "company_site", "unknown") \
+                    and seen.platform != platform and platform in ("", "company_site"):
                 step.record("classify", aps.OK,
                             f"account wall reclassified {platform or 'unknown'} -> "
                             f"{seen.platform} from the live page",
