@@ -9906,3 +9906,46 @@ record and not ours to round off.
 
 *State at hand-off:* sections 1–6 complete and green; **nothing submitted**; Review and Submit
 remains the operator's gate, as on every platform, always.
+
+## 2026-08-21 (later) — one submitted through the gate, and two entry mechanisms that earned their names
+
+**OCEAN SPRAY IS SUBMITTED — the first LinkedIn-sourced application this system has sent.** The
+operator delegated the press in chat; the gate's own rule held until the initiator was theirs. The
+click-time verifier read the page a beat before the modal rendered and honestly refused; the
+screenshot showed *"Application Submitted — Thank you for applying!"* at
+`jobTasks/completed/application?source=LinkedIn`, and the refusal's own message named the fix:
+*"this platform has no hint entry"*. Workday's hint (that URL + that modal text) is in
+`submission_verifier.ATS_HINTS` now, measured on a live confirmation — the additive tier working
+exactly as designed. Re-flag scored high, terminal `submitted`, applied stamp + canonical mirror +
+flow join all wrote. **The apply source survived the whole pipe: LinkedIn on the review page,
+`?source=LinkedIn` in the confirmation URL.**
+
+**MAPFRE NAMED A WRAPPER FAMILY.** `jobs.mapfre.com` is a SuccessFactors RMK marketing wrapper:
+its "Apply now" is a Bootstrap `dropdown-toggle` whose menu closes between protocol calls — three
+trusted clicks each reported ok while only toggling a menu (the verify reads the same page and the
+walk calls it no progress; the SCREENSHOT showed the open menu with the real entry:
+`a[href*='/talentcommunity/apply/<req>/']`). And that link redirects to the careers HOME even
+signed in, because the RMK site and the applicant portal (`career5.successfactors.eu`) keep
+separate sessions on different cookie domains. Parked resumable with the mechanism in the flag;
+the second MAPFRE pick will need the same protocol. *Two real fixes fell out on the way:* the
+account rung's fresh look now ADOPTS the platform it sees (jobs.mapfre.com classified
+`company_site` at classify-time, redirected to SuccessFactors before the wall; the rung then
+looked for a company_site account form that cannot exist) — and `known` was deliberately not
+required for the adoption, because known means DRIVEN and a merely RECOGNISED platform still
+names the right form mapping. The reward was immediate: **`ats_mapfre_successfactors` from the
+08-15 Indeed drive was already in the store, and the sign-in leg entered it** — an account
+created through one engine serving the other, the accounts side of the morning's canonical-tier
+lesson.
+
+**AND A SIDE-DOOR CLICK COST EXACTLY WHAT THE PRINCIPLE SAYS IT COSTS.** WAHVE's pane Apply was
+driven through a direct `/execute` because the rung had scanned a leftover tab — the click WORKED,
+the form tab opened, and the ladder then could not see it: LinkedIn's pane flipped to
+"Clicked apply", the control `enter_apply` hunts for no longer exists, and the rung loops
+"no apply control found" forever. `adopt_from_window` did not rescue it (landing_state stayed
+None — a sub-bug in its own right). Parked with the tab open. *Drive every action through the
+system* is not etiquette; an out-of-band act creates a world the ladder has no record of reaching.
+Both gaps are chipped as follow-up tasks.
+
+*Where the session stands:* page 1 — 15 picks, **1 submitted (Ocean Spray), 2 parked with
+mechanisms named (MAPFRE entry, WAHVE adoption), 12 queued.** Accounts held: Ocean Spray workday,
+MAPFRE successfactors, both signed in with credentials stored.
