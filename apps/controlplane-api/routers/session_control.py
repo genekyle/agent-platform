@@ -5898,6 +5898,22 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                             f"into yet: press its apply control to enter the application, then "
                             f"work this rung again."))
 
+            # THE FRESH LOOK ALSO NAMES THE PLATFORM. A careers front classifies as the catch-all
+            # and then redirects into the real ATS between classify and this rung — MAPFRE:
+            # jobs.mapfre.com (company_site) -> career5.successfactors.eu (live 2026-08-21). The
+            # account form mappings are keyed by the REAL platform, so the stale word made this
+            # rung report "no create_account form mapped for company_site" while the wall on
+            # screen was SuccessFactors' own. Adopt the fresh verdict — but only over the
+            # catch-all or nothing: a real word already on the step is a measured fact this
+            # glance must not overwrite.
+            if seen.known and seen.platform and seen.platform != platform \
+                    and platform in ("", "company_site"):
+                step.record("classify", aps.OK,
+                            f"account wall reclassified {platform or 'unknown'} -> "
+                            f"{seen.platform} from the live page",
+                            initiator=body.initiator)
+                step.platform = platform = seen.platform
+
             # ensure_account REGISTERS the company-ATS pair (idempotent); next_account_action
             # reads back which leg is due from its lifecycle state.
             ats_accounts.ensure_account(company, platform, login_url=_apply_tab_url(bb, obs))
