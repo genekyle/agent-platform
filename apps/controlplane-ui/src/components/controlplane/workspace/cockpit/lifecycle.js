@@ -435,11 +435,17 @@ function executeFocus(p, step, nextAction) {
     return { ...base, kind: "account_handoff", handoff,
       why: "Your account, your call. The system can create it for you — a captcha or an email "
         + "verification code still stops for you, and the honeypot is never touched.",
+      // THE BUTTON IS THE ATS'S OWN WORD FOR IT, not ours. `handoff.button` has carried the real
+      // label since the handoff was first written (iCIMS says "Submit Profile"), and this branch
+      // spelled "Create Account" into the prose anyway while its `account` sibling one block below
+      // interpolated it correctly. PowerSchool's identifier-first signup made the drift visible:
+      // the screen the operator is sent to has a "Continue" and no "Create Account" anywhere on
+      // it, so the sentence described a control that is not there.
       primary: { label: "Create it automatically", endpoint: "/apply_account", body: { mode: "auto" },
-        why: "Fills the form with these credentials and clicks Create Account." },
+        why: `Fills the form with these credentials and clicks ${handoff.button || "the submit"}.` },
       alternates: [
         { label: "Fill, I'll submit", endpoint: "/apply_account", body: { mode: "fill" },
-          why: "Fill the form but leave the Create Account click to you." },
+          why: `Fill the form but leave the ${handoff.button || "submit"} click to you.` },
         { label: "I created it", endpoint: "/apply_account", body: { mark_created: true },
           why: "You typed it yourself — mark done and continue." },
       ] };
