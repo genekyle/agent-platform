@@ -192,6 +192,19 @@ WORKDAY_FIELDS: dict[str, dict[str, Any]] = {
                             widget_type=WidgetType.ARIA_LISTBOX,
                             vocabulary={"Mobile": "Mobile"},
                             note="applies on select — no footer commit"),
+    # The work-experience block's dates. The ids carry a per-block index
+    # (`workExperience-78--startDate-dateSectionMonth-input`, measured 2026-08-21, Ocean Spray),
+    # so they are matched by SUFFIX — which also means these address the FIRST block only; a
+    # second Add-Experience block needs per-block addressing this table cannot express yet.
+    "work_start_date": _f(ats="workday",
+                          selector="[id$='--startDate-dateSectionMonth-input']",
+                          widget_type=WidgetType.SEGMENTED_DATE,
+                          note="MM/YYYY spinbutton pair; /set_date owns the shape"),
+    "work_end_date": _f(ats="workday",
+                        selector="[id$='--endDate-dateSectionMonth-input']",
+                        widget_type=WidgetType.SEGMENTED_DATE,
+                        note="drops off the required census once 'I currently work here' is "
+                             "ticked (the checkbox is `[id$='--currentlyWorkHere']`)"),
     "previous_worker": _f(ats="workday", selector="[data-automation-id=candidateIsPreviousWorker]",
                           widget_type=WidgetType.RADIO_GROUP),
     # SCOPED, because the attributes do not distinguish the two uploaders on this screen: the
