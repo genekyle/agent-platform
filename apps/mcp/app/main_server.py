@@ -3411,9 +3411,15 @@ _WORKDAY_SEGMENTED_DATE_JS = r"""
     return container.querySelector('input[id$="' + suffix + '"]')
         || document.querySelector('input[id="' + (container.id || '') + suffix + '"]');
   };
+  // Month and Year are the shape's floor; Day is a fact about THIS widget. Workday renders both
+  // MM/DD/YYYY (questionnaire dates) and MM/YYYY (work-experience From/To, measured 2026-08-21 on
+  // Ocean Spray: dateSectionMonth + dateSectionYear, no Day) — so the page decides whether a day
+  // is needed, not the endpoint.
   const parts = {Month: pick('Month'), Day: pick('Day'), Year: pick('Year')};
-  const missing = Object.keys(parts).filter((k) => !parts[k]);
+  const missing = ['Month', 'Year'].filter((k) => !parts[k]);
   if (missing.length) return {found: false, detail: 'no ' + missing.join('/') + ' sub-input'};
+  if (parts.Day && DAY === null)
+    return {found: false, detail: 'the page shows a Day section and no day was given'};
 
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   const write = (el, v) => {
@@ -3425,7 +3431,7 @@ _WORKDAY_SEGMENTED_DATE_JS = r"""
     el.dispatchEvent(new Event('change', {bubbles: true}));
   };
   write(parts.Month, MONTH);
-  write(parts.Day, DAY);
+  if (parts.Day && DAY !== null) write(parts.Day, DAY);
   write(parts.Year, YEAR);
   parts.Year.dispatchEvent(new Event('blur', {bubbles: true}));
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -3439,20 +3445,26 @@ _WORKDAY_SEGMENTED_DATE_JS = r"""
   const read = (el) => ({value: el.value || '',
                          aria: el.getAttribute('aria-valuenow') || '',
                          invalid: el.getAttribute('aria-invalid') || ''});
-  return {found: true, month: read(parts.Month), day: read(parts.Day), year: read(parts.Year),
+  return {found: true, has_day: !!parts.Day, month: read(parts.Month),
+          day: parts.Day ? read(parts.Day) : null, year: read(parts.Year),
           container_invalid: container.getAttribute('aria-invalid') || ''};
 })()
 """
 
 
-def _segment_disagreement(got: dict, *, month: int, day: int, year: int) -> str:
+def _segment_disagreement(got: dict, *, month: int, day: Optional[int], year: int) -> str:
     """Which segments did not take, phrased for the operator, or '' when the date is on the page.
 
     Compared NUMERICALLY: Workday pads Month/Day to two digits ("09"), and a string compare would
     call a correctly-set date a failure. `aria-valuenow` is advisory here — some tenants leave it
     empty on a freshly written segment — so it is reported but never the thing that fails.
+
+    Day is compared only when the page HAS a Day section (`has_day`) — an MM/YYYY widget's
+    absent day is the widget's shape, not a segment that failed to take.
     """
-    want = {"month": month, "day": day, "year": year}
+    want = {"month": month, "year": year}
+    if got.get("has_day"):
+        want["day"] = day
     bad = []
     for part, expected in want.items():
         seg = got.get(part) or {}
@@ -3522,17 +3534,18 @@ async def set_date(body: SetDateRequest):
             # auto-advance to race, and it is the primitive the `month_year` year input has used
             # here since it was written. The old bar still applies — this verifies all three
             # segments AFTER writing them and refuses to claim a date it cannot read back.
-            if body.day is None:
-                return {**common, "outcome": Outcome.NO_OPTION,
-                        "detail": "a segmented date needs a day — got month/year only"}
-            if not 1 <= body.day <= 31:
+            # Day is a fact about the WIDGET, not a precondition here: Workday renders both
+            # MM/DD/YYYY and MM/YYYY (work-experience From/To) under this shape, so the JS reads
+            # which sections the page has and refuses only when a Day section exists unfed.
+            if body.day is not None and not 1 <= body.day <= 31:
                 return {**common, "outcome": Outcome.NO_OPTION,
                         "detail": f"day {body.day} out of range 1-31"}
             # SELECTOR is substituted LAST: an earlier injection could contain one of the value
             # placeholders as literal text and be mangled by the substitution that follows it.
             js = (_WORKDAY_SEGMENTED_DATE_JS
                   .replace("MONTH", json.dumps(f"{body.month:02d}"))
-                  .replace("DAY", json.dumps(f"{body.day:02d}"))
+                  .replace("DAY", json.dumps(f"{body.day:02d}") if body.day is not None
+                           else "null")
                   .replace("YEAR", json.dumps(str(body.year)))
                   .replace("SELECTOR", json.dumps(body.selector)))
             r = await cdp.send("Runtime.evaluate", {"expression": js, "returnByValue": True})
@@ -3550,10 +3563,11 @@ async def set_date(body: SetDateRequest):
                 return {**common, "outcome": Outcome.NOT_STAGED, "steps": steps,
                         "detail": f"segments did not all take — {bad}. The date on the page is "
                                   f"PARTIAL; clear it before retrying."}
+            shown = (f"{body.month:02d}/{body.day:02d}/{body.year}" if got.get("has_day")
+                     else f"{body.month:02d}/{body.year}")
             return {**common, "outcome": Outcome.OK, "steps": steps,
                     "actions": ["clear", "type", "clear", "type", "clear", "type"],
-                    "detail": f"{body.month:02d}/{body.day:02d}/{body.year} "
-                              f"(all three segments verified at .value)"}
+                    "detail": f"{shown} (every segment the page shows verified at .value)"}
 
         if wt == WidgetType.MONTH_YEAR.value:
             steps: list[dict] = []

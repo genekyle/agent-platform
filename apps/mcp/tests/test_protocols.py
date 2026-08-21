@@ -242,10 +242,13 @@ def test_scan_required_lists_what_is_required_and_unanswered(corpus, monkeypatch
 
 # --- /set_date ----------------------------------------------------------------------
 def _segmented(reads):
-    """A CDP responder for the segmented-date protocol: classify, then the one write+read call."""
+    """A CDP responder for the segmented-date protocol: classify, then the one write+read call.
+
+    `has_day` mirrors what the live JS now reports: the page's own shape. A fake that carries a
+    day read is a MM/DD/YYYY widget; one without is the MM/YYYY work-experience pair."""
     def responder(expr):
         if "dateSection" in expr and "HTMLInputElement" in expr:
-            return {"found": True, **reads}
+            return {"found": True, "has_day": "day" in reads, **reads}
         return {"found": True, "widget_type": "segmented_date"}
     return responder
 
@@ -262,8 +265,8 @@ def test_set_date_drives_the_workday_segmented_date_without_typing_a_keystroke(c
     def responder(expr):
         seen.append(expr)
         if "dateSection" in expr and "HTMLInputElement" in expr:
-            return {"found": True, "month": {"value": "09"}, "day": {"value": "01"},
-                    "year": {"value": "2026"}}
+            return {"found": True, "has_day": True, "month": {"value": "09"},
+                    "day": {"value": "01"}, "year": {"value": "2026"}}
         return {"found": True, "widget_type": "segmented_date"}
 
     wire_cdp(monkeypatch, responder)
@@ -299,12 +302,31 @@ def test_a_padded_segment_is_the_same_date_not_a_failure(corpus, monkeypatch):
     assert out["ok"] is True
 
 
-def test_a_segmented_date_without_a_day_is_refused_rather_than_half_set(corpus, monkeypatch):
-    wire_cdp(monkeypatch, _segmented({}))
+def test_a_page_with_a_day_section_refuses_a_dayless_call(corpus, monkeypatch):
+    """The PAGE decides whether a day is needed, not the endpoint (Workday renders both
+    MM/DD/YYYY and MM/YYYY under this shape, measured 2026-08-21). A Day section left unfed is
+    still refused rather than half-set — the JS itself reports it."""
+    def responder(expr):
+        if "dateSection" in expr and "HTMLInputElement" in expr:
+            return {"found": False,
+                    "detail": "the page shows a Day section and no day was given"}
+        return {"found": True, "widget_type": "segmented_date"}
+    wire_cdp(monkeypatch, responder)
     out = asyncio.run(ms.set_date(ms.SetDateRequest(
         selector="#q--date", month=9, year=2026, ats="workday")))
-    assert out["ok"] is False and out["outcome"] == "no_option"
-    assert "needs a day" in out["detail"]
+    assert out["ok"] is False and out["outcome"] == "not_found"
+    assert "no day was given" in out["detail"]
+
+
+def test_a_month_year_segmented_date_takes_no_day(corpus, monkeypatch):
+    """The MM/YYYY shape: Workday's work-experience From/To renders dateSectionMonth +
+    dateSectionYear and no Day (Ocean Spray, 2026-08-21). A dayless call is the CORRECT call for
+    it, and the verified detail shows the date the way the widget does."""
+    wire_cdp(monkeypatch, _segmented({"month": {"value": "03"}, "year": {"value": "2026"}}))
+    out = asyncio.run(ms.set_date(ms.SetDateRequest(
+        selector="#q--date", month=3, year=2026, ats="workday")))
+    assert out["ok"] is True and out["outcome"] == "ok"
+    assert "03/2026" in out["detail"] and "03/01/2026" not in out["detail"]
 
 
 def test_a_segmented_date_whose_sub_inputs_are_absent_is_not_found(corpus, monkeypatch):
