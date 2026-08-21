@@ -2695,6 +2695,116 @@ def test_account_handoff_persists_on_the_view_so_a_reload_keeps_it(monkeypatch):
     assert g["account_handoff"]["job_id"] == "indeed:a1"
 
 
+def test_the_handoff_re_reads_the_account_instead_of_replaying_its_snapshot(monkeypatch):
+    """A handoff records WHICH WALL WAS MET; it must not go on answering WHICH LEG IS DUE from a
+    copy taken when the rung last ran.
+
+    `account_status` moves without the rung: the operator creates the account in the Accounts
+    panel, `reset_account` un-says a wrong `mark_created`, a registry fix corrects an ATS's button
+    pair. Its sibling `account_state` re-derives on every view and picked those up immediately —
+    the handoff replayed its snapshot, and the cockpit prefers the handoff, so the stale one was
+    the one the operator read (measured live 2026-08-20 on schoolspring's button map).
+
+    That time only the label was wrong. `leg` is the expensive one: it decides create-versus-
+    sign-in, and offering to CREATE an account that already exists sends the operator to the wrong
+    form with the wrong instruction. Nothing is cranked here between the two reads — the account
+    record changes underneath, which is exactly how it happens.
+    """
+    import ats_accounts
+    company = "Handoff Freshness Co"
+    bb = _classified_step("icims", company=company)
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}}, blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+        before = r["account_handoff"]
+        # iCIMS's own words for both legs, and only the create leg has a recipe — so every
+        # volatile field genuinely differs between the two, and none of them can pass by accident.
+        assert (before["leg"], before["button"]) == ("create_account", "Submit Profile")
+        assert before["account_status"] == "pending" and before["has_recipe"] is True
+
+        # The operator makes the account somewhere else — the Accounts panel, a manual signup.
+        # The rung is NOT walked again; nothing rewrites the snapshot.
+        ats_accounts.mark_created(company, "icims")
+        after = client.get("/api/session_control/1").json()["account_handoff"]
+    finally:
+        _teardown()
+
+    assert after["leg"] == "sign_in", "the leg is re-read, not replayed"
+    assert after["state"] == "icims_sign_in"
+    assert after["button"] == "Log back in!"
+    assert after["account_status"] == "active"
+    # iCIMS has no sign-in recipe: the returning-candidate leg has not been driven. A stale True
+    # here would claim a drive that does not exist.
+    assert after["has_recipe"] is False
+    # ...and the identity half is untouched. WHICH wall was met is the part worth storing, and
+    # re-deriving it would be the mirror mistake — the card would follow the queue instead of
+    # staying pinned to the job whose wall it is about.
+    for key in ("job_id", "company", "ats_id", "account_id"):
+        assert after[key] == before[key], f"{key} is identity, not a live read"
+    assert after["ats_id"] == "icims" and after["company"] == company
+
+
+def test_a_leg_change_retires_the_plan_and_the_measurement_taken_for_the_old_one(monkeypatch):
+    """`plan` and `remaining` are descriptions OF the leg, so a leg that moves takes them with it.
+
+    The plan is rendered from the same table the driver executes precisely so the card cannot
+    describe a drive that does not happen — which is what a create-leg plan over a sign-in leg is.
+    `remaining` cannot be re-read here (it needs the browser, and this is a render) and a
+    measurement of the create form is not an answer about the sign-in form, so it retires rather
+    than being relabelled: the card shows no 'needs you' line instead of the wrong one.
+    """
+    import ats_accounts
+    company = "Plan Freshness Co"
+    ats_accounts.ensure_account(company, "successfactors",
+                                login_url="https://career41.sapsf.com/")
+    bb = _sap_step(_with_queue(("indeed:a1", "Pricing Analyst", company)))
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://career41.sapsf.com/careers"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/execute": {"outcome": "ok"},
+              "/scan_required": {"ok": True, "unanswered": [
+                  {"field": "Employee referral code: *", "selector": "#fbclc_ref"}]}},
+             blackboard=bb)
+    try:
+        before = client.post("/api/session_control/1/apply_account",
+                             json={"mode": "handoff"}).json()["account_handoff"]
+        assert before["leg"] == "create_account" and len(before["plan"]) == 12
+        assert before["remaining"]["checked"] is True
+        assert before["remaining"]["operator"] == ["Employee referral code: *"]
+
+        ats_accounts.mark_created(company, "successfactors")
+        after = client.get("/api/session_control/1").json()["account_handoff"]
+    finally:
+        _teardown()
+
+    assert after["leg"] == "sign_in"
+    assert len(after["plan"]) == 4, "the plan follows the leg, or it describes another drive"
+    assert "remaining" not in after, "a measurement of the create form is not about the sign-in one"
+
+
+def test_a_handoff_the_account_record_cannot_answer_keeps_its_last_known_words(monkeypatch):
+    """The refresh is a read model, and a read model must not break the panel. When the account
+    cannot be consulted the snapshot IS the last-known answer — degrading to a blank card would
+    lose the operator the credentials they were reading."""
+    import ats_accounts
+    bb = _classified_step("icims", company="Unreadable Account Co")
+    _install(monkeypatch, {"/list_tabs": _tabs(SEARCH_URL),
+                           "/auth_state": {"ok": True, "logged_in": True}}, blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_step", json={})
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("accounts store unreadable")
+        monkeypatch.setattr(ats_accounts, "next_account_action", _boom)
+        after = client.get("/api/session_control/1").json()["account_handoff"]
+    finally:
+        _teardown()
+
+    assert after["button"] == "Submit Profile" and after["leg"] == "create_account"
+    assert after["job_id"] == "indeed:aaa"
+
+
 def test_parking_clears_a_lingering_handoff(monkeypatch):
     """A finished step must not carry its handoff onto the next job."""
     bb = _wd_at_wall()

@@ -540,6 +540,78 @@ def _account_state(bb: Any) -> Optional[dict[str, Any]]:
         return None
 
 
+#: The handoff fields that are a CLAIM ABOUT THE ACCOUNT RECORD rather than about the wall. Each
+#: one is `next_account_action`'s answer, and that function's answer changes without the handoff
+#: being rewritten — so each one is re-read at render instead of replayed from the snapshot.
+#: `has_recipe` is volatile too and is set beside them rather than listed here, because it is the
+#: one that is not a straight copy: the action carries the recipe's NAME, and the card only ever
+#: asked whether there is one.
+_HANDOFF_VOLATILE = ("leg", "state", "account_status", "button")
+
+
+def _account_handoff(bb: Any) -> Optional[dict[str, Any]]:
+    """The pending account handoff, with its VOLATILE fields re-read from the account record.
+
+    A handoff answers two different kinds of question and they have different lifetimes. WHICH WALL
+    WAS MET — job, company, ATS, account id — is a fact about a moment, and storing it is the whole
+    point: it is what makes the card survive a reload and what scopes it to its step. WHAT TO DO
+    ABOUT IT — which leg is due, what the button says, whether a recipe exists — is
+    `next_account_action` re-answering from the account's CURRENT lifecycle state, and that answer
+    moves on its own: the operator creates the account in the Accounts panel, a registry fix
+    corrects an ATS's button pair, a `reset_account` un-says a wrong `mark_created`. None of those
+    go anywhere near the account rung, and the snapshot was only rewritten when the rung was
+    cranked again.
+
+    So the panel showed the stale half. Measured live 2026-08-20: `next_account_action`'s button map
+    was corrected for schoolspring (Workday's default "Create Account" -> PowerSchool's real
+    "Continue"); `account_state`, which derives on every view, read "Continue" immediately, while
+    `account_handoff` went on saying "Create Account" until the rung was cranked. The cockpit
+    prefers the handoff, so the stale one is the one the operator was reading.
+
+    That time only the label was wrong. `leg` is snapshotted the same way and is the expensive one:
+    it decides create-versus-sign-in, and a card that offers to CREATE an account that already
+    exists sends the operator at the wrong form with the wrong instruction — the same shape as the
+    wrong `mark_created` that `reset_account` exists to undo.
+
+    Two derived fields ride along with the leg, because they are descriptions OF it:
+      * `plan` is `program_steps(ats, leg)`, rendered from the same table the driver executes so the
+        card cannot describe a drive that does not happen. If the leg moved and the plan did not,
+        it describes exactly that.
+      * `remaining` was read off the LIVE form for the leg that was due then. It cannot be re-read
+        here (it needs the browser, and this is a render), and a measurement of the create form is
+        not an answer about the sign-in form — so a leg change retires it rather than relabelling
+        it. The card renders no "needs you" line instead of the wrong one.
+
+    Read-only in both directions: the stored record keeps every field it was written with, so the
+    snapshot stays available as the last-known answer and this can fall back to it whole when the
+    account is unreadable. A read model must not break the panel, and it must not write either.
+    """
+    stored = (bb.world or {}).get("account_handoff")
+    if not isinstance(stored, dict):
+        return None
+    company = stored.get("company") or ""
+    # BOTH WRITERS, ONE READER. The account rung stores the ATS as `ats_id`; `/apply_account`
+    # stores it as `ats`. The vocabularies differ because the two grew apart, and a reader that
+    # knew only one of them would silently decline to refresh half the handoffs in the system.
+    ats = stored.get("ats_id") or stored.get("ats") or ""
+    if not (company and ats):
+        return stored
+    try:
+        import ats_accounts
+        action = ats_accounts.next_account_action(company, ats)
+        fresh = {**stored,
+                 **{k: action.get(k) for k in _HANDOFF_VOLATILE},
+                 "has_recipe": bool(action.get("recipe"))}
+        if stored.get("leg") and stored["leg"] != action.get("leg"):
+            fresh.pop("remaining", None)
+        if "plan" in fresh:
+            import account_forms
+            fresh["plan"] = account_forms.program_steps(ats, action.get("leg") or "create_account")
+        return fresh
+    except Exception:  # noqa: BLE001 — a read model must not break the panel
+        return stored
+
+
 # --- arbitration: the ONE next action -----------------------------------------------------------
 # TWO SURFACES ANSWER "WHAT NEXT", AND SOMETHING HAS TO RESOLVE THEM.
 #
@@ -815,8 +887,11 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "queue": queue.as_dict(),
         # What the teacher intends next, if anything — the pause the operator steers from.
         "proposal": (bb.world or {}).get("apply_proposal"),
-        # A pending account-creation handoff (durable, survives reloads like the proposal).
-        "account_handoff": (bb.world or {}).get("account_handoff"),
+        # A pending account-creation handoff (durable, survives reloads like the proposal) — with
+        # its volatile half re-read from the account record rather than replayed. WHICH wall was
+        # met is stored; WHICH LEG IS DUE is asked again on every render, because the answer moves
+        # without the rung being cranked. See `_account_handoff`.
+        "account_handoff": _account_handoff(bb),
         # THE ACCOUNT'S STANDING STATE for the step being worked — which leg is due, and whether a
         # credential exists to run it. Separate from `account_handoff`, which is a pending REQUEST
         # and is cleared the moment the account is made. Without this the panel went blank at

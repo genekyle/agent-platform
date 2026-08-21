@@ -432,21 +432,36 @@ function executeFocus(p, step, nextAction) {
       primary: null, alternates: [] };
   }
   if (handoff) {
+    // AND THE VERB IS THE LEG'S, for the same reason the label is the ATS's. The handoff's `leg`
+    // is re-read from the account record on every render (`_account_handoff`), so it can now say
+    // `sign_in` about a card that was written for a create — which is precisely the case where a
+    // button reading "Create it automatically" would send the operator at the wrong form. The
+    // endpoint always drove whichever leg is due; only the wording assumed one.
+    const signingIn = handoff.leg === "sign_in";
+    const press = handoff.button || "the submit";
     return { ...base, kind: "account_handoff", handoff,
-      why: "Your account, your call. The system can create it for you — a captcha or an email "
-        + "verification code still stops for you, and the honeypot is never touched.",
+      why: signingIn
+        ? "The account exists — this signs in with the stored credential. A captcha or an email "
+          + "verification code still stops for you."
+        : "Your account, your call. The system can create it for you — a captcha or an email "
+          + "verification code still stops for you, and the honeypot is never touched.",
       // THE BUTTON IS THE ATS'S OWN WORD FOR IT, not ours. `handoff.button` has carried the real
       // label since the handoff was first written (iCIMS says "Submit Profile"), and this branch
       // spelled "Create Account" into the prose anyway while its `account` sibling one block below
       // interpolated it correctly. PowerSchool's identifier-first signup made the drift visible:
       // the screen the operator is sent to has a "Continue" and no "Create Account" anywhere on
       // it, so the sentence described a control that is not there.
-      primary: { label: "Create it automatically", endpoint: "/apply_account", body: { mode: "auto" },
-        why: `Fills the form with these credentials and clicks ${handoff.button || "the submit"}.` },
+      primary: { label: signingIn ? "Sign in automatically" : "Create it automatically",
+        endpoint: "/apply_account", body: { mode: "auto" },
+        why: `Fills the form with these credentials and clicks ${press}.` },
       alternates: [
         { label: "Fill, I'll submit", endpoint: "/apply_account", body: { mode: "fill" },
-          why: `Fill the form but leave the ${handoff.button || "submit"} click to you.` },
-        { label: "I created it", endpoint: "/apply_account", body: { mark_created: true },
+          why: `Fill the form but leave the ${press} click to you.` },
+        // THE TRUTHFUL EXIT, on both legs. This settles the rung and stores the credential the
+        // card showed, so an operator who did it by hand is not left pressing an automation
+        // button to say they did not need one.
+        { label: signingIn ? "I signed in" : "I created it",
+          endpoint: "/apply_account", body: { mark_created: true },
           why: "You typed it yourself — mark done and continue." },
       ] };
   }

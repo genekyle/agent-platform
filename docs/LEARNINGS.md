@@ -9777,3 +9777,63 @@ those is the remaining gap this drive names.
 
 *Also banked:* `previously_employed_here` gained the "ever worked for … in the past" pattern this
 tenant used; demographic pages answered by standing preference (declines) with the CC-305 signed.
+
+## 2026-08-21 (fourth) — the snapshot that kept answering a question it had stopped knowing
+
+**SIXTH TIME THIS WEEK, AND THE FIRST ONE CAUGHT BY READING THE LOG INSTEAD OF BY A DRIVE.** The
+08-20 entry ends on an aside: *"`account_handoff` is a snapshot on the blackboard, not a live read,
+so it kept the old label until the account rung was cranked again — while its sibling
+`account_state` already read correctly. The cockpit prefers the handoff, so the stale one is the
+one that shows."* That was written as a footnote to a label fix. It is the same
+fact-existed-and-nothing-asked shape as the five before it, and it was still in the code.
+
+**THE TWO FIELDS THAT LOOK ALIKE AND ARE NOT.** A handoff answers two questions with different
+lifetimes. *Which wall was met* — job, company, ATS, account id — is a fact about a moment, and
+storing it is the whole point: it survives a reload and it scopes the card to its step. *Which leg
+is due* — `leg`, `button`, `account_status`, `has_recipe`, and `state` — is `next_account_action`
+re-answering from the account's CURRENT lifecycle, and **that answer moves without the rung being
+cranked**: the operator creates the account in the Accounts panel, `reset_account` un-says a wrong
+`mark_created`, a registry fix corrects an ATS's button pair. All three change the account record
+and none of them go near `apply_step`.
+
+**ONLY THE LABEL WAS WRONG ON 08-20; `leg` IS THE EXPENSIVE ONE.** A stale button reads as *"the
+button is missing"*. A stale `leg` offers to CREATE an account that already exists — the operator
+is sent at the wrong form with the wrong instruction, which is the same damage `reset_account`
+exists to undo, arriving from the other direction.
+
+**THE FIX IS THE SPLIT, NOT A REFRESH.** `_account_handoff(bb)` sits beside `_account_state` and
+re-reads the volatile five at render; identity stays stored and untouched. Refreshing the snapshot
+before rendering would have worked once and left the same trap armed for the next reader — and it
+would have put a write in a read path. **A read model may derive; it may not store.**
+
+*Three things found doing it:*
+- **The two writers speak different vocabularies for the same fact.** The account rung stores the
+  ATS as `ats_id`; `/apply_account` stores it as `ats`. A reader that knew one of them would
+  silently have declined to refresh half the handoffs in the system, and looked like it worked.
+- **`plan` and `remaining` are descriptions OF the leg, so they move with it.** `plan` is
+  `program_steps(ats, leg)`, rendered from the same table the driver executes *precisely so the
+  card cannot describe a drive that does not happen* — which is exactly what a 12-step create
+  program over a sign-in leg is. `remaining` was measured off the live form for the leg that was
+  due then; it cannot be re-read at render (it needs the browser) and a measurement of the create
+  form is not an answer about the sign-in form, so **a leg change retires it rather than
+  relabelling it.** The card shows no "needs you" line instead of the wrong one.
+- **`has_recipe` has been written since the handoff was first built and is read by nothing.** The
+  same shape as the bug, one layer down: a fact produced, stored, and never asked for. It is kept
+  fresh here rather than deleted, because the thing to fix is the asking.
+
+**AND THE FRESH FACT MADE A UI SENTENCE WRONG THAT HAD BEEN SAFE ONLY BECAUSE THE DATA NEVER
+MOVED.** With `leg` now live, a handoff written for a create can render as `sign_in` — over a
+cockpit button that said "Create it automatically" on both. `/apply_account` always drove whichever
+leg was due; only the wording assumed one. The card's verb now follows the leg, its button still
+follows the ATS (`handoff.button`), and **"I created it" survives on both legs as "I signed in"** —
+first cut deleted it for sign-in and would have left the operator on a card with no truthful exit
+but an automation button.
+
+*Tests:* three new in `test_session_control.py`, and the two that matter were **run against the
+un-fixed view first and confirmed failing** (`create_account != sign_in`) — a freshness test that
+passes either way pins nothing. The third pins the degradation: an unreadable account store keeps
+the snapshot's last-known words rather than blanking the card. session_control, accounts,
+account_forms, cockpit_reach — **324 passed** (321 before), from the worktree with import
+provenance verified. UI: `deriveCockpit` driven under node on both legs, lint clean, build green —
+note the worktree has **no `node_modules`** either (the same wrong-module trap as the venv);
+symlinked from the main checkout.
