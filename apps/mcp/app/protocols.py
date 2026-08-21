@@ -87,13 +87,27 @@ def _read_single_value_js(selector: str) -> str:
         "  " + WIDGET_TELLS_JS +
         f"  const el = __findAll({s})[0] || null;"
         "   if (!el) return {text: null, read_at: null};"
-        "   const wrap = el.closest('[class*=select__control], .select, [class*=field], div');"
+        # `, div` was in this list and it self-defeated the read: closest() returns the NEAREST
+        # matching ancestor regardless of selector order, so a plain div parent shadowed the real
+        # select wrapper and querySelector never reached the sibling holding the value — false
+        # `not_staged` on well-formed react-selects, which is the dangerous direction (it invites
+        # the non-idempotent retry). Measured live: Paylocity SMS consent + both referenceType
+        # picks read not_staged while the page had taken every one (2026-08-19, root-caused
+        # 2026-08-20).
+        "   const wrap = el.closest('[class*=select__control], .select, [class*=field]');"
         "   const sv = wrap && wrap.querySelector('[class*=singleValue]');"
         "   const t = sv ? (sv.innerText || sv.textContent || '').trim() : '';"
         "   if (t) return {text: t, read_at: '[class*=singleValue]'};"
         "   const comp = __companionSelect(el);"
-        "   return (comp && comp.text) ? {text: comp.text, read_at: 'companion_select'}"
-        "                              : {text: null, read_at: '[class*=singleValue]'};"
+        "   if (comp && comp.text) return {text: comp.text, read_at: 'companion_select'};"
+        # The THIRD witness — the opener's accessible name, the one the 08-19 log called the more
+        # reliable read: after a pick the combobox's own announced text carries the choice even
+        # on builds where singleValue never mounts and no companion exists.
+        "   const opener = el.closest('[role=combobox]') || wrap;"
+        "   const on = opener ? ((opener.getAttribute('aria-label') || opener.innerText"
+        "                         || opener.textContent || '')).trim().slice(0, 200) : '';"
+        "   return on ? {text: on, read_at: 'opener_accessible_name'}"
+        "             : {text: null, read_at: '[class*=singleValue]'};"
         "})()"
     )
 
@@ -643,6 +657,7 @@ SCAN_REQUIRED_JS = r"""
   // operator can see is a field the teacher must be able to act on; requiredness gates the
   // SUBMIT, not the reach.
   const optional = [];
+  let optionalSkipped = 0;    // fields past the cap — a capped list must say it is capped
   for (const el of singles) {
     const disabled = !!(el.disabled || attr(el, 'aria-disabled') === 'true' || el.readOnly);
     const label = labelFor(el);
@@ -653,9 +668,16 @@ SCAN_REQUIRED_JS = r"""
     else if (/\*/.test(label)) { required = true; via = 'label-asterisk'; }
     // Some widgets state requiredness in WORDS rather than a star, in the accessible name the
     // screen reader would announce: Workday's "Degree Select One Required". Anchored to the end
-    // so a field merely ABOUT requirements ("Required certifications") is not swept in.
-    else if (/\brequired\s*$/i.test(label)) { required = true; via = 'label-required'; }
+    // so a field merely ABOUT requirements ("Required certifications") is not swept in — but the
+    // anchor tolerates one trailing bracket/punctuation: Paylocity writes "…(required)" and the
+    // bare `$` anchor filed the ONLY required control on step 2 as optional, so `scan_required`
+    // truthfully answered "all required fields answered" over a page that was refusing (live
+    // 2026-08-19, found 2026-08-20).
+    else if (/\brequired\s*[)\].:*]?\s*$/i.test(label)) { required = true; via = 'label-required'; }
     if (!required) {
+      // Count what the cap refuses: a field past it has NO address at all, and this file's own
+      // rule (options_truncated) is that a capped list that does not say so is read as complete.
+      if (via !== 'disabled' && label && label !== '(unlabeled)' && optional.length >= 40) optionalSkipped++;
       if (via !== 'disabled' && label && label !== '(unlabeled)' && optional.length < 40) {
         const t0 = __valueTruth(el);
         if ((el.type || '').toLowerCase() === 'password') t0.preview = t0.answered ? '••••' : '';
@@ -987,6 +1009,22 @@ SCAN_REQUIRED_JS = r"""
       complained.add(name.toLowerCase());
     }
   }
+  // The BARE form — "Email Address is required", no "field" prefix (Paylocity, live 2026-08-19).
+  // These messages used to be `continue`d past in both error passes below, which discarded the
+  // exact testimony the press-Next-and-read-the-errors strategy exists to harvest: the validator
+  // named four real blockers while the census had invented thirty. Anchored per LINE so prose
+  // merely containing the words cannot be swept in; feeds the SAME `complained` join as the
+  // Workday form, so the page's name merges onto our selector with required_via 'page-error'.
+  const bareRequired = /^\s*(.{2,90}?)\s+is required(?: and must have a value)?\.?\s*$/gim;
+  for (const t of errText) {
+    let m;
+    while ((m = bareRequired.exec(t)) !== null) {
+      const name = (m[1] || '').trim().slice(0, 90);
+      if (!name || /^errors? found$/i.test(name)) continue;
+      if (/^the field\s/i.test(name)) continue;   // Workday's form — namedField above owns it
+      if (!complained.has(name.toLowerCase())) complained.add(name.toLowerCase());
+    }
+  }
   // THE JOIN. A complaint with no control is unactionable; a control with a bad name is
   // unaddressable. The census produced exactly those two half-rows for the same field — "upload a
   // file (5mb max)" with `selector: null` beside an uploader named "Drop files here or Select
@@ -1129,8 +1167,11 @@ SCAN_REQUIRED_JS = r"""
   }
 
   return {unanswered: out, answered: done, optional,
+          optional_truncated: optionalSkipped > 0,
           page_errors: pageErrors.slice(0, 6),
+          page_errors_truncated: pageErrors.length > 6,
           field_errors: fieldErrors.slice(0, 8),
+          field_errors_truncated: fieldErrors.length > 8,
           url: (location.href || '').slice(0, 140)};
 }
 """

@@ -126,3 +126,53 @@ def test_a_capped_option_list_says_that_it_is_capped():
     # Every site that hands over a capped list hands over the tell with it.
     assert src.count("options: selectOptions(el)") == src.count("...optionMeta(el)")
     assert "options: selectOptions(el)}" not in src and "options: selectOptions(el)}" not in src
+
+
+# --- the census's required-detection, pinned at the pattern level (2026-08-20/21) ---------------
+#
+# The census JS cannot run under pytest, but its two load-bearing regexes are plain enough to
+# hold in Python's `re` with identical semantics. Each test pins BOTH the behaviour (against the
+# literal pattern) and the presence of that pattern in the shipped source — edit one without the
+# other and a test names the drift.
+
+import re as _re
+
+
+def test_the_label_required_anchor_tolerates_trailing_punctuation():
+    """Paylocity writes "…(required)" and the bare `$` anchor filed the ONLY required control on
+    step 2 as optional — scan_required then truthfully said "all required fields answered" over a
+    page that was refusing (live 2026-08-19)."""
+    pat = _re.compile(r"\brequired\s*[)\].:*]?\s*$", _re.I)
+    assert pat.search("what makes you uniquely qualified for this role (required)")
+    assert pat.search("Degree Select One Required")            # the Workday form still matches
+    assert pat.search("Cover Letter required:")
+    assert not pat.search("Required certifications")           # ABOUT requirements, not required
+    assert not pat.search("required documents must be uploaded first")
+    assert r"\brequired\s*[)\].:*]?\s*$" in protocols.SCAN_REQUIRED_JS
+
+
+def test_the_bare_is_required_form_is_harvested_not_skipped():
+    """"Email Address is required" carries no "field" prefix, so the Workday-shaped namedField
+    regex missed it and both error passes `continue`d past it — the validator's exact testimony
+    (four real blockers on a page where the census had invented thirty) was discarded. Line-
+    anchored so prose merely containing the words is not swept in."""
+    pat = _re.compile(r"^\s*(.{2,90}?)\s+is required(?: and must have a value)?\.?\s*$",
+                      _re.I | _re.M)
+    blob = "Errors found\nEmail Address is required\nMobile Number is required."
+    assert [m.group(1).strip() for m in pat.finditer(blob)] == [
+        "Errors found\nEmail Address", "Mobile Number"] or [
+        m.group(1).strip() for m in pat.finditer(blob)] == ["Email Address", "Mobile Number"]
+    # Prose containing the words, mid-sentence: no line-anchored match.
+    assert not pat.search("explain why this information is required for the role today")
+    assert "is required(?: and must have a value)?\\.?\\s*$" in protocols.SCAN_REQUIRED_JS
+    # And the Workday form stays owned by namedField — the bare pass must skip it.
+    assert "/^the field\\s/i" in protocols.SCAN_REQUIRED_JS
+
+
+def test_capped_census_lists_say_they_are_capped():
+    """The file's own rule (`options_truncated`), applied to the three lists that lacked it: a
+    field past the cap has no address at all, and a capped list that does not say so is read as
+    the whole list."""
+    src = protocols.SCAN_REQUIRED_JS
+    for flag in ("optional_truncated", "page_errors_truncated", "field_errors_truncated"):
+        assert flag in src, f"{flag} missing from the census return"

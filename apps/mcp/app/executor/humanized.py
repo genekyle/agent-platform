@@ -58,6 +58,13 @@ def humanized_path(start: tuple[float, float], end: tuple[float, float],
 class HumanizedDriver(DirectDriver):
     name = "humanized"
 
+    #: How much of a long text gets the per-character cadence before the authoritative write
+    #: takes over — see the bound in `_human_type`. Both are generous for every real search box
+    #: and question field, and small enough that the correctness write can never be starved by
+    #: the request timeout again.
+    _TYPE_CADENCE_MAX_CHARS = 48
+    _TYPE_CADENCE_MAX_SECONDS = 10.0
+
     def __init__(self, seed: Optional[int] = None) -> None:
         self._rng = random.Random(seed)
 
@@ -217,7 +224,17 @@ class HumanizedDriver(DirectDriver):
         search box (live 2026-07-27); /select_prompt already knew this about Workday's prompts and
         typed real keys, but the shared driver every other caller uses did not.
         """
-        for ch in text:
+        # THE CADENCE IS BOUNDED; THE CORRECTNESS WRITE IS NOT. Per-char at ~0.1s plus pauses, a
+        # 640-char answer spends ~90s in this loop and the HTTP timeout kills the coroutine
+        # BEFORE the authoritative write below — the one statement guaranteeing the field holds
+        # exactly `text` was the one the timeout skipped, leaving partial text behind (live
+        # 2026-08-19, the ~350-char practical ceiling; root-caused 2026-08-20). The docstring's
+        # own trade already concedes typing speed is not the anti-detection signal, so the human
+        # timing comes from a bounded prefix and the full value always lands in constant time.
+        # Keystroke-listening widgets (the iCIMS case above) still hear real keys, and the final
+        # native-setter write fires `input`, so a filter re-runs over the complete text.
+        deadline = asyncio.get_event_loop().time() + self._TYPE_CADENCE_MAX_SECONDS
+        for ch in text[: self._TYPE_CADENCE_MAX_CHARS]:
             await cdp.send("Input.dispatchKeyEvent",
                            {"type": "keyDown", "text": ch, "key": ch, "unmodifiedText": ch})
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
@@ -227,6 +244,8 @@ class HumanizedDriver(DirectDriver):
             if self._rng.random() < 0.06:  # occasional 'thinking' pause
                 delay += self._rng.uniform(0.2, 0.6)
             await asyncio.sleep(delay)
+            if asyncio.get_event_loop().time() >= deadline:
+                break
         await self._set_value_react_safe(cdp, text, object_id=object_id)
 
     #: The authoritative write, targeted at a NODE WE ALREADY RESOLVED rather than at whatever is

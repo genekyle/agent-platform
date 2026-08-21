@@ -302,3 +302,39 @@ def test_node_centre_returns_empty_when_the_node_has_no_box():
     assert asyncio.run(DirectDriver()._node_centre(_framed_cdp(None, []), 99)) == {}
     assert asyncio.run(DirectDriver()._node_centre(_framed_cdp([1.0, 2.0], []), 99)) == {}
     assert asyncio.run(DirectDriver()._node_centre(_framed_cdp([1.0], []), None)) == {}
+
+
+# --- the set_text ceiling: cadence is bounded, correctness is not (2026-08-20) ---
+def test_long_text_types_a_prefix_and_always_lands_whole():
+    """A 640-char answer used to spend ~90s in the per-char loop and the HTTP timeout killed the
+    coroutine BEFORE the authoritative write — the one statement that guarantees the field holds
+    exactly `text` was the one the timeout skipped, leaving partial text (live 2026-08-19, the
+    ~350-char practical ceiling). The cadence now comes from a bounded prefix; the native-setter
+    write always runs, in constant time, with the FULL string."""
+    import asyncio as aio
+    from unittest.mock import patch
+
+    from app.executor.humanized import HumanizedDriver
+
+    long_text = "x" * 640
+    calls = {"keys": 0, "set_value": None}
+
+    class FakeCDP:
+        async def send(self, method, params=None):
+            p = params or {}
+            if method == "Input.dispatchKeyEvent" and p.get("type") == "keyDown":
+                calls["keys"] += 1
+            if method == "Runtime.callFunctionOn":
+                calls["set_value"] = (p.get("arguments") or [{}])[0].get("value")
+                return {"result": {"value": calls["set_value"]}}
+            return {"result": {"value": None}}
+
+    async def _nosleep(_secs):
+        return None
+
+    drv = HumanizedDriver(seed=7)
+    with patch("app.executor.humanized.asyncio.sleep", _nosleep):
+        asyncio.run(drv._human_type(FakeCDP(), long_text, object_id="obj-1"))
+
+    assert calls["keys"] <= HumanizedDriver._TYPE_CADENCE_MAX_CHARS
+    assert calls["set_value"] == long_text, "the authoritative write must carry the whole text"
