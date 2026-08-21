@@ -4,7 +4,6 @@ import "./App.css";
 import "./styles/tokens.css";
 import "./styles/ai-ops.css";
 import { ApiUsageSection } from "./components/controlplane/ApiUsageSection";
-import { ChatSection } from "./components/controlplane/ChatSection";
 import {
   CONTROL_PLANE_NAV,
   LEARNING_ADVANCED_IDS,
@@ -29,7 +28,6 @@ import { DomainWorkspace } from "./components/controlplane/workspace/DomainWorks
 import { CockpitPage } from "./components/controlplane/workspace/cockpit/CockpitPage";
 import { DOMAINS_BY_ID } from "./components/controlplane/workspace/domains";
 import { candidateLabelsFromAnnotation, positiveCandidateIdFromLabels, resolveBbox } from "./components/controlplane/utils";
-import { WorkersSection } from "./components/controlplane/WorkersSection";
 import { ControllerSection } from "./components/controlplane/ControllerSection";
 import { SessionActivitySection } from "./components/controlplane/SessionActivitySection";
 import { LearningOverview } from "./components/controlplane/LearningOverview";
@@ -56,12 +54,6 @@ const EMPTY_INTERACTION_EDITS = {
   observed_page_state: "",
   post_action_state: "",
 };
-
-const mockWorkers = [
-  { id: "worker-01", name: "Seat-01", domain: "Marketplace", status: "Busy", seat: "VM-01" },
-  { id: "worker-02", name: "Seat-02", domain: "Jobs", status: "Idle", seat: "VM-02" },
-  { id: "worker-03", name: "Seat-03", domain: "Finance", status: "Blocked", seat: "VM-03" },
-];
 
 export default function App() {
   const location = useLocation();
@@ -106,9 +98,6 @@ export default function App() {
   }, []);
   const [systemStatus, setSystemStatus] = useState({ loading: false, data: null, error: null });
   const [usage, setUsage] = useState({ loading: false, data: null, error: null });
-  const [runs, setRuns] = useState({ loading: true, data: [], error: null });
-  const [selectedRunId, setSelectedRunId] = useState(null);
-  const [runSearch, setRunSearch] = useState("");
 
   const [trainingRegistry, setTrainingRegistry] = useState({ domains: [], goals: [], tasks: [], scenarios: [] });
   const [registryStatus, setRegistryStatus] = useState(null);
@@ -238,19 +227,7 @@ export default function App() {
     } catch (error) {
       setHealth({ loading: false, ok: false, error: error.message });
     }
-
-    setRuns((current) => ({ ...current, loading: true, error: null }));
-    try {
-      const response = await fetch(`${API}/api/runs`);
-      if (!response.ok) throw new Error(`Runs failed: ${response.status}`);
-      const payload = await response.json();
-      const safeRuns = Array.isArray(payload) ? payload : [];
-      setRuns({ loading: false, data: safeRuns, error: null });
-      if (safeRuns.length > 0 && !selectedRunId) setSelectedRunId(safeRuns[0].id);
-    } catch (error) {
-      setRuns({ loading: false, data: [], error: error.message });
-    }
-  }, [selectedRunId]);
+  }, []);
 
   const loadSystemStatus = useCallback(async () => {
     setSystemStatus((current) => ({ ...current, loading: true, error: null }));
@@ -510,16 +487,6 @@ export default function App() {
       // best-effort
     }
   }, [loadObservations]);
-
-  const createRun = useCallback(async () => {
-    try {
-      const response = await fetch(`${API}/api/runs`, { method: "POST" });
-      if (!response.ok) throw new Error(`Create run failed: ${response.status}`);
-      await refresh();
-    } catch {
-      // best-effort
-    }
-  }, [refresh]);
 
   const loadObservation = useCallback(async (filename) => {
     setSelectedObsFilename(filename);
@@ -873,11 +840,6 @@ export default function App() {
     await loadObservation(filename);
   }, [loadObservation, navigate]);
 
-  const openWorkerObservation = useCallback(async (filename) => {
-    navigate(pathForView("learning", { sectionId: "review-label" }));
-    await loadObservation(filename);
-  }, [loadObservation, navigate]);
-
   const triggerCapture = useCallback(async () => {
     if (!selectedTrainingSessionId || !selectedTabId || !selectedTrainingSession) return null;
     setCaptureInProgress(true);
@@ -952,9 +914,6 @@ export default function App() {
       loadStateMeta();
       loadActions();
     }
-    if (activePrimaryView === "workers") {
-      loadObservations();
-    }
   }, [activePrimaryView, loadObservations, loadTrainingRegistry, loadTrainingSessions, loadTrainingTargetComparison, loadStateMeta, loadActions]);
 
   useEffect(() => {
@@ -988,21 +947,6 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [selectedObsFilename, selectedHasScreenshot, selectedHasVisionSidecar, refreshVisionCandidates]);
-
-  const activeRuns = runs.data.filter((run) => String(run.status || "").toLowerCase().includes("running")).length;
-  const blockedRuns = runs.data.filter((run) => String(run.status || "").toLowerCase().includes("blocked")).length;
-  const completedRuns = runs.data.filter((run) => String(run.status || "").toLowerCase().includes("success")).length;
-  const filteredRuns = runs.data.filter((run) => {
-    const query = runSearch.trim().toLowerCase();
-    if (!query) return true;
-    return String(run.id || "").toLowerCase().includes(query) || String(run.status || "").toLowerCase().includes(query);
-  });
-
-  const selectedRun =
-    filteredRuns.find((run) => run.id === selectedRunId) ||
-    runs.data.find((run) => run.id === selectedRunId) ||
-    filteredRuns[0] ||
-    null;
 
   let sectionContent = null;
   if (activePrimaryView === "command") {
@@ -1124,37 +1068,6 @@ export default function App() {
         onChangeSection={setActiveSection}
       />
     );
-  } else if (activePrimaryView === "workers") {
-    sectionContent = (
-      <WorkersSection
-        section={activeSectionId}
-        filteredRuns={filteredRuns}
-        selectedRun={selectedRun}
-        runSearch={runSearch}
-        setRunSearch={setRunSearch}
-        activeRuns={activeRuns}
-        blockedRuns={blockedRuns}
-        completedRuns={completedRuns}
-        createRun={createRun}
-        setSelectedRunId={setSelectedRunId}
-        runs={runs}
-        workers={mockWorkers}
-        observations={observations}
-        loadObservations={loadObservations}
-        updateObsMeta={updateObsMeta}
-        deleteObservation={deleteObservation}
-        bulkDeleteObservations={bulkDeleteObservations}
-        justCapturedFilename={justCapturedFilename}
-        openWorkerObservation={openWorkerObservation}
-        selectedObs={selectedObs}
-        selectedObsFilename={selectedObsFilename}
-        clearSelectedObservation={clearSelectedObservation}
-      />
-    );
-  } else if (activePrimaryView === "chat") {
-    sectionContent = <ChatSection />;
-  } else if (activePrimaryView === "models") {
-    sectionContent = <ModelsSection section={activeSectionId} />;
   } else {
     sectionContent = (
       <DomainsSection
