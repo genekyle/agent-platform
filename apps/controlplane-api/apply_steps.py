@@ -466,6 +466,24 @@ class ApplyStep:
             self.status = STATUS_OPEN
         return mini
 
+    def stall_count(self, rung: str) -> int:
+        """Consecutive non-landing tries on this rung since it last landed — the number the
+        retry discipline reads (docs/LEARNINGS 2026-08-14: 2 failed tries on one control →
+        screenshot; 3 → tell the operator, don't grind). Prose-only until 2026-08-21; this is
+        the counter that gives both thresholds a place to live. Minis of OTHER rungs do not
+        break the streak — an orient between two failed advances is still the same grind."""
+        n = 0
+        for m in reversed(self.minis):
+            r = m.rung if not isinstance(m, dict) else m.get("rung")
+            if r != rung:
+                continue
+            o = m.outcome if not isinstance(m, dict) else m.get("outcome")
+            if o in (FAILED, MISMATCH):
+                n += 1
+                continue
+            break                      # an OK (or an escalation already recorded) ends the streak
+        return n
+
     def finish(self, flag: str, detail: str = "") -> None:
         if flag not in TERMINAL_FLAGS:
             raise ValueError(f"{flag!r} is not a terminal flag; have {sorted(TERMINAL_FLAGS)}")

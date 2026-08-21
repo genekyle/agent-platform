@@ -584,3 +584,23 @@ def test_a_measured_wall_still_waits_for_the_page_to_reach_it():
     # measured-account generic platform on its posting would too.
     assert aps.rung_applies("account", platform="successfactors",
                             state="successfactors_job_posting")[0] is False
+
+
+def test_the_grind_counter_counts_the_streak_not_the_history():
+    """The retry discipline (2 misses → look; 3 → the operator) was prose-only since 2026-08-14.
+    `stall_count` is its number: consecutive non-landing tries on ONE rung, where minis of other
+    rungs do not break the streak (an orient between two failed advances is the same grind) and
+    an OK resets it."""
+    step = aps.ApplyStep(job_id="indeed:g1", title="t", company="c")
+    assert step.stall_count("advance") == 0
+    step.record("advance", aps.MISMATCH, "pressed, nothing moved")
+    step.record("orient", aps.OK, "looked around")               # another rung: streak survives
+    step.record("advance", aps.FAILED, "pressed, page refused")
+    assert step.stall_count("advance") == 2
+    step.record("advance", aps.MISMATCH, "third miss")
+    assert step.stall_count("advance") == 3
+    step.record("advance", aps.OK, "landed at last")
+    assert step.stall_count("advance") == 0, "an OK ends the streak"
+    # And a fresh mismatch after the OK starts a NEW streak of one.
+    step.record("advance", aps.MISMATCH, "new page, new problem")
+    assert step.stall_count("advance") == 1

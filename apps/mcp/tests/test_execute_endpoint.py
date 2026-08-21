@@ -72,3 +72,27 @@ def test_a_landed_upload_is_still_ok(monkeypatch, journal_dir):
     out = _execute_upload(monkeypatch, "upload")
     assert out["outcome"] == "ok"
     assert out["ok"] is True
+
+
+def test_a_downgraded_drive_is_named_in_the_response(monkeypatch, journal_dir):
+    """get_driver falls back humanized -> direct on ImportError with only a log warning — the
+    system-wide human-motion standard silently became teleport-and-click on live employer sites,
+    and nothing in the journal said so (audit 2026-08-20). The response now names it."""
+    from app.executor import driver as driver_mod
+    from app import main_server
+
+    class _Robot(_FakeDriver):
+        name = "direct"
+
+    monkeypatch.setattr(driver_mod, "get_driver", lambda name=None: _Robot("element:click"))
+    body = main_server.ExecuteRequest(
+        action_id="click", target_bbox={"x": 0, "y": 0, "width": 10, "height": 10},
+        backend_node_id=42, tab_url="https://example.test/x", driver="humanized")
+    out = asyncio.run(main_server.execute_action(body))
+    assert out.get("driver_downgraded") is True
+    # And an explicitly requested direct drive is not a downgrade.
+    body2 = main_server.ExecuteRequest(
+        action_id="click", target_bbox={"x": 0, "y": 0, "width": 10, "height": 10},
+        backend_node_id=42, tab_url="https://example.test/x", driver="direct")
+    out2 = asyncio.run(main_server.execute_action(body2))
+    assert "driver_downgraded" not in out2

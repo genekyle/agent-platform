@@ -6604,6 +6604,26 @@ async def _work_advance_rung(rung: Any, step: Any, bb: Any, obs: dict[str, Any],
     import apply_recipe as ar
     from controller.decide import advance_control
 
+    # THE GRIND RULE, enforced at last (prose-only since 2026-08-14; counter added 2026-08-21):
+    # 2 straight non-landing tries on this rung → the next answer says LOOK before pressing
+    # again; 3 → this rung is the operator's, full stop. The streak is `stall_count`'s — an
+    # orient between two failed advances is still the same grind, and an OK resets it.
+    _stall = step.stall_count(rung.id)
+    if _stall >= 3:
+        step.record(rung.id, aps.HUMAN_REQUIRED,
+                    f"{_stall} straight non-landing tries on this rung — stopping per the grind "
+                    f"rule rather than pressing a fourth time", initiator=initiator)
+        return _refuse(out, refusal.Refusal(
+            what=f"This control has been tried {_stall} times without landing, and a fourth "
+                 f"press is not an experiment any more.",
+            why="two misses mean look (screenshot the page); three mean the page wants something "
+                "a press cannot give — the grind rule hands it to you here rather than after "
+                "ten more identical tries.",
+            exit=refusal.Exit(label="Take over on the page, or park it",
+                              endpoint="/apply_flag",
+                              body={"job_id": step.job_id, "flag": "parked:operator",
+                                    "detail": "grind rule: 3 misses on one control"})))
+
     read = await _read_apply_page(bb, obs, browser_url)
     if read is None:
         step.record(rung.id, aps.UNKNOWN, "no application tab to advance", initiator=initiator)

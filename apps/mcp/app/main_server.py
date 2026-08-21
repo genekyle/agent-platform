@@ -725,7 +725,16 @@ async def execute_action(body: ExecuteRequest):
     # bare word "upload", which is why the original check here never fired (dead 08-11..08-20).
     _mode = str((result.extra or {}).get("mode") or "")
     _upload_failed = _mode.startswith(("upload:not_staged", "upload:rejected"))
+    # A DOWNGRADED DRIVE IS RECORDED, NEVER SILENT (2026-08-21). `get_driver` falls back to the
+    # robotic DirectDriver on an ImportError with only a process-log warning — a bot-safety
+    # posture that can vanish silently is not a posture. The event log and the response both say
+    # so; the journal already carries the driver name on every row for anyone who asserts on it.
+    _downgraded = (body.driver or "humanized").lower() == "humanized" and result.driver == "direct"
+    if _downgraded:
+        _log_event("drive", "DRIVER DOWNGRADE: humanized unavailable — this act ran ROBOTIC",
+                   detail=(body.tab_url or ""), domain=body.tab_url)
     return {
+        **({"driver_downgraded": True} if _downgraded else {}),
         # A driver ok=False got here by catching an exception (driver.py:245), so it is a
         # mechanism failure — ERROR, not a protocol outcome.
         "outcome": (Outcome.NOT_STAGED if _upload_failed

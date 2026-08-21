@@ -445,6 +445,26 @@ def record_flow(db, *, url: str, job_key: Optional[str], terminal: str,
         # is now by definition — this function runs at the terminal flag.
         row.started_at = row.started_at or started_at
         row.ended_at = ended_at or models.utcnow()
+
+        # A WALL MET IS A MEASUREMENT, and this is the moment it is measured (2026-08-21). The
+        # characteristics table promised "measured facts with provenance, replacing the prose in
+        # the registry's notes" and had no live writer for the auth axis — the one fact the
+        # UNE drive needed before spending its approach. Instance-scoped on purpose: a tenant's
+        # wall is a fact about the tenant; the vendor-level rule stays the registry's.
+        if terminal.startswith("parked:account_wall"):
+            ch = (db.query(models.AtsCharacteristic)
+                  .filter_by(ats_id=ats_id, instance_key=key, kind="auth", key="wall_met")
+                  .first())
+            if ch is None:
+                ch = models.AtsCharacteristic(ats_id=ats_id, instance_key=key,
+                                              kind="auth", key="wall_met")
+                db.add(ch)
+                ch.observations = 0
+            ch.value = "account"
+            ch.confidence = "measured"
+            ch.observations = (ch.observations or 0) + 1
+            ch.evidence = (f"met the account wall live — a driven flow ended {terminal!r} on "
+                           f"this instance ({ch.observations} time(s))")
         db.flush()
         return key
     except Exception:  # noqa: BLE001 — never let bookkeeping break a recorded terminal

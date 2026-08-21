@@ -210,7 +210,9 @@ def test_record_flow_is_idempotent_per_session_instance_and_job():
             outer = self
             class Q:
                 def filter_by(self, **kw): return self
-                def first(self): return outer._flow
+                # Dispatch on the queried MODEL — a fake that answers every query with the same
+                # row lied to the characteristics upsert the moment record_flow gained one.
+                def first(self): return outer._flow if m is models.AtsFlow else None
             return Q()
         def add(self, o):
             self.added.append(o)
@@ -313,3 +315,26 @@ def test_backfill_names_a_missing_traces_dir_instead_of_a_clean_zero(tmp_path):
     out = bf2.backfill(None, directory=str(tmp_path / "empty"), dry_run=True,
                        traces_dir=str(tmp_path / "definitely-not-there"))
     assert out.get("traces_dir_missing") is True
+
+
+def test_a_wall_met_live_writes_a_measured_characteristic():
+    """The characteristics table promised measured facts with provenance and had no live writer
+    for the auth axis — the one fact the UNE drive needed before spending its approach
+    (2026-08-19). A flow ending parked:account_wall IS the measurement, scoped to the instance."""
+    import ats_backfill as bf2, models
+
+    db = _sqlite_db()
+    bf2.record_flow(db, url="https://une.peopleadmin.com/postings/26341", job_key="job_x",
+                    terminal="parked:account_wall", session_id=9, platform="peopleadmin")
+    ch = db.query(models.AtsCharacteristic).filter_by(kind="auth", key="wall_met").one()
+    assert ch.instance_key == "peopleadmin:une" and ch.value == "account"
+    assert ch.confidence == "measured" and ch.observations == 1
+    # A second meeting is a second observation, not a second row.
+    bf2.record_flow(db, url="https://une.peopleadmin.com/postings/9", job_key="job_y",
+                    terminal="parked:account_wall", session_id=10, platform="peopleadmin")
+    assert db.query(models.AtsCharacteristic).filter_by(kind="auth", key="wall_met").count() == 1
+    assert db.query(models.AtsCharacteristic).filter_by(kind="auth").one().observations == 2
+    # And a submitted flow writes no auth fact at all.
+    bf2.record_flow(db, url="https://recruiting.paylocity.com/Recruiting/Jobs/Details/1/A-Co",
+                    job_key="job_z", terminal="submitted", session_id=11, platform="paylocity")
+    assert db.query(models.AtsCharacteristic).filter_by(ats_id="paylocity").count() == 0

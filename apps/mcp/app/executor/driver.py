@@ -111,7 +111,10 @@ class TrajectoryDriver(ABC):
         try:
             await asyncio.wait_for(cdp.send("Input.dispatchMouseEvent", params), timeout=timeout)
         except asyncio.TimeoutError:
-            pass
+            # Tolerated, but COUNTED (2026-08-21): a press whose ack never came and a press that
+            # never landed used to be the same fact. The count rides out in ExecResult.extra so a
+            # no_progress diagnosis can see whether the input channel was dropping acks.
+            self._dropped_acks = getattr(self, "_dropped_acks", 0) + 1
 
     async def _click_sequence(self, cdp, x: float, y: float, path: Optional[list[tuple[float, float]]] = None) -> None:
         """Optional pre-move along `path` (CSS px), then a left click at (x,y)."""
@@ -468,6 +471,7 @@ class DirectDriver(TrajectoryDriver):
         import websockets
         from app.observer.ax_proposer import _CDPSession, _discover_target
 
+        self._dropped_acks = 0            # per-act; _dispatch_mouse increments on a swallowed ack
         x, y = target_css_point(request.target_bbox, request.device_scale_factor)
         mode = "coordinate"
         try:
@@ -492,8 +496,10 @@ class DirectDriver(TrajectoryDriver):
         # A select's verdict belongs in `detail`, where /execute actually surfaces it. `ok` still
         # means only "the mechanism completed" — but "notfound" now reaches the caller instead of
         # dying in a local variable.
+        dropped = getattr(self, "_dropped_acks", 0)
         return ExecResult(ok=True, driver=self.name, action_id=request.action_id,
-                          css_point=(x, y), path_points=0, extra={"mode": mode},
+                          css_point=(x, y), path_points=0,
+                          extra={"mode": mode, **({"dropped_acks": dropped} if dropped else {})},
                           detail=(mode if mode.startswith("element:select:") else ""))
 
 
