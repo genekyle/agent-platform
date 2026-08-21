@@ -493,10 +493,14 @@ class LiveActuator:
             return self._field_result(res)
 
         if intent == Intent.SET_DATE.value:
+            # The recipe's widget hint rides along, as it does for select_option: the work-date
+            # container is a plain div the live classifier can only call `unknown`, and the hint
+            # is the one place that knows it fronts the segmented shape (2026-08-21).
             res = self._post("/set_date", {
                 **self._addr(), "selector": addr.get("selector"),
                 "month": int(p.get("month") or 0), "year": int(p.get("year") or 0),
-                "day": p.get("day"), "ats": self._ats, "field": field})
+                "day": p.get("day"), "ats": self._ats, "field": field,
+                "widget_type": addr.get("widget_type")})
             return self._field_result(res)
 
         if intent == Intent.CHECK_GROUP.value:
