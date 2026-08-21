@@ -88,6 +88,13 @@ class FailureClass(str, Enum):
     #: Present so the supervisor NARRATES it rather than filing the loop's loudest stop as UNKNOWN.
     CHALLENGE = "challenge"
 
+    #: The PLATFORM errored — the act landed on the site's own error/retry page (`*_error_retry`),
+    #: which is the site failing, not our act or our map. `workday_error_retry` is the 4th most
+    #: common state in the entire corpus (36 of 356 rows, ANALYSIS_ats_corpus 2026-08-20) and
+    #: every encounter burned a human escalation for a page whose own remedy is wait-and-retry.
+    #: Detected from the LANDED state's name — the suffix convention the facet map already uses.
+    PLATFORM_ERROR = "platform_error"
+
     #: We cannot name it. The honest bucket, never a guess wearing a label — and the metric that
     #: tells us whether the taxonomy fits reality (PLAN_supervisor §8). Never graduates (§6).
     UNKNOWN = "unknown"
@@ -125,6 +132,7 @@ PLAY_FOR_CLASS: dict[str, str] = {
     FailureClass.AUTH_WALL.value: RecoveryPlay.ESCALATE.value,
     FailureClass.MISSED_REQUIRED_CONTROL.value: RecoveryPlay.RESCAN_REQUIRED.value,
     FailureClass.CHALLENGE.value: RecoveryPlay.ESCALATE.value,
+    FailureClass.PLATFORM_ERROR.value: RecoveryPlay.SETTLE_AND_RETRY.value,
     FailureClass.UNKNOWN.value: RecoveryPlay.ESCALATE.value,
 }
 
@@ -138,6 +146,7 @@ _STUCK_SIGNAL: dict[str, float] = {
     FailureClass.RACE_SETTLE.value: 0.5,
     FailureClass.NO_PROGRESS.value: 0.7,
     FailureClass.MISSED_REQUIRED_CONTROL.value: 0.7,
+    FailureClass.PLATFORM_ERROR.value: 0.6,     # the site's fault, and usually transient
     FailureClass.UNRECOGNIZED_STATE.value: 0.8,
     FailureClass.STALE_TAB.value: 0.85,
     FailureClass.AUTH_WALL.value: 0.9,
@@ -278,6 +287,20 @@ def classify(
                   "we cannot plan from a page we cannot name; it is recorded as a candidate "
                   "state rather than guessed at",
                   ("state",), 0.85)
+
+    # --- the platform's own error page: the site failed, not us -----------------------
+    # Detected from the LANDED state (where the act put us), narrowly: only the
+    # `*_error_retry` suffix — a page whose entire content is "something went wrong, retry".
+    # `workday_error_retry` alone is 36 of 356 corpus rows, each one previously burning a human
+    # escalation for a page whose own remedy is wait-and-look-again. Checked BEFORE the nominal
+    # branch: landing on an error page is not success whatever the delta says.
+    if landed_state and landed_state.endswith("_error_retry"):
+        return _v(FailureClass.PLATFORM_ERROR,
+                  f"expected {' or '.join(expected_next) if expected_next else 'the next step'}, "
+                  f"landed on the platform's own error/retry page",
+                  "the PLATFORM errored — a transient server-side failure, not our act and not "
+                  "our map; the page's own remedy is to settle and try again",
+                  ("landed_state",), 0.9)
 
     # --- the action landed and the page moved: nominal --------------------------------
     if verified and delta.moved:

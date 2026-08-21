@@ -44,9 +44,17 @@ _NEVER_RECOVER = frozenset({
 _LOOP_OWNED = frozenset({RecoveryPlay.NONE.value, RecoveryPlay.RE_OBSERVE.value,
                          RecoveryPlay.ESCALATE.value})
 
-#: Classes an operator may enable today. Deliberately empty: nothing has graduated yet. Populated
-#: only by the promotion gate (≥20 instances of the class at ≥70% agreement, PLAN_supervisor §6).
-AUTONOMOUS_CLASSES: frozenset[str] = frozenset()
+#: Classes an operator may enable. Populated by the promotion gate (≥20 instances of the class at
+#: ≥70% agreement, PLAN_supervisor §6) — or by the operator naming one directly.
+#:
+#: PLATFORM_ERROR is the first graduate (operator-approved 2026-08-20, the audit build-out). The
+#: argument, since promotion must carry one: the incident count clears the bar before the class
+#: existed (`workday_error_retry` is 36 of 356 corpus rows — the 4th most common state — and every
+#: one burned a human escalation), the remedy is deterministic (settle, re-observe, re-decide:
+#: `apply_play` never re-fires the failed decision), and the play TOUCHES NOTHING on the page —
+#: strictly safer than the escalation it replaces, which parked a drive on a page whose entire
+#: content is "try again". UNKNOWN and the stop-states remain unpromotable by construction.
+AUTONOMOUS_CLASSES: frozenset[str] = frozenset({FailureClass.PLATFORM_ERROR.value})
 
 
 class RecoveryActuator(Protocol):

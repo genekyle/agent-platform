@@ -289,3 +289,31 @@ def test_the_delta_is_what_separates_a_treadmill_from_real_progress():
 
 def test_schema_version_is_pinned():
     assert SUPERVISION_SCHEMA_VERSION == "v1"
+
+
+def test_landing_on_the_platforms_error_page_is_the_platforms_fault():
+    """workday_error_retry is the 4th most common state in the corpus (36/356) and every
+    encounter burned a human escalation — for a page whose entire content is "something went
+    wrong, try again". Detected from the LANDED state, narrowly (`*_error_retry` only), and
+    checked before the nominal branch: landing on an error page is not success whatever moved."""
+    v = classify(outcome=Outcome.OK.value, verified=False, delta=MOVED,
+                 intent="click", state="workday_my_experience",
+                 expected_next=("workday_questions",), landed_state="workday_error_retry")
+    assert v.failure_class == FailureClass.PLATFORM_ERROR.value
+    assert v.proposed_recovery == RecoveryPlay.SETTLE_AND_RETRY.value
+    assert not v.nominal
+    # Even a delta that "verified" cannot launder the landing into nominal.
+    v2 = classify(outcome=Outcome.OK.value, verified=True, delta=MOVED,
+                  intent="click", state="workday_my_experience",
+                  expected_next=("workday_error_retry",), landed_state="workday_error_retry")
+    assert v2.failure_class == FailureClass.PLATFORM_ERROR.value
+
+
+def test_a_form_error_state_is_not_a_platform_error():
+    """The suffix is deliberately narrow: greenhouse_apply_error is a FORM with validation
+    errors — our input's problem, not the platform's — and must not settle-and-retry."""
+    v = classify(outcome=Outcome.OK.value, verified=False, delta=MOVED,
+                 intent="click", state="greenhouse_apply_form",
+                 expected_next=("greenhouse_apply_confirmation",),
+                 landed_state="greenhouse_apply_error")
+    assert v.failure_class != FailureClass.PLATFORM_ERROR.value

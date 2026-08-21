@@ -53,11 +53,14 @@ ALL = frozenset(c.value for c in FailureClass)
 
 
 # --- refusal: the whole point ---------------------------------------------------------
-def test_shadow_mode_is_the_default_and_runs_nothing():
-    """Stage 1 (PLAN_supervisor §6). The executor exists and does nothing until an operator names
-    a class that has earned promotion. `AUTONOMOUS_CLASSES` ships empty and this is the test that
-    keeps it that way."""
-    assert recovery.AUTONOMOUS_CLASSES == frozenset()
+def test_shadow_mode_is_the_default_for_every_ungraduated_class():
+    """Stage 1 (PLAN_supervisor §6): the executor does nothing until a class earns promotion.
+    This test shipped as `AUTONOMOUS_CLASSES == frozenset()` and failed loudly on 2026-08-21 when
+    PLATFORM_ERROR graduated — which is exactly what a pinned default is for: the change argues
+    itself here, not past it. The promoted set is now EXACTLY the one graduate (its argument
+    rides in recovery.py's own comment: 36 incidents, a deterministic remedy, a play that touches
+    nothing on the page), and every other class still runs nothing."""
+    assert recovery.AUTONOMOUS_CLASSES == frozenset({FailureClass.PLATFORM_ERROR.value})
     act = FakeRecoveryActuator()
     res = apply_play(_verdict(FailureClass.RACE_SETTLE, RecoveryPlay.SETTLE_AND_RETRY),
                      _decision(), act)
@@ -196,3 +199,40 @@ def test_every_play_is_either_loop_owned_or_has_an_executor():
                          _decision(field="f", value="v"), act, enabled_classes=ALL)
         owned = "unexpected.respond" in res.detail
         assert owned or res.attempted, f"{play.value} does nothing and nobody owns it"
+
+
+def test_platform_error_is_the_first_graduate_and_its_play_runs():
+    """The promotion argument rides in recovery.py's own comment: 36 incidents, a deterministic
+    remedy, and a play that touches nothing on the page — strictly safer than the escalation it
+    replaces. The default AUTONOMOUS_CLASSES now carries exactly this class; the stop-states and
+    UNKNOWN remain refused by construction."""
+    from interaction.supervision import classify, FailureClass
+    from interaction.contract import Outcome
+    from interaction.delta import StateDelta
+    from controller import recovery
+
+    assert recovery.AUTONOMOUS_CLASSES == frozenset({FailureClass.PLATFORM_ERROR.value})
+
+    calls = []
+
+    class _Rec:
+        def settle(self):
+            calls.append("settle")
+
+        def re_resolve_tab(self):
+            return False
+
+        def rescan_required(self):
+            return ()
+
+        def commit_widget(self, field, value):
+            return False
+
+    verdict = classify(outcome=Outcome.OK.value, verified=False,
+                       delta=StateDelta(appeared=("text|error",)),
+                       intent="click", state="workday_my_experience",
+                       expected_next=("workday_questions",),
+                       landed_state="workday_error_retry")
+    play = recovery.apply_play(verdict, _decision(), _Rec())
+    assert play.attempted and play.retry
+    assert calls == ["settle"], "the play must wait and touch nothing else"

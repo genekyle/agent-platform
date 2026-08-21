@@ -296,10 +296,29 @@ async def run_live(body: RunBody) -> dict[str, Any]:
         _on_step(bundle, decision, result)
         rec_step(bundle, decision, result)
 
+    # The recovery seam, wired at last (2026-08-21). `apply_play` skipped every play with "no
+    # recovery actuator wired" — including the newly graduated PLATFORM_ERROR, whose entire
+    # remedy is wait-then-re-observe. Only `settle` does anything: the play touches nothing on
+    # the page by design, and the loop re-observes and re-decides after it. The other members
+    # stay honest no-ops until their classes graduate and earn a real implementation.
+    class _LiveRecovery:
+        def settle(self) -> None:
+            time.sleep(2.5)
+
+        def re_resolve_tab(self) -> bool:
+            return False
+
+        def rescan_required(self) -> tuple[dict, ...]:
+            return ()
+
+        def commit_widget(self, field: str, value: str) -> bool:
+            return False
+
     result = await run_in_threadpool(
         run_controller, actuator,
         programs=programs_mod.ProgramStore(), model=model,
         session_id=run_key, max_steps=body.max_steps,
+        recovery_actuator=_LiveRecovery(),
         reviewer=reviewer,
         on_escalate=handoff_mod.escalation_callback(
             task_goal=body.goal_text or body.task, reason="unexpected_state"),
