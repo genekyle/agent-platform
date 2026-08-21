@@ -917,7 +917,7 @@ async def select_prompt(body: SelectPromptRequest):
     if opt_node is None:
         # The searchBox flag is the diagnostic: found=no means the popup never opened
         # (not_opened); found=yes means it opened and the value isn't in the list (no_option,
-        # which is a vocabulary miss -> /resolve_answer). Collapsing both into one failure is
+        # which is a vocabulary miss -> the answer store / the teacher). Collapsing both into one failure is
         # what used to make this endpoint's errors un-actionable.
         return {**common, "steps": steps,
                 "outcome": Outcome.NO_OPTION if sb.get("found") else Outcome.NOT_OPENED,
@@ -2845,12 +2845,12 @@ def _popup_outcome(res: dict) -> Outcome:
             # It opened, but nothing matches the option selector — the widget is not the
             # shape we assumed (it may render plain divs). The caller's move is not_opened's
             # ("this widget works differently than you think"), which is why it lands here
-            # rather than on no_option: /resolve_answer cannot help with a shape mismatch.
+            # rather than on no_option: a re-asked answer cannot help with a shape mismatch.
             return Outcome.NOT_OPENED
         if "would not stage" in detail:
             return Outcome.NOT_STAGED
         if "no option" in detail:
-            return Outcome.NO_OPTION          # a genuine vocabulary miss -> /resolve_answer
+            return Outcome.NO_OPTION          # a genuine vocabulary miss -> the answer store / teacher
         return Outcome.ERROR
     # ok:true — but only ONE of the two success paths is actually verified.
     if "applies on select" in detail:

@@ -156,7 +156,7 @@ def test_react_select_verifies_at_singlevalue_not_at_dot_value(corpus, monkeypat
 
 def test_react_select_distinguishes_never_opened_from_word_not_in_the_list(corpus, monkeypatch):
     # Different caller moves: not_opened => the widget_type is wrong; no_option => it's a
-    # vocabulary miss for /resolve_answer. Collapsing them is what made failures unactionable.
+    # vocabulary miss for the answer store. Collapsing them is what made failures unactionable.
     wire_cdp(monkeypatch, route(
         focus={"ok": True, "x": 1, "y": 1, "expanded": "false"},
         option={"found": False, "count": 0, "sample": []}))
@@ -170,7 +170,10 @@ def test_react_select_distinguishes_never_opened_from_word_not_in_the_list(corpu
     out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
         selector="#country", value="Atlantis", widget_type="react_select")))
     assert out["outcome"] == "no_option"
-    assert "resolve_answer" in out["detail"]
+    # The remedy must point at something that EXISTS: /resolve_answer was advertised for
+    # months and never implemented (audit 2026-08-20) — a caller sent to a 404 is worse off
+    # than one told plainly to ask the store or the teacher.
+    assert "application-answers/match" in out["detail"]
 
 
 def test_react_select_catches_the_wrong_option_taking(corpus, monkeypatch):

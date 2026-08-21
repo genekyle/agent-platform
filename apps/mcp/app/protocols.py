@@ -208,7 +208,8 @@ async def react_select_pick(cdp, *, selector: str, value: str,
                     f"keystrokes; if this recurs the widget_type is wrong")
         return (Outcome.NO_OPTION, steps,
                 f"no option matching {value!r} among {hit.get('count')} — "
-                f"sample: {hit.get('sample')}. Vocabulary miss -> /resolve_answer.")
+                f"sample: {hit.get('sample')}. Vocabulary miss -> ask the answer store "
+                f"(POST /api/application-answers/match) or the teacher.")
 
     # CONFIRM AT THE LAYER THAT COMMITS. .value is empty by now and would report failure;
     # singleValue is where the choice actually lives — or, where it never mounts, the hidden
