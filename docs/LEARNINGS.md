@@ -9656,3 +9656,57 @@ its own; it cannot be summoned early.**
 *Tests:* session_control, apply_fields, account_forms, accounts, cockpit_reach — **347 passed**,
 from the worktree with import provenance verified. UI still has no test runner: `deriveCockpit`
 driven under node against the live panel, lint clean on the touched file, build green.
+## 2026-08-21 — Tier 2: the prose rules become enforcement points, and one class graduates
+
+The audit's Tier 2, built. Each item is a lesson this log had already paid for, now with a line
+of code that stops it recurring. controlplane-api **1764**, mcp **156**, interaction **277** —
+all green (note for worktree sessions: the venv's `interaction` is an editable install pointing
+at MAIN, so cross-package changes need `PYTHONPATH=<worktree>/packages/interaction` until merge).
+
+**THE CENSUS BELIEVES THE VALIDATOR.** Three fixes in `SCAN_REQUIRED_JS`: the label-required
+anchor tolerates one trailing bracket (Paylocity's "(required)" filed the page's ONLY required
+control as optional); the BARE "X is required" form now feeds the existing `complained` join —
+the machinery was already there, keyed only to Workday's "the field X…" phrasing, while both
+error passes `continue`d past the exact testimony the press-Next strategy harvests; and the three
+capped lists carry `*_truncated` flags, the file's own `options_truncated` rule applied to
+itself. Pinned at the PATTERN level: the regexes hold in Python `re` with identical semantics,
+so the tests pin behaviour and source together.
+
+**THE THIRD WITNESS, AND THE SELECTOR THAT DEFEATED ITSELF.** `_read_single_value_js` dropped
+`, div` from its `closest()` list — nearest-ancestor matching meant a plain div parent shadowed
+the real select wrapper, manufacturing the false `not_staged` on well-formed react-selects (the
+direction that invites the non-idempotent retry) — and gained the opener's accessible name as the
+third witness, the read the 08-19 log called the more reliable one.
+
+**THE CADENCE IS BOUNDED; THE CORRECTNESS WRITE IS NOT.** `_human_type` types a 48-char/10s
+prefix for the timing signal and ALWAYS runs the native-setter write with the full text. The
+~350-char ceiling was the authoritative write being the statement after the loop the timeout
+killed.
+
+**THE CONTROL BEATS ITS CONTAINER.** `_resolve_ax_node`: inside a tier, interactive candidates
+outrank non-interactive ones, and a tier of only containers answers nothing — unless the caller
+named that role, which is them owning an unusual target. The PeopleAdmin heading wearing three
+links' names cannot win a centre-click again.
+
+**PLATFORM_ERROR IS THE FIRST GRADUATED RECOVERY CLASS.** `workday_error_retry` (36/356 corpus
+rows, the 4th most common state, one dict entry of code) now classifies from the LANDED state —
+narrowly, `*_error_retry` only; `greenhouse_apply_error` is a FORM problem and stays out — with
+`settle_and_retry` as its play, checked before the nominal branch. `AUTONOMOUS_CLASSES` carries
+exactly this graduate; the "ships empty" pin failed loudly and the change argues itself in the
+test, per the Paylocity-auth precedent. The run endpoint finally wires a recovery actuator
+(settle sleeps 2.5s; every other member is an honest no-op until its class earns one).
+
+**THE GRIND RULE HAS A COUNTER** (`ApplyStep.stall_count` — consecutive non-landing tries on one
+rung; an orient between two failed advances is the same grind; an OK resets) and the advance rung
+refuses a fourth press with the exit named. **THE DRIVER HAS WITNESSES**: a humanized→direct
+downgrade is named in the response and event log, and swallowed mouse-acks are counted into
+`extra.dropped_acks`. **AND THE WALL HAS A ROW**: a flow ending `parked:account_wall` writes a
+measured, instance-scoped `auth` characteristic with provenance — the characteristics table's
+first live writer. The consult side (decision paths preferring a measured instance row over the
+registry constant) deliberately waits until the decision path knows the tenant; a consumer wired
+to an empty table would be the audit's anti-pattern in reverse.
+
+*Also merged up:* the branch rebased onto main twice mid-day (the live session landed the same
+apply_flag staleness fix independently, PLUS the missing `db.commit()` — record_flow only
+flushes, and on a parked flag nothing commits after it, which my version had missed; the merge
+keeps their position and commit with my canonical key and timestamps).
