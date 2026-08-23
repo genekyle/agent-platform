@@ -40,7 +40,14 @@ import errands
 #: kind of plausible-wrong hint that matches somebody else's code. Rows are added when a sender is
 #: MEASURED (the verify seam also writes instance-scoped `verification_sender` characteristics,
 #: which `senders_for` prefers over anything here).
-ATS_MAIL_DOMAINS: dict[str, tuple[str, ...]] = {}
+ATS_MAIL_DOMAINS: dict[str, tuple[str, ...]] = {
+    # Folded from the outcome matcher's interim table (ruling 4). Only domains the site catalogue
+    # cannot reach through classify_sender's bidirectional suffix match belong here — bare parent
+    # domains like adp.com/powerschool.com resolve through their subdomain host entries already.
+    "indeed_quick_apply": ("indeedemail.com",),   # Indeed notifies from @indeedemail.com
+    "greenhouse": ("greenhouse-mail.io",),        # sends via us.greenhouse-mail.io
+    "workable": ("workablemail.com",),
+}
 
 #: A company hint shorter than this is not a hint — "GE" as a substring matches "message",
 #: "manage", and half the inbox. The freshness window and the ambiguity refusal soften a miss;

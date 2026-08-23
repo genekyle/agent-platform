@@ -105,6 +105,7 @@ from routers import ats_db as ats_db_router
 from routers import activity as activity_router  # noqa: E402
 from routers import application_answers as application_answers_router  # noqa: E402
 from routers import career_search as career_search_router  # noqa: E402
+from routers import application_inbox as application_inbox_router  # noqa: E402
 from routers import job_database as job_database_router  # noqa: E402
 from routers import controller as controller_router  # noqa: E402
 from routers import drive_lock as drive_lock_router  # noqa: E402
@@ -5315,6 +5316,7 @@ def create_app() -> FastAPI:
     app.include_router(application_answers_router.router)
     app.include_router(career_search_router.router)
     app.include_router(job_database_router.router)
+    app.include_router(application_inbox_router.router)
     app.include_router(controller_router.router)
     app.include_router(drive_lock_router.router)
     app.include_router(errands_router.router)

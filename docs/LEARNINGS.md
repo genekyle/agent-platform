@@ -10322,3 +10322,78 @@ honest.
 **FROM HERE THE CLOCK RUNS ON FRESH ROWS ONLY.** Every historical pair carries `phase=None`; live
 agreement stayed **0.5952/294** through all of this, correctly. The next drive is the first one
 whose rows can score the rail at all.
+
+## 2026-08-22 (third) — the tracker gets its reader: inbox rows become outcome events
+
+The audit's bottleneck 3 closed at the seam the models drew on day one. Built: `inbox_matcher.py`
+(pure `decide()` — no DB, no browser), `inbox_sweep.py` (persistence + the event writes; ITS OWN
+module per the tandem contract, so the drive-end hook in `session_control` is one line calling
+`inbox_sweep.sweep()`), `routers/application_inbox.py` (`POST /api/career_search/inbox/sweep`,
+the ledger `GET`, `POST …/{id}/resolve`), the `inbox_emails` ledger table, and an Inbox tab in
+the Job Database section. 18 new tests; the matcher also ran clean against all 28 real
+applications (each company's own confirmation mail matches exactly its own application — the
+"Boston Children's ≠ Boston College" and "a different credit union must not claim Metro's mail"
+collisions are pinned as tests).
+
+**THE DECISION BOUNDARY IS THE DESIGN.** Three verdicts: `record` (written unattended), `review`
+(surfaced prefilled, one click to resolve), `ignore` (not ours). Auto-write requires BOTH an
+unambiguous single-company match (≥0.75 of the company's normalized tokens — the threshold that
+keeps two-of-three generic words from claiming a row) AND distinctive phrasing — and only for
+confirmation / viewed / strong-formula rejections. Employer-response kinds (interview, assessment,
+screening, recruiter contact) are NEVER auto-written however clear the phrasing: they are the
+numerator of the response rate, and a false one poisons the number the operator actually reads.
+Weak tells ("unfortunately" alone) only prefill review.
+
+**MAIL DOMAINS ARE NOT WEB HOSTS.** The registry's hosts catalogue nearly classifies senders, but
+the mail leaves from different domains: Indeed notifies from `@indeedemail.com`, Greenhouse from
+`greenhouse-mail.io`, ADP from bare `adp.com` (only subdomains are registry hosts). Additive
+`ATS_MAIL_DOMAINS` map in the matcher, to fold into `gmail_senders.classify_sender` at rebase once
+the verify-leg lands (coach ruling: one table, mail domains beside site domains). And unlike
+`classify_ats`, the ENGINE domains stay in play for mail — a message *from indeed.com about an
+application* is exactly the attribution wanted; no shadowing exists in the mail direction.
+
+**PERSONAL MAIL IS A SECRET.** The sweep reads a personal mailbox, so `ignored` rows persist the
+FINGERPRINT ONLY (sender+subject+timestamp hash, for idempotent re-sweeps) — subject and snippet
+of non-application mail are never stored. Same §4 rule as answered previews; the evidence-cites-
+the-secret lesson generalizes to mail about someone's dinner plans.
+
+**NO MESSAGE ID EXISTS AND THAT IS FINE.** The subject-line reader never opens a thread (no read
+receipt), so the documented `{message_id, …}` gmail evidence gets the sweep fingerprint as its
+durable reference instead. Idempotency lives on that fingerprint: re-sweeping an unchanged inbox
+writes nothing, which is what makes "run it after every drive" safe. Review catch worth keeping:
+the reader nulls `received_at` exactly when Gmail's title timestamp fails Date-parse and emits
+raw `received_text` for that case — a fingerprint that ignores it collapses recurring
+same-subject mail to one identity (and a locale change nulls EVERY date). The raw text is the
+fallback half of the identity, not decoration.
+
+**THE HUMAN INPUT IS THE UNTRUSTED PATH.** The matcher's own keys come from applications joined
+to jobs and always resolve; the review UI's free-text job-key input accepts any paste. The
+original `resolve_key(...) or job_key` fallback would have turned a typo into a 200 OK plus a
+phantom Application no job view can see (they all start from `Job`, and `Application.job_key`
+has no FK). The writer now raises on an unresolvable key and the confirm path 422s — the guard
+lives at the shared writer, so any future caller inherits it.
+
+**FLOW TERMINALS GET A WITNESS, NOT A WRITE.** A matched confirmation names the open `ats_flows`
+rows for its job (`flow_terminal_witness`) but never sets `terminal` — that column describes what
+the DRIVE did, and an email cannot retroactively change it. The corroboration is surfaced; the
+join stays honest.
+
+Verified live: the blocked contract answers honestly against the real capture server (no browser
+at 9222 → the 404 named; a live browser with no attachable pages → named too — never a silent
+empty), and the full loop clicked through in the cockpit against a scratch DB: sweep → auto
+rejection flips the application to `rejected` → response rate recomputes → the review row's
+prefilled interview_invite confirms in one click as `· human` beside the `· auto` rows.
+
+**THE REBASE, DONE.** The fold shrank on contact with the verify-leg's actual code:
+`classify_sender` suffix-matches BOTH directions (`domain.endswith("."+host)` and
+`host.endswith("."+domain)`), so bare parent domains — `adp.com` against the
+`workforcenow.adp.com` host entry, `powerschool.com` against `auth.powerschool.com` — resolve
+through the site catalogue already, and only the three true mail-only domains
+(`indeedemail.com`, `greenhouse-mail.io`, `workablemail.com`) went into `ATS_MAIL_DOMAINS`.
+`inbox_matcher.sender_ats` now delegates to the one shared classifier (the deadp.com≠adp
+suffix pin kept anyway). The drive-end hook rides `close_out` — the one press at the end of every
+sitting — as a best-effort epilogue reported in the close-out account (`inbox_sweep` key), never
+a raise. And the hook's first consequence was the FOURTH instance of conftest's oldest warning:
+`close_out` became a network caller, so its tests would have read the operator's REAL inbox into
+a throwaway test DB the moment a Gmail browser was up — `settings.capture_server_url` is now
+pinned to the discard port for the whole suite, with the blocked path as the honest fixture.

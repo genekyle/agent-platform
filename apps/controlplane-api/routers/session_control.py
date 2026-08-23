@@ -8599,7 +8599,15 @@ async def close_out(session_id: int, body: CloseOutBody,
         # stop was already a reportable outcome; an unexpected one is too.
         chrome = {"stopped": False, "detail": f"{type(exc).__name__}: {exc}"}
 
+    # The drive-end crank (tandem contract): the mailbox is read once per sitting through the
+    # SAME sweep the cockpit button turns, so outcomes land without anyone remembering to press
+    # it. Best-effort by construction — no Gmail tab, a signed-out profile, or an unreachable
+    # browser reports `{ok: false, blocked: …}` in the close-out account, never a raise.
+    import inbox_sweep
+    inbox = await inbox_sweep.sweep_live(db)
+
     return {"ok": True, "closed": True, "session_id": session_id,
+            "inbox_sweep": inbox,
             "kept_work": bool(body.keep_work),
             # Named by what actually happened to them, so a report can never read as a discard that
             # did not occur (or, worse, a keep that did not).
