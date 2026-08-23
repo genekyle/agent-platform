@@ -204,19 +204,32 @@ def _matches_caller(row: dict[str, Any], sender_hints: list[str]) -> bool:
     return any(hint in hay for hint in sender_hints if hint)
 
 
+def domain_stem(domain_id: str) -> str:
+    """The brand word inside a registry domain_id — `indeed_jobs` → `indeed`. Public because it is
+    also `gmail_senders.senders_for`'s last-resort fallback: the registry id and the brand in an
+    email address are deliberately different strings, the exact `indeed_jobs` vs `indeed` split
+    that already cost us a wrong rollup once."""
+    stem = (domain_id or "").lower()
+    for suffix in ("_jobs", "_marketplace", "_search"):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
 def _sender_hints(request: ErrandRequest) -> list[str]:
-    """What to match the mail against. An explicit `sender_hint` wins; otherwise derive it from the
-    caller's domain_id, stripping our registry suffix (`indeed_jobs` → `indeed`) because the
-    registry id and the brand in an email address are deliberately different strings — the exact
-    `indeed_jobs` vs `indeed` split that already cost us a wrong rollup once."""
+    """What to match the mail against. Explicit hints win — `sender_hints` (a list, e.g. from
+    `gmail_senders.senders_for` when the caller is an ATS account flow whose mail brand is not its
+    domain_id), then the single `sender_hint`; otherwise derive the brand from the caller's
+    domain_id via `domain_stem`."""
+    listed = request.params.get("sender_hints")
+    if listed:
+        hints = [str(h).strip().lower() for h in listed if str(h or "").strip()]
+        if hints:
+            return hints
     explicit = request.params.get("sender_hint")
     if explicit:
         return [str(explicit).lower()]
-    stem = (request.requested_by or "").lower()
-    for suffix in ("_jobs", "_marketplace", "_search"):
-        if stem.endswith(suffix):
-            stem = stem[: -len(suffix)]
-            break
+    stem = domain_stem(request.requested_by)
     return [stem] if stem else []
 
 
@@ -331,6 +344,9 @@ def spec() -> dict[str, Any]:
         "route": route("fetch_login_code"),
         "params": {
             "sender_hint": "optional — brand word to match; defaults to the caller's domain stem",
+            "sender_hints": "optional — a LIST of hints (domains + company phrase), for callers "
+                            "whose mail brand is not their domain_id; derive it with "
+                            "gmail_senders.senders_for(ats, company)",
             "max_age_seconds": "optional — freshness window, default 900 (15 min)",
         },
         "returns": {

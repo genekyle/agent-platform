@@ -242,6 +242,20 @@ WORKDAY_FIELDS: dict[str, dict[str, Any]] = {
                          note="reveals the sign-in form; NOT the nav's utilityButtonSignIn"),
     "create_account_submit": _f(ats="workday", role="button", name="Create Account",
                                 widget_type=WidgetType.UNKNOWN),
+    # THE EMAIL-VERIFICATION WALL'S TWO CONTROLS — HYPOTHESIS, UNMEASURED (2026-08-22). No live
+    # Workday verify screen has been scanned (every verification so far was the operator's hand),
+    # so these are the generic Workday shape, not this table's usual measured automation-ids. The
+    # exact-name addressing is the net: a wrong name is a loud `not_found` with nothing typed and
+    # nothing submitted, and the verify seam escalates with the errand's masked evidence. Whoever
+    # first sees the screen live: replace these from the scan and drop the label
+    # (account_forms.ACCOUNT_FORMS["verify_email"] carries the same note).
+    "verification_code": _f(ats="workday", role="textbox", name="Verification Code",
+                            widget_type=WidgetType.TEXT,
+                            note="ERRAND-SOURCED, not an answer key: the value is the "
+                                 "fetch_login_code errand's one-time code, held only in flight — "
+                                 "never stored, never journaled raw."),
+    "verify_email_submit": _f(ats="workday", role="button", name="Verify",
+                              widget_type=WidgetType.UNKNOWN),
 }
 
 # --- INDEED -------------------------------------------------------------------------

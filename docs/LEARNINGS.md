@@ -10012,3 +10012,59 @@ outcome loop and gives the submission verifier its second witness; (3) mine the 
 pairs and re-measure per-scenario — the first promotion is one calibration axis away; (4) give the
 flywheel its screen: the real label queue + one scorecard with the gate on it. Gmail-as-domain
 stays out of scope (Career Search until a family graduates); Gmail-as-reader is Career Search.
+
+## 2026-08-22 (second) — the built errand gets its first caller, and a detector that could not see half the wall
+
+The `fetch_login_code` errand has had a contract, a recipe, a route, a CDP reader and ~36 tests
+since 07-10, and **zero internal callers** until today (the reflection audit's finding, entry
+above). It now has one: `apply_account`'s verification seam, where the escalation text literally
+read *"a Gmail errand we can automate next"* while the errand sat on the shelf. Built to
+`PLAN_verify_email_leg.md` Part 1, in tandem with three other sessions (Part 2 lanes).
+
+**WHAT LANDED.** A third leg, `verify_email`, beside create/sign-in. Due-ness is MEASURED — the
+live scan decides, never a stored flag — and the mechanism is classified from the page: a code box
+means `code` (driven end to end: errand fetch → stage → submit → **re-classify**), link language
+means `link` (honestly human-required in v1; the errand reads subject lines only, so no thread is
+opened and no read receipt left), neither means scan-and-refuse with what IS on screen. Both
+mechanisms write an instance-scoped `verification_mechanism` characteristic — the link ones too,
+because the case for building a link-click spine accumulates in the ledger before the build, not
+after. `gmail_senders.py` is the new shared table (one row per ATS, mail domains beside site
+domains, read forward by `senders_for` and backward by `classify_sender`).
+
+**THE BUG THE TEST FOUND, WHICH WAS OLDER THAN THE FEATURE.** `_ACCOUNT_VERIFY_MARKERS` is
+code-centric — every phrase in it describes a page asking you to TYPE something ("verification
+code", "enter the code", "two-factor"). So a wall whose entire message is *"we sent you an email,
+click the link"* matched **nothing** and read as a clean signup. That is the expensive direction:
+the leg would call `mark_created` on an account the employer has not verified, the sign-in leg
+would be due forever against it, and every later rejection would read as a bad password. Found
+only because the link-mechanism fixture was written honestly rather than to match the detector.
+Wall detection now goes through `_is_verification_wall` (code language OR link language, one list
+each, shared with the classifier). *The general shape: a detector written for one mechanism is
+blind to the other in exactly the way that looks like success.*
+
+**THE NAMING COLLISION, RETIRED BEFORE IT BIT.** `operator_verify` already meant "the search was
+submitted but not confirmed" (`run_query`), and `lifecycle.js` renders that meaning's copy — so
+the old seam told an operator to check a search box while the page wanted a six-digit code. The
+07-27 `mfa → operator_2fa` split is the precedent; this seam is `account_verify_email` with its
+own copy and its own card. Two meanings on one wire key is a bug with a UI-shaped symptom, and it
+is cheapest to fix while only one of the two meanings exists at the seam.
+
+**WHAT IS MEASURED AND WHAT IS NOT — stated plainly, because the gap is the whole risk here.**
+MEASURED: 1786 API tests green, including seven new ones that pin the wire's refusals (ambiguous
+codes escalate, a stale code is never entered, a link wall types nothing, the code reaches no
+event/mini-step/response). **HYPOTHESIS, UNMEASURED: the Workday verify screen itself.** Nobody
+has scanned one — every verification to date was done by the operator's hand — so
+`verification_code` / `verify_email_submit` in `apply_fields` are the generic Workday shape, not a
+measurement, and both they and the `ACCOUNT_FORMS` entry carry that label in the source. The
+exact-name addressing is the net: a wrong name is a loud `not_found` with nothing typed and
+nothing submitted. **Also unmeasured: any live errand read.** There is currently no Gmail tab open
+in any browser, so the first live attempt will hit the reader's honest `blocked` state — that is
+the contract working, and the named remedy (an operator-opened, signed-in Gmail tab; the agent
+never drives Google's sign-in) is what the escalation says. *Whoever first drives this live:
+correct the field names from the scan and drop the label — that is the measurement this owes.*
+
+**A SMALLER ONE WORTH KEEPING.** A one-time code is a THIRD kind of value: not a credential
+(nothing stores it — it is dead in ten minutes) and not an application answer (it is not a fact
+about the operator). It travels as `errand.login_code` (`ERRAND_REFS`), resolvable only while the
+errand's answer is in hand, so a committed program carries the ref and nothing that could
+reproduce the value.
