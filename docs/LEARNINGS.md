@@ -10313,6 +10313,18 @@ Verified live: the blocked contract answers honestly against the real capture se
 at 9222 → the 404 named; a live browser with no attachable pages → named too — never a silent
 empty), and the full loop clicked through in the cockpit against a scratch DB: sweep → auto
 rejection flips the application to `rejected` → response rate recomputes → the review row's
-prefilled interview_invite confirms in one click as `· human` beside the `· auto` rows. Merge
-order holds: this branch rebases after the verify-leg lands, folds the mail domains into
-`classify_sender`, and places the one-line drive-end hook.
+prefilled interview_invite confirms in one click as `· human` beside the `· auto` rows.
+
+**THE REBASE, DONE.** The fold shrank on contact with the verify-leg's actual code:
+`classify_sender` suffix-matches BOTH directions (`domain.endswith("."+host)` and
+`host.endswith("."+domain)`), so bare parent domains — `adp.com` against the
+`workforcenow.adp.com` host entry, `powerschool.com` against `auth.powerschool.com` — resolve
+through the site catalogue already, and only the three true mail-only domains
+(`indeedemail.com`, `greenhouse-mail.io`, `workablemail.com`) went into `ATS_MAIL_DOMAINS`.
+`inbox_matcher.sender_ats` now delegates to the one shared classifier (the deadp.com≠adp
+suffix pin kept anyway). The drive-end hook rides `close_out` — the one press at the end of every
+sitting — as a best-effort epilogue reported in the close-out account (`inbox_sweep` key), never
+a raise. And the hook's first consequence was the FOURTH instance of conftest's oldest warning:
+`close_out` became a network caller, so its tests would have read the operator's REAL inbox into
+a throwaway test DB the moment a Gmail browser was up — `settings.capture_server_url` is now
+pinned to the discard port for the whole suite, with the blocked path as the honest fixture.

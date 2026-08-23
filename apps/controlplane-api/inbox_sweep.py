@@ -99,6 +99,23 @@ async def read_live_inbox(browser_url: str = "http://127.0.0.1:9222",
     return {"ok": True, "rows": read.get("rows") or []}
 
 
+async def sweep_live(db: Session, browser_url: str = "http://127.0.0.1:9222",
+                     tab_id: Optional[str] = None,
+                     tab_url: str = "mail.google.com") -> dict[str, Any]:
+    """The drive-end hook: read the live Gmail tab and sweep it, in one call.
+
+    NEVER raises — this rides the close-out epilogue, and a cleanup's job is to report what
+    happened, not to 500 halfway through it. An unreachable browser, signed-out profile, or
+    unknown layout comes back as `{ok: False, blocked: …}`, same as the endpoint."""
+    try:
+        read = await read_live_inbox(browser_url=browser_url, tab_id=tab_id, tab_url=tab_url)
+        if not read.get("ok"):
+            return read
+        return sweep(db, read["rows"])
+    except Exception as exc:  # noqa: BLE001 — see docstring
+        return {"ok": False, "blocked": f"{type(exc).__name__}: {exc}"}
+
+
 def sweep(db: Session, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Run the matcher over inbox rows and write what is safe to write. Commits.
 
@@ -146,6 +163,9 @@ def sweep(db: Session, rows: list[dict[str, Any]]) -> dict[str, Any]:
             app, ev = write_event(db, decision.job_key, decision.kind, row,
                                   ats_id=decision.ats_id)
             ledger.status, ledger.decided_by, ledger.decided_at = "recorded", "auto", utcnow()
+            # The ALIVE key, post-tombstone — the event landed there, and an audit join through
+            # the ledger must land on the same row (the confirm path already does this).
+            ledger.job_key = app.job_key
             db.flush()
             ledger.event_id = ev.id
             entry = {**ledger_dict(ledger), "application_status": app.status}

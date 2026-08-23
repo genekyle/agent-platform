@@ -83,6 +83,15 @@ def test_sender_ats_registry_and_mail_domains():
     assert im.sender_ats("mom@gmail.com") is None
 
 
+def test_sender_domains_are_suffix_anchored_not_substrings():
+    # Review finding 3: substring matching attributed hr@deadp.com to adp, which blocked the
+    # IGNORE branch and persisted personal mail into review. The shared classify_sender anchors
+    # on domain boundaries; this pin holds even if the delegation ever changes.
+    assert im.sender_ats("hr@deadp.com") is None
+    assert im.sender_ats("x@badp.com") is None
+    assert im.sender_ats("no-reply@notindeed.com") is None
+
+
 def test_sender_address_splits_reader_format():
     address, name = im.sender_address("no-reply@indeedemail.com Indeed Apply")
     assert address == "no-reply@indeedemail.com"

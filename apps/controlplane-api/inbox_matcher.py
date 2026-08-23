@@ -41,26 +41,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-import ats_registry
 import job_dedup
 
 # --------------------------------------------------------------------------------------
 # Sender → ATS
 # --------------------------------------------------------------------------------------
-
-#: MAIL domains that identify an ATS the registry already knows but that never appear as a WEB
-#: host (so the hosts catalogue alone cannot see them). Additive only — an entry here may add an
-#: attribution, never change what a registry host would have said. Substring-matched against the
-#: sender's domain, same as the hosts loop.
-ATS_MAIL_DOMAINS: dict[str, str] = {
-    "indeedemail.com": "indeed_quick_apply",   # Indeed notifies from @indeedemail.com
-    "greenhouse-mail.io": "greenhouse",        # Greenhouse sends via us.greenhouse-mail.io
-    "workablemail.com": "workable",
-    "adp.com": "adp",                          # hosts list only the workforcenow/myjobs subdomains
-    "powerschool.com": "schoolspring",         # only auth.powerschool.com is a registry host
-    "talent.icims.com": "icims",               # already covered by icims.com; named for clarity
-}
-
 
 def sender_address(sender: str) -> tuple[str, str]:
     """Split `/read_inbox`'s sender field into (address, display_name).
@@ -77,27 +62,17 @@ def sender_address(sender: str) -> tuple[str, str]:
 def sender_ats(address: str) -> Optional[str]:
     """The ATS a sender domain names, or None for an unrecognised (usually personal) sender.
 
-    Substring match against the registry's hosts, mirroring `classify_ats` — but unlike the URL
-    classifier the ENGINE domains are kept in play: mail *from indeed.com about an application* is
-    exactly the attribution we want, and no ATS mail domain contains an engine's, so there is no
-    shadowing to guard against here.
-
-    TANDEM SEAM (docs/PLAN_verify_email_leg.md Part 2): the verify-leg session is creating
-    `gmail_senders.py` with a `classify_sender`; once it lands, this function should delegate to
-    (and `ATS_MAIL_DOMAINS` should fold into) that one classifier so the verify leg and the
-    matcher cannot disagree about who a sender is. Resolved at this branch's rebase, verify-leg
-    merges first.
+    Delegates to `gmail_senders.classify_sender` — the ONE table both the verify leg and this
+    matcher read, so the two directions cannot disagree about who a sender is (tandem seam,
+    resolved at rebase as planned; this matcher's interim mail-domain table folded into
+    `gmail_senders.ATS_MAIL_DOMAINS`). The shared classifier suffix-anchors the domain, so a
+    lookalike like deadp.com no longer attributes to adp — and unlike the URL-side
+    `classify_ats`, engine domains stay in play: mail *from indeed.com about an application* is
+    exactly the attribution wanted.
     """
-    domain = address.rsplit("@", 1)[-1].lower() if "@" in address else ""
-    if not domain:
-        return None
-    for needle, ats_id in ATS_MAIL_DOMAINS.items():
-        if needle in domain:
-            return ats_id
-    for ats in ats_registry.ATS_PLATFORMS:
-        if any(needle in domain for needle in ats.get("hosts") or ()):
-            return ats["ats_id"]
-    return None
+    import gmail_senders
+
+    return gmail_senders.classify_sender(address)
 
 
 # --------------------------------------------------------------------------------------
@@ -322,13 +297,19 @@ def decide(row: dict[str, Any], applications: list[dict[str, Any]]) -> Decision:
 def event_evidence(row: dict[str, Any], *, ats_id: Optional[str] = None) -> dict[str, Any]:
     """The `ApplicationEvent.evidence` payload for a gmail-sourced event. The documented shape is
     {message_id, from_address, subject}; the list reader never sees a message id, so the sweep
-    fingerprint stands in as the durable reference."""
+    fingerprint stands in as the durable reference.
+
+    An explicit `row["fingerprint"]` wins over recomputing: the confirm path reconstructs the
+    reader row from the LEDGER, whose datetime round-trips differently than the reader emitted it
+    (Z vs +00:00), so a recompute there could never match the ledger row it came from. Sweep-path
+    identity is unaffected — `sweep()` fingerprints the raw reader row itself.
+    """
     address, name = sender_address(str(row.get("sender") or ""))
     return {
         "from_address": address, "sender_name": name,
         "subject": str(row.get("subject") or "")[:300],
         "received_at": row.get("received_at"),
-        "fingerprint": fingerprint(row),
+        "fingerprint": str(row.get("fingerprint") or "") or fingerprint(row),
         **({"ats_id": ats_id} if ats_id else {}),
     }
 

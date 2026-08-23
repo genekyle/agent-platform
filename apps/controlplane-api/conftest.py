@@ -93,3 +93,22 @@ def _isolate_controller_programs():
                 os.environ.pop("CONTROLLER_PROGRAMS_DIR", None)
             else:
                 os.environ["CONTROLLER_PROGRAMS_DIR"] = previous
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_capture_server():
+    """No test reaches a LIVE capture server — the fourth instance of the module docstring's
+    warning (2026-08-22). The inbox sweep's drive-end hook made `close_out` a network caller
+    (`routers.errands._capture_post` → `settings.capture_server_url`), so with the capture server
+    and a signed-in Gmail browser both up, the close_out TESTS would read the operator's real
+    inbox and sweep it into a throwaway test DB — test behavior keyed to what is open on the
+    operator's desk. Point the URL at the discard port; the blocked path ({ok: false}) is the
+    honest fixture, and tests that want rows stub the seam explicitly.
+    """
+    from settings import settings
+
+    previous = settings.capture_server_url
+    settings.capture_server_url = "http://127.0.0.1:9"  # nothing listens on the discard port
+    try:
+        yield
+    finally:
+        settings.capture_server_url = previous

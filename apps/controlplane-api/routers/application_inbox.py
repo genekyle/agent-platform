@@ -108,7 +108,10 @@ def resolve_review(ledger_id: int, body: ResolveBody, db: Session = Depends(get_
 
     reader_row = {"sender": f"{row.from_address} {row.sender_name}".strip(),
                   "subject": row.subject, "snippet": row.snippet,
-                  "received_at": row.received_at.isoformat() if row.received_at else None}
+                  "received_at": row.received_at.isoformat() if row.received_at else None,
+                  # The stored identity, not a recompute — the ledger's datetime round-trips
+                  # differently than the reader emitted it, so a recompute would never join back.
+                  "fingerprint": row.fingerprint}
     try:
         app, ev = inbox_sweep.write_event(db, job_key, kind, reader_row, ats_id=row.ats_id)
     except ValueError as exc:
