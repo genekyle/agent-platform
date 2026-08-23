@@ -257,9 +257,18 @@ class Decision:
 
 def fingerprint(row: dict[str, Any]) -> str:
     """The identity of one inbox row across sweeps. The list reader never opens a thread, so
-    there is no message id — sender + subject + received timestamp is the stable surrogate."""
+    there is no message id — sender + subject + received timestamp is the stable surrogate.
+
+    The reader emits `received_at: null` exactly when Gmail's title timestamp fails Date-parse —
+    and emits the raw `received_text` for that case. Fold it in as the fallback, or two distinct
+    mails with the same sender and subject (recurring "your application was viewed" mail, or a
+    locale change nulling EVERY date) collapse to one identity and the second is skipped forever.
+    Rows with a parsed timestamp keep the exact pre-fix basis, so existing ledger fingerprints
+    stay valid.
+    """
     address, _ = sender_address(str(row.get("sender") or ""))
-    basis = "|".join([address, str(row.get("subject") or ""), str(row.get("received_at") or "")])
+    stamp = str(row.get("received_at") or row.get("received_text") or "")
+    basis = "|".join([address, str(row.get("subject") or ""), stamp])
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
 
 

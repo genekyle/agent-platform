@@ -34,8 +34,17 @@ def applications_for_matching(db: Session) -> list[dict[str, Any]]:
 
 def write_event(db: Session, job_key: str, kind: str, row: dict[str, Any],
                 *, ats_id: Optional[str]) -> tuple[Any, Any]:
-    """One gmail-sourced event on the right application, resolved through merge tombstones."""
-    alive = job_dedup.resolve_key(db, job_key) or job_key
+    """One gmail-sourced event on the right application, resolved through merge tombstones.
+
+    An unresolvable key RAISES rather than falling back to the raw string: the fallback would
+    mint a phantom Application on a job no view can see (every job view starts from `Job`), which
+    is exactly the two-answers drift this ledger exists to prevent. The matcher's own keys come
+    from applications joined to jobs and always resolve — this guard is for the human free-text
+    path, where a typo'd paste must be a 422, not a 200.
+    """
+    alive = job_dedup.resolve_key(db, job_key)
+    if alive is None:
+        raise ValueError(f"no such job: {job_key!r} — events attach to jobs the ledger knows")
     app = db.scalar(select(Application).where(Application.job_key == alive))
     if app is None:
         # An employer writing about an application is proof one exists (same rule as add_event).

@@ -218,6 +218,17 @@ def test_ignored_rows_keep_fingerprint_only(corpus):
     stub = corpus.scalar(select(InboxEmail).where(InboxEmail.status == "ignored"))
     assert stub.fingerprint
     assert stub.subject == "" and stub.from_address == "" and stub.snippet == ""
+    assert stub.sender_name == ""
+
+
+def test_null_dates_do_not_collapse_distinct_mails():
+    # The reader emits received_at: null exactly when Gmail's timestamp fails Date-parse, and
+    # emits the raw received_text for that case. Recurring same-subject mail must stay distinct.
+    a = {"sender": "no-reply@indeed.com Indeed", "subject": "Your application was viewed",
+         "received_at": None, "received_text": "Wed, Aug 19, 2026, 9:02 AM"}
+    b = {**a, "received_text": "Fri, Aug 21, 2026, 3:40 PM"}
+    assert im.fingerprint(a) != im.fingerprint(b)
+    assert im.fingerprint(a) == im.fingerprint(dict(a))  # same mail, stable identity
 
 
 def test_confirmation_surfaces_open_flows_as_witness(corpus):
@@ -271,6 +282,20 @@ def test_review_dismiss_writes_nothing(corpus):
     assert res.status_code == 200 and res.json()["email"]["status"] == "dismissed"
     assert not list(corpus.scalars(select(ApplicationEvent)
                                    .where(ApplicationEvent.source == "gmail")).all())
+
+
+def test_confirm_with_an_unknown_job_key_is_refused(corpus):
+    # The free-text fallback input accepts any paste; a typo must be a 422, never a phantom
+    # Application on a job no view can see.
+    inbox_sweep.sweep(corpus, [
+        _row("news@somecu.org Harborview Credit Union", "Your Harborview Credit Union application",
+             "Thank you for applying to Harborview Credit Union.")])
+    row = client.get("/api/career_search/inbox", params={"status": "needs_review"}).json()["emails"][0]
+    res = client.post(f"/api/career_search/inbox/{row['id']}/resolve",
+                      json={"action": "confirm", "kind": "confirmation", "job_key": "job_tpyo"})
+    assert res.status_code == 422 and "job_tpyo" in res.json()["detail"]
+    assert not list(corpus.scalars(select(Application)
+                                   .where(Application.job_key == "job_tpyo")).all())
 
 
 def test_confirm_without_a_job_key_is_refused(corpus):

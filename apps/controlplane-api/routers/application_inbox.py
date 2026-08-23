@@ -62,7 +62,7 @@ async def sweep_endpoint(body: SweepBody, db: Session = Depends(get_db)):
 
 
 @router.get("/api/career_search/inbox")
-def list_ledger(status: Optional[str] = Query(None), limit: int = Query(100, le=500),
+def list_ledger(status: Optional[str] = Query(None), limit: int = Query(100, ge=1, le=500),
                 db: Session = Depends(get_db)):
     """The ledger, newest first — the review queue when filtered to `needs_review`. Ignored rows
     are fingerprint-only stubs and excluded unless asked for."""
