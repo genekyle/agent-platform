@@ -54,6 +54,37 @@ def test_a_step_carries_no_value_and_no_selector():
                     assert not looks_like_selector(v), f"{ats}/{leg}: {v!r} is a selector"
 
 
+def test_the_verification_code_is_neither_a_vault_secret_nor_an_answer():
+    """A one-time code is a THIRD kind of value and has to travel as one.
+
+    It is not a credential (nothing stores it — it is dead in ten minutes) and not an application
+    answer (it is not a fact about the operator). Giving it the vault ref would put a live secret
+    on the recovery path; giving it an answer key would file it in the store beside their phone
+    number. `errand.login_code` says what it is: resolvable only while the errand's answer is in
+    hand, and a committed program carries the ref and nothing that could reproduce the value.
+    """
+    steps = account_forms.program_steps("workday", "verify_email")
+    refs = {s["params"].get("value_ref") for s in steps}
+    assert "errand.login_code" in refs
+    assert refs.isdisjoint(set(account_forms.VAULT_REFS))
+    assert set(account_forms.ERRAND_REFS) <= refs
+    # And it is still just a field name and a ref — no literal, no selector.
+    for step in steps:
+        assert "value" not in step["params"]
+
+
+def test_the_verify_leg_ends_on_its_own_submit_and_claims_nothing_else():
+    """The leg enters a code and presses the wall's own button. It must not carry a create-account
+    submit or a credential fill: verification is its own fact, and a leg that re-typed the
+    password at a code prompt would be the wrong-form press the Workday toggle lesson was about.
+    """
+    steps = account_forms.program_steps("workday", "verify_email")
+    assert [s["intent"] for s in steps] == ["set_text", "click"]
+    fields = [s["params"]["field"] for s in steps]
+    assert fields == ["verification_code", "verify_email_submit"]
+    assert "create_account_submit" not in fields and "password" not in fields
+
+
 def test_the_credential_refs_do_not_point_at_the_answer_store():
     """A credential is not an application answer. These resolve from the encrypted vault, and
     saying so in the ref is what keeps a committed program free of anything that reads like the

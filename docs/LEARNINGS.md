@@ -10013,7 +10013,248 @@ pairs and re-measure per-scenario — the first promotion is one calibration axi
 flywheel its screen: the real label queue + one scorecard with the gate on it. Gmail-as-domain
 stays out of scope (Career Search until a family graduates); Gmail-as-reader is Career Search.
 
-## 2026-08-22 (second) — the tracker gets its reader: inbox rows become outcome events
+## 2026-08-22 (second) — the built errand gets its first caller, and a detector that could not see half the wall
+
+The `fetch_login_code` errand has had a contract, a recipe, a route, a CDP reader and ~36 tests
+since 07-10, and **zero internal callers** until today (the reflection audit's finding, entry
+above). It now has one: `apply_account`'s verification seam, where the escalation text literally
+read *"a Gmail errand we can automate next"* while the errand sat on the shelf. Built to
+`PLAN_verify_email_leg.md` Part 1, in tandem with three other sessions (Part 2 lanes).
+
+**WHAT LANDED.** A third leg, `verify_email`, beside create/sign-in. Due-ness is MEASURED — the
+live scan decides, never a stored flag — and the mechanism is classified from the page: a code box
+means `code` (driven end to end: errand fetch → stage → submit → **re-classify**), link language
+means `link` (honestly human-required in v1; the errand reads subject lines only, so no thread is
+opened and no read receipt left), neither means scan-and-refuse with what IS on screen. Both
+mechanisms write an instance-scoped `verification_mechanism` characteristic — the link ones too,
+because the case for building a link-click spine accumulates in the ledger before the build, not
+after. `gmail_senders.py` is the new shared table (one row per ATS, mail domains beside site
+domains, read forward by `senders_for` and backward by `classify_sender`).
+
+**THE BUG THE TEST FOUND, WHICH WAS OLDER THAN THE FEATURE.** `_ACCOUNT_VERIFY_MARKERS` is
+code-centric — every phrase in it describes a page asking you to TYPE something ("verification
+code", "enter the code", "two-factor"). So a wall whose entire message is *"we sent you an email,
+click the link"* matched **nothing** and read as a clean signup. That is the expensive direction:
+the leg would call `mark_created` on an account the employer has not verified, the sign-in leg
+would be due forever against it, and every later rejection would read as a bad password. Found
+only because the link-mechanism fixture was written honestly rather than to match the detector.
+Wall detection now goes through `_is_verification_wall` (code language OR link language, one list
+each, shared with the classifier). *The general shape: a detector written for one mechanism is
+blind to the other in exactly the way that looks like success.*
+
+**THE NAMING COLLISION, RETIRED BEFORE IT BIT.** `operator_verify` already meant "the search was
+submitted but not confirmed" (`run_query`), and `lifecycle.js` renders that meaning's copy — so
+the old seam told an operator to check a search box while the page wanted a six-digit code. The
+07-27 `mfa → operator_2fa` split is the precedent; this seam is `account_verify_email` with its
+own copy and its own card. Two meanings on one wire key is a bug with a UI-shaped symptom, and it
+is cheapest to fix while only one of the two meanings exists at the seam.
+
+**WHAT IS MEASURED AND WHAT IS NOT — stated plainly, because the gap is the whole risk here.**
+MEASURED: 1786 API tests green, including seven new ones that pin the wire's refusals (ambiguous
+codes escalate, a stale code is never entered, a link wall types nothing, the code reaches no
+event/mini-step/response). **HYPOTHESIS, UNMEASURED: the Workday verify screen itself.** Nobody
+has scanned one — every verification to date was done by the operator's hand — so
+`verification_code` / `verify_email_submit` in `apply_fields` are the generic Workday shape, not a
+measurement, and both they and the `ACCOUNT_FORMS` entry carry that label in the source. The
+exact-name addressing is the net: a wrong name is a loud `not_found` with nothing typed and
+nothing submitted. **Also unmeasured: any live errand read.** There is currently no Gmail tab open
+in any browser, so the first live attempt will hit the reader's honest `blocked` state — that is
+the contract working, and the named remedy (an operator-opened, signed-in Gmail tab; the agent
+never drives Google's sign-in) is what the escalation says. *Whoever first drives this live:
+correct the field names from the scan and drop the label — that is the measurement this owes.*
+
+**A SMALLER ONE WORTH KEEPING.** A one-time code is a THIRD kind of value: not a credential
+(nothing stores it — it is dead in ten minutes) and not an application answer (it is not a fact
+about the operator). It travels as `errand.login_code` (`ERRAND_REFS`), resolvable only while the
+errand's answer is in hand, so a committed program carries the ref and nothing that could
+reproduce the value.
+
+**THREE MORE, FROM A TANDEM REVIEW OF THE DIFF — and the first is the one to remember.**
+
+*A "store it the moment it is proven" rule has a precondition, and a second caller can quietly
+break it.* `_account_secured_view` writes the credential because **the site just took it** — true
+of the call that drove the form, false of the call that only clears a wall an EARLIER submit put
+up. On that second path the derivation in hand is not evidence of anything (the suffix and the
+company string both drift, which is why the vault exists at all), so writing it would overwrite
+the real password with a plausible wrong one and manufacture the exact silent wrong-password
+future the function's own docstring warns about. The precondition is now a parameter,
+`credential_proven`, and on the unproven path a stored credential wins. *The general shape: when
+you give an existing function a second caller, re-read its docstring as a CONTRACT — the sentence
+justifying what it does is usually where the new caller violates it.*
+
+*A code box does not mean the code is in your email.* An authenticator app and an SMS render
+exactly the same box, and `_ACCOUNT_VERIFY_MARKERS` deliberately matches "two-factor" and
+"authenticator" — so those walls classified as `code`, would have spent three inbox reads (~25s)
+on a code no inbox holds, and then escalated with the errand's honest-but-wrong sentence: *"the
+mail may not have arrived yet — retry, or check the inbox by hand."* Sending someone to their
+email for a code sitting in their phone is the misleading kind of true. `second_factor` is now a
+fourth classification, decided by named factor language (unless the page also says email — plenty
+of walls read "two-factor authentication: enter the code we emailed you", and there email is the
+specific word). No inbox read is attempted; it is the standing 2FA boundary reached through the
+seam rather than around it.
+
+*A hint carrying a stray bracket looks like knowledge and behaves like absence.* The measured
+sender was parsed as `token.split("@")[1]`, which stores `myworkday.com>` from a display-name
+formatted sender — a characteristic that can never match a later inbox read, failing silently and
+forever. Parsing moved into `_sender_domain`, which strips the brackets and is unit-tested,
+because the failure is invisible at every other layer.
+
+## 2026-08-22 (later) — the click↔observe axis was never a threshold: the Bundle could not see whose turn it was
+
+Mining the 106 click↔observe pairs the morning's audit found. The headline: **the shadow was not
+miscalibrated, it was under-informed** — and the corrections were the spec for the missing feature,
+exactly as `CONTROLLER_PROMOTION.md`'s falsifier says they would be.
+
+**THE DIRECTION SPLIT IS ONE MECHANISM, NOT TWO BUGS.** Joining every pair to the ladder rung that
+produced it (parsed from the row's own rationale) resolves the whole axis in one table: the teacher
+`observe`s on `verify_identity` (26 rows), `classify` (15) and `account` (6), and `click`s on
+`open_pane` (33), `enter_apply` (28) and `submit` (8). That mapping is not an inference — it is
+literally `session_control._RUNG_INTENT`, a dict that has been in the code the whole time. **The
+Bundle never carried it.** So the same `(task, state)` legitimately maps to `observe` on one crank
+and `click` on the next, and no decision function reading only the page can beat class frequency
+there. A blanket "observe-first on posting states" rail would have traded the 70 for the 36; the
+coach's instruction to split by direction before proposing a rail was the right call and is why
+that rail was not built.
+
+**THE CONFIDENCE THRESHOLD IS RULED OUT, MEASURED.** Every one of the 119 disagreeing proposals was
+already an escalating hand-up carrying `proposed_rung="teacher"` — nothing was acting, so there is
+no threshold to lower. Raising or lowering `DECISION_CONFIDENCE_THRESHOLD` would have moved zero of
+these rows. The disagreement is about which VERB the turn takes, not about how sure anyone was.
+
+**THE SECOND MISSING FACET, AND IT EXPLAINS THE TWO WORST SCENARIOS.** `_shadow_the_crank` builds
+its bundle with **no `page_text`**. For Indeed that is survivable (states are URL-driven), but
+Workday keeps one URL across the whole application, so all 61 `workday:workday_job_posting` pairs
+are really 45 misfiled form-rung turns (`my_information`, `my_experience`, `questions`,
+`voluntary_disclosures`), and all 45 `company_site:?` pairs have `state=None` while the crank
+itself knew `company_site_job_posting` — the crank names states from AX candidate names via
+`_state_from_observation`, and the shadow bundle is handed neither. **Those two scenarios' agreement
+numbers were never about the controller's judgement; they were about mislabeled inputs**, and their
+promotion clocks restart honestly once the facet is right.
+
+**WHAT SHIPPED (c6af17a) — a feature, not a knob.** `Bundle.phase` (the ladder rung claiming the
+turn) appended last and defaulted; NOT rendered by `bundle_to_prompt`, so the feature contract is
+unchanged and no `DECISION_SCHEMA_VERSION` bump is owed; `bundle_digest` includes it
+**only-when-set**, so every digest minted before the field is byte-identical; `replay_snapshot`
+carries it, because the same page on a different rung is a different decision point. The rail in
+`decide.phase_prediction` consults the phase BEFORE the form-shape guess and before orientation —
+orientation always proposes the Apply click, which is precisely wrong mid-look. **`submit` is
+deliberately in neither phase set**: the one irreversible control stays unproposable, so a
+submit-turn disagreement stays honest rather than being papered over.
+
+*Numbers, labeled honestly.* **MEASURED:** live shadow agreement is **still 0.5952 over 294** after
+the change — correct and expected, because historical rows carry no phase and the rail is inert
+until the wire lands. **HYPOTHESIS:** replaying the 294 journaled snapshots through the shipped
+`local_prediction` with the phase injected moves 0.585 → 0.765 overall and
+`indeed_quick_apply:indeed_job_posting` 0.672 → **1.000 over n=67**.
+
+**Do not read that 1.000 as a promotion signal.** Two discounts apply, and a first attempt to
+write them up got the second one WRONG — corrected here because a plausible-sounding causal story
+in this log is worse than none.
+
+*Discount 1, leakage:* the rail was designed on these same 294 rows, so the backtest scores a
+hypothesis against the evidence that produced it.
+
+*Discount 2, the replay does not see the page the shadow saw:* snapshots do not keep
+`ax_identities`, so the replay feeds the rail a reconstruction (the journaled proposal's own
+control name). The obvious guess is that this inflates `indeed_job_posting`. **It does not.**
+Re-running the backtest with `ax_identities` forced EMPTY: `indeed_job_posting` scores **1.000/67
+either way**, while the OVERALL figure drops 0.765 → **0.554**. So the reconstruction is load-
+bearing for the overall number (the phase-less shape guess needs identities to propose any click
+at all) and irrelevant to the headline scenario. **Quote the overall 0.765 with that caveat
+attached; the 1.000/67 stands on the phase mapping alone.**
+
+**AND THE REASON IT STANDS SO CLEANLY IS ITSELF A FINDING ABOUT THE GATE.** `metrics._matches`
+compares `params.get("field")` on both sides — and a click's params carry `control`, not `field`,
+so `_field()` returns `None` for both. **Loose match is therefore INTENT-ONLY for every click
+decision**: verified directly, a proposal to click `"A"` against a teacher who clicked
+`"TOTALLY DIFFERENT"` scores as agreement. That is the metric the ≥90% promotion gate reads. It
+is defensible as far as it goes (the doc defines loose as "same intent AND same field", and a
+click has no field), but it means **a scenario can pass the gate while the controller reaches for
+the wrong button every time** — and `open_pane`/`enter_apply`, the phases the rail is most
+confident about, are exactly the click-shaped turns where this blind spot lives. The `exact`
+match mode already compares full params and would catch it; nothing currently gates on `exact`.
+Flagged, not fixed — changing what the gate measures is not a change to make quietly at the end
+of a session.
+
+**Nobody promotes off any of this.** The gate fills from fresh post-wire drives only (≥90% over
+≥25, per state per ATS, fall-through intact).
+
+**AND A LATENT BUG THE NEW TEST CAUGHT BEFORE IT COULD FIRE.** `orientation.apply_control` (made
+public for the rail) had the exact defect `advance_control` was fixed for on 2026-08-14: it applied
+only its own three-word `NEVER_PROPOSE` list, so **"Apply now Help" out-lengthed "Apply now"** and
+won the longest-match tiebreak — the MAPFRE lesson, still live in a second matcher. It now consults
+`apply_recipe.GENERIC_CONTROL_EXCLUSIONS`, the apply-DOOR list (the full one is right here, unlike
+in `advance_control`, where "save" must stay legal for BrassRing/Workday). *The general shape: when
+one matcher is taught a lesson, grep for the OTHER matcher that answers the same question.*
+
+**TWO DIFFERENT THINGS ARE BOTH CALLED `mismatch` IN THE TRANSITION CORPUS.** `step_runner.verify`
+returns MISMATCH for "the world did not move / the expected URL never appeared"; `live_actuator`'s
+recorder returns MISMATCH for "the supervisor judged the turn non-nominal" — different evidence,
+different meaning, one word, and the label queue ranks them as a single class. Also worth recording:
+`verify()` has **no branch for `expected_next`**, the one kind `live_actuator` emits, so a row that
+reached it would fall through to `UNOBSERVED`; those rows get their verdict from the supervisor
+path instead and never touch `verify()`.
+
+**THE LABELING PASS: 67 ROWS, AND THE MISMATCH HEAD IS NOW EMPTY.** Queue **373 → 306**, every
+`mismatch` row labeled through `POST /api/transitions/{key}/correct` with train-on-label firing on
+each. Teacher corpus 17 → 84 corrections. Each label cites the row's own evidence (its candidates,
+its diff, and a screenshot wherever one existed).
+
+*The pattern that dominates those 67 — and it is not a near miss.* **When a platform has no state
+vocabulary, the witnesses borrow another ATS's names.** `describe_for_ats` returns `unknown` for
+every `brassring` URL (recipe `seed`, via `generic_ats`), and the witnesses duly called BrassRing's
+sign-in dialog `workday_sign_in` (6 rows) and its application form
+`successfactors_session_expired` (2 rows — the screenshot shows "Import Profile", a prefilled name
+and address, and the page's own "*Résumé/CV - Required" banner; there is no session expiry
+anywhere). Paylocity's apply form came back `indeed_apply_resume_selection`; MAPFRE's posting came
+back `workday_error_retry`; LinkedIn's logged-out jobs home came back
+`successfactors_account_gate`. **These are not confusable pages — they are confusable only to a
+classifier with no name for what it is looking at.** New names were minted in the house
+`<platform>_<screen>` convention (`brassring_sign_in`, `brassring_apply_form`,
+`paylocity_apply_form`, `indeed_apply_exit_save_prompt`, `linkedin_jobs_home_logged_out`), which
+the label corpus already had precedent for (`college_ats`, `indeed_apply_resume_tailor_prompt`).
+
+*The most dangerous single label, for the record:* Ocean Spray's Workday posting was believed
+`workday_already_applied` **with nothing on the page supporting it**. Wrong in that direction skips
+a job we never applied to — and this is the same session that went on to submit Ocean Spray
+successfully.
+
+*Three rows turned out to be right all along* (`company_site_job_posting` on Boston Children's,
+`workday_my_experience` and `workday_apply_auth` on Eversource) and were labeled anyway: an
+agreement nobody wrote down is not trainable. *And two rows were the CLICK WORKING and the verifier
+being wrong* — `enter_apply` into `bc.csod.com` and into `careers.solutionhealth.org`, the latter
+being literally the case that later motivated the "AN EMPLOYER'S OWN CAREERS DOMAIN CONFIRMS TOO"
+fix now sitting in `step_runner.verify`.
+
+*Still open, deliberately:* the two-line wire in `_shadow_the_crank` (pass `phase=rung.id` and the
+candidate-names `page_text`) is the shadow session's own follow-up commit **after verify-leg
+merges** — a named exception to `session_control.py` ownership, per this round's seam rulings. Until
+it lands, `Bundle.phase` is None on every live row and the rail changes nothing.
+
+*Post-merge review of c6af17a (independent session) — verdict SAFE AS MERGED, with three notes
+worth keeping.* Two were fixed on the spot: **(a)** the digest test pinned the only-when-set
+property RELATIVELY, so a later refactor to an unconditional `payload["phase"] = None` would have
+kept the test green while silently changing every historical digest — now pinned to a literal
+sha256 golden, the same device `test_bundle_to_prompt_is_stable` uses on the prompt, and for the
+same reason: **a join key outlives the code that minted it**. **(b)** the rail's `try` wrapped the
+CALL to `apply_control`, not just its lazy import, so any future error inside the matcher would
+have degraded every enter-phase prediction to a bare-verb click with nothing ever raising — a
+silent agreement sag. Only the import is guarded now (the shape `advance_control` already used),
+with a test that asserts a broken matcher raises.
+
+**(c) is not fixed, deliberately, because it is a real question and not a bug.** The phase rail
+sits BELOW the program rung: an observe-phase turn on a state that holds a compiled click-program
+still gets the program's click at confidence 1.0. So the click-when-teacher-observed class can
+reappear on program-covered states once the wire lands. **That is the thing to watch in the fresh
+rows** — if it shows up, it is a phase-conditioned program-gating question (should a program be
+scoped to the phases it was compiled under?), not a rail defect. Recorded here so the next session
+reads it as a prediction rather than rediscovering it as a surprise.
+
+*One more binding for the wire commit:* nothing currently ties `_OBSERVE_PHASES`/`_ENTER_PHASES` to
+`session_control._RUNG_INTENT`'s keys, and an unmapped rung falls through by design — so the two
+vocabularies can drift apart silently. Pin them from the `session_control` side when the wire lands.
+
+## 2026-08-22 (third) — the tracker gets its reader: inbox rows become outcome events
 
 The audit's bottleneck 3 closed at the seam the models drew on day one. Built: `inbox_matcher.py`
 (pure `decide()` — no DB, no browser), `inbox_sweep.py` (persistence + the event writes; ITS OWN

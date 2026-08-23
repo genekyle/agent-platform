@@ -1,0 +1,32 @@
+{
+  "task": "apply",
+  "state": "indeed_apply_resume_highlights",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and close"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Review details"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_resume_review",
+    "indeed_apply_questions",
+    "indeed_apply_contact_info",
+    "indeed_apply_demographics",
+    "indeed_apply_review"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "c701bb1ae65e4f073b7f235fcdcb57113e4512ee905ccfcd53ce913e8a7ffd19"
+  ],
+  "verified_at": "2026-08-23T03:01:34.421593+00:00",
+  "stale": false
+}

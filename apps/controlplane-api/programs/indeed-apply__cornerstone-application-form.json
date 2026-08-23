@@ -1,0 +1,135 @@
+{
+  "task": "indeed_apply",
+  "state": "cornerstone_application_form",
+  "guard_fields": [
+    "Gender",
+    "Ethnicity",
+    "Voluntary Self-Identification of Disability:",
+    "BC Veteran Status (Part 60-300)",
+    "Would you require sponsorship in order to work in the US in the future?",
+    "How did you first learn about this job?",
+    "Have you previously been employed by Boston College?",
+    "Did you graduate/receive a degree from the educational institutions listed on your resume?",
+    "Were you referred by a current Boston College employee or faculty member?",
+    "Are you currently authorized to work in the US?",
+    "Are you willing to undergo a background check",
+    "I agree",
+    "Country",
+    "Degree *",
+    "Major*"
+  ],
+  "steps": [
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Gender"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Ethnicity"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Voluntary Self-Identification of Disability:"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "BC Veteran Status (Part 60-300)"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Would you require sponsorship in order to work in the US in the future?"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "How did you first learn about this job?"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Have you previously been employed by Boston College?"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Did you graduate/receive a degree from the educational institutions listed on your resume?"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Were you referred by a current Boston College employee or faculty member?"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Are you currently authorized to work in the US?"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Are you willing to undergo a background check"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "I agree"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Country"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Degree *"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Major*"
+      }
+    }
+  ],
+  "expected_exit": [
+    "cornerstone_application_form",
+    "cornerstone_review",
+    "cornerstone_account_gate",
+    "cornerstone_confirmation"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "26a137ba284edfd48ef9cbb96e107abbc0c7cd95e90a65b712c0197212126d90",
+    "bd60d0a965861b899b4b501e8074cb17a45cd84057bac0cf3a6f4b603d54a57c",
+    "9b5f54be37e8d3f22d630bb61cd8acd834fd75098ffb4b5f863a274189f712d5",
+    "2e38b05585e5da33e01ceb4ae84b5a86b5e9fc42f5426c8bb090fe88783f2873",
+    "b79696ebde56999ed087495bf25ef543d82dacc63d46c6abeb5ef9a8ae15933d",
+    "853fb014ccda3297be1bdeb9b11c15de0483e425cfe9fcabf98a0e2115cbf969",
+    "047566ba27d3de60e0d81151234fb3f222e47460ab8693082f9338a68e40ed81",
+    "bfc3e0c9c80910e28c9d4edc46af70ef0a34600c4f83cf51814004c2a9d1f28a",
+    "dad687311b3e53c0205d998578603cfc40ce7f7c984d30ab278072af3657d035",
+    "c292355d27ba649af2ec5da5bf6fe7015ccdeac37dbe85f299a53a22f0cea548",
+    "76fa7bb9a05c193c774f62b9aad9cc8ea702a0426d0e3fb693ae5b42057c5c1e"
+  ],
+  "verified_at": "2026-08-23T03:01:34.430064+00:00",
+  "stale": false
+}

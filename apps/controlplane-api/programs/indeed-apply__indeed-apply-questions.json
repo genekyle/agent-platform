@@ -3,7 +3,32 @@
   "state": "indeed_apply_questions",
   "guard_fields": [
     "SMS recruiting-text consent",
-    "read and accept the above acknowledgement"
+    "read and accept the above acknowledgement",
+    "Do you now or will you in the future require sponsorship for a work visa?",
+    "Are you currently legally authorized to work in the United States?",
+    "Do you have at least 1-2 years of demonstrated experience in Treasury, Finance, or Accounting?",
+    "How did you hear about this opportunity? *",
+    "What is your highest level of completed education? *",
+    "Do you have a resume to provide outlining your work experience? * Yes No",
+    "I certify that all information I have provided in support of my application for employment",
+    "Are you at least 18 years of age? * Yes No Choose an option to continue.",
+    "Will you now or in the future require sponsorship for Employment Visa status (e.g. H-1B Vi",
+    "Please describe your ability to speak Spanish in a clinical setting. * Native/Bilingual (c",
+    "Please describe your ability to speak Portuguese in a clinical setting. * Native/Bilingual",
+    "Please describe your ability to speak Haitian Creole in a clinical setting. * Native/Bilin",
+    "Do you have any family members who are CURRENTLY or have been PREVIOUSLY employed at CRCH?",
+    "By selecting Yes, I consent to receive informational recruiting related text messages from",
+    "By submitting your application you hereby certify that the facts set forth in the above em",
+    "Mobile Number Provide valid phone numbers to allow Recruiters to contact you. Country *",
+    "Home Phone Number Provide valid phone numbers to allow Recruiters to contact you. Country",
+    "Referred By: (If no-one, enter \"None\") *",
+    "Do you have a degree in Business, Information Systems, Accounting or related field? *",
+    "Do you have experience with report writing using business intelligence tools including adv",
+    "How many years of experience have you performed the same or similar job duties? *",
+    "Mobile Number Provide valid phone numbers to allow Recruiters to contact you. Country * re",
+    "Self Attestation is required. I hereby certify and affirm that the information provided in",
+    "This employer may use an artificial intelligence algorithm to provide an initial compariso",
+    "Please type your full name. *"
   ],
   "steps": [
     {
@@ -41,6 +66,246 @@
       "params": {
         "control": "Continue"
       }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Do you now or will you in the future require sponsorship for a work visa?"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Are you currently legally authorized to work in the United States?"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Do you have at least 1-2 years of demonstrated experience in Treasury, Finance, or Accounting?"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "How did you hear about this opportunity? *"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "What is your highest level of completed education? *"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Do you have a resume to provide outlining your work experience? * Yes No"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "I certify that all information I have provided in support of my application for employment"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "No, I am not an Active Employee"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Are you at least 18 years of age? * Yes No Choose an option to continue."
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Will you now or in the future require sponsorship for Employment Visa status (e.g. H-1B Vi"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Please describe your ability to speak Spanish in a clinical setting. * Native/Bilingual (c"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Please describe your ability to speak Portuguese in a clinical setting. * Native/Bilingual"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Please describe your ability to speak Haitian Creole in a clinical setting. * Native/Bilin"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Do you have any family members who are CURRENTLY or have been PREVIOUSLY employed at CRCH?"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "By selecting Yes, I consent to receive informational recruiting related text messages from"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "By submitting your application you hereby certify that the facts set forth in the above em"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Mobile Number Provide valid phone numbers to allow Recruiters to contact you. Country *"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Home Phone Number Provide valid phone numbers to allow Recruiters to contact you. Country"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Referred By: (If no-one, enter \"None\") *"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Do you have a degree in Business, Information Systems, Accounting or related field? *"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Do you have experience with report writing using business intelligence tools including adv"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "How many years of experience have you performed the same or similar job duties? *"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Mobile Number Provide valid phone numbers to allow Recruiters to contact you. Country * re"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Self Attestation is required. I hereby certify and affirm that the information provided in"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "This employer may use an artificial intelligence algorithm to provide an initial compariso"
+      }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Self Attestation is required. I hereby certify and affirm that the information provided in"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Please type your full name. *"
+      }
     }
   ],
   "expected_exit": [
@@ -51,8 +316,29 @@
   ],
   "version": "v1",
   "compiled_from": [
-    "8154a3900dffebd12921cdfafaa4b865a9a53eb8d8e6f3e3a150c4444b115426"
+    "8154a3900dffebd12921cdfafaa4b865a9a53eb8d8e6f3e3a150c4444b115426",
+    "37fca2a0912cdba40a55811291c362f99e41605d75c0d5675fccf9eefa79f5f0",
+    "0c07877136b24e4d6c6f03180e3038cac583d7bb77b7dc84929c1bc696d23326",
+    "f76b960fd7a0525a8a88f0c2c172e07c9f8e19c455f941661df48220e159dbeb",
+    "38d5132672dc9da94479b39113c3996d0181fe9b57e6da85704124485382343b",
+    "b640a18ad16a641021a91081b3e2b3e31e53e1c201e92c7609f978dfd40094ca",
+    "47aaed65c5f45cd96aa3b39f4c17a0a74c4bce86b39ed5e628d804ed7d0eda2f",
+    "e26031eb7eb542d09e12fc9f867df9d3943f9a7b32df8d563de050691d3090c4",
+    "4e6e312d92901b07c953bbb395ed52a7ab5bce1fe0870401b524647b46ea6d76",
+    "c1452b78f2ee3f2fe872b94741df00c667c0cfb7377f176655c438e3d5573c39",
+    "e3f8a3b04ce24c44a169ddfc1ae57c35350315e92d6913e8db79abfa49d1934f",
+    "0ae37e95c6d1adf9a9960988ae9e85ef7b7656ad3dc486071e8549967d86fc7b",
+    "241671c146d705a6844190d33a37e02000387135c8a770d3b02937740ba41219",
+    "45004bddaee064cd6c4ec53b7a113d67a9009197dc8737251d9a19754d9ace2f",
+    "52ef8a099c65883d0c6458a6a06e477277b64ab35059455d47ac2730048f0228",
+    "12072e8de46e6095dd46a7588275fbf408d0b73410cc0d57b0c839210501e365",
+    "13816b5961de9c161c62b0e40c2d6e98918e544ffb47ceac0ee895a003eb3703",
+    "60af81c22d30376498cd78056b8edb62fa92cfb6efe5209a0cdbbb5c11f1d717",
+    "093f27286e363c5959d7ae12c4743423f83daa2f7d6cd1d2324dd2600bf6f85f",
+    "1627596fd3a121c0964464c60079c16cd4fdb2fa04b2fd959f250ac1521d9f7c",
+    "ccc6c7bebc1a6da729d498a326211479da81397c09605f996c6fb992c3c288f3",
+    "4db304d2ce48da7d278daa7ad40f089be59defbf8e2894aa549c1a7a41d35ec5"
   ],
-  "verified_at": "2026-07-20T00:52:56.552843+00:00",
-  "stale": true
+  "verified_at": "2026-08-23T03:01:34.359655+00:00",
+  "stale": false
 }

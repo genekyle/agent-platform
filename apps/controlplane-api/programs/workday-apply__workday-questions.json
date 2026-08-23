@@ -1,0 +1,49 @@
+{
+  "task": "workday_apply",
+  "state": "workday_questions",
+  "guard_fields": [
+    "Are you currently employed by a cranberry grower that is a member of the Ocean Spray Cooperative",
+    "Are you legally permitted to work in the country where this job is located?",
+    "Do you now or in the future require sponsorship for a work visa?",
+    "What is your desired Annual Base Salary?"
+  ],
+  "steps": [
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Are you currently employed by a cranberry grower that is a member of the Ocean Spray Cooperative"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Are you legally permitted to work in the country where this job is located?"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Do you now or in the future require sponsorship for a work visa?"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "What is your desired Annual Base Salary?"
+      }
+    }
+  ],
+  "expected_exit": [
+    "workday_questions",
+    "workday_voluntary_disclosures"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "f1fd364943d0aa46046a8984d9c3ec5b677d3a64012e02a20fd7afaf83b6db12",
+    "8a3d7951acd88c06fc4920f11255c10cd550897b9f1453af02ccdee688d79440",
+    "5673745daf4a058ae135fe446e3f816b80c96ac46cd372af981cb0d4c72e807b",
+    "3674f6801227fa88e2ccd316f17ce929a53b14b54d96dbc07b60b85fc13abebd"
+  ],
+  "verified_at": "2026-08-23T03:01:34.438921+00:00",
+  "stale": false
+}
