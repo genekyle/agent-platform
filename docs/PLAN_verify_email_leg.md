@@ -151,3 +151,33 @@ matcher's drive-end sweep enters through one hook line added AFTER verify merges
 - Throughput is measured where the docs already say it is: rows banked, labels written, parks
   answered — plus, once the matcher lands, **flows closed** and **outcomes recorded**. The
   scorecard session gives all five a screen.
+
+### Seam rulings (2026-08-22, coach — binding for this round)
+
+1. **`packages/interaction/interaction/decision.py` is the shadow lane's this round**, additive
+   only: `Bundle.phase` appended last and defaulted, not rendered by `bundle_to_prompt` (no schema
+   bump), `bundle_digest` includes phase only-when-set so old digests are unchanged. No other lane
+   touches this file.
+2. **The two-line live wire in `_shadow_the_crank`** (session_control.py ~:6998 — pass
+   `phase=rung.id` and the candidate-names `page_text`) is **NOT part of the verify-leg diff**.
+   The shadow session lands it as its own scoped follow-up commit after verify-leg merges — a
+   narrow, named exception to the session_control ownership, exactly those two lines. Verify-leg:
+   do not apply it for them; a transcription by a lane that didn't design it is invisible until
+   re-measured.
+3. **Replay numbers are HYPOTHESIS, not the gate.** The phase-rail backtest (0.595→0.776 overall;
+   indeed_quick_apply:indeed_job_posting 0.657→0.985/67) was designed on and evaluated against the
+   same 294 historical pairs. The promotion gate fills with FRESH shadow rows from post-fix drives
+   (≥90% over ≥25 per scenario, per-state per-ATS, fall-through intact) — nobody promotes off the
+   backtest. The misfiled workday/company_site scenario clocks restart honestly under the
+   corrected state facet.
+4. **`classify_sender` keeps the doc's shape**: `classify_sender(from_address) -> ats_id | None`,
+   one table read backwards. The matcher session's interim `ATS_MAIL_DOMAINS` folds INTO that
+   table at its rebase (its local copy carries a marked TANDEM SEAM comment until then); richer
+   attribution, if ever needed, is a second function, not a wider signature. Verify-leg: build the
+   table so mail domains sit beside site domains — one row per ATS, both readers.
+5. **The matcher session owns `JobDatabaseSection.jsx` this round** — its needs-review inbox
+   queue gets an "Inbox" tab there (career_search Database), which nobody else listed. Scorecard
+   keeps Learning/Overview. Reach-parity terms: every review row has truthful exits (approve
+   writes the event, dismiss records why, ambiguous shows its candidates), and event KINDS render
+   generically. The drive-end hook stays ONE line calling `inbox_sweep.sweep`, placed by the
+   matcher session in its rebase commit after verify-leg merges — same pattern as ruling 2.
