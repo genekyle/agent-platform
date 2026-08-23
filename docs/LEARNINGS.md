@@ -10012,3 +10012,130 @@ outcome loop and gives the submission verifier its second witness; (3) mine the 
 pairs and re-measure per-scenario — the first promotion is one calibration axis away; (4) give the
 flywheel its screen: the real label queue + one scorecard with the gate on it. Gmail-as-domain
 stays out of scope (Career Search until a family graduates); Gmail-as-reader is Career Search.
+
+## 2026-08-22 (later) — the click↔observe axis was never a threshold: the Bundle could not see whose turn it was
+
+Mining the 106 click↔observe pairs the morning's audit found. The headline: **the shadow was not
+miscalibrated, it was under-informed** — and the corrections were the spec for the missing feature,
+exactly as `CONTROLLER_PROMOTION.md`'s falsifier says they would be.
+
+**THE DIRECTION SPLIT IS ONE MECHANISM, NOT TWO BUGS.** Joining every pair to the ladder rung that
+produced it (parsed from the row's own rationale) resolves the whole axis in one table: the teacher
+`observe`s on `verify_identity` (26 rows), `classify` (15) and `account` (6), and `click`s on
+`open_pane` (33), `enter_apply` (28) and `submit` (8). That mapping is not an inference — it is
+literally `session_control._RUNG_INTENT`, a dict that has been in the code the whole time. **The
+Bundle never carried it.** So the same `(task, state)` legitimately maps to `observe` on one crank
+and `click` on the next, and no decision function reading only the page can beat class frequency
+there. A blanket "observe-first on posting states" rail would have traded the 70 for the 36; the
+coach's instruction to split by direction before proposing a rail was the right call and is why
+that rail was not built.
+
+**THE CONFIDENCE THRESHOLD IS RULED OUT, MEASURED.** Every one of the 119 disagreeing proposals was
+already an escalating hand-up carrying `proposed_rung="teacher"` — nothing was acting, so there is
+no threshold to lower. Raising or lowering `DECISION_CONFIDENCE_THRESHOLD` would have moved zero of
+these rows. The disagreement is about which VERB the turn takes, not about how sure anyone was.
+
+**THE SECOND MISSING FACET, AND IT EXPLAINS THE TWO WORST SCENARIOS.** `_shadow_the_crank` builds
+its bundle with **no `page_text`**. For Indeed that is survivable (states are URL-driven), but
+Workday keeps one URL across the whole application, so all 61 `workday:workday_job_posting` pairs
+are really 45 misfiled form-rung turns (`my_information`, `my_experience`, `questions`,
+`voluntary_disclosures`), and all 45 `company_site:?` pairs have `state=None` while the crank
+itself knew `company_site_job_posting` — the crank names states from AX candidate names via
+`_state_from_observation`, and the shadow bundle is handed neither. **Those two scenarios' agreement
+numbers were never about the controller's judgement; they were about mislabeled inputs**, and their
+promotion clocks restart honestly once the facet is right.
+
+**WHAT SHIPPED (c6af17a) — a feature, not a knob.** `Bundle.phase` (the ladder rung claiming the
+turn) appended last and defaulted; NOT rendered by `bundle_to_prompt`, so the feature contract is
+unchanged and no `DECISION_SCHEMA_VERSION` bump is owed; `bundle_digest` includes it
+**only-when-set**, so every digest minted before the field is byte-identical; `replay_snapshot`
+carries it, because the same page on a different rung is a different decision point. The rail in
+`decide.phase_prediction` consults the phase BEFORE the form-shape guess and before orientation —
+orientation always proposes the Apply click, which is precisely wrong mid-look. **`submit` is
+deliberately in neither phase set**: the one irreversible control stays unproposable, so a
+submit-turn disagreement stays honest rather than being papered over.
+
+*Numbers, labeled honestly.* **MEASURED:** live shadow agreement is **still 0.5952 over 294** after
+the change — correct and expected, because historical rows carry no phase and the rail is inert
+until the wire lands. **HYPOTHESIS:** replaying the 294 journaled snapshots through the shipped
+`local_prediction` with the phase injected moves 0.585 → 0.765 overall and
+`indeed_quick_apply:indeed_job_posting` 0.672 → **1.000 over n=67**. That is a **backtest with
+leakage** — the rail was designed on these same rows — and the replay also has to reconstruct
+`ax_identities` from the journaled proposal, since snapshots do not keep them. **Nobody promotes
+off this.** The gate fills from fresh post-wire drives only (≥90% over ≥25, per state per ATS,
+fall-through intact).
+
+**AND A LATENT BUG THE NEW TEST CAUGHT BEFORE IT COULD FIRE.** `orientation.apply_control` (made
+public for the rail) had the exact defect `advance_control` was fixed for on 2026-08-14: it applied
+only its own three-word `NEVER_PROPOSE` list, so **"Apply now Help" out-lengthed "Apply now"** and
+won the longest-match tiebreak — the MAPFRE lesson, still live in a second matcher. It now consults
+`apply_recipe.GENERIC_CONTROL_EXCLUSIONS`, the apply-DOOR list (the full one is right here, unlike
+in `advance_control`, where "save" must stay legal for BrassRing/Workday). *The general shape: when
+one matcher is taught a lesson, grep for the OTHER matcher that answers the same question.*
+
+**TWO DIFFERENT THINGS ARE BOTH CALLED `mismatch` IN THE TRANSITION CORPUS.** `step_runner.verify`
+returns MISMATCH for "the world did not move / the expected URL never appeared"; `live_actuator`'s
+recorder returns MISMATCH for "the supervisor judged the turn non-nominal" — different evidence,
+different meaning, one word, and the label queue ranks them as a single class. Also worth recording:
+`verify()` has **no branch for `expected_next`**, the one kind `live_actuator` emits, so a row that
+reached it would fall through to `UNOBSERVED`; those rows get their verdict from the supervisor
+path instead and never touch `verify()`.
+
+**THE LABELING PASS: 67 ROWS, AND THE MISMATCH HEAD IS NOW EMPTY.** Queue **373 → 306**, every
+`mismatch` row labeled through `POST /api/transitions/{key}/correct` with train-on-label firing on
+each. Teacher corpus 17 → 84 corrections. Each label cites the row's own evidence (its candidates,
+its diff, and a screenshot wherever one existed).
+
+*The pattern that dominates those 67 — and it is not a near miss.* **When a platform has no state
+vocabulary, the witnesses borrow another ATS's names.** `describe_for_ats` returns `unknown` for
+every `brassring` URL (recipe `seed`, via `generic_ats`), and the witnesses duly called BrassRing's
+sign-in dialog `workday_sign_in` (6 rows) and its application form
+`successfactors_session_expired` (2 rows — the screenshot shows "Import Profile", a prefilled name
+and address, and the page's own "*Résumé/CV - Required" banner; there is no session expiry
+anywhere). Paylocity's apply form came back `indeed_apply_resume_selection`; MAPFRE's posting came
+back `workday_error_retry`; LinkedIn's logged-out jobs home came back
+`successfactors_account_gate`. **These are not confusable pages — they are confusable only to a
+classifier with no name for what it is looking at.** New names were minted in the house
+`<platform>_<screen>` convention (`brassring_sign_in`, `brassring_apply_form`,
+`paylocity_apply_form`, `indeed_apply_exit_save_prompt`, `linkedin_jobs_home_logged_out`), which
+the label corpus already had precedent for (`college_ats`, `indeed_apply_resume_tailor_prompt`).
+
+*The most dangerous single label, for the record:* Ocean Spray's Workday posting was believed
+`workday_already_applied` **with nothing on the page supporting it**. Wrong in that direction skips
+a job we never applied to — and this is the same session that went on to submit Ocean Spray
+successfully.
+
+*Three rows turned out to be right all along* (`company_site_job_posting` on Boston Children's,
+`workday_my_experience` and `workday_apply_auth` on Eversource) and were labeled anyway: an
+agreement nobody wrote down is not trainable. *And two rows were the CLICK WORKING and the verifier
+being wrong* — `enter_apply` into `bc.csod.com` and into `careers.solutionhealth.org`, the latter
+being literally the case that later motivated the "AN EMPLOYER'S OWN CAREERS DOMAIN CONFIRMS TOO"
+fix now sitting in `step_runner.verify`.
+
+*Still open, deliberately:* the two-line wire in `_shadow_the_crank` (pass `phase=rung.id` and the
+candidate-names `page_text`) is the shadow session's own follow-up commit **after verify-leg
+merges** — a named exception to `session_control.py` ownership, per this round's seam rulings. Until
+it lands, `Bundle.phase` is None on every live row and the rail changes nothing.
+
+*Post-merge review of c6af17a (independent session) — verdict SAFE AS MERGED, with three notes
+worth keeping.* Two were fixed on the spot: **(a)** the digest test pinned the only-when-set
+property RELATIVELY, so a later refactor to an unconditional `payload["phase"] = None` would have
+kept the test green while silently changing every historical digest — now pinned to a literal
+sha256 golden, the same device `test_bundle_to_prompt_is_stable` uses on the prompt, and for the
+same reason: **a join key outlives the code that minted it**. **(b)** the rail's `try` wrapped the
+CALL to `apply_control`, not just its lazy import, so any future error inside the matcher would
+have degraded every enter-phase prediction to a bare-verb click with nothing ever raising — a
+silent agreement sag. Only the import is guarded now (the shape `advance_control` already used),
+with a test that asserts a broken matcher raises.
+
+**(c) is not fixed, deliberately, because it is a real question and not a bug.** The phase rail
+sits BELOW the program rung: an observe-phase turn on a state that holds a compiled click-program
+still gets the program's click at confidence 1.0. So the click-when-teacher-observed class can
+reappear on program-covered states once the wire lands. **That is the thing to watch in the fresh
+rows** — if it shows up, it is a phase-conditioned program-gating question (should a program be
+scoped to the phases it was compiled under?), not a rail defect. Recorded here so the next session
+reads it as a prediction rather than rediscovering it as a surprise.
+
+*One more binding for the wire commit:* nothing currently ties `_OBSERVE_PHASES`/`_ENTER_PHASES` to
+`session_control._RUNG_INTENT`'s keys, and an unmapped rung falls through by design — so the two
+vocabularies can drift apart silently. Pin them from the `session_control` side when the wire lands.

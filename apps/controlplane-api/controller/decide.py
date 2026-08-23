@@ -98,11 +98,18 @@ def phase_prediction(bundle: Bundle) -> Optional[tuple[str, dict, float, str, tu
         # which the advance lexicon deliberately cannot see), the advance lexicon second. Lazy
         # import for the same reason `advance_control` lazily imports `apply_recipe`: this module
         # must stay loadable without the registry-touching layers.
+        #
+        # ONLY THE IMPORT IS GUARDED, and the call is deliberately OUTSIDE the guard — the same
+        # shape `advance_control` uses for its own lazy import. A try that wrapped the CALL would
+        # turn any future error inside the matcher into a silent degradation: every enter-phase
+        # turn would quietly fall back to a bare-verb click, agreement would sag, and nothing
+        # would ever raise. A missing module is a deployment fact worth surviving; a broken
+        # matcher is a bug worth hearing about.
         try:
             from controller.orientation import apply_control
-            control = apply_control(tuple(bundle.ax_identities or ()))
         except Exception:  # noqa: BLE001 — the rail must never fail to answer because of an import
-            control = ""
+            apply_control = None
+        control = apply_control(tuple(bundle.ax_identities or ())) if apply_control else ""
         control = control or advance_control(bundle.ax_identities)
         why = (f"the {bundle.phase} rung is due — the turn that clicks into the application"
                + (f", and {control!r} is the entering control on the page" if control

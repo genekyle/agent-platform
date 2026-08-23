@@ -37,6 +37,8 @@ The honest numbers, so nobody re-derives them:
 | Decision journal / intent journal / orientation corpus | 117 / 754 / 40 rows — **zero image refs between them** (fixed 2026-08-09) |
 | Teacher inbox (`teacher_inbox.jsonl`) | last wrote **07-23** — the seat was built and sat empty |
 | First real shadow-agreement numbers | 2026-08-06: shadow 47% over 15 pairs, orienter 25% (gate: ≥90% over ≥25) |
+| Shadow agreement, measured 2026-08-22 | **0.5952 over 294 pairs**; 119 disagreements, **all `wrong_intent`**, **106 of them click↔observe** (70 shadow-clicked/teacher-observed, 36 reverse). Best with real n: `indeed:indeed_apply_questions` 0.80/15, `indeed_quick_apply:indeed_job_posting` 0.657/67, `workday:workday_job_posting` 0.590/61. **No scenario passes the gate.** Root cause is a missing Bundle feature, not a threshold — see LEARNINGS 2026-08-22 (later) |
+| Teacher labels on the transition corpus | **84** (17 before 2026-08-22, +67 that day); label queue **373 → 306**, the `mismatch` head fully worked |
 | Flywheel revolutions (`PLAN_flywheel_first_revolution.md` DoD, all six) | **0** |
 
 The pattern the log itself counted six times: built, documented, never wired. The refocus's answer

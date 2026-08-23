@@ -135,7 +135,16 @@ def test_the_phase_facet_is_additive_everywhere_it_travels():
     from interaction.decision import bundle_to_prompt, replay_snapshot
 
     # Digest: identical without a phase; distinct per phase when one is set.
-    assert bundle_digest(_bundle(phase=None)) == bundle_digest(_bundle())
+    #
+    # PINNED AS A LITERAL, not relative to today's code. A relative assertion
+    # (`digest(phase=None) == digest()`) stays green through a refactor to an unconditional
+    # `payload["phase"] = None`, which would silently change EVERY phase-less digest and break
+    # every historical join in the journal. The golden is the same device
+    # `test_bundle_to_prompt_is_stable` uses on the prompt, for the same reason: this value is a
+    # join key that outlived the code that minted it.
+    PHASELESS_GOLDEN = "f9307629dcc18ff27217d24aa5efdf78acf8ae0f9fe5379b42b295bd85de6772"
+    assert bundle_digest(_bundle()) == PHASELESS_GOLDEN
+    assert bundle_digest(_bundle(phase=None)) == PHASELESS_GOLDEN
     assert bundle_digest(_bundle(phase="verify_identity")) != bundle_digest(_bundle())
     assert bundle_digest(_bundle(phase="verify_identity")) != \
         bundle_digest(_bundle(phase="enter_apply"))
