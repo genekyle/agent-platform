@@ -1,0 +1,212 @@
+{
+  "task": "apply",
+  "state": "workday_job_posting",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply Manually"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply Manually"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply Manually"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply Manually"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Save and Continue"
+      }
+    }
+  ],
+  "expected_exit": [],
+  "version": "v1",
+  "compiled_from": [
+    "65e06fc7876f5fe9acf9911aa047abee4268f7acf51c5724187cb1785a0c995c",
+    "ba1209dc7a08e8c184a93457eaa7aa318eda46b82ac471e7f49abbe58bfcff05",
+    "f748caa5e2e011ebc5a4c638d74d5344990e5a707aa161bd10ae028fb1380f78",
+    "38f30960c2548592a745acb00a5b02b74a1ff6e9591a3bbe74ca4bb214e3f7aa",
+    "c76eebbf09531f593d1f4b8c353d3db6a1322420ff2047958f23dfcacb637262",
+    "43b082cc16acccc9236f858a023fac2edba0444ac575f2c59d8d5d5526ce447a",
+    "bac0490918c334974aef4db78d9a8b58430fb95d43ea561fe10ab75d44c78f48",
+    "c49a39312449bf8d8bb3036e1d7917fa09a8bc64f74b2e4575a03ca5ccb2e72c",
+    "a2a7ae0b50fffe2e5973d34c560d454adb17ae821812cfc696bd47e47c49cfae"
+  ],
+  "verified_at": "2026-08-23T03:01:34.433277+00:00",
+  "stale": false
+}

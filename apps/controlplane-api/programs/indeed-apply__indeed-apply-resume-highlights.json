@@ -1,0 +1,22 @@
+{
+  "task": "indeed_apply",
+  "state": "indeed_apply_resume_highlights",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Close"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_resume_highlights"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "cfb524b5b7dfe20850db7eb50f138db94711a8bf3a0e7d45d2fc42ac6da76bb1"
+  ],
+  "verified_at": "2026-08-23T03:01:34.422448+00:00",
+  "stale": false
+}

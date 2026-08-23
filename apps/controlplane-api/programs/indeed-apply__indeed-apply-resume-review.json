@@ -1,0 +1,35 @@
+{
+  "task": "indeed_apply",
+  "state": "indeed_apply_resume_review",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Add another"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "No work experience to add"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "No education to add"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_resume_review"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "3152120117fc8c88505c547d1ee15021e02ec40884efd78f5366426ca938146f",
+    "e1156d0a9bdf48c3a04cc2205d4c7192a4f5bd5ac9aa004778f83de3e96db3a5"
+  ],
+  "verified_at": "2026-08-23T03:01:34.417102+00:00",
+  "stale": false
+}

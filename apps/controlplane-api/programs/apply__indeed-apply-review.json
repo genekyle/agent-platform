@@ -1,0 +1,48 @@
+{
+  "task": "apply",
+  "state": "indeed_apply_review",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Submit your application"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Submit your application"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Submit your application"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Submit your application"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Submit your application"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_submitted",
+    "indeed_apply_ai_recruiter_gate",
+    "captcha"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "d9df429b7bd29b4ac7b9bfefe0d9434f388b7fcf2454d22b3282b4c166883214"
+  ],
+  "verified_at": "2026-08-23T03:01:34.423581+00:00",
+  "stale": false
+}

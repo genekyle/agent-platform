@@ -1,0 +1,25 @@
+{
+  "task": "company_site_apply",
+  "state": "company_site_job_posting",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Reject All Cookies"
+      }
+    }
+  ],
+  "expected_exit": [
+    "company_site_account_gate",
+    "company_site_application_form",
+    "company_site_job_posting",
+    "company_site_review"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "0fa0c405b3a0b2e8f15c22eb9beb92c315c206c1e472c8528e8fb39a6d6c1750"
+  ],
+  "verified_at": "2026-08-23T03:01:34.522030+00:00",
+  "stale": false
+}

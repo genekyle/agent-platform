@@ -1,0 +1,35 @@
+{
+  "task": "apply",
+  "state": "indeed_apply_demographics",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Review your application"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_review",
+    "indeed_apply_demographics"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "e977ff2006df2dad627f6b31663a8c70783317da6e878edc42c0f9b5165d687e"
+  ],
+  "verified_at": "2026-08-23T03:01:34.428442+00:00",
+  "stale": false
+}

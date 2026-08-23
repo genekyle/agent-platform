@@ -1,0 +1,46 @@
+{
+  "task": "apply",
+  "state": "linkedin_job_search",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {}
+    },
+    {
+      "intent": "click",
+      "params": {}
+    }
+  ],
+  "expected_exit": [],
+  "version": "v1",
+  "compiled_from": [
+    "e9646f0f5b092dde66359bbff306fa19bc6205b739ad6949c2642f4faf89924b"
+  ],
+  "verified_at": "2026-08-23T03:01:34.436240+00:00",
+  "stale": false
+}
