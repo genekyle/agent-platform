@@ -309,6 +309,21 @@ def build_summary(db: Session) -> dict[str, Any]:
             "training": training_by_domain.get(d["capture_domain"], {"to_label": 0, "labeled": 0}),
         })
 
+    # The teacher's OWN queues, surfaced on the landing. Handoffs above are the runtime queue;
+    # the transition label queue and parked drives are DIFFERENT queues and rendered nowhere on
+    # /overview until the 2026-08-22 reach-parity audit named the gap. Best-effort like every
+    # other source: None means "could not read", never a fabricated 0.
+    try:
+        from routers.transitions import build_label_queue
+        transition_queue = len(build_label_queue())
+    except Exception:
+        transition_queue = None
+    try:
+        from controller import inbox as inbox_mod
+        parks_open = inbox_mod.counts()["open"]
+    except Exception:
+        parks_open = None
+
     return {
         "domains": tiles,
         "attention_open_count": len(open_handoffs),
@@ -319,6 +334,8 @@ def build_summary(db: Session) -> dict[str, Any]:
             "labeled_total": sum(t["labeled"] for t in training_by_domain.values()),
             "grounding_accuracy": _latest_grounding_accuracy(),
         },
+        # The teacher's worklists (distinct from runtime handoffs — see the note above).
+        "teacher": {"transition_queue": transition_queue, "parks_open": parks_open},
     }
 
 

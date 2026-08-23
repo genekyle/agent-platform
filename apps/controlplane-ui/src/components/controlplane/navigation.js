@@ -33,6 +33,8 @@ export const CONTROL_PLANE_NAV = {
     sections: [
       { id: "overview", label: "Overview", subtitle: "Learning health, flow, coverage, and graduation readiness." },
       { id: "label", label: "Label", subtitle: "Confirm or correct the next queued training example." },
+      { id: "queue", label: "Queue", subtitle: "The teacher's ranked worklist — the transition rows self-supervision cannot claim." },
+      { id: "session-scorecard", label: "Scorecard", subtitle: "Rows banked, labels written, parks answered, and the road to the promotion gate." },
       { id: "coverage", label: "Coverage", subtitle: "See which page states need more examples." },
       { id: "session-setup", label: "Sessions", subtitle: "Create and manage structured capture sessions." },
       { id: "session-capture", label: "Capture", subtitle: "Capture from the active session browser." },
@@ -73,6 +75,8 @@ export const CONTROL_PLANE_NAV = {
 export const LEARNING_PRIMARY_TABS = [
   { id: "overview", label: "Overview" },
   { id: "label", label: "Label" },
+  { id: "queue", label: "Queue" },
+  { id: "session-scorecard", label: "Scorecard" },
   { id: "transitions", label: "Transitions" },
   { id: "coverage", label: "Coverage" },
   { id: "session-setup", label: "Sessions" },

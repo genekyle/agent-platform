@@ -258,24 +258,10 @@ def _shot_names(row: dict[str, Any]) -> dict[str, Optional[str]]:
     return out
 
 
-# Registered BEFORE /api/transitions/{key}: FastAPI matches in registration order, and
-# the {key} route would otherwise capture "label_queue" as a corpus key (caught by the
-# endpoint's own test on first run, 2026-08-20).
-@router.get("/api/transitions/label_queue")
-def label_queue(limit: int = 20) -> dict[str, Any]:
-    """The teacher's worklist — the rows self-supervision CANNOT claim, ranked by what a label
-    buys (2026-08-20).
-
-    The split is deliberate and matches who pays: a `confirmed` row whose witnesses agreed labels
-    ITSELF (`perception.dataset._self_label`) and never reaches this queue; what remains is
-    exactly where a teacher matters — the world disagreed (`mismatch`, ranked first: one label
-    both corrects the witnesses AND explains a failed act), the witnesses were blind
-    (`no_belief`), or they split (`witness_split`). The teacher here is the operator's own
-    session-Claude (2026-08-09 economics: the attended session is already paid for), answering
-    through `POST /api/transitions/{key}/correct` — which train-on-label then turns into a refit
-    and a possible program recompile, so a label written from this queue teaches three organs at
-    once. `remaining` carries the full backlog size so a shrinking queue is a visible number.
-    """
+def build_label_queue() -> list[dict[str, Any]]:
+    """The full ranked worklist behind `/api/transitions/label_queue`, importable so the
+    session scorecard and the landing page count the SAME queue the teacher answers —
+    two counters over one derivation, never a second derivation that can drift."""
     order = {"mismatch": 0, "no_belief": 1, "witness_split": 2}
     queue: list[dict[str, Any]] = []
     for c in sr.list_corpora():
@@ -309,6 +295,28 @@ def label_queue(limit: int = 20) -> dict[str, Any]:
                 "screenshots": _shot_names(row),
             })
     queue.sort(key=lambda q: (order.get(q["why_queued"], 9), str(q.get("ts") or "")))
+    return queue
+
+
+# Registered BEFORE /api/transitions/{key}: FastAPI matches in registration order, and
+# the {key} route would otherwise capture "label_queue" as a corpus key (caught by the
+# endpoint's own test on first run, 2026-08-20).
+@router.get("/api/transitions/label_queue")
+def label_queue(limit: int = 20) -> dict[str, Any]:
+    """The teacher's worklist — the rows self-supervision CANNOT claim, ranked by what a label
+    buys (2026-08-20).
+
+    The split is deliberate and matches who pays: a `confirmed` row whose witnesses agreed labels
+    ITSELF (`perception.dataset._self_label`) and never reaches this queue; what remains is
+    exactly where a teacher matters — the world disagreed (`mismatch`, ranked first: one label
+    both corrects the witnesses AND explains a failed act), the witnesses were blind
+    (`no_belief`), or they split (`witness_split`). The teacher here is the operator's own
+    session-Claude (2026-08-09 economics: the attended session is already paid for), answering
+    through `POST /api/transitions/{key}/correct` — which train-on-label then turns into a refit
+    and a possible program recompile, so a label written from this queue teaches three organs at
+    once. `remaining` carries the full backlog size so a shrinking queue is a visible number.
+    """
+    queue = build_label_queue()
     return {"remaining": len(queue), "queue": queue[:limit],
             "answer_with": "POST /api/transitions/{key}/correct "
                            "{index, ts, before_state, after_state, note}"}

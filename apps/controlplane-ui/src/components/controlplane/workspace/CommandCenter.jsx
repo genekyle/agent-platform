@@ -15,18 +15,24 @@ function Metric({ label, value, detail, tone = "neutral" }) {
   );
 }
 
-function OverviewHero({ summary, health, onOpenLabeler }) {
+function OverviewHero({ summary, health, onOpenLabeler, onOpenQueue }) {
   const domains = summary?.domains || [];
   const ready = domains.filter((domain) => domain.status === "ready").length;
   const attention = summary?.attention_open_count ?? 0;
   const toLabel = summary?.flywheel?.to_label_total ?? 0;
   const active = domains.filter((domain) => domain.status && domain.status !== "idle").length;
+  // The teacher's OWN queues — distinct from runtime handoffs (the inbox below reads those).
+  // Parked drives are the loudest: a drive is literally waiting on an answer.
+  const teacherQueue = summary?.teacher?.transition_queue;
+  const parksOpen = summary?.teacher?.parks_open;
 
-  const message = attention
-    ? `${attention} handoff${attention === 1 ? "" : "s"} need your judgment. Everything else can keep moving.`
-    : active
-      ? "Your agents are moving. Nothing needs your judgment right now."
-      : "Your workspace is quiet. Start with a domain when you are ready.";
+  const message = parksOpen
+    ? `${parksOpen} drive${parksOpen === 1 ? " is" : "s are"} parked waiting on your answer — that comes first.`
+    : attention
+      ? `${attention} handoff${attention === 1 ? "" : "s"} need your judgment. Everything else can keep moving.`
+      : active
+        ? "Your agents are moving. Nothing needs your judgment right now."
+        : "Your workspace is quiet. Start with a domain when you are ready.";
 
   return (
     <>
@@ -37,6 +43,11 @@ function OverviewHero({ summary, health, onOpenLabeler }) {
           <p>{message}</p>
           <div className="overview-hero__actions">
             {attention ? <a className="primary-btn" href="#attention">Review handoffs</a> : null}
+            {teacherQueue ? (
+              <button className="secondary-btn" type="button" onClick={onOpenQueue}>
+                Answer {teacherQueue} queued transition{teacherQueue === 1 ? "" : "s"}
+              </button>
+            ) : null}
             {toLabel ? (
               <button className="secondary-btn" type="button" onClick={onOpenLabeler}>
                 Review {toLabel} learning example{toLabel === 1 ? "" : "s"}
@@ -57,6 +68,12 @@ function OverviewHero({ summary, health, onOpenLabeler }) {
 
       <section className="overview-metrics" aria-label="Workspace summary">
         <Metric label="Needs you" value={attention} detail={attention ? "open handoffs" : "all clear"} tone={attention ? "warning" : "success"} />
+        <Metric label="Parked drives" value={parksOpen ?? "—"}
+          detail={parksOpen ? "waiting on a teacher answer" : "no drive is waiting"}
+          tone={parksOpen ? "warning" : "success"} />
+        <Metric label="Teacher queue" value={teacherQueue ?? "—"}
+          detail={teacherQueue ? "transitions to label" : "queue is clear"}
+          tone={teacherQueue ? "warning" : "success"} />
         <Metric label="Ready" value={`${ready}/${domains.length || 0}`} detail="connected domains" tone="success" />
         <Metric label="Learning queue" value={toLabel} detail={toLabel ? "waiting for review" : "nothing waiting"} />
         <Metric label="System" value={health?.ok ? "Online" : "Offline"} detail={health?.ok ? "services reachable" : "check connection"} tone={health?.ok ? "success" : "danger"} />
@@ -65,7 +82,7 @@ function OverviewHero({ summary, health, onOpenLabeler }) {
   );
 }
 
-export function CommandCenter({ health, onOpenDomain, onOpenLabeler }) {
+export function CommandCenter({ health, onOpenDomain, onOpenLabeler, onOpenQueue }) {
   const [summary, setSummary] = useState(null);
 
   const load = useCallback(() => {
@@ -85,7 +102,7 @@ export function CommandCenter({ health, onOpenDomain, onOpenLabeler }) {
 
   return (
     <div className="section-body overview-dashboard">
-      <OverviewHero summary={summary} health={health} onOpenLabeler={onOpenLabeler} />
+      <OverviewHero summary={summary} health={health} onOpenLabeler={onOpenLabeler} onOpenQueue={onOpenQueue} />
 
       <div className="overview-focus-grid">
         <div id="attention"><AttentionInbox title="Needs your attention" showDomainTag /></div>

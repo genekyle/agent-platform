@@ -239,6 +239,26 @@ def get(request_id: str) -> Optional[dict[str, Any]]:
     return _read_overlaid().get(request_id)
 
 
+def counts() -> dict[str, int]:
+    """The inbox by status, plus today's answered tally — "parks answered" is one third of the
+    session measure (PROJECT_STATUS: rows banked, labels written, parks answered), and until the
+    scorecard asked, the only way to know it was to grep the JSONL."""
+    today = datetime.now().astimezone().date()
+    out = {"open": 0, "answered": 0, "expired": 0, "answered_today": 0}
+    for row in _read_overlaid().values():
+        status = str(row.get("status") or "open")
+        out[status] = out.get(status, 0) + 1
+        if status == "answered":
+            # answered_at is stamped UTC; "today" is the operator's LOCAL day.
+            try:
+                answered = datetime.fromisoformat(str(row.get("answered_at") or ""))
+                if answered.astimezone().date() == today:
+                    out["answered_today"] += 1
+            except ValueError:
+                pass
+    return out
+
+
 class InboxError(ValueError):
     """A malformed response. Loud, because a silently-dropped answer parks the drive until it
     times out and the operator has no idea why."""

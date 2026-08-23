@@ -114,6 +114,7 @@ from routers import facebook as facebook_router  # noqa: E402
 from routers import inventory as inventory_router  # noqa: E402
 from routers import providers as providers_router  # noqa: E402
 from routers import session_control as session_control_router  # noqa: E402
+from routers import scorecard as scorecard_router  # noqa: E402
 from routers import searches as searches_router  # noqa: E402
 from routers import sessions as sessions_router  # noqa: E402
 from routers import transitions as transitions_router  # noqa: E402
@@ -5322,6 +5323,7 @@ def create_app() -> FastAPI:
     app.include_router(facebook_router.router)
     app.include_router(inventory_router.router)
     app.include_router(providers_router.router)
+    app.include_router(scorecard_router.router)
     app.include_router(searches_router.router)
     app.include_router(session_control_router.router)
     app.include_router(sessions_router.router)

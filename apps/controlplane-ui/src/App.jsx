@@ -19,6 +19,8 @@ import { TrainingSection } from "./components/controlplane/TrainingSection";
 import { PageStatesSection } from "./components/controlplane/PageStatesSection";
 import { CoverageSection } from "./components/controlplane/CoverageSection";
 import { ScorecardSection } from "./components/controlplane/ScorecardSection";
+import { SessionScorecardSection } from "./components/controlplane/SessionScorecardSection";
+import { TransitionQueueSection } from "./components/controlplane/TransitionQueueSection";
 import { TransitionsSection } from "./components/controlplane/TransitionsSection";
 import { TrainingSpaceSection } from "./components/controlplane/TrainingSpaceSection";
 import { StateGraphSection } from "./components/controlplane/StateGraphSection";
@@ -215,6 +217,12 @@ export default function App() {
   // Dataset Browser dig. (#2 training-UI overhaul.)
   const openLabeler = useCallback(() => {
     navigate(pathForView("learning", { sectionId: "label" }));
+  }, [navigate]);
+
+  // One-click into the TRANSITION queue (the teacher's ranked worklist) from the landing —
+  // the queue the 2026-08-22 reach-parity audit found had no UI caller at all.
+  const openTransitionQueue = useCallback(() => {
+    navigate(pathForView("learning", { sectionId: "queue" }));
   }, [navigate]);
 
   const refresh = useCallback(async () => {
@@ -950,7 +958,7 @@ export default function App() {
 
   let sectionContent = null;
   if (activePrimaryView === "command") {
-    sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} onOpenLabeler={openLabeler} />;
+    sectionContent = <CommandCenter health={health} onOpenDomain={openDomain} onOpenLabeler={openLabeler} onOpenQueue={openTransitionQueue} />;
   } else if (activePrimaryView === "cockpit") {
     sectionContent = <CockpitPage routeSessionId={routeState.sessionId} routeTab={routeState.tabId} />;
   } else if (activePrimaryView === "activity") {
@@ -991,6 +999,10 @@ export default function App() {
     sectionContent = <ModelsSection section={activeSectionId === "models" ? "registry" : activeSectionId} />;
   } else if (activePrimaryView === "learning" && activeSectionId === "transitions") {
     sectionContent = <TransitionsSection />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "queue") {
+    sectionContent = <TransitionQueueSection />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "session-scorecard") {
+    sectionContent = <SessionScorecardSection />;
   } else if (activePrimaryView === "learning" && activeSectionId === "scorecard") {
     sectionContent = <ScorecardSection />;
   } else if (activePrimaryView === "learning" && activeSectionId === "training-space") {

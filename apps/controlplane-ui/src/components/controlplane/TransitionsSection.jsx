@@ -59,6 +59,17 @@ export function TransitionsSection() {
 
   useEffect(() => { loadLanding(); }, [loadLanding]);
 
+  // The correction surface follows the drive: fresh rows appear while a live drive banks them,
+  // without a manual Refresh (2026-08-22 audit — Learning tabs didn't poll). Row keys are
+  // index+ts, so an expanded row's in-progress note survives the re-render.
+  useEffect(() => {
+    const t = setInterval(() => {
+      loadLanding();
+      if (corpusKey) loadCorpus(corpusKey);
+    }, 10000);
+    return () => clearInterval(t);
+  }, [loadLanding, loadCorpus, corpusKey]);
+
   const correct = useCallback(async (row, verdict, note, states = {}) => {
     const r = await fetch(`${API}/api/transitions/${encodeURIComponent(corpusKey)}/correct`, {
       method: "POST",
