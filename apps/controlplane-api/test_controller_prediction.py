@@ -156,6 +156,66 @@ def test_a_shaky_model_keeps_its_OWN_proposal_not_the_shape_guess():
     assert d.evidence == ("state",)
 
 
+# --- the phase rail (the 2026-08-22 click↔observe finding) --------------------------
+def test_an_observe_phase_predicts_observe_even_beside_a_clickable_advance():
+    """The teacher's verb on a consuming rung is `observe` by construction — the same page whose
+    shape guess would click. 47 of 119 shadow disagreements were exactly this turn."""
+    for phase in ("verify_identity", "classify", "account"):
+        intent, params, _, why, evidence = local_prediction(
+            bundle(state="indeed_job_posting", ats="indeed_quick_apply", phase=phase,
+                   identities=("button|Continue", "link|Apply now")))
+        assert intent == Intent.OBSERVE.value and params == {}
+        assert "consuming look" in why
+        assert "phase" in evidence
+
+
+def test_an_enter_phase_reaches_the_apply_control_the_advance_lexicon_cannot():
+    """"Apply now" is invisible to `_ADVANCE_CONTROLS` — 12 of the reverse-direction misses were
+    the shape guess answering `observe` while the teacher clicked the posting's own Apply."""
+    intent, params, *_ = local_prediction(
+        bundle(state="company_site_job_posting", ats="company_site", phase="enter_apply",
+               identities=("link|Apply now", "link|Apply now Help", "button|Save")))
+    assert intent == Intent.CLICK.value
+    assert params == {"control": "Apply now"}     # rendered label; the Help link is refused
+
+
+def test_an_enter_phase_with_no_visible_control_still_names_the_verb():
+    """Loose agreement scores intent + field; a verb-only click is an honest, scoreable guess."""
+    intent, params, _, why, _ = local_prediction(
+        bundle(phase="open_pane", identities=("heading|Search results",)))
+    assert intent == Intent.CLICK.value and params == {}
+    assert "no entering control is visible" in why
+
+
+def test_a_submit_phase_gets_no_rail_and_never_the_gate():
+    """`submit` is in neither phase set on purpose: the one irreversible control is never
+    proposed, so a submit-turn disagreement is an honest, permanent one."""
+    intent, params, *_ = local_prediction(
+        bundle(phase="submit", identities=("button|Submit application",)))
+    assert intent == Intent.OBSERVE.value and params == {}
+
+
+def test_the_phase_rail_beats_orientation_in_the_handup():
+    """Orientation always proposes the Apply click — exactly wrong mid-look. A wired `orient`
+    must not override the rail on a phase-claimed turn."""
+    from controller.orientation import predict as orient_predict
+    d = decide(bundle(state=None, phase="verify_identity",
+                      url="https://jobs.example.com/posting/1",
+                      identities=("link|Apply now",)),
+               programs=NoPrograms(), orient=orient_predict)
+    assert d.escalate
+    assert d.intent == Intent.OBSERVE.value and d.params == {}
+
+
+def test_no_phase_changes_nothing():
+    """The rail is inert until a ladder claims the turn — every phase-less caller (the loop,
+    teach sessions, all journaled history) predicts exactly as before."""
+    with_none = local_prediction(bundle(identities=("button|Continue",), phase=None))
+    assert with_none[0] == Intent.CLICK.value and with_none[1] == {"control": "Continue"}
+    unmapped = local_prediction(bundle(identities=("button|Continue",), phase="workday_questions"))
+    assert unmapped == with_none
+
+
 # --- the calibration guard ----------------------------------------------------------
 def test_prediction_confidence_is_always_below_the_acting_floor():
     """A prediction is a thing to be SCORED, never a bid to act. If a guess could ever clear the
@@ -165,6 +225,8 @@ def test_prediction_confidence_is_always_below_the_acting_floor():
         bundle(unanswered=({"field": "x", "kind": "mystery"},)),
         bundle(identities=("button|Continue",)),
         bundle(identities=("heading|Nothing here",)),
+        bundle(phase="verify_identity", identities=("link|Apply now",)),
+        bundle(phase="enter_apply", identities=("link|Apply now",)),
     ]
     for b in cases:
         d = decide(b, programs=NoPrograms())

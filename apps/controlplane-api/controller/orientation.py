@@ -100,14 +100,29 @@ def _visual_platform(belief: Optional[dict]) -> str:
     return ""
 
 
-def _apply_control(identities: tuple[str, ...]) -> str:
+def apply_control(identities: tuple[str, ...]) -> str:
     """The visible control that enters an application, or "".
 
     Returns the label AS RENDERED, not the lexicon entry that matched it — a proposal naming a
     control the page does not have is one nobody can approve as written.
+
+    Public because `decide`'s phase rail needs the same answer on an `enter_apply` turn, and a
+    second apply lexicon there would be a second opinion about which control enters a posting.
     """
     names = [ident.partition("|")[2].strip() for ident in identities or ()]
-    names = [n for n in names if n and not any(bad in n.lower() for bad in NEVER_PROPOSE)]
+    # THE APPLY-DOOR JUDGEMENT, SHARED WITH THE RECIPE LAYER rather than re-learned here. This
+    # matcher had the exact latent bug `advance_control` already fixed: a name the recipe's door
+    # matcher refuses was reachable through this one. "Apply now Help" leads with the token and
+    # out-lengths "Apply now" (MAPFRE, live 2026-08-14); employee doors out-length the candidate
+    # door (C&S, 2026-08-13). The full door list is right HERE — unlike the advance lexicon,
+    # beside an Apply control "save" and "with " really are disqualifiers. Lazy import, same
+    # rule as decide's: orientation must still answer if the recipe layer is absent.
+    try:
+        from apply_recipe import GENERIC_CONTROL_EXCLUSIONS as _door_excluded
+    except Exception:  # noqa: BLE001
+        _door_excluded = ()
+    names = [n for n in names if n and not any(bad in n.lower() for bad in NEVER_PROPOSE)
+             and not any(bad in n.lower() for bad in _door_excluded)]
     for wanted in APPLY_CONTROLS:
         matches = [n for n in names if wanted.lower() in n.lower()]
         if matches:
@@ -125,7 +140,7 @@ def orient(bundle: Bundle, *, page_hints: Optional[dict] = None) -> Orientation:
 
     visual = _visual_platform(bundle.belief)
     identities = tuple(bundle.ax_identities or ())
-    control = _apply_control(identities)
+    control = apply_control(identities)
 
     known_url = bool(url_platform) and url_platform not in (UNMAPPED, "unknown")
     branded = bool(visual) and visual not in ("generic", "company_site") and not known_url
