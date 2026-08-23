@@ -10145,11 +10145,39 @@ submit-turn disagreement stays honest rather than being papered over.
 the change — correct and expected, because historical rows carry no phase and the rail is inert
 until the wire lands. **HYPOTHESIS:** replaying the 294 journaled snapshots through the shipped
 `local_prediction` with the phase injected moves 0.585 → 0.765 overall and
-`indeed_quick_apply:indeed_job_posting` 0.672 → **1.000 over n=67**. That is a **backtest with
-leakage** — the rail was designed on these same rows — and the replay also has to reconstruct
-`ax_identities` from the journaled proposal, since snapshots do not keep them. **Nobody promotes
-off this.** The gate fills from fresh post-wire drives only (≥90% over ≥25, per state per ATS,
-fall-through intact).
+`indeed_quick_apply:indeed_job_posting` 0.672 → **1.000 over n=67**.
+
+**Do not read that 1.000 as a promotion signal.** Two discounts apply, and a first attempt to
+write them up got the second one WRONG — corrected here because a plausible-sounding causal story
+in this log is worse than none.
+
+*Discount 1, leakage:* the rail was designed on these same 294 rows, so the backtest scores a
+hypothesis against the evidence that produced it.
+
+*Discount 2, the replay does not see the page the shadow saw:* snapshots do not keep
+`ax_identities`, so the replay feeds the rail a reconstruction (the journaled proposal's own
+control name). The obvious guess is that this inflates `indeed_job_posting`. **It does not.**
+Re-running the backtest with `ax_identities` forced EMPTY: `indeed_job_posting` scores **1.000/67
+either way**, while the OVERALL figure drops 0.765 → **0.554**. So the reconstruction is load-
+bearing for the overall number (the phase-less shape guess needs identities to propose any click
+at all) and irrelevant to the headline scenario. **Quote the overall 0.765 with that caveat
+attached; the 1.000/67 stands on the phase mapping alone.**
+
+**AND THE REASON IT STANDS SO CLEANLY IS ITSELF A FINDING ABOUT THE GATE.** `metrics._matches`
+compares `params.get("field")` on both sides — and a click's params carry `control`, not `field`,
+so `_field()` returns `None` for both. **Loose match is therefore INTENT-ONLY for every click
+decision**: verified directly, a proposal to click `"A"` against a teacher who clicked
+`"TOTALLY DIFFERENT"` scores as agreement. That is the metric the ≥90% promotion gate reads. It
+is defensible as far as it goes (the doc defines loose as "same intent AND same field", and a
+click has no field), but it means **a scenario can pass the gate while the controller reaches for
+the wrong button every time** — and `open_pane`/`enter_apply`, the phases the rail is most
+confident about, are exactly the click-shaped turns where this blind spot lives. The `exact`
+match mode already compares full params and would catch it; nothing currently gates on `exact`.
+Flagged, not fixed — changing what the gate measures is not a change to make quietly at the end
+of a session.
+
+**Nobody promotes off any of this.** The gate fills from fresh post-wire drives only (≥90% over
+≥25, per state per ATS, fall-through intact).
 
 **AND A LATENT BUG THE NEW TEST CAUGHT BEFORE IT COULD FIRE.** `orientation.apply_control` (made
 public for the rail) had the exact defect `advance_control` was fixed for on 2026-08-14: it applied
