@@ -10050,7 +10050,18 @@ the-secret lesson generalizes to mail about someone's dinner plans.
 **NO MESSAGE ID EXISTS AND THAT IS FINE.** The subject-line reader never opens a thread (no read
 receipt), so the documented `{message_id, …}` gmail evidence gets the sweep fingerprint as its
 durable reference instead. Idempotency lives on that fingerprint: re-sweeping an unchanged inbox
-writes nothing, which is what makes "run it after every drive" safe.
+writes nothing, which is what makes "run it after every drive" safe. Review catch worth keeping:
+the reader nulls `received_at` exactly when Gmail's title timestamp fails Date-parse and emits
+raw `received_text` for that case — a fingerprint that ignores it collapses recurring
+same-subject mail to one identity (and a locale change nulls EVERY date). The raw text is the
+fallback half of the identity, not decoration.
+
+**THE HUMAN INPUT IS THE UNTRUSTED PATH.** The matcher's own keys come from applications joined
+to jobs and always resolve; the review UI's free-text job-key input accepts any paste. The
+original `resolve_key(...) or job_key` fallback would have turned a typo into a 200 OK plus a
+phantom Application no job view can see (they all start from `Job`, and `Application.job_key`
+has no FK). The writer now raises on an unresolvable key and the confirm path 422s — the guard
+lives at the shared writer, so any future caller inherits it.
 
 **FLOW TERMINALS GET A WITNESS, NOT A WRITE.** A matched confirmation names the open `ats_flows`
 rows for its job (`flow_terminal_witness`) but never sets `terminal` — that column describes what
