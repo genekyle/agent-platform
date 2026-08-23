@@ -37,6 +37,13 @@ router = APIRouter()
 PROMOTION_MIN_AGREEMENT = 0.90
 PROMOTION_MIN_N = 25
 
+#: Where the outcome clock started — the 2026-08-22 reflection audit measured the ledger
+#: write-only after submit (0 outcomes recorded, 5/68 flows closed). The week's progress is
+#: judged against this snapshot. A recorded FACT, deliberately frozen: it never updates, so the
+#: distance travelled stays visible after the matcher starts writing.
+OUTCOMES_BASELINE = {"date": "2026-08-22", "outcomes_recorded": 0,
+                     "flows_closed": 5, "flows_total": 68}
+
 
 def _day(ts: Any) -> str:
     """The LOCAL calendar day of a stored (UTC) timestamp. Rows are stamped UTC; the operator's
@@ -154,5 +161,6 @@ def learning_scorecard(db: Session = Depends(get_db)) -> dict[str, Any]:
             "events_by_kind": events_by_kind,
             "outcomes_recorded": outcomes_recorded,
             "flows": {"total": flows_total, "closed": flows_closed},
+            "baseline": OUTCOMES_BASELINE,
         },
     }

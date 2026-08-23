@@ -140,6 +140,14 @@ export function SessionScorecardSection() {
             </div>
           </div>
         ) : null}
+        {outcomes?.baseline ? (
+          <div className="chrome-label muted" style={{ marginTop: 6 }}>
+            baseline {outcomes.baseline.date} (reflection audit):{" "}
+            {outcomes.baseline.outcomes_recorded} outcomes ·{" "}
+            {outcomes.baseline.flows_closed}/{outcomes.baseline.flows_total} flows closed — the
+            clock this week is measured against.
+          </div>
+        ) : null}
       </section>
 
       <section className="panel">
