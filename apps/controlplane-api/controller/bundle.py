@@ -84,6 +84,7 @@ def build_bundle(
     staleness: Optional[dict] = None,
     applied: Optional[dict] = None,
     capture: Optional[dict] = None,
+    phase: Optional[str] = None,
 ) -> Bundle:
     """Assemble the controller's input for ONE tab. Pure — no IO, no network.
 
@@ -112,6 +113,9 @@ def build_bundle(
         capture: durable refs to this observation's artifact + screenshot (see
             `Bundle.capture`). Pure passthrough, like `belief`; None when nothing was
             collected — which is exactly what a `collect=False` credential flow must journal.
+        phase: the executor ladder's rung id claiming this turn (see `Bundle.phase`), or None
+            when no ladder is driving. Pure passthrough — the caller is the only place that
+            knows which rung is due.
     """
     ats = ats or ats_registry.classify_ats(url)
     desc = apply_recipe.describe_for_ats(ats, url, page_text)
@@ -145,4 +149,5 @@ def build_bundle(
         staleness=staleness,
         applied=applied,
         capture=capture,
+        phase=phase,
     )

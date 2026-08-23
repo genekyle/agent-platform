@@ -276,6 +276,24 @@ class Bundle:
     #: without its screenshot is half a training pair.
     capture: Optional[dict] = None
 
+    #: --- phase: which rung of the EXECUTOR'S ladder claims this turn — the crank's rung id
+    #: (e.g. "verify_identity", "enter_apply", "workday_my_information"), or None when no ladder
+    #: is driving (a bare decide() call, a teach session).
+    #:
+    #: Found by the 2026-08-22 shadow-agreement mining: 106 of 119 disagreements were
+    #: click↔observe, and the split was RUNG-driven — the teacher observes while working the
+    #: consuming rungs (verify_identity/classify/account) and clicks on the entering ones
+    #: (open_pane/enter_apply), from the same (task, state). Without this facet the same Bundle
+    #: legitimately maps to BOTH verbs, so no decision function can agree above class frequency —
+    #: CONTROLLER_PROMOTION.md's falsifier ("the Bundle is missing a feature the teacher is
+    #: using"), measured. The rail that reads it lives in `controller/decide.py`.
+    #:
+    #: Follows `belief`/`staleness`: appended last, defaulted, and DELIBERATELY NOT RENDERED by
+    #: `bundle_to_prompt` — the phase rail is deterministic, not a model feature, so the feature
+    #: contract is unchanged and every row journaled before this field stays valid (schema note
+    #: above).
+    phase: Optional[str] = None
+
 
 # --- the Decision: what the controller EMITS ----------------------------------------
 @dataclass(frozen=True)
@@ -595,6 +613,10 @@ def replay_snapshot(bundle: Bundle) -> dict:
         # dropped that would silently re-run the easy version of the case. Already PII-free by
         # construction (state ids, floats, witness names — `BeliefState.as_dict`).
         "belief": dict(bundle.belief) if bundle.belief else None,
+        # The ladder phase travels with the replay case for the same reason belief does: a turn
+        # the verify_identity rung claims is a DIFFERENT decision point from the same page with
+        # no ladder driving, and a replay that dropped it would re-run the phase-free version.
+        "phase": bundle.phase,
     }
 
 
@@ -613,4 +635,9 @@ def bundle_digest(bundle: Bundle) -> str:
         "is_branch": bundle.is_branch,
         "unanswered": sorted(str(it.get("field", "")) for it in bundle.unanswered),
     }
+    # Only when a ladder claims the turn: the same page on a different rung is a different
+    # decision point (the 2026-08-22 click↔observe finding). Conditional so every digest minted
+    # before the field existed — and every phase-less row after — is byte-identical to before.
+    if bundle.phase:
+        payload["phase"] = bundle.phase
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()

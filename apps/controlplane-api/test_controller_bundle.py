@@ -128,6 +128,19 @@ def test_build_bundle_is_pure_and_deterministic():
     assert a == b                                # same inputs -> identical bundle (replayable)
 
 
+def test_the_ladder_phase_rides_the_bundle_and_survives_replay():
+    """The caller is the only place that knows which rung is due (the 2026-08-22 click↔observe
+    finding); build_bundle passes it through untouched and a snapshotted case re-runs with it."""
+    from controller.replay import bundle_from_snapshot
+    from interaction.decision import replay_snapshot
+
+    b = build_bundle("apply", "https://smartapply.indeed.com/questions/abc",
+                     phase="verify_identity")
+    assert b.phase == "verify_identity"
+    assert build_bundle("apply", "https://smartapply.indeed.com/questions/abc").phase is None
+    assert bundle_from_snapshot(replay_snapshot(b)).phase == "verify_identity"
+
+
 def test_history_half_is_shaped_from_journal_tail():
     b = build_bundle(
         "indeed_apply", "https://smartapply.indeed.com/questions/abc",

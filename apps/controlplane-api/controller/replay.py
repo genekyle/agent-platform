@@ -42,6 +42,7 @@ def bundle_from_snapshot(snap: dict[str, Any]) -> Bundle:
         lessons=snap.get("lessons", ""),
         unanswered=tuple(snap.get("unanswered") or ()),
         recent=tuple(snap.get("recent") or ()),
+        phase=snap.get("phase"),
     )
 
 

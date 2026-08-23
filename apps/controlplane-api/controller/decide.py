@@ -63,6 +63,54 @@ _ADVANCE_CONTROLS = ("Continue", "Save and Continue", "Next", "Review your appli
 PREDICTION_CONFIDENCE_FIELD = 0.35
 PREDICTION_CONFIDENCE_ADVANCE = 0.30
 PREDICTION_CONFIDENCE_NONE = 0.0
+PREDICTION_CONFIDENCE_PHASE = 0.5
+
+#: Rung ids of the apply ladder whose turns are CONSUMING LOOKS by contract — the crank reads
+#: (which job is this pane? is a wall up? whose account?) and acts nothing; the teacher's verb on
+#: these rungs is `observe` by construction (`session_control._RUNG_INTENT`). Measured 2026-08-22:
+#: 47 of 119 shadow disagreements were the shape guess proposing the advance click while the
+#: ladder was mid-look, because nothing below the call site knew a look was what the turn was.
+_OBSERVE_PHASES = frozenset({"classify", "verify_identity", "account"})
+
+#: Rung ids whose turns ENTER something by clicking — a results card (`open_pane`) or the
+#: posting's own Apply control (`enter_apply`). `submit` is deliberately in NEITHER set: the one
+#: irreversible control is never something a phase may reach for (same rule as
+#: `_ADVANCE_CONTROLS`), so a submit-phase turn falls through to the ordinary shape guess and the
+#: disagreement it produces is an honest one.
+_ENTER_PHASES = frozenset({"open_pane", "enter_apply"})
+
+
+def phase_prediction(bundle: Bundle) -> Optional[tuple[str, dict, float, str, tuple[str, ...]]]:
+    """What the executor ladder's own phase says this turn is — or None when no phase claims it.
+
+    The 2026-08-22 shadow mining found the same (task, state) legitimately maps to `observe` on
+    one crank and `click` on the next, because the verb is decided by the RUNG being worked, not
+    by the page (verify_identity looks; enter_apply clicks). The phase is that context, carried
+    on the Bundle. Consulted BEFORE the form-shape guess: a ladder's declaration of what the turn
+    is beats an inference from what happens to be on screen.
+    """
+    if bundle.phase in _OBSERVE_PHASES:
+        return (Intent.OBSERVE.value, {}, PREDICTION_CONFIDENCE_PHASE,
+                f"the {bundle.phase} rung is due — a consuming look, not an act",
+                ("phase",))
+    if bundle.phase in _ENTER_PHASES:
+        # The control that ENTERS: the apply lexicon first (posting pages render "Apply now",
+        # which the advance lexicon deliberately cannot see), the advance lexicon second. Lazy
+        # import for the same reason `advance_control` lazily imports `apply_recipe`: this module
+        # must stay loadable without the registry-touching layers.
+        try:
+            from controller.orientation import apply_control
+            control = apply_control(tuple(bundle.ax_identities or ()))
+        except Exception:  # noqa: BLE001 — the rail must never fail to answer because of an import
+            control = ""
+        control = control or advance_control(bundle.ax_identities)
+        why = (f"the {bundle.phase} rung is due — the turn that clicks into the application"
+               + (f", and {control!r} is the entering control on the page" if control
+                  else "; no entering control is visible yet, but the verb this turn takes is a "
+                       "click"))
+        return (Intent.CLICK.value, {"control": control} if control else {},
+                PREDICTION_CONFIDENCE_PHASE, why, ("phase", "ax_identities"))
+    return None
 
 
 def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, ...]]:
@@ -79,6 +127,10 @@ def local_prediction(bundle: Bundle) -> tuple[str, dict, float, str, tuple[str, 
     It guesses from FORM SHAPE only, never from meaning. It will not invent an answer value: the
     `answer` axis belongs to `resolve_answer` and, past that, to the human.
     """
+    phased = phase_prediction(bundle)
+    if phased is not None:
+        return phased
+
     unanswered = [u for u in bundle.unanswered if u.get("field")]
     if unanswered:
         first = unanswered[0]
@@ -216,7 +268,9 @@ def _handup(rung: str, axis: str, rationale: str, bundle: Bundle,
     # A landing page is the one case where something better than form shape is available: which
     # SITE is this, and where is Apply. Tried first because on the deep end there is usually no
     # form to read shape from yet, so the shape guess would return `observe` and teach nothing.
-    if orient is not None:
+    # UNLESS a ladder phase claims the turn: orientation always proposes the Apply click, which
+    # is exactly wrong mid-look (the 2026-08-22 finding) — the phase rail answers those turns.
+    if orient is not None and phase_prediction(bundle) is None:
         oriented = orient(bundle)
         if oriented is not None:
             return Decision(intent=oriented.intent, params=oriented.params,
