@@ -10254,6 +10254,75 @@ reads it as a prediction rather than rediscovering it as a surprise.
 `session_control._RUNG_INTENT`'s keys, and an unmapped rung falls through by design — so the two
 vocabularies can drift apart silently. Pin them from the `session_control` side when the wire lands.
 
+## 2026-08-22 (later still) — the wire: the shadow finally sees whose turn it is, and on what page
+
+The two-line follow-up the mining entry parked. `_shadow_the_crank` now passes **`phase=rung.id`**
+and a **`page_text`** built from the observation's AX names — the same join
+`_state_from_observation` already used, so the shadow names the screen the way the crank does
+instead of a worse way. A scoped, named exception to `session_control.py`'s ownership this round,
+landed after verify-leg merged, per the seam rulings.
+
+*Verified before and after on a real Workday shape rather than asserted:*
+
+| | state the bundle names | prediction |
+|---|---|---|
+| before the wire | `workday_job_posting` (URL only) | `observe` |
+| after, `phase=verify_identity` | `workday_my_information` | `observe` |
+| after, `phase=enter_apply` | `workday_my_information` | `click "apply now"` |
+
+The bottom two rows are the whole point: **one page, two phases, two different correct verbs** —
+the thing the Bundle could not express yesterday.
+
+**FOLLOW-UP 4 IS IN, AND IT IS THE TEST THAT MATTERS MOST HERE.**
+`test_the_phase_vocabularies_agree_with_the_rung_intent_table` pins `_OBSERVE_PHASES`/
+`_ENTER_PHASES` against `session_control._RUNG_INTENT` **from the session_control side**, both
+directions (every mapped rung is in the matching set; nothing sits in a set the crank never
+journals), with `submit` asserted as the deliberate exception — `click` in `_RUNG_INTENT`, in
+NEITHER phase set, because the rail may never reach for the irreversible control. Without this the
+two vocabularies drift **silently**: an unmapped rung falls through the rail by design, so a drift
+does not fail, it just quietly stops improving agreement on whichever rung was dropped.
+
+**AND THE OTHER NEW TEST EARNED ITS KEEP INSIDE ONE SESSION.** A stray `cp` copied main's
+unmodified `session_control.py` over the worktree's wired copy — the wire was silently gone, and
+the seam swallows exceptions by design (`except Exception: pass`, correctly: measuring ourselves
+must not cost the operator a step). Nothing would have failed; the commit would have shipped a
+LEARNINGS entry describing a wire that was not there.
+`test_the_shadow_bundle_carries_the_phase_and_the_page_text` caught it, because it asserts on the
+bundle the seam **actually builds** rather than on the source text. *The general rule this is a
+case of: a seam that swallows its own errors needs a test that observes its OUTPUT, since by
+construction it will never raise to tell you.*
+
+**THE FALSIFIER, RECORDED BEFORE THE FRESH ROWS ARRIVE** (§13 — stated first, so it is a
+prediction and not a rationalisation later). The phase rail sits **below the program rung**:
+`decide()` consults a compiled `IntentProgram` first, and only reaches `local_prediction` when
+there is no program or the guard misses. So on a state that holds a compiled *click* program, an
+**observe-phase turn still gets the program's click at confidence 1.0**, and the
+click-when-teacher-observed class can reappear — on exactly the states the flywheel has taught
+most. **What to look for:** fresh `wrong_intent` rows whose `proposed_rung` is `recipe` rather
+than `teacher`. Yesterday's 119 were *all* `teacher`, so the rung field cleanly separates the two
+mechanisms. If those appear, it is a phase-conditioned program-gating question (should a program
+be scoped to the phases it was compiled under?), **not** a rail defect — and note the 18 programs
+recompiled by the labeling pass (5c1f323) make this MORE likely, not less.
+
+**THE GATE THE FRESH ROWS WILL BE READ AGAINST — decided, not open.** Following the finding that
+`loose` match is intent-only for every click decision, the ruling is **two bars, both required**:
+`loose` stays the untouched headline (historical comparability with the 08-06 and 08-22 numbers),
+and **`exact` must also clear its own bar — starting at ≥0.85 over the same n ≥ 25** — as a named,
+operator-tunable constant, with both bars surfaced in `/api/controller/summary` and the scorecard
+so no screen can show gate-passing on `loose` alone. Rejected: redefining `loose` to fall back to
+`params["control"]` (silently changes the metric and invalidates every prior number), and
+documenting the blind spot without gating (a documented blind spot in a gate is still a blind spot
+the week someone promotes in a hurry). *Implementation is its own chipped task, not this commit.*
+
+*The pairing is the honest part:* the backtest's `1.000/67` being **insensitive** to the
+`ax_identities` reconstruction makes it more credible as an **intent-level** result and exactly as
+blind on **control choice** as the gate is. The `exact` bar is what makes quoting the two together
+honest.
+
+**FROM HERE THE CLOCK RUNS ON FRESH ROWS ONLY.** Every historical pair carries `phase=None`; live
+agreement stayed **0.5952/294** through all of this, correctly. The next drive is the first one
+whose rows can score the rail at all.
+
 ## 2026-08-22 (third) — the tracker gets its reader: inbox rows become outcome events
 
 The audit's bottleneck 3 closed at the seam the models drew on day one. Built: `inbox_matcher.py`
