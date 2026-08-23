@@ -8602,9 +8602,12 @@ async def close_out(session_id: int, body: CloseOutBody,
     # The drive-end crank (tandem contract): the mailbox is read once per sitting through the
     # SAME sweep the cockpit button turns, so outcomes land without anyone remembering to press
     # it. Best-effort by construction — no Gmail tab, a signed-out profile, or an unreachable
-    # browser reports `{ok: false, blocked: …}` in the close-out account, never a raise.
+    # browser reports `{ok: false, blocked: …}` in the close-out account, never a raise. The
+    # browser is DISCOVERED, same as the verify leg one screen up: the google profile routinely
+    # runs on a provisioned port, and a hardcoded 9222 here would blocked-out every close-out
+    # the moment it does (review catch, three finders independently).
     import inbox_sweep
-    inbox = await inbox_sweep.sweep_live(db)
+    inbox = await inbox_sweep.sweep_live(db, browser_url=_gmail_browser_url(db))
 
     return {"ok": True, "closed": True, "session_id": session_id,
             "inbox_sweep": inbox,

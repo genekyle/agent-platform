@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 import inbox_sweep
@@ -31,7 +31,10 @@ class SweepBody(StrictModel):
     #: Rows from any inbox reader, for offline runs and tests. When omitted, the live Gmail tab
     #: is read through the capture server — same knobs as the fetch_login_code errand.
     rows: Optional[list[dict[str, Any]]] = None
-    browser_url: str = "http://127.0.0.1:9222"
+    #: None means DISCOVER: the signed-in google-profile browser usually runs on a per-session
+    #: provisioned port, and `_gmail_browser_url` (the same seam the verify leg reads) knows
+    #: which. An explicit value still wins, for tests and unusual setups.
+    browser_url: Optional[str] = None
     tab_id: Optional[str] = None
     tab_url: str = "mail.google.com"
 
@@ -50,15 +53,22 @@ class ResolveBody(StrictModel):
 @router.post("/api/career_search/inbox/sweep")
 async def sweep_endpoint(body: SweepBody, db: Session = Depends(get_db)):
     """Run the matcher over the inbox (live tab unless rows are supplied) and write what is safe
-    to write. See `inbox_sweep.sweep` for the record / needs_review / ignored contract."""
-    rows = body.rows
-    if rows is None:
-        read = await inbox_sweep.read_live_inbox(browser_url=body.browser_url,
-                                                 tab_id=body.tab_id, tab_url=body.tab_url)
-        if not read.get("ok"):
-            return read
-        rows = read["rows"]
-    return inbox_sweep.sweep(db, rows)
+    to write. See `inbox_sweep.sweep` for the record / needs_review / ignored contract.
+
+    The live path IS `sweep_live` — the same call the drive-end hook makes — so the button and
+    the hook cannot drift (the drift the inbox_sweep docstring promises against; this endpoint
+    briefly re-implemented it and the review caught the copy)."""
+    if body.rows is not None:
+        return inbox_sweep.sweep(db, body.rows)
+    if body.browser_url is None:
+        # Function-local for the same reason session_control imports inbox_sweep at the call
+        # site: the two routers otherwise stay independent.
+        from routers.session_control import _gmail_browser_url
+        browser_url = _gmail_browser_url(db)
+    else:
+        browser_url = body.browser_url
+    return await inbox_sweep.sweep_live(db, browser_url=browser_url,
+                                        tab_id=body.tab_id, tab_url=body.tab_url)
 
 
 @router.get("/api/career_search/inbox")
@@ -70,9 +80,11 @@ def list_ledger(status: Optional[str] = Query(None), limit: int = Query(100, ge=
     stmt = stmt.where(InboxEmail.status == status) if status \
         else stmt.where(InboxEmail.status != "ignored")
     rows = list(db.scalars(stmt.limit(limit)).all())
-    pending = db.scalar(select(InboxEmail.id).where(InboxEmail.status == "needs_review")
-                        .limit(1)) is not None
-    return {"total": len(rows), "has_pending": pending,
+    # The TRUE queue depth, not the page length — the badge reads this, and a page-capped count
+    # would understate the backlog exactly when it matters (review finding: `total` is post-limit).
+    pending = db.scalar(select(func.count()).select_from(InboxEmail)
+                        .where(InboxEmail.status == "needs_review")) or 0
+    return {"total": len(rows), "pending": pending, "has_pending": pending > 0,
             "emails": [inbox_sweep.ledger_dict(r) for r in rows]}
 
 

@@ -137,7 +137,10 @@ def classify_sender(from_address: str) -> Optional[str]:
     if "@" not in addr:
         return None
     domain = addr.rsplit("@", 1)[1].split()[0].strip()
-    if not domain:
+    # A dotless "domain" is not a domain — and without this guard the reverse suffix leg below
+    # attributes bare TLDs (measured: x@com → workday via myworkdayjobs.com, x@io → greenhouse),
+    # which blocks the matcher's ignore branch and persists personal mail into review.
+    if not domain or "." not in domain:
         return None
     for ats in ats_registry.ATS_PLATFORMS:
         row = domains_for(ats["ats_id"])

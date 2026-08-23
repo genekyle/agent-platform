@@ -10397,3 +10397,51 @@ a raise. And the hook's first consequence was the FOURTH instance of conftest's 
 `close_out` became a network caller, so its tests would have read the operator's REAL inbox into
 a throwaway test DB the moment a Gmail browser was up — `settings.capture_server_url` is now
 pinned to the discard port for the whole suite, with the blocked path as the honest fixture.
+
+## 2026-08-22 (fourth) — the eight-angle review of the inbox lane: ten findings, ten fixes
+
+A full multi-angle review of the merged matcher lane (line-scan, removed-behavior with empirical
+parity runs, cross-file tracing, reuse/simplification/efficiency/altitude/conventions), verified
+finding-by-finding, then fixed. What it caught that a green suite did not:
+
+**THE SWEEP WAS AIMED AT A CONVENTION, NOT A DISCOVERY.** Three finders independently: the
+drive-end hook and the cockpit endpoint hardcoded browser 9222 while `_gmail_browser_url(db)` —
+the seam the verify leg already reads, in the SAME file — knows the provisioned port the google
+profile actually runs on. One provisioned port later, every sweep would have reported blocked
+forever; and the close-out UI never rendered the sweep's account, so nobody would have seen it.
+Both fixed: discovery at both call sites, and the close-out card now prints "Inbox swept: N
+recorded…" or the blocked reason. *A silently-dead crank looks identical to an empty mailbox —
+every automatic background job needs its account rendered somewhere a human looks.*
+
+**CONFIRMATION BOILERPLATE CONTAINS CONDITIONAL REJECTIONS.** "IF you are not selected for an
+interview, your resume will be kept on file" fired the strong `not selected for` formula and
+auto-wrote a terminal rejection on application day. The strong lists now hold only DEFINITE
+past-tense formulas; conditional-capable phrasing ("not selected for", "with other applicants",
+"for an interview") demoted to weak. The first attempted fix — demote any rejection that co-occurs
+with confirmation phrasing — was WRONG and the test caught it: genuine rejections open with
+"thank you for your application", and that rule would have sent the most common real rejection
+format to review. Precision lives in the phrase tier, not in cross-family vetoes.
+
+**REVIEW NEEDS SOMETHING A HUMAN CAN ACT ON.** The ignore branch required `not ats_id` — but
+engine domains classify (indeed.com sends daily alert digests), so the ignore branch was
+UNREACHABLE for engine mail and every digest became a persisted review row; and bare application
+words put a friend's "how's the job hunt?" into review with content stored, against the
+fingerprint-only rule. New boundary: review iff a matched application OR a recognised event
+phrase; everything else is a fingerprint-only stub. The honest tradeoff is stated in the code: a
+real outcome mail naming neither a known company nor any known phrasing is one we could not have
+filed anyway.
+
+**THE REST, BRIEFLY.** Bare-TLD senders classified (x@com → workday via the reverse suffix leg;
+dot-guard added in classify_sender). Two concurrent sweeps raced to a unique-index 500 (IntegrityError
+now rolls back into an honest "a concurrent sweep got there first"). `sweep_live` swallowed errors
+without rollback, leaving close_out's Session pending-rollback. Mint-on-confirm now floors
+`applied_at` at the mail's date and flips Job.status (days_to_response can no longer go negative).
+The sweep stamps its computed fingerprint into the row so replayed exports can't poison event
+evidence. `flow_witness` follows merge tombstones (apply_merge re-points applications, never
+flows). The queue panel is server-filtered so a pending row can't age out behind 100 resolved
+rows, and the badge reads a true `pending` count instead of a page length. The endpoint delegates
+to `sweep_live` instead of re-implementing it. Fingerprint membership is a batch IN() instead of
+loading the whole append-only history. Drive-end reads carry an 8s timeout so a wedged tab can't
+hold the close-out button for the CDP layer's 25s deadline. `_REVIEW_ONLY_KINDS` is now DERIVED
+from `EMPLOYER_RESPONSE_KINDS` (the hand copy had drifted: `offer` was missing — the one kind
+whose phrase family doesn't exist yet, which is exactly when the gate matters).

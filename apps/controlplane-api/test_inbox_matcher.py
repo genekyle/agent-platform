@@ -90,6 +90,11 @@ def test_sender_domains_are_suffix_anchored_not_substrings():
     assert im.sender_ats("hr@deadp.com") is None
     assert im.sender_ats("x@badp.com") is None
     assert im.sender_ats("no-reply@notindeed.com") is None
+    # And the REVERSE suffix leg must not fire on bare TLDs (measured: x@com attributed to
+    # workday via myworkdayjobs.com before the dot guard) — the same privacy hole from the
+    # other direction.
+    assert im.sender_ats("x@com") is None
+    assert im.sender_ats("x@io") is None
 
 
 def test_sender_address_splits_reader_format():
@@ -108,6 +113,27 @@ def test_rejection_outranks_its_polite_opener():
         "Your application to Beth Israel Lahey Health",
         "Thank you for your interest. We regret to inform you that we will not be moving forward.")
     assert (kind, strong) == ("rejection", True)
+
+
+def test_conditional_boilerplate_never_auto_rejects(corpus):
+    # Real confirmation mail: "IF you are not selected for an interview, your resume will be
+    # kept on file." The conditional phrases live in the weak tier, so this classifies as the
+    # confirmation it IS — never an unattended terminal rejection (review finding 2).
+    d = im.decide(_row("no-reply@indeedemail.com Indeed Apply",
+                       "Application submitted: Sales Revenue Analyst - Boston at Datadog",
+                       "Thank you for applying. If you are not selected for an interview, "
+                       "your resume will be kept on file."),
+                  _apps(corpus))
+    assert d.action == im.RECORD
+    assert d.kind == "confirmation"
+
+    # And "not selected for" standing alone still prefills a rejection review — weak, not gone.
+    d2 = im.decide(_row("talent@gardnermuseum.org Isabella Stewart Gardner Museum",
+                        "Isabella Stewart Gardner Museum — your application",
+                        "You were not selected for this position."),
+                   _apps(corpus))
+    assert d2.action == im.REVIEW
+    assert d2.kind == "rejection"
 
 
 def test_unfortunately_alone_is_weak():
@@ -187,6 +213,28 @@ def test_generic_credit_union_mail_does_not_claim_metro(corpus):
 
 def test_personal_mail_is_ignored(corpus):
     d = im.decide(_row("mom@gmail.com Mom", "Dinner Sunday?", "Are you coming home this weekend?"),
+                  _apps(corpus))
+    assert d.action == im.IGNORE
+
+
+def test_engine_alert_digests_are_ignored_not_reviewed(corpus):
+    # An ATS/engine sender alone is not reviewable: Indeed's daily job-alert digest has no event
+    # phrasing and names no applied-to company, and routing it to review would persist its
+    # content and bury the queue under a row a day (review finding 3 — the ignore branch was
+    # unreachable for engine mail).
+    d = im.decide(_row("alert@indeed.com Indeed",
+                       "10 new Data Analyst opportunities in Boston, MA"),
+                  _apps(corpus))
+    assert d.action == im.IGNORE
+    assert d.ats_id == "indeed_quick_apply"  # attribution kept for the reasons trail
+
+
+def test_personal_mail_with_job_words_stays_fingerprint_only(corpus):
+    # "How's the job hunt?" from a friend used to trip the application-words net into review,
+    # persisting its content — the §4 case the InboxEmail docstring promises to keep
+    # fingerprint-only.
+    d = im.decide(_row("friend@gmail.com Alex", "How's the job hunt going?",
+                       "Thinking of you — let's grab coffee this weekend."),
                   _apps(corpus))
     assert d.action == im.IGNORE
 
@@ -291,6 +339,93 @@ def test_review_dismiss_writes_nothing(corpus):
     assert res.status_code == 200 and res.json()["email"]["status"] == "dismissed"
     assert not list(corpus.scalars(select(ApplicationEvent)
                                    .where(ApplicationEvent.source == "gmail")).all())
+
+
+def test_confirm_against_never_applied_job_backdates_the_application(corpus):
+    # Confirming a reply against a job with no Application mints one — with applied_at floored
+    # at the MAIL's date (else days_to_response goes negative) and the job's triage state
+    # flipped to applied (else the Jobs and Applied tabs give two answers). Review finding 5.
+    corpus.add(Job(job_key="job_fresh", company="Woodgrain",
+                   company_norm=jd.normalize_company("Woodgrain"),
+                   title="Regional Pricing Analyst", source_platforms=["indeed"], status="new"))
+    corpus.commit()
+    inbox_sweep.sweep(corpus, [
+        _row("careers@woodgrain.com Woodgrain", "Woodgrain — an update",
+             "Unfortunately we have decided to go another direction.",
+             received="2026-08-19T09:00:00Z")])
+    row = client.get("/api/career_search/inbox", params={"status": "needs_review"}).json()["emails"][0]
+    res = client.post(f"/api/career_search/inbox/{row['id']}/resolve",
+                      json={"action": "confirm", "job_key": "job_fresh", "kind": "rejection"})
+    assert res.status_code == 200
+    app_out = res.json()["application"]
+    # startswith: sqlite round-trips the stored datetime naive, so the offset suffix varies.
+    assert (app_out["applied_at"] or "").startswith("2026-08-19T09:00:00")
+    assert (app_out["days_to_response"] or 0) >= 0
+    assert corpus.get(Job, "job_fresh").status == "applied"
+
+
+def test_sweep_stamps_its_own_fingerprint_into_evidence(corpus):
+    # A caller-supplied row carrying a foreign "fingerprint" key (a replayed sweep export) must
+    # not leak into the event evidence — the ledger↔event audit join runs on the computed
+    # identity. Review finding 9.
+    row = _row("no-reply@indeedemail.com Indeed Apply",
+               "Application submitted: Sales Revenue Analyst - Boston at Datadog")
+    out = inbox_sweep.sweep(corpus, [{**row, "fingerprint": "bogus-foreign-value"}])
+    ledger_fp = out["recorded"][0]["fingerprint"]
+    ev = corpus.scalar(select(ApplicationEvent).where(ApplicationEvent.source == "gmail"))
+    assert ev.evidence["fingerprint"] == ledger_fp
+    assert ledger_fp != "bogus-foreign-value"
+
+
+def test_flow_witness_survives_a_merge(corpus):
+    # apply_merge re-points applications but not flows: the drive's open flow stays keyed to the
+    # folded job, and the confirmation recording on the kept job is its witness. Review finding.
+    corpus.add(Job(job_key="job_datadog_dupe", company="Datadog",
+                   company_norm=jd.normalize_company("Datadog"), title="Sales Revenue Analyst",
+                   source_platforms=["linkedin"], merged_into_key="job_datadog"))
+    corpus.add(AtsFlow(instance_key="datadog:2", ats_id="indeed_quick_apply",
+                       job_key="job_datadog_dupe", terminal=None))
+    corpus.commit()
+    out = inbox_sweep.sweep(corpus, [
+        _row("no-reply@indeedemail.com Indeed Apply",
+             "Application submitted: Sales Revenue Analyst - Boston at Datadog")])
+    assert out["recorded"][0]["flow_terminal_witness"], \
+        "the folded job's open flow should still be named as gaining a witness"
+
+
+def test_pending_is_the_true_count_not_the_page_length(corpus):
+    inbox_sweep.sweep(corpus, [
+        _row("recruiting@datadoghq.com Datadog", "Datadog — schedule an interview",
+             "We would like to invite you to interview."),
+        _row("talent@gardnermuseum.org Isabella Stewart Gardner Museum",
+             "Your application — Isabella Stewart Gardner Museum",
+             "Unfortunately we have decided to go another direction.")])
+    d = client.get("/api/career_search/inbox",
+                   params={"status": "needs_review", "limit": 1}).json()
+    assert d["total"] == 1        # the page
+    assert d["pending"] == 2      # the truth the badge reads
+
+
+def test_sweep_live_rolls_back_before_reporting(corpus, monkeypatch):
+    # A swallowed flush error must not leave the caller's Session pending-rollback — close_out
+    # keeps using it to build its own response. Review finding 4.
+    import asyncio
+
+    async def fake_read(**kwargs):
+        return {"ok": True, "rows": [_row("no-reply@indeedemail.com Indeed Apply",
+                                          "Application submitted at Datadog")]}
+
+    def boom(db, rows):
+        db.add(InboxEmail(fingerprint="x" * 24, status="needs_review"))
+        db.flush()
+        raise RuntimeError("mid-sweep failure")
+
+    monkeypatch.setattr(inbox_sweep, "read_live_inbox", fake_read)
+    monkeypatch.setattr(inbox_sweep, "sweep", boom)
+    out = asyncio.run(inbox_sweep.sweep_live(corpus))
+    assert out["ok"] is False and "mid-sweep failure" in out["blocked"]
+    # The session is clean: this query would raise PendingRollbackError without the rollback.
+    assert corpus.scalar(select(Application).where(Application.job_key == "job_datadog"))
 
 
 def test_confirm_with_an_unknown_job_key_is_refused(corpus):

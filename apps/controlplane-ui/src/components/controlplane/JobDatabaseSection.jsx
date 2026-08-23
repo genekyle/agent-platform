@@ -54,8 +54,9 @@ export function JobDatabaseSection({ domain }) {
     getJSON("/api/career_search/overview").then(setOverview).catch((e) => setErr(e.message));
   }, []);
   const loadInboxPending = useCallback(() => {
-    getJSON("/api/career_search/inbox?status=needs_review")
-      .then((d) => setInboxPending(d.total || 0)).catch(() => {});
+    // `pending` is the server's true count; `total` is only the returned page's length.
+    getJSON("/api/career_search/inbox?status=needs_review&limit=1")
+      .then((d) => setInboxPending(d.pending ?? d.total ?? 0)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -511,8 +512,20 @@ function InboxQueue({ vocab, onChange }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(null);
 
+  // Two fetches on purpose: the queue is SERVER-filtered so a pending row can never age out of
+  // the panel behind 100 newer resolved rows (the badge counted rows the panel could not show —
+  // review catch); the unfiltered page only feeds "recently resolved".
   const load = useCallback(() => {
-    getJSON("/api/career_search/inbox").then(setData).catch((e) => setErr(e.message));
+    Promise.all([
+      getJSON("/api/career_search/inbox?status=needs_review"),
+      getJSON("/api/career_search/inbox"),
+    ])
+      .then(([pend, all]) => setData({
+        queue: pend.emails || [],
+        pending: pend.pending ?? (pend.emails || []).length,
+        done: (all.emails || []).filter((e) => e.status !== "needs_review"),
+      }))
+      .catch((e) => setErr(e.message));
   }, []);
   useEffect(load, [load]);
 
@@ -533,13 +546,13 @@ function InboxQueue({ vocab, onChange }) {
       .finally(() => setBusy(null));
   };
 
-  const queue = (data?.emails || []).filter((e) => e.status === "needs_review");
-  const done = (data?.emails || []).filter((e) => e.status !== "needs_review");
+  const queue = data?.queue || [];
+  const done = data?.done || [];
 
   return (
     <div className="panel" style={{ marginTop: 14 }}>
       <div className="panel-header">
-        <div>Gmail inbox <span className="muted">({queue.length} waiting)</span></div>
+        <div>Gmail inbox <span className="muted">({data?.pending ?? queue.length} waiting)</span></div>
         <button className="btn btn-sm btn-primary" disabled={busy === "sweep"} onClick={runSweep}>
           {busy === "sweep" ? "Sweeping…" : "Sweep inbox"}
         </button>

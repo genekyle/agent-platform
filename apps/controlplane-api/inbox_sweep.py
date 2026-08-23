@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import inbox_matcher
@@ -47,8 +48,14 @@ def write_event(db: Session, job_key: str, kind: str, row: dict[str, Any],
         raise ValueError(f"no such job: {job_key!r} — events attach to jobs the ledger knows")
     app = db.scalar(select(Application).where(Application.job_key == alive))
     if app is None:
-        # An employer writing about an application is proof one exists (same rule as add_event).
-        app = ensure_application(db, alive)
+        # An employer writing about an application is proof one exists — the WHOLE add_event
+        # rule, not half of it: the application predates the mail (so `applied_at` floors at the
+        # mail's own date, or days_to_response goes negative), and the job's triage state must
+        # agree that an application exists (or the Jobs and Applied tabs give two answers).
+        app = ensure_application(db, alive, applied_at=inbox_matcher.parse_received_at(row))
+        job = db.get(Job, alive)
+        if job is not None:
+            job.status = "applied"
     ev = record_event(db, app, kind=kind, source="gmail",
                      summary=str(row.get("subject") or "")[:500],
                      occurred_at=inbox_matcher.parse_received_at(row),
@@ -59,8 +66,14 @@ def write_event(db: Session, job_key: str, kind: str, row: dict[str, Any],
 def flow_witness(db: Session, job_key: str) -> list[int]:
     """ats_flows for this job that never recorded a terminal — the confirmation mail is their
     second, durable witness. Surfaced, never written: `terminal` describes what the DRIVE did,
-    and an email cannot retroactively change that."""
-    return list(db.scalars(select(AtsFlow.id).where(AtsFlow.job_key == job_key,
+    and an email cannot retroactively change that.
+
+    Tombstoned keys are included because `apply_merge` re-points applications but not flows: the
+    drive's flow for job X stays keyed X after X folds into Y, and the confirmation recording on
+    Y is a witness for exactly that flow."""
+    keys = [job_key] + list(db.scalars(select(Job.job_key)
+                                       .where(Job.merged_into_key == job_key)).all())
+    return list(db.scalars(select(AtsFlow.id).where(AtsFlow.job_key.in_(keys),
                                                     AtsFlow.terminal.is_(None))).all())
 
 
@@ -80,13 +93,15 @@ def ledger_dict(row: InboxEmail) -> dict[str, Any]:
 
 async def read_live_inbox(browser_url: str = "http://127.0.0.1:9222",
                           tab_id: Optional[str] = None,
-                          tab_url: str = "mail.google.com") -> dict[str, Any]:
+                          tab_url: str = "mail.google.com",
+                          timeout: float = 30.0) -> dict[str, Any]:
     """The live Gmail tab through the capture server, with the three blocked states named.
     Returns `{ok: True, rows: […]}` or `{ok: False, blocked: reason}`."""
     from routers.errands import _capture_post  # the one seam for capture-server POSTs
 
     read = await _capture_post("/read_inbox", {"browser_url": browser_url,
-                                               "tab_id": tab_id, "tab_url": tab_url})
+                                               "tab_id": tab_id, "tab_url": tab_url},
+                               timeout=timeout)
     if not read.get("ok"):
         return {"ok": False, "blocked": f"could not read the inbox: "
                                         f"{read.get('detail') or 'unknown error'}"}
@@ -101,18 +116,28 @@ async def read_live_inbox(browser_url: str = "http://127.0.0.1:9222",
 
 async def sweep_live(db: Session, browser_url: str = "http://127.0.0.1:9222",
                      tab_id: Optional[str] = None,
-                     tab_url: str = "mail.google.com") -> dict[str, Any]:
+                     tab_url: str = "mail.google.com",
+                     timeout: float = 8.0) -> dict[str, Any]:
     """The drive-end hook: read the live Gmail tab and sweep it, in one call.
 
     NEVER raises — this rides the close-out epilogue, and a cleanup's job is to report what
     happened, not to 500 halfway through it. An unreachable browser, signed-out profile, or
-    unknown layout comes back as `{ok: False, blocked: …}`, same as the endpoint."""
+    unknown layout comes back as `{ok: False, blocked: …}`, same as the endpoint. The timeout is
+    deliberately short: a wedged tab must not hold the operator's close-out button for the CDP
+    layer's own 25s deadline. And the except ROLLS BACK before reporting — a swallowed flush
+    error would otherwise leave the caller's Session pending-rollback, turning the close-out's
+    own response into a 500 after everything else succeeded."""
     try:
-        read = await read_live_inbox(browser_url=browser_url, tab_id=tab_id, tab_url=tab_url)
+        read = await read_live_inbox(browser_url=browser_url, tab_id=tab_id, tab_url=tab_url,
+                                     timeout=timeout)
         if not read.get("ok"):
             return read
         return sweep(db, read["rows"])
     except Exception as exc:  # noqa: BLE001 — see docstring
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 — reporting still beats raising
+            pass
         return {"ok": False, "blocked": f"{type(exc).__name__}: {exc}"}
 
 
@@ -125,7 +150,11 @@ def sweep(db: Session, rows: list[dict[str, Any]]) -> dict[str, Any]:
     deliberately not; see the InboxEmail docstring).
     """
     applications = applications_for_matching(db)
-    known = set(db.scalars(select(InboxEmail.fingerprint)).all())
+    # Membership for THIS page only, not the whole append-only history: the ledger grows for as
+    # long as the mailbox does, and the unique index answers a batch IN() at any size.
+    batch_fps = {inbox_matcher.fingerprint(row) for row in rows}
+    known = set(db.scalars(select(InboxEmail.fingerprint)
+                           .where(InboxEmail.fingerprint.in_(batch_fps))).all()) if batch_fps else set()
 
     recorded: list[dict[str, Any]] = []
     review: list[dict[str, Any]] = []
@@ -137,6 +166,9 @@ def sweep(db: Session, rows: list[dict[str, Any]]) -> dict[str, Any]:
             skipped += 1
             continue
         known.add(fp)
+        # The computed identity rides the row from here on, so evidence can never cite a foreign
+        # fingerprint a caller-supplied row happened to carry (a replayed sweep export does).
+        row = {**row, "fingerprint": fp}
 
         decision = inbox_matcher.decide(row, applications)
         address, name = inbox_matcher.sender_address(str(row.get("sender") or ""))
@@ -176,6 +208,15 @@ def sweep(db: Session, rows: list[dict[str, Any]]) -> dict[str, Any]:
             db.flush()
             review.append(ledger_dict(ledger))
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two cranks at once — the cockpit button racing the drive-end hook. Both snapshot the
+        # known fingerprints before either commits, so the loser trips the unique index here.
+        # The winner recorded these exact rows; losing is a no-op, not an error worth a 500.
+        db.rollback()
+        return {"ok": False,
+                "blocked": "a concurrent sweep recorded these mails first — nothing was lost; "
+                           "re-run to pick up anything newer"}
     return {"ok": True, "read": len(rows), "skipped_known": skipped, "ignored": ignored,
             "recorded": recorded, "needs_review": review}

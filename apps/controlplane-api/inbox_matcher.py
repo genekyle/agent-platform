@@ -36,12 +36,12 @@ dedup matcher is pinned to.
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import job_dedup
+from application_events import EMPLOYER_RESPONSE_KINDS
 
 # --------------------------------------------------------------------------------------
 # Sender → ATS
@@ -86,13 +86,13 @@ _KIND_PHRASES: list[tuple[str, list[str]]] = [
     ("rejection", [
         "will not be moving forward", "not be moving forward", "not moving forward",
         "move forward with other candidates", "moving forward with other candidates",
-        "pursue other candidates", "selected another candidate", "with other applicants",
+        "pursue other candidates", "selected another candidate",
         "no longer under consideration", "regret to inform", "position has been filled",
-        "decided not to proceed", "not selected for",
+        "decided not to proceed",
     ]),
     ("interview_invite", [
         "schedule an interview", "interview invitation", "invite you to interview",
-        "invited to interview", "for an interview", "schedule your interview",
+        "invited to interview", "schedule your interview",
     ]),
     ("assessment", [
         "assessment", "coding challenge", "take-home", "hackerrank", "codility",
@@ -118,23 +118,26 @@ _KIND_PHRASES: list[tuple[str, list[str]]] = [
 #: prefill the review row, never enough to bet the timeline on. "Unfortunately" is the canonical
 #: member: in application mail it is almost always a rejection, and "almost" is the point.
 _WEAK_KIND_PHRASES: list[tuple[str, list[str]]] = [
-    ("rejection", ["unfortunately", "other candidates", "wish you the best", "not a match"]),
+    # "not selected for" / "with other applicants" were strong until the review caught the
+    # conditional future: "IF you are not selected for an interview, your resume will be kept on
+    # file" is CONFIRMATION boilerplate, and a phrase that fires inside it must never write a
+    # terminal unattended.
+    ("rejection", ["unfortunately", "other candidates", "wish you the best", "not a match",
+                   "not selected for", "with other applicants"]),
+    # "for an interview" belongs down here with "interview": confirmation boilerplate uses it
+    # conditionally ("IF you are selected for an interview…"), same trap as "not selected for".
     ("interview_invite", ["interview", "your availability", "schedule a time", "schedule time"]),
     ("recruiter_contact", ["reached out", "connect with you", "your background"]),
     ("confirmation", ["your application to", "you applied", "your recent application"]),
 ]
 
-#: Kinds a matcher may propose but never write unattended — the employer-response tier that every
-#: response rate is computed from, plus anything a human should own.
-_REVIEW_ONLY_KINDS = frozenset({
-    "interview_invite", "assessment", "screening_invite", "recruiter_contact",
-})
+#: Kinds a matcher may propose but never write unattended — DERIVED from the employer-response
+#: tier the response rate is computed from, so a kind added there inherits the human gate
+#: automatically (the hand-copied set had already drifted: it was missing `offer`). Rejection is
+#: the one deliberate exception: its strong formulas are distinctive automated boilerplate, argued
+#: in the module docstring.
+_REVIEW_ONLY_KINDS = frozenset(EMPLOYER_RESPONSE_KINDS - {"rejection"})
 
-#: Words that say "this mail is about a job application" even when no kind phrase lands — used
-#: only to decide review-vs-ignore for mail from an unrecognised sender.
-_APPLICATION_WORDS = re.compile(
-    r"\b(application|applied|candidate|interview|recruiter|hiring|job|position|requisition)\b",
-    re.IGNORECASE)
 
 
 def classify_kind(subject: str, snippet: str) -> tuple[Optional[str], bool, str]:
@@ -142,6 +145,11 @@ def classify_kind(subject: str, snippet: str) -> tuple[Optional[str], bool, str]
 
     `strong` means the phrase belongs to the distinctive family — eligible for unattended writing
     if the kind itself is (rejection/viewed/confirmation). A weak phrase only prefills review.
+
+    The strong lists hold only DEFINITE, past-tense formulas on purpose: phrasing that can appear
+    conditionally inside confirmation boilerplate ("IF you are not selected for an interview,
+    your resume will be kept on file") lives in the weak tier, because the family order tries
+    rejection first and a conditional future must never win that race unattended.
     """
     hay = f"{subject} {snippet}".lower()
     for kind, phrases in _KIND_PHRASES:
@@ -267,10 +275,17 @@ def decide(row: dict[str, Any], applications: list[dict[str, Any]]) -> Decision:
     if kind:
         reasons.append(f"{'strong' if strong else 'weak'} {kind} phrasing: {phrase!r}")
 
-    # Nothing ties this mail to an application: not the sender, not a company, not the language.
-    if not ats_id and not candidates and not (kind or _APPLICATION_WORDS.search(f"{subject} {snippet}")):
-        return Decision(action=IGNORE, reasons=["no ATS sender, no company match, "
-                                                "no application language"])
+    # Review needs something a human can ACT on: an application it might belong to, or an event
+    # it might be. An ATS sender alone is neither — engine domains send daily job-alert digests,
+    # and routing those to review persists their content and buries the queue (the review that
+    # caught this measured the ignore branch as UNREACHABLE for engine mail). Same for bare
+    # application words in personal mail ("how's the job hunt?"): §4 says fingerprint only. The
+    # tradeoff is honest: a real outcome mail naming neither a known company nor any recognised
+    # phrasing is one we could not have filed anyway.
+    if not candidates and not kind:
+        reasons.append("no matched application and no event phrasing"
+                       + (" — ATS sender but likely an alert/digest" if ats_id else ""))
+        return Decision(action=IGNORE, ats_id=ats_id, reasons=reasons)
 
     unambiguous = len(candidates) == 1
     if unambiguous and kind and strong and kind not in _REVIEW_ONLY_KINDS:
