@@ -9949,3 +9949,66 @@ Both gaps are chipped as follow-up tasks.
 *Where the session stands:* page 1 — 15 picks, **1 submitted (Ocean Spray), 2 parked with
 mechanisms named (MAPFRE entry, WAHVE adoption), 12 queued.** Accounts held: Ocean Spray workday,
 MAPFRE successfactors, both signed in with credentials stored.
+
+## 2026-08-22 — the reflection audit: the flywheel turns, and its three bottlenecks measured
+
+A step-back session, all read-only. Fresh numbers so nobody re-derives them; each was measured
+today, offline, against the live corpus/journal/DB (server down — everything below is reproducible
+without it).
+
+**THE REFOCUS IS WORKING, MEASURED.** Transition corpus 59 → **432 rows** since 08-09, driven
+~daily. Metered API spend since 08-03: **$0.00** (usage log: last Anthropic call 08-03) — the
+teacher-first inversion holds; session-Claude has been the only teacher. Checkpoints exist since
+08-20 (perception_observer_v1 + state_transition_table_v1, incl. one self-supervision refit).
+Verdicts: 175 confirmed / 136 read_only / 68 mismatch / 53 unobserved. Flow ledger spans **11 ATS
+families**. Answer store: 78 active rows.
+
+**BOTTLENECK 1 — SHADOW AGREEMENT IS 59.5% OVER 294 PAIRS, AND THE MISS IS ONE AXIS.**
+`metrics.shadow_agreement(decision_journal.read_rows())` today: 0.595, n=294 (was 0.47 over 15 on
+08-06 — volume 20×, agreement +12.5pts). No scenario passes the ≥90%/≥25 gate; best with real n:
+`indeed:indeed_apply_questions` 0.80/15, `indeed_quick_apply:indeed_job_posting` 0.66/67,
+`workday:workday_job_posting` 0.59/61. The load-bearing fact: **106 of 119 disagreements are
+click↔observe** (70 shadow-clicked-teacher-observed, 36 the reverse; every wrong pair categorised
+`wrong_intent`). The shadow's failure is not WHERE — it is WHEN to act versus look: a calibration/
+rails question on one axis, not a perception rebuild. Mining those 106 journaled pairs (each with
+its screenshot) is the cheapest path to the first promotion.
+
+**BOTTLENECK 2 — THE LABEL QUEUE HOLDS 373 ROWS AND HAS NO SCREEN.** 17 teacher corrections ever,
+versus `GET /api/transitions/label_queue` reporting **remaining: 373** (mismatches first — the 68
+mismatch rows are the top of it, and mismatches are where recovery classes come from). The queue is
+**curl-only**: zero UI callers. Worse, the cockpit's Learning → Label tab reads the OTHER
+`/api/training/label_queue` (the old observation queue) — same name, different organ, and the wrong
+one has the screen. The flywheel is starved of labeling throughput, not of data.
+
+**BOTTLENECK 3 — THE PRODUCT IS BLIND AFTER SUBMIT.** `application_events` contains exactly one
+kind: `applied` (28 rows, one per application). 63 of 68 ats_flows have no terminal. 604 jobs known
+→ 28 applied → **0 outcomes recorded**. Nothing anywhere aggregates applications per week. The
+canonical DB was built to join on exactly this (`job_key` minted as "the key Gmail will join on",
+`ApplicationEvent.source="gmail"` already in the model) — the reader was never written.
+
+**AND THE GMAIL ERRAND IS FULLY BUILT WITH ZERO CALLERS.** `fetch_login_code` end to end —
+contract+resolver (`errands.py`), recipe (`gmail_recipe.py`), `POST /api/errands/fetch_login_code`,
+CDP inbox reader (`/read_inbox`, subject-line only, no read receipt), masking/audit, ~36 tests —
+and `session_control.apply_account`'s verify seam (~:4123) stops at `awaiting="operator_verify"`
+with operator text that literally names it: *"a Gmail errand we can automate next."* The account
+rung's #1 recurring human stall (PowerSchool done by hand 08-21, email verification included) has
+its solution built on the shelf. Missing only: the call at that seam, a `verify_email` leg in
+`ACCOUNT_FORMS`, and sender-hints derived from ATS/company rather than domain_id. Note
+`DEFAULT_USERNAME` is already the same address the errand's google profile reads.
+
+**UI PARITY, AUDITED.** Reachable and good: Trace + correction form (2 clicks), TeacherParks with
+full respond controls (1 click), accounts (2–3 clicks, three separate panels). Violations: the
+transitions label queue (above); parks invisible from `/overview` (its "needs attention" inbox is
+the handoffs queue, a different organ); **no session scorecard** — rows banked / labels written /
+parks answered / apps-per-week render nowhere; three different agreement numbers on three screens,
+none showing progress toward the ≥90%/≥25 gate; the Learning tabs don't poll (the correction
+surface does not follow the drive).
+
+**THE REFLECTION'S VERDICT, FOR THE RECORD.** The three candidate directions (leverage the data /
+improve the UI / Gmail errands) are one flywheel touched at three points, and the order fell out
+of the numbers: (1) wire the built errand into the verify seam — smallest diff, removes the top
+human stall; (2) write the inbox→ApplicationEvent matcher — turns a write-only ledger into an
+outcome loop and gives the submission verifier its second witness; (3) mine the click↔observe
+pairs and re-measure per-scenario — the first promotion is one calibration axis away; (4) give the
+flywheel its screen: the real label queue + one scorecard with the gate on it. Gmail-as-domain
+stays out of scope (Career Search until a family graduates); Gmail-as-reader is Career Search.
