@@ -1,0 +1,76 @@
+{
+  "task": "indeed_apply",
+  "state": "company_site_application_form",
+  "guard_fields": [
+    "Country*",
+    "CHOOSE A FILE",
+    "Area of Interest*",
+    "Job Description (current or recent job responsibilities)"
+  ],
+  "steps": [
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Country*"
+      }
+    },
+    {
+      "intent": "upload",
+      "params": {
+        "field": "CHOOSE A FILE"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Area of Interest*"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Job Description (current or recent job responsibilities)"
+      }
+    },
+    {
+      "intent": "upload",
+      "params": {
+        "field": "CHOOSE A FILE"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Country*"
+      }
+    },
+    {
+      "intent": "select_option",
+      "params": {
+        "field": "Area of Interest*"
+      }
+    },
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "Job Description (current or recent job responsibilities)"
+      }
+    }
+  ],
+  "expected_exit": [
+    "company_site_application_form",
+    "company_site_review",
+    "company_site_account_gate",
+    "company_site_confirmation"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "397d585cd0d8691a30fc6b6394d0951ad0d434567e65cb83cb64ea3f1e949d71",
+    "d93af11946774c302994ff1f7074be982d8f067178ef6114c21a40a6d2c0d412",
+    "d459e905aa71068c969ed9677ee51044b4ad3be67dd93f87ed3ea5728829ccb1",
+    "41e9410d926b079df24bc8b4403b04f0b5111205b252817dce7624a99568ac7b",
+    "05476a81442614e288c4ef27de7d8297b43b0d04e752a8e221e078ae597f7def"
+  ],
+  "verified_at": "2026-08-23T03:01:34.436519+00:00",
+  "stale": false
+}

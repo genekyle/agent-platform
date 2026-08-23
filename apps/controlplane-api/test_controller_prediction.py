@@ -207,6 +207,20 @@ def test_the_phase_rail_beats_orientation_in_the_handup():
     assert d.intent == Intent.OBSERVE.value and d.params == {}
 
 
+def test_a_broken_apply_matcher_is_LOUD_not_a_quiet_downgrade(monkeypatch):
+    """Only the lazy IMPORT is guarded. If the matcher itself raises, the rail must not swallow
+    it into a bare-verb click: every enter-phase prediction would silently lose its control name,
+    agreement would sag, and nothing would ever fail."""
+    import controller.orientation as orientation
+
+    def exploding(_identities):
+        raise TypeError("matcher changed shape under us")
+
+    monkeypatch.setattr(orientation, "apply_control", exploding)
+    with pytest.raises(TypeError):
+        local_prediction(bundle(phase="enter_apply", identities=("link|Apply now",)))
+
+
 def test_no_phase_changes_nothing():
     """The rail is inert until a ladder claims the turn — every phase-less caller (the loop,
     teach sessions, all journaled history) predicts exactly as before."""
