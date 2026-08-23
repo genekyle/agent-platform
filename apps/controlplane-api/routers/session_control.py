@@ -7495,13 +7495,30 @@ def _shadow_the_crank(rung: Any, step: Any, before: Any, acted: dict[str, Any],
             confidence=1.0, rung="teacher",
             rationale=acted.get("rationale") or f"the operator worked the {rung.id} rung",
             evidence=tuple(acted.get("evidence") or ("operator",)))
+        # THE TWO FACETS THE 2026-08-22 MINING FOUND MISSING, and they are both free here.
+        #
+        # `page_text`: without it the bundle's state came from the URL alone. Indeed survives that
+        # (its states ARE url-driven) but Workday keeps ONE url across a whole application, so all
+        # 61 workday_job_posting shadow pairs were really misfiled form-rung turns, and every
+        # company_site pair carried state=None while this very function knew the state. The names
+        # joined here are exactly what `_state_from_observation` feeds `describe_for_ats`, so the
+        # shadow now names the screen the same way the crank does instead of a worse way.
+        #
+        # `phase`: the rung being worked. The teacher's VERB is chosen by the rung
+        # (`_RUNG_INTENT`, just above) — consuming rungs look, entering rungs click — so without
+        # it the same (task, state) mapped to both verbs and no decision function could beat class
+        # frequency. 106 of 119 shadow disagreements were that one axis.
+        names = " ".join(str(c.get("name") or "")
+                         for c in (getattr(before, "candidates", None) or []))
         bundle = build_bundle(
             task="apply", url=getattr(before, "url", "") or "",
+            page_text=names,
             goal_text=f"{step.title or step.job_id} at {step.company or 'unknown'}",
             ats=step.platform or None,
             ax_candidates=list(getattr(before, "candidates", None) or []),
             belief=getattr(before, "belief", None),
-            window=getattr(before, "window", None))
+            window=getattr(before, "window", None),
+            phase=rung.id)
         shadow_step(teacher, bundle, session_id=str(session_id), outcome=outcome)
     except Exception:  # noqa: BLE001 — measuring ourselves must never break the drive
         pass

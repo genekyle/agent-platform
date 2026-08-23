@@ -6420,3 +6420,59 @@ def test_apply_flag_records_the_live_url_and_the_canonical_key(monkeypatch):
         "the flow must carry the canonical job key, not the sighting id")
     assert captured["started_at"] is not None, "the first mini-step dates the flow"
     assert (out.get("last_step") or {}).get("terminal") != "now", "the flag must have landed"
+
+
+# --- the shadow seam's two facets, and the vocabulary they must agree with -----------
+def test_the_phase_vocabularies_agree_with_the_rung_intent_table():
+    """`decide`'s phase sets and `_RUNG_INTENT` are two statements of ONE fact — which rungs look
+    and which rungs click. They live in different packages and nothing but this test stops them
+    drifting apart, because an unmapped rung falls through the rail BY DESIGN and so a drift is
+    silent: agreement just quietly stops improving on whichever rung was dropped.
+
+    `submit` is the deliberate exception. It is `click` in `_RUNG_INTENT` (that IS what the rung
+    does) and in NEITHER phase set, because the rail must never propose the one irreversible
+    control — the same rule that keeps `Submit` out of `_ADVANCE_CONTROLS`.
+    """
+    from controller.decide import _ENTER_PHASES, _OBSERVE_PHASES
+
+    for rung, verb in sc._RUNG_INTENT.items():
+        if rung == "submit":
+            assert rung not in _OBSERVE_PHASES and rung not in _ENTER_PHASES, \
+                "submit must never be reachable by the phase rail"
+            continue
+        expected = _OBSERVE_PHASES if verb == "observe" else _ENTER_PHASES
+        assert rung in expected, (
+            f"{rung!r} is {verb!r} in _RUNG_INTENT but is not in the matching phase set — "
+            f"the rail will fall through on it and its shadow rows will keep disagreeing")
+    # And nothing may appear in a phase set that the ladder never works.
+    for phase in _OBSERVE_PHASES | _ENTER_PHASES:
+        assert phase in sc._RUNG_INTENT, f"{phase!r} is a phase the crank never journals"
+
+
+def test_the_shadow_bundle_carries_the_phase_and_the_page_text(monkeypatch):
+    """The 2026-08-22 wire. Without `phase` the same (task, state) maps to both verbs; without
+    `page_text` the state comes from the URL alone, which Workday (one url per application) and
+    company_site both defeat. Asserted on the bundle the seam actually builds."""
+    seen = {}
+
+    def capture_bundle(**kw):
+        seen.update(kw)
+        return SimpleNamespace(state="workday_my_information", task="apply")
+
+    monkeypatch.setattr("controller.bundle.build_bundle", capture_bundle)
+    monkeypatch.setattr("controller.shadow.shadow_step",
+                        lambda *a, **k: None)
+
+    before = SimpleNamespace(
+        url="https://acme.wd1.myworkdayjobs.com/job/apply",
+        candidates=[{"role": "heading", "name": "My Information"},
+                    {"role": "button", "name": "Save and Continue"}],
+        belief=None, window=None)
+    step = SimpleNamespace(title="Analyst", job_id="j1", company="Acme", platform="workday")
+
+    sc._shadow_the_crank(SimpleNamespace(id="verify_identity"), step, before,
+                         {}, "ok", session_id=1)
+
+    assert seen.get("phase") == "verify_identity"
+    # the SAME join `_state_from_observation` uses — AX names, space-joined
+    assert seen.get("page_text") == "My Information Save and Continue"
