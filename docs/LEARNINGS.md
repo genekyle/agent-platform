@@ -10012,3 +10012,46 @@ outcome loop and gives the submission verifier its second witness; (3) mine the 
 pairs and re-measure per-scenario — the first promotion is one calibration axis away; (4) give the
 flywheel its screen: the real label queue + one scorecard with the gate on it. Gmail-as-domain
 stays out of scope (Career Search until a family graduates); Gmail-as-reader is Career Search.
+
+## 2026-08-22 (later) — the flywheel gets its screen: the real queue, one scorecard, and the landing tells the truth
+
+**THE 373-ROW QUEUE HAS A SCREEN NOW (Learning → Queue).** `GET /api/transitions/label_queue` —
+zero UI callers since it was written — renders as the teacher's ranked worklist: mismatches
+first, witness beliefs with uncertainties prefilled into the correction form (the cockpit
+Trace's StepCorrection contract verbatim: note required, states both-or-neither, server errors
+shown as the contract speaking), before/after screenshots inline, 10s poll with the Trace's
+monotonic guard so a slow poll cannot resurrect a just-answered row. The name collision the
+audit flagged stands in the nav: **Label** is still the old observation queue; **Queue** is the
+transition queue. Same word, different organ — the tab subtitles now say which.
+
+**ONE SCORECARD, COMPOSED — NEVER A SECOND DERIVATION (Learning → Scorecard).**
+`GET /api/learning/scorecard` (new, read-only) composes the session measures the docs already
+name — rows banked / labels written / parks answered, today vs. total — plus queue backlog by
+reason, per-scenario shadow agreement with DISTANCE to the ≥90%/≥25 gate (and the honest line
+that `authority()` enforces the maturity ladder, not this number), the witness census
+(`from_transitions` finally visible: 168 of 362), applications per week off
+`applied_at | created_at`, and the tandem's two coming measures: **flows closed (5/68)** and
+**outcomes recorded (0)** with `application_events` kinds rendered GENERICALLY — the Gmail
+matcher's new kinds appear with no UI change, per the Part 2 contract. The endpoint calls the
+same `build_label_queue()` the queue screen reads (extracted, not duplicated), so the two
+counters cannot drift.
+
+**/overview STOPS HIDING THE TEACHER'S QUEUES.** The landing's inbox reads runtime handoffs — a
+different organ from both teacher queues. `command-center/summary` now carries a best-effort
+`teacher` block (transition-queue depth + open parks; `None` when unreadable, never a fabricated
+0), rendered as two tiles and a hero action into the Queue screen. Parked drives outrank
+handoffs in the hero copy — a park is a drive literally waiting on an answer.
+
+**TWO CATCHES WORTH THE WRITE-UP.** (1) *UTC day tallies lie to an evening operator*: first live
+read showed "rows banked today: 0" at 9pm ET beside 432 total — midnight UTC had passed. Stored
+stamps stay UTC; "today" converts to the LOCAL day at read (`fromisoformat(...).astimezone()`),
+in the scorecard and `inbox.counts()` both. (2) *A prop added to a child is not a prop passed
+through the parent*: `onOpenQueue` sat on OverviewHero while CommandCenter never forwarded it —
+the button rendered and did nothing. Caught only by CLICKING it in the preview (the
+pilot-the-UI-by-hand rule paying again); the fix was two lines.
+
+*Verified*: endpoints exercised against the live corpus/DB from the worktree (module provenance
+checked — the venv and node_modules live in MAIN; the worktree API ran on :8091 with data-root
+envs, the operator's :8081 untouched); 27 transition/controller tests green; eslint + vite build
+clean; all three screens driven in the preview. Branch rebased on 3e6ea29; merges LAST per the
+tandem contract.
