@@ -701,6 +701,54 @@ class ApplicationEvent(Base):
     application: Mapped["Application"] = relationship(back_populates="events")
 
 
+class InboxEmail(Base):
+    """One inbox row the application tracker has looked at — the Gmail matcher's ledger.
+
+    Three jobs in one table, in the same shape `JobMatch` gave the dedup queue:
+
+      * **Idempotency.** The list reader has no message id, so `fingerprint` (sender + subject +
+        received timestamp) is the identity of a mail across sweeps; a row seen once is never
+        reprocessed, and re-sweeping an unchanged inbox writes nothing.
+      * **The review queue.** `needs_review` rows are the matcher's honest "I can see this is
+        about an application but I will not guess which/what" — surfaced with the candidates and
+        the proposed kind prefilled, resolved by a human into `confirmed` or `dismissed`.
+      * **Audit.** `recorded` rows point (via `event_id`) at the ApplicationEvent they wrote, so
+        every gmail-sourced entry on a timeline can be traced back to the exact mail and sweep
+        that produced it.
+
+    PRIVACY: the inbox is a personal mailbox. `ignored` rows (mail that is about nothing we
+    applied to) keep the fingerprint ONLY — sender, subject and snippet are stored blank, because
+    remembering personal mail is capture-of-secrets, not evidence (PRINCIPLES §4).
+    """
+    __tablename__ = "inbox_emails"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    fingerprint: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+
+    from_address: Mapped[str] = mapped_column(String(200), default="")
+    sender_name: Mapped[str] = mapped_column(String(200), default="")
+    subject: Mapped[str] = mapped_column(String(300), default="")
+    snippet: Mapped[str] = mapped_column(String(300), default="")
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    #: What the matcher read off the row: sender-domain ATS, proposed event kind, matched job.
+    ats_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+    kind: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    job_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    #: [{job_key, company, title, ats, score, reasons}] — every application that could plausibly
+    #: own this mail, kept so the review screen can offer them instead of a free-text field.
+    candidates: Mapped[list] = mapped_column(JSON, default=list)
+    reasons: Mapped[list] = mapped_column(JSON, default=list)
+
+    #: recorded | needs_review | ignored | confirmed | dismissed
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    #: The ApplicationEvent written (on `recorded` and `confirmed` rows), for the audit trail.
+    event_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    decided_by: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # auto | human
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class JobDecision(Base):
     """One triage decision about one job — AND the choice set it was made in.
 

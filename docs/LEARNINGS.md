@@ -10012,3 +10012,55 @@ outcome loop and gives the submission verifier its second witness; (3) mine the 
 pairs and re-measure per-scenario — the first promotion is one calibration axis away; (4) give the
 flywheel its screen: the real label queue + one scorecard with the gate on it. Gmail-as-domain
 stays out of scope (Career Search until a family graduates); Gmail-as-reader is Career Search.
+
+## 2026-08-22 (second) — the tracker gets its reader: inbox rows become outcome events
+
+The audit's bottleneck 3 closed at the seam the models drew on day one. Built: `inbox_matcher.py`
+(pure `decide()` — no DB, no browser), `inbox_sweep.py` (persistence + the event writes; ITS OWN
+module per the tandem contract, so the drive-end hook in `session_control` is one line calling
+`inbox_sweep.sweep()`), `routers/application_inbox.py` (`POST /api/career_search/inbox/sweep`,
+the ledger `GET`, `POST …/{id}/resolve`), the `inbox_emails` ledger table, and an Inbox tab in
+the Job Database section. 18 new tests; the matcher also ran clean against all 28 real
+applications (each company's own confirmation mail matches exactly its own application — the
+"Boston Children's ≠ Boston College" and "a different credit union must not claim Metro's mail"
+collisions are pinned as tests).
+
+**THE DECISION BOUNDARY IS THE DESIGN.** Three verdicts: `record` (written unattended), `review`
+(surfaced prefilled, one click to resolve), `ignore` (not ours). Auto-write requires BOTH an
+unambiguous single-company match (≥0.75 of the company's normalized tokens — the threshold that
+keeps two-of-three generic words from claiming a row) AND distinctive phrasing — and only for
+confirmation / viewed / strong-formula rejections. Employer-response kinds (interview, assessment,
+screening, recruiter contact) are NEVER auto-written however clear the phrasing: they are the
+numerator of the response rate, and a false one poisons the number the operator actually reads.
+Weak tells ("unfortunately" alone) only prefill review.
+
+**MAIL DOMAINS ARE NOT WEB HOSTS.** The registry's hosts catalogue nearly classifies senders, but
+the mail leaves from different domains: Indeed notifies from `@indeedemail.com`, Greenhouse from
+`greenhouse-mail.io`, ADP from bare `adp.com` (only subdomains are registry hosts). Additive
+`ATS_MAIL_DOMAINS` map in the matcher, to fold into `gmail_senders.classify_sender` at rebase once
+the verify-leg lands (coach ruling: one table, mail domains beside site domains). And unlike
+`classify_ats`, the ENGINE domains stay in play for mail — a message *from indeed.com about an
+application* is exactly the attribution wanted; no shadowing exists in the mail direction.
+
+**PERSONAL MAIL IS A SECRET.** The sweep reads a personal mailbox, so `ignored` rows persist the
+FINGERPRINT ONLY (sender+subject+timestamp hash, for idempotent re-sweeps) — subject and snippet
+of non-application mail are never stored. Same §4 rule as answered previews; the evidence-cites-
+the-secret lesson generalizes to mail about someone's dinner plans.
+
+**NO MESSAGE ID EXISTS AND THAT IS FINE.** The subject-line reader never opens a thread (no read
+receipt), so the documented `{message_id, …}` gmail evidence gets the sweep fingerprint as its
+durable reference instead. Idempotency lives on that fingerprint: re-sweeping an unchanged inbox
+writes nothing, which is what makes "run it after every drive" safe.
+
+**FLOW TERMINALS GET A WITNESS, NOT A WRITE.** A matched confirmation names the open `ats_flows`
+rows for its job (`flow_terminal_witness`) but never sets `terminal` — that column describes what
+the DRIVE did, and an email cannot retroactively change it. The corroboration is surfaced; the
+join stays honest.
+
+Verified live: the blocked contract answers honestly against the real capture server (no browser
+at 9222 → the 404 named; a live browser with no attachable pages → named too — never a silent
+empty), and the full loop clicked through in the cockpit against a scratch DB: sweep → auto
+rejection flips the application to `rejected` → response rate recomputes → the review row's
+prefilled interview_invite confirms in one click as `· human` beside the `· auto` rows. Merge
+order holds: this branch rebases after the verify-leg lands, folds the mail domains into
+`classify_sender`, and places the one-line drive-end hook.
