@@ -3121,6 +3121,94 @@ def test_a_stale_code_is_not_entered_and_the_wall_holds(monkeypatch, tmp_path):
     assert not any(v == "418302" for _n, v in typed)
 
 
+def test_a_second_factor_wall_never_asks_the_inbox_for_a_code_it_cannot_hold(monkeypatch,
+                                                                             tmp_path):
+    """An authenticator/SMS wall renders the SAME code box an emailed code does, and
+    `_ACCOUNT_VERIFY_MARKERS` deliberately matches "two-factor"/"authenticator". Classified as
+    `code` it would spend three inbox reads on a code that is in nobody's inbox and then tell the
+    operator to go and check their email — the misleading kind of true."""
+    reads = []
+    from routers import errands as errand_routes
+
+    async def _count_reads(path, payload, timeout=30.0):
+        reads.append(path)
+        return {"ok": True, "signed_in": True, "list_found": True, "row_count": 0, "rows": [],
+                "url": "", "read_at": datetime.now(timezone.utc).isoformat()}
+
+    monkeypatch.setattr(errand_routes, "_capture_post", _count_reads)
+    _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}, "/execute": {"outcome": "ok"},
+         "/ax_scan": {"ok": True,
+                      "page_text": "Two-factor authentication: enter the code from your "
+                                   "authenticator app",
+                      "candidates": [{"role": "textbox", "name": "Verification Code",
+                                      "backend_node_id": 9}]}},
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "account_verify_email"
+    assert r["last_step"]["verify"]["mechanism"] == "second_factor"
+    assert reads == []                                   # the inbox was never opened
+    assert "authenticator" in r["last_step"]["detail"]
+
+
+def test_an_emailed_code_still_wins_when_the_page_also_says_two_factor():
+    """The guard above must not swallow the ordinary case: plenty of walls read 'two-factor
+    authentication: enter the code we emailed you', and there the email wording is the specific
+    one. Named-factor language only wins when the page does NOT mention email."""
+    emailed = sc._verify_wall_mechanism(
+        {"page_text": "Two-factor authentication — enter the code we emailed you",
+         "candidates": [{"role": "textbox", "name": "Verification Code"}]})
+    assert emailed["mechanism"] == "code"
+
+
+def test_a_display_name_sender_does_not_store_an_unmatchable_domain():
+    """`Name <user@host>` would store `host>` as the measured sender, and a hint carrying a stray
+    bracket can never match a later inbox read — it looks like knowledge and behaves like
+    absence."""
+    assert sc._sender_domain("Workday <no-reply@myworkday.com>") == "myworkday.com"
+    assert sc._sender_domain("no-reply@myworkday.com Workday") == "myworkday.com"
+    assert sc._sender_domain("Talent Acquisition") == ""     # the reader's display-name fallback
+    assert sc._sender_domain("") == ""
+
+
+def test_clearing_a_wall_on_a_later_press_keeps_the_credential_the_site_actually_took(
+        monkeypatch, tmp_path):
+    """THE VAULT-CORRUPTION PATH. When the wall is cleared by a LATER press, this request typed no
+    password — an earlier one did. Re-deriving now is not proof of what the site holds (the suffix
+    and the company string both drift), so an existing vault entry must win. Overwriting it would
+    manufacture the silent wrong-password future `record_credentials` exists to prevent."""
+    import ats_accounts
+
+    written = []
+    monkeypatch.setattr(ats_accounts, "record_credentials",
+                        lambda *a, **k: written.append(a) or {"ok": True})
+    monkeypatch.setattr(sc, "_has_stored_credential", lambda *_a: True)
+    monkeypatch.setattr(ats_accounts, "mark_created", lambda *a, **k: {"ok": True})
+
+    bb = _wd_at_wall()
+    # The wall was met by an EARLIER request and parked; this press is the operator's "fetch it".
+    bb.world["account_verify"] = {"job_id": aps.Queue.from_dict(
+        bb.world["apply_queue"]).steps[0].job_id, "company": "MFS Investment Management",
+        "ats": "workday", "mechanism": "code"}
+    _, saved, typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[_mail("Your Workday verification code is 418302")])
+    saved["bb"] = bb
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    assert ("Verification Code", "418302") in typed      # the wall was still cleared
+    assert written == []                                 # ...and the vault was left alone
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any("kept" in m.detail for m in step.minis if m.rung == "account")
+
+
 def test_the_verification_wall_does_not_borrow_the_searchs_awaiting_key(monkeypatch, tmp_path):
     """THE NAMING COLLISION, retired at this seam. `operator_verify` means 'the search was
     submitted but not confirmed' (run_query) and the cockpit renders that copy — so reusing it

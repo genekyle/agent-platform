@@ -3450,19 +3450,55 @@ def _gmail_browser_url(db: Session) -> str:
     return "http://127.0.0.1:9222"
 
 
+#: Factors that do NOT arrive by email, however code-shaped the wall looks. An authenticator app
+#: and an SMS both present a code box, so the box alone cannot tell them from an emailed code.
+_NON_EMAIL_FACTOR_LANGUAGE = ("authenticator", "authentication app", "text message", "sms",
+                              "your phone", "phone number", "mobile number", "call you")
+
+
+def _sender_domain(sender: str) -> str:
+    """The mail domain out of whatever the inbox reader called the sender, or "".
+
+    Two shapes arrive from the reader and neither is guaranteed: `"user@host Display Name"` (the
+    `span[email]` path) and a bare display name with no address at all (the `.yW` fallback). A
+    third arrives from anything that formats the header conventionally: `"Name <user@host>"` — and
+    the angle bracket is the one that bites, because `host>` stores as a measured characteristic
+    that can never match a later inbox read. A hint that silently never fires is worse than no
+    hint: it looks like knowledge and behaves like absence. `gmail_senders.classify_sender` strips
+    the same character for the same reason.
+    """
+    for token in str(sender or "").split():
+        if "@" in token:
+            return token.split("@", 1)[1].strip().strip("<>.,;").lower()
+    return ""
+
+
 def _verify_wall_mechanism(scan: dict[str, Any]) -> dict[str, Any]:
-    """CODE or LINK — which verification mechanism the measured wall uses (PLAN_verify_email_leg).
+    """Which verification mechanism the measured wall uses (PLAN_verify_email_leg).
 
     Classified from the live scan, never from a stored flag: a code-entry textbox decides `code`;
     its absence plus link language decides `link`; neither is `unknown`, which escalates with what
     IS on screen — the same refusal an unmapped page gets, because a guess here types a one-time
     code into whichever box happens to be first.
+
+    `second_factor` IS THE FOURTH ANSWER, AND IT EXISTS BECAUSE A CODE BOX IS AMBIGUOUS. An
+    authenticator app and an SMS both render exactly the code box an emailed code does, and
+    `_ACCOUNT_VERIFY_MARKERS` deliberately matches "two-factor"/"authenticator" walls — so without
+    this, those walls classify `code`, spend three inbox reads over ~25s on a code that is not in
+    any inbox, and then escalate with the errand's honest-but-wrong sentence: *"the mail may not
+    have arrived yet — retry, or check the inbox by hand."* Sending someone to their email for a
+    code sitting in their phone is the misleading kind of true. Named factor language wins over
+    the box UNLESS the page also says email — plenty of walls read "two-factor authentication:
+    enter the code we emailed you", and there the email wording is the specific one.
     """
+    text = str(scan.get("page_text") or "").lower()
+    named_factor = next((w for w in _NON_EMAIL_FACTOR_LANGUAGE if w in text), "")
+    if named_factor and "email" not in text:
+        return {"mechanism": "second_factor", "factor": named_factor}
     for c in scan.get("candidates") or []:
         if c.get("role") == "textbox" and re.search(
                 r"\b(code|verification|one.?time|otp)\b", str(c.get("name") or ""), re.I):
             return {"mechanism": "code", "code_field": str(c.get("name") or "")}
-    text = str(scan.get("page_text") or "").lower()
     if any(w in text for w in _VERIFY_LINK_LANGUAGE):
         return {"mechanism": "link"}
     return {"mechanism": "unknown"}
@@ -3573,7 +3609,17 @@ async def _clear_verification_wall(db: Session, *, browser_url: str, tab_id: str
                                         if mech["mechanism"] == "code" else
                                         "link language on the wall, no code box"
                                         if mech["mechanism"] == "link" else
+                                        f"the wall names {mech.get('factor')!r} and not email"
+                                        if mech["mechanism"] == "second_factor" else
                                         "neither a code box nor link language on the wall"))
+    if mech["mechanism"] == "second_factor":
+        # NOT an email wall at all — no inbox read is attempted, because none could succeed. This
+        # is the standing 2FA boundary (never auto-solved, on any form), reached through the verify
+        # seam rather than around it.
+        out["note"] = (f"This is a second factor, not an emailed code — the page asks for "
+                       f"{mech.get('factor')!r}. Nothing in the inbox can answer it: enter it "
+                       f"yourself in the window, then continue.")
+        return out
     if mech["mechanism"] == "link":
         out["note"] = ("The site sent a verification LINK, not a code. The inbox errand reads "
                        "subject lines only — it never opens a mail, so no read receipt — which "
@@ -3599,10 +3645,9 @@ async def _clear_verification_wall(db: Session, *, browser_url: str, tab_id: str
     # The sender is MEASURED the moment the errand proves a match — true whether or not the entry
     # below lands, and it is what feeds `gmail_senders.senders_for` next time.
     sender = fetched.get("sender") or ""
-    if "@" in sender:
+    if _sender_domain(sender):
         _record_verification_fact(db, ats=ats, url=live_url, key="verification_sender",
-                                  value=next((t.split("@", 1)[1].strip().lower()
-                                              for t in sender.split() if "@" in t), ""),
+                                  value=_sender_domain(sender),
                                   evidence=f"the code errand matched this sender ({sender[:200]})",
                                   session_id=session_id)
 
@@ -3636,11 +3681,26 @@ async def _clear_verification_wall(db: Session, *, browser_url: str, tab_id: str
     return out
 
 
+def _has_stored_credential(company: str, ats: str) -> bool:
+    """Does the vault already hold a login for this company↔ATS account? Read-only, and False on
+    any failure — the caller uses this to decide whether to KEEP what is stored, and an unreadable
+    vault must not read as "nothing there" and license an overwrite."""
+    try:
+        import accounts as accounts_mod
+        import ats_accounts
+        rec = accounts_mod.get_account(ats_accounts.ats_account_id(company, ats))
+        return bool((rec or {}).get("has_creds"))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("credential probe failed for %s/%s", company, ats)
+        return True     # unreadable: assume something is there and do not overwrite it
+
+
 async def _account_secured_view(*, session: TrainingSession, bb: Any, ledger: cps.Ledger,
                                 queue: Any, step: Any, company: str, action: dict[str, Any],
                                 creds: dict[str, Any], browser_url: str,
                                 verification: Optional[dict[str, Any]],
-                                verified_note: str) -> dict[str, Any]:
+                                verified_note: str,
+                                credential_proven: bool = True) -> dict[str, Any]:
     """Through the wall: the ATS accepted the leg and any verification gate has cleared.
 
     Both success paths end here — the ordinary submit and the wall-cleared-on-entry one — because
@@ -3653,27 +3713,45 @@ async def _account_secured_view(*, session: TrainingSession, bb: Any, ledger: cp
     `mark_created` so an account can never be marked usable while its credential exists nowhere but
     in this request. If the vault write fails the account still exists on the site, so that fact is
     still recorded — the failure rides along in the detail rather than being swallowed.
+
+    `credential_proven` IS THAT SENTENCE'S PRECONDITION, MADE A PARAMETER. "The site just took it"
+    is true when this request drove the form; it is NOT true when this request only cleared a
+    verification wall that an EARLIER request's submit put up. The password the site actually holds
+    is the one that earlier call derived, and derivation drifts by design — one edit to
+    ATS_ACCOUNT_PW_SUFFIX, or the same employer arriving as "Teradyne, Inc." instead of "Teradyne",
+    and re-deriving now yields a different, plausible, wrong string. Overwriting the vault with it
+    manufactures exactly the silent wrong-password future this docstring warns about. So on the
+    unproven path an EXISTING vault entry wins and we write nothing; an empty vault still gets the
+    derivation, because a best guess beats no record at all.
     """
     import ats_accounts
 
     signing_in = action.get("leg") == "sign_in"
-    stored = ats_accounts.record_credentials(company, step.platform,
-                                             creds.get("username") or "",
-                                             creds.get("suggested_password") or "")
+    if credential_proven or not _has_stored_credential(company, step.platform):
+        stored = ats_accounts.record_credentials(company, step.platform,
+                                                 creds.get("username") or "",
+                                                 creds.get("suggested_password") or "")
+    else:
+        stored = {"ok": True, "kept": True}
     if not signing_in:
         # Only a CREATE makes the account exist. Signing in must not re-stamp that — the
         # lifecycle flag is what tells the next session which leg is due.
         ats_accounts.mark_created(company, step.platform)
     saved = bool(stored.get("ok"))
+    kept = bool(stored.get("kept"))
     # A credential we did not manage to store is worth as much noise as a step that failed —
-    # the account is real either way, and the one that is unrecoverable is the quiet one.
+    # the account is real either way, and the one that is unrecoverable is the quiet one. A KEPT
+    # one is neither: the vault already holds what the site was given, and leaving it alone is the
+    # correct outcome rather than a shortfall to warn about.
     vault_note = ("" if saved else
                   f" CREDENTIAL NOT STORED ({stored.get('detail')}) — save it in the Accounts "
                   f"panel before this session ends.")
+    credit = (", stored credential kept (this call did not type it)" if kept else
+              ", credential stored" if saved else ", CREDENTIAL NOT STORED")
     step.record(_ACCOUNT_RUNG, aps.OK,
                 ((f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
                   f"create leg: created the {company} {step.platform} account automatically")
-                 + (", credential stored" if saved else ", CREDENTIAL NOT STORED")),
+                 + credit),
                 initiator="auto",
                 # Through the wall: the site accepted the form and we are signed in. What we
                 # typed lives on the site now, not in the page, so a reload costs nothing —
@@ -4468,7 +4546,11 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
             return await _account_secured_view(
                 session=session, bb=bb, ledger=ledger, queue=queue, step=step, company=company,
                 action=action, creds=creds, browser_url=browser_url,
-                verification=_verification, verified_note=verified_note)
+                verification=_verification, verified_note=verified_note,
+                # THIS CALL TYPED NO PASSWORD — an earlier request's submit did, possibly in an
+                # earlier session. So the derivation in hand is not proof of what the site holds,
+                # and a stored credential outranks it. See `_account_secured_view`.
+                credential_proven=False)
 
         # Answers the form needs beyond the credential — resolved here, where the DB is.
         from sqlalchemy import select as _select

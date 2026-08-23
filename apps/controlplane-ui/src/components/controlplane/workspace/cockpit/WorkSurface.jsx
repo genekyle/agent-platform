@@ -651,7 +651,9 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
             <dd>
               {focus.verify.mechanism === "code" ? "a one-time code (readable from the inbox list)"
                 : focus.verify.mechanism === "link" ? "a verification link (the click is yours)"
-                  : "not measurable from the scan"}
+                  : focus.verify.mechanism === "second_factor"
+                    ? "a second factor — not email, so no inbox read is attempted"
+                    : "not measurable from the scan"}
             </dd>
           </dl>
           {focus.verify.detail && <p className="rung__meta">{focus.verify.detail}</p>}

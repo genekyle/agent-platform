@@ -447,9 +447,18 @@ function executeFocus(p, step, nextAction) {
   if (verify) {
     const code = verify.mechanism === "code";
     const link = verify.mechanism === "link";
+    const factor = verify.mechanism === "second_factor";
+    // THE EXIT'S VERB FOLLOWS THE LEG, not the wall — the same rule the handoff card learned when
+    // "Create it automatically" appeared over a sign-in form. `mark_created` settles the rung
+    // either way, but a sign-in-leg wall is verifying an account that already exists, and telling
+    // the operator they are "recording it as made" describes a different act than the one they
+    // just performed.
+    const signingIn = verify.leg === "sign_in";
     const done = { label: code ? "I entered the code" : "I finished the verification",
       endpoint: "/apply_account", body: { mark_created: true },
-      why: "You settled the wall by hand — record the account as made and continue." };
+      why: signingIn
+        ? "You settled the wall by hand — mark this sign-in done and continue."
+        : "You settled the wall by hand — record the account as made and continue." };
     return { ...base, kind: "verify_email", verify,
       why: code
         ? `The site emailed a one-time code to ${verify.mailbox || "the shared inbox"}. The `
@@ -458,9 +467,12 @@ function executeFocus(p, step, nextAction) {
         : link
           ? "The site sent a verification LINK, not a code. The errand never opens a mail (no "
             + "read receipt), so the click is yours — press it in Gmail, then continue."
-          : (verify.detail
-             || "The page asks for verification but its mechanism couldn't be measured — "
-              + "finish it in the window, then continue."),
+          : factor
+            ? "This is a second factor, not an emailed code — nothing in the inbox can answer "
+              + "it. Enter it yourself in the window, then continue. We never auto-solve these."
+            : (verify.detail
+               || "The page asks for verification but its mechanism couldn't be measured — "
+                + "finish it in the window, then continue."),
       primary: code
         ? { label: "Fetch code from Gmail & continue", endpoint: "/apply_account",
             body: { mode: "auto" },

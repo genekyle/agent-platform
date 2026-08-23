@@ -10068,3 +10068,33 @@ correct the field names from the scan and drop the label — that is the measure
 about the operator). It travels as `errand.login_code` (`ERRAND_REFS`), resolvable only while the
 errand's answer is in hand, so a committed program carries the ref and nothing that could
 reproduce the value.
+
+**THREE MORE, FROM A TANDEM REVIEW OF THE DIFF — and the first is the one to remember.**
+
+*A "store it the moment it is proven" rule has a precondition, and a second caller can quietly
+break it.* `_account_secured_view` writes the credential because **the site just took it** — true
+of the call that drove the form, false of the call that only clears a wall an EARLIER submit put
+up. On that second path the derivation in hand is not evidence of anything (the suffix and the
+company string both drift, which is why the vault exists at all), so writing it would overwrite
+the real password with a plausible wrong one and manufacture the exact silent wrong-password
+future the function's own docstring warns about. The precondition is now a parameter,
+`credential_proven`, and on the unproven path a stored credential wins. *The general shape: when
+you give an existing function a second caller, re-read its docstring as a CONTRACT — the sentence
+justifying what it does is usually where the new caller violates it.*
+
+*A code box does not mean the code is in your email.* An authenticator app and an SMS render
+exactly the same box, and `_ACCOUNT_VERIFY_MARKERS` deliberately matches "two-factor" and
+"authenticator" — so those walls classified as `code`, would have spent three inbox reads (~25s)
+on a code no inbox holds, and then escalated with the errand's honest-but-wrong sentence: *"the
+mail may not have arrived yet — retry, or check the inbox by hand."* Sending someone to their
+email for a code sitting in their phone is the misleading kind of true. `second_factor` is now a
+fourth classification, decided by named factor language (unless the page also says email — plenty
+of walls read "two-factor authentication: enter the code we emailed you", and there email is the
+specific word). No inbox read is attempted; it is the standing 2FA boundary reached through the
+seam rather than around it.
+
+*A hint carrying a stray bracket looks like knowledge and behaves like absence.* The measured
+sender was parsed as `token.split("@")[1]`, which stores `myworkday.com>` from a display-name
+formatted sender — a characteristic that can never match a later inbox read, failing silently and
+forever. Parsing moved into `_sender_domain`, which strips the brackets and is unit-tested,
+because the failure is invisible at every other layer.
