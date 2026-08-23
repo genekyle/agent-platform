@@ -127,6 +127,25 @@ def test_digest_is_stable_and_pii_free():
     assert bundle_digest(_bundle(state="indeed_apply_review")) != d1
 
 
+def test_the_phase_facet_is_additive_everywhere_it_travels():
+    """The 2026-08-22 shadow finding: the same page on a different ladder rung is a DIFFERENT
+    decision point — but only when a ladder claims the turn. Phase-less bundles must keep the
+    digest and prompt they always had, or every row journaled before the field existed stops
+    joining/training."""
+    from interaction.decision import bundle_to_prompt, replay_snapshot
+
+    # Digest: identical without a phase; distinct per phase when one is set.
+    assert bundle_digest(_bundle(phase=None)) == bundle_digest(_bundle())
+    assert bundle_digest(_bundle(phase="verify_identity")) != bundle_digest(_bundle())
+    assert bundle_digest(_bundle(phase="verify_identity")) != \
+        bundle_digest(_bundle(phase="enter_apply"))
+    # Prompt: deliberately NOT rendered — the rail is deterministic, not a model feature.
+    assert bundle_to_prompt(_bundle(phase="verify_identity")) == bundle_to_prompt(_bundle())
+    # Replay: the snapshot carries it, so a replayed case re-runs the phase-claimed version.
+    assert replay_snapshot(_bundle(phase="verify_identity"))["phase"] == "verify_identity"
+    assert replay_snapshot(_bundle())["phase"] is None
+
+
 # --- selector guard (invariant #10) ------------------------------------------
 @pytest.mark.parametrize("val", [
     "#first_name", ".jobsearch-Foo", "[data-automation-id=email]",
