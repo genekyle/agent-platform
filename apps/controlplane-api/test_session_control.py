@@ -16,6 +16,7 @@ What is being pinned, in order of how expensive it is to get wrong:
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import accounts
@@ -2936,9 +2937,11 @@ def test_a_captcha_on_signup_escalates_and_never_auto_solves(monkeypatch):
     assert typed == []                              # nothing filled under the challenge
 
 
-def test_an_email_verification_wall_escalates_after_submit(monkeypatch):
-    """Submitting can lead to an email/2FA code prompt — a real gate we do not fabricate. It
-    escalates (and points at the Gmail errand as the next automation)."""
+def test_an_unmeasurable_verification_wall_escalates_after_submit(monkeypatch):
+    """Submitting can lead to a verification prompt. When the wall shows NEITHER a code box nor
+    link language, its mechanism is unmeasured — so it escalates with what IS on screen, the same
+    scan-and-refuse an unmapped page gets. Never a guess: a one-time code typed into whichever box
+    happens to be first burns an attempt on a real account."""
     _, saved = _install(
         monkeypatch,
         {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
@@ -2950,11 +2953,275 @@ def test_an_email_verification_wall_escalates_after_submit(monkeypatch):
         r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
     finally:
         _teardown()
-    assert r["awaiting"] == "operator_verify"
+    # NOT `operator_verify` — that key already means "the search was submitted but not confirmed",
+    # and the cockpit renders that meaning's copy. See the dedicated test below.
+    assert r["awaiting"] == "account_verify_email"
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert any(m.rung == "account" and m.outcome == aps.HUMAN_REQUIRED and "verify leg" in m.detail
                for m in step.minis)
     assert "account" not in _settled(step)         # a real gate does NOT settle the rung
+    assert saved["bb"].world["account_verify"]["mechanism"] == "unknown"
+
+
+# --- the verify_email leg: the Gmail errand's first caller -------------------------------------
+# The errand was built end-to-end on 2026-07-10 and had ZERO internal callers until 2026-08-22
+# (LEARNINGS, the reflection audit). These pin the wire — and, more importantly, pin that wiring it
+# did not soften any of the errand's refusals: an ambiguous match, a stale code and a link-only
+# wall all still stop for the operator.
+
+_CODE_WALL_TEXT = "Please enter the verification code we sent to your email"
+
+
+def _verify_harness(monkeypatch, tmp_path, *, rows, mechanism="code"):
+    """A workday create-leg drive that lands on a verification wall, with the INBOX faked at the
+    errand's own seam. The wall stays up until the code is actually typed into it, so the seam's
+    re-classification reads a real transition rather than a canned one."""
+    import errand_log
+    from routers import errands as errand_routes
+
+    # The errand log is the operator's real record — never appended to by a test run.
+    monkeypatch.setattr(errand_log, "_path", lambda: tmp_path / "errands.jsonl")
+
+    state = {"entered": False}
+
+    async def _fake_inbox(path, payload, timeout=30.0):
+        assert path == "/read_inbox"
+        return {"ok": True, "signed_in": True, "list_found": True, "row_count": len(rows),
+                "rows": rows, "url": "https://mail.google.com/mail/u/0/#inbox",
+                "read_at": datetime.now(timezone.utc).isoformat()}
+
+    monkeypatch.setattr(errand_routes, "_capture_post", _fake_inbox)
+
+    typed = []
+
+    def _execute(payload):
+        if payload.get("action_id") == "type":
+            typed.append((payload.get("target_name"), payload.get("value")))
+            if "Verification" in str(payload.get("target_name") or ""):
+                state["entered"] = True
+        return {"outcome": "ok"}
+
+    def _scan(_payload):
+        if state["entered"]:
+            return {"ok": True, "page_text": "My Information", "candidates": []}
+        wall = {"ok": True, "page_text": _CODE_WALL_TEXT, "candidates": []}
+        if mechanism == "code":
+            wall["candidates"] = [{"role": "textbox", "name": "Verification Code",
+                                   "backend_node_id": 9}]
+        elif mechanism == "link":
+            wall["page_text"] = "We sent you an email — click the link in your email to continue."
+        return wall
+
+    harness, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}, "/execute": _execute, "/ax_scan": _scan},
+        blackboard=_wd_at_wall())
+    return harness, saved, typed
+
+
+def _mail(subject, *, sender="no-reply@myworkday.com", ago_seconds=30):
+    return {"sender": sender, "subject": subject, "snippet": "",
+            "received_at": (datetime.now(timezone.utc)
+                            - timedelta(seconds=ago_seconds)).isoformat()}
+
+
+def test_a_code_wall_is_read_from_the_inbox_and_entered(monkeypatch, tmp_path):
+    """THE WIRE. The account rung's #1 recurring human stall, removed: the wall is measured, the
+    code is read off the inbox LIST (no mail opened), entered, and the page re-classified. Only
+    then is the account claimed — `mark_created` is a claim about another system."""
+    _, saved, typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[_mail("Your Workday verification code is 418302")])
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    assert r["awaiting"] == "apply"                      # through the wall, back to the ladder
+    # The code went into the verification box, and the box was addressed by its exact name.
+    assert ("Verification Code", "418302") in typed
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any(m.rung == "account" and m.outcome == aps.OK and "verify leg" in m.detail
+               for m in step.minis)
+    assert _settled(step) >= {"account"}                 # the rung settles: the ladder moves on
+    assert saved["bb"].world.get("account_verify") is None   # and the card is cleared
+
+
+def test_the_one_time_code_never_reaches_an_event_a_mini_step_or_the_response(monkeypatch,
+                                                                              tmp_path):
+    """The errand redacts the code in its own journal; wiring it into a drive must not re-leak it
+    somewhere else. The value exists only in flight between the errand and the form."""
+    _, saved, _typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[_mail("Your Workday verification code is 418302")])
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert "418302" not in json.dumps(r)                 # not in the panel the UI renders
+    bb = saved["bb"]
+    for e in bb.events:
+        assert "418302" not in e.detail
+    for s in aps.Queue.from_dict(bb.world["apply_queue"]).steps:
+        for m in s.minis:
+            assert "418302" not in m.detail
+
+
+def test_a_link_wall_escalates_because_the_errand_never_opens_a_mail(monkeypatch, tmp_path):
+    """The LINK mechanism is honestly human-required in v1: reading a subject line is free and
+    leaves no read receipt, opening a thread is neither. No button pretends otherwise."""
+    _, saved, typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[_mail("Verify your email address")], mechanism="link")
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "account_verify_email"
+    assert r["last_step"]["verify"]["mechanism"] == "link"
+    assert "link" in r["last_step"]["detail"].lower()
+    # The credential went into the SIGNUP form before the wall appeared — that is the create leg
+    # doing its job. What must not happen is anything typed AT the wall: there is no code to have.
+    assert not any("Verification" in name for name, _v in typed)
+    # RECORDED ANYWAY: the ledger is how the case for building a link-click spine accumulates.
+    assert saved["bb"].world["account_verify"]["mechanism"] == "link"
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert "account" not in _settled(step)
+
+
+def test_two_matching_codes_escalate_rather_than_guessing_through_the_wire(monkeypatch, tmp_path):
+    """The errand refuses to choose between two live codes — a wrong one burns a login attempt.
+    Wiring it into a drive must carry that refusal through, not average it into a retry."""
+    _, saved, typed = _verify_harness(
+        monkeypatch, tmp_path,
+        rows=[_mail("Your Workday verification code is 418302"),
+              _mail("Your Workday verification code is 550913", ago_seconds=20)])
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "account_verify_email"
+    assert r["last_step"]["verify"]["errand_status"] == "ambiguous"
+    assert not any(v for _n, v in typed if v in ("418302", "550913"))   # neither was entered
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert "account" not in _settled(step)
+
+
+def test_a_stale_code_is_not_entered_and_the_wall_holds(monkeypatch, tmp_path):
+    """A login-code inbox is FULL of old codes that match every other filter. The freshness proof
+    is the errand's job and it still holds through the wire — the failure it prevents is silent
+    (the site just says 'invalid' and nothing looks broken)."""
+    _, saved, typed = _verify_harness(
+        monkeypatch, tmp_path,
+        rows=[_mail("Your Workday verification code is 418302", ago_seconds=4000)])
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "account_verify_email"
+    assert r["last_step"]["verify"]["errand_status"] == "not_found"
+    assert not any(v == "418302" for _n, v in typed)
+
+
+def test_a_second_factor_wall_never_asks_the_inbox_for_a_code_it_cannot_hold(monkeypatch,
+                                                                             tmp_path):
+    """An authenticator/SMS wall renders the SAME code box an emailed code does, and
+    `_ACCOUNT_VERIFY_MARKERS` deliberately matches "two-factor"/"authenticator". Classified as
+    `code` it would spend three inbox reads on a code that is in nobody's inbox and then tell the
+    operator to go and check their email — the misleading kind of true."""
+    reads = []
+    from routers import errands as errand_routes
+
+    async def _count_reads(path, payload, timeout=30.0):
+        reads.append(path)
+        return {"ok": True, "signed_in": True, "list_found": True, "row_count": 0, "rows": [],
+                "url": "", "read_at": datetime.now(timezone.utc).isoformat()}
+
+    monkeypatch.setattr(errand_routes, "_capture_post", _count_reads)
+    _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}, "/execute": {"outcome": "ok"},
+         "/ax_scan": {"ok": True,
+                      "page_text": "Two-factor authentication: enter the code from your "
+                                   "authenticator app",
+                      "candidates": [{"role": "textbox", "name": "Verification Code",
+                                      "backend_node_id": 9}]}},
+        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] == "account_verify_email"
+    assert r["last_step"]["verify"]["mechanism"] == "second_factor"
+    assert reads == []                                   # the inbox was never opened
+    assert "authenticator" in r["last_step"]["detail"]
+
+
+def test_an_emailed_code_still_wins_when_the_page_also_says_two_factor():
+    """The guard above must not swallow the ordinary case: plenty of walls read 'two-factor
+    authentication: enter the code we emailed you', and there the email wording is the specific
+    one. Named-factor language only wins when the page does NOT mention email."""
+    emailed = sc._verify_wall_mechanism(
+        {"page_text": "Two-factor authentication — enter the code we emailed you",
+         "candidates": [{"role": "textbox", "name": "Verification Code"}]})
+    assert emailed["mechanism"] == "code"
+
+
+def test_a_display_name_sender_does_not_store_an_unmatchable_domain():
+    """`Name <user@host>` would store `host>` as the measured sender, and a hint carrying a stray
+    bracket can never match a later inbox read — it looks like knowledge and behaves like
+    absence."""
+    assert sc._sender_domain("Workday <no-reply@myworkday.com>") == "myworkday.com"
+    assert sc._sender_domain("no-reply@myworkday.com Workday") == "myworkday.com"
+    assert sc._sender_domain("Talent Acquisition") == ""     # the reader's display-name fallback
+    assert sc._sender_domain("") == ""
+
+
+def test_clearing_a_wall_on_a_later_press_keeps_the_credential_the_site_actually_took(
+        monkeypatch, tmp_path):
+    """THE VAULT-CORRUPTION PATH. When the wall is cleared by a LATER press, this request typed no
+    password — an earlier one did. Re-deriving now is not proof of what the site holds (the suffix
+    and the company string both drift), so an existing vault entry must win. Overwriting it would
+    manufacture the silent wrong-password future `record_credentials` exists to prevent."""
+    import ats_accounts
+
+    written = []
+    monkeypatch.setattr(ats_accounts, "record_credentials",
+                        lambda *a, **k: written.append(a) or {"ok": True})
+    monkeypatch.setattr(sc, "_has_stored_credential", lambda *_a: True)
+    monkeypatch.setattr(ats_accounts, "mark_created", lambda *a, **k: {"ok": True})
+
+    bb = _wd_at_wall()
+    # The wall was met by an EARLIER request and parked; this press is the operator's "fetch it".
+    bb.world["account_verify"] = {"job_id": aps.Queue.from_dict(
+        bb.world["apply_queue"]).steps[0].job_id, "company": "MFS Investment Management",
+        "ats": "workday", "mechanism": "code"}
+    _, saved, typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[_mail("Your Workday verification code is 418302")])
+    saved["bb"] = bb
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True
+    assert ("Verification Code", "418302") in typed      # the wall was still cleared
+    assert written == []                                 # ...and the vault was left alone
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any("kept" in m.detail for m in step.minis if m.rung == "account")
+
+
+def test_the_verification_wall_does_not_borrow_the_searchs_awaiting_key(monkeypatch, tmp_path):
+    """THE NAMING COLLISION, retired at this seam. `operator_verify` means 'the search was
+    submitted but not confirmed' (run_query) and the cockpit renders that copy — so reusing it
+    here would tell an operator to check a search box while the page wanted a 6-digit code. Same
+    bug the mfa -> operator_2fa split fixed (LEARNINGS 2026-07-27); fixed here before it bit."""
+    _, _saved, _typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[], mechanism="link")
+    try:
+        r = client.post("/api/session_control/1/apply_account", json={"mode": "auto"}).json()
+    finally:
+        _teardown()
+    assert r["awaiting"] != "operator_verify"
+    assert r["awaiting"] == "account_verify_email"
 
 
 def test_handoff_mode_still_available_for_a_manual_creation(monkeypatch):
@@ -6153,3 +6420,59 @@ def test_apply_flag_records_the_live_url_and_the_canonical_key(monkeypatch):
         "the flow must carry the canonical job key, not the sighting id")
     assert captured["started_at"] is not None, "the first mini-step dates the flow"
     assert (out.get("last_step") or {}).get("terminal") != "now", "the flag must have landed"
+
+
+# --- the shadow seam's two facets, and the vocabulary they must agree with -----------
+def test_the_phase_vocabularies_agree_with_the_rung_intent_table():
+    """`decide`'s phase sets and `_RUNG_INTENT` are two statements of ONE fact — which rungs look
+    and which rungs click. They live in different packages and nothing but this test stops them
+    drifting apart, because an unmapped rung falls through the rail BY DESIGN and so a drift is
+    silent: agreement just quietly stops improving on whichever rung was dropped.
+
+    `submit` is the deliberate exception. It is `click` in `_RUNG_INTENT` (that IS what the rung
+    does) and in NEITHER phase set, because the rail must never propose the one irreversible
+    control — the same rule that keeps `Submit` out of `_ADVANCE_CONTROLS`.
+    """
+    from controller.decide import _ENTER_PHASES, _OBSERVE_PHASES
+
+    for rung, verb in sc._RUNG_INTENT.items():
+        if rung == "submit":
+            assert rung not in _OBSERVE_PHASES and rung not in _ENTER_PHASES, \
+                "submit must never be reachable by the phase rail"
+            continue
+        expected = _OBSERVE_PHASES if verb == "observe" else _ENTER_PHASES
+        assert rung in expected, (
+            f"{rung!r} is {verb!r} in _RUNG_INTENT but is not in the matching phase set — "
+            f"the rail will fall through on it and its shadow rows will keep disagreeing")
+    # And nothing may appear in a phase set that the ladder never works.
+    for phase in _OBSERVE_PHASES | _ENTER_PHASES:
+        assert phase in sc._RUNG_INTENT, f"{phase!r} is a phase the crank never journals"
+
+
+def test_the_shadow_bundle_carries_the_phase_and_the_page_text(monkeypatch):
+    """The 2026-08-22 wire. Without `phase` the same (task, state) maps to both verbs; without
+    `page_text` the state comes from the URL alone, which Workday (one url per application) and
+    company_site both defeat. Asserted on the bundle the seam actually builds."""
+    seen = {}
+
+    def capture_bundle(**kw):
+        seen.update(kw)
+        return SimpleNamespace(state="workday_my_information", task="apply")
+
+    monkeypatch.setattr("controller.bundle.build_bundle", capture_bundle)
+    monkeypatch.setattr("controller.shadow.shadow_step",
+                        lambda *a, **k: None)
+
+    before = SimpleNamespace(
+        url="https://acme.wd1.myworkdayjobs.com/job/apply",
+        candidates=[{"role": "heading", "name": "My Information"},
+                    {"role": "button", "name": "Save and Continue"}],
+        belief=None, window=None)
+    step = SimpleNamespace(title="Analyst", job_id="j1", company="Acme", platform="workday")
+
+    sc._shadow_the_crank(SimpleNamespace(id="verify_identity"), step, before,
+                         {}, "ok", session_id=1)
+
+    assert seen.get("phase") == "verify_identity"
+    # the SAME join `_state_from_observation` uses — AX names, space-joined
+    assert seen.get("page_text") == "My Information Save and Continue"

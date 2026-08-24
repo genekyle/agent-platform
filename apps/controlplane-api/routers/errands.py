@@ -44,6 +44,12 @@ class FetchLoginCodeRequest(BaseModel):
     #: `indeed`, because the registry id and the brand in an email address are deliberately
     #: different strings.
     sender_hint: Optional[str] = None
+    #: Optional LIST of hints — domains and a company phrase — for callers whose mail brand is not
+    #: their domain_id at all. The account rung's verification mail comes from the ATS's mail
+    #: domain ("Boston Children's Hospital on BrassRing" → `@trm.brassring.com`), which no stem of
+    #: any domain_id produces; derive these with `gmail_senders.senders_for(ats, company)`. Wins
+    #: over `sender_hint` when both are given.
+    sender_hints: Optional[list[str]] = None
     #: Freshness window. 15 minutes by default: most one-time codes expire inside 10.
     max_age_seconds: int = 900
     #: Which browser holds the signed-in Google profile. The errand is a tab hop, not a login —
@@ -119,7 +125,8 @@ async def fetch_login_code(body: FetchLoginCodeRequest):
         errand_id="fetch_login_code",
         requested_by=body.requested_by,
         reason=body.reason,
-        params={"sender_hint": body.sender_hint, "max_age_seconds": body.max_age_seconds},
+        params={"sender_hint": body.sender_hint, "sender_hints": body.sender_hints,
+                "max_age_seconds": body.max_age_seconds},
         resume_hint=body.resume_hint,
     )
 

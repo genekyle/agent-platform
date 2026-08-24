@@ -45,7 +45,14 @@ import apply_fields
 #: free of anything that could be mistaken for the secret itself.
 VAULT_REFS = ("account.username", "account.password")
 
-_VALUE_REF = {"username": "account.username", "password": "account.password"}
+#: Value sources resolved from a LIVE ERRAND RESULT at drive time — the fetch_login_code code.
+#: Deliberately neither a vault ref nor an answer key: a one-time code is never stored anywhere,
+#: so the ref can only ever resolve while the errand's answer is in hand, and a committed program
+#: carries the ref and nothing that could reproduce the value.
+ERRAND_REFS = ("errand.login_code",)
+
+_VALUE_REF = {"username": "account.username", "password": "account.password",
+              "login_code": "errand.login_code"}
 
 #: WHICH fields a create-account form has, per ATS, and where each value comes from. The ADDRESSING
 #: is not here — it is in `apply_fields`, resolved by (ats, field), because a second place that says
@@ -171,6 +178,30 @@ ACCOUNT_FORMS: dict[str, dict[str, dict[str, Any]]] = {
                     "submit": "identifier_continue",
                 },
             ),
+        },
+    },
+    # THE WALL AFTER THE SUBMIT — the email-verification gate, as its own leg
+    # (PLAN_verify_email_leg.md, wired 2026-08-22). Due-ness is MEASURED, never stored: the seam
+    # offers this leg only when the live scan matches the verification wall, exactly as a paged
+    # form's page is chosen by `present`. The code value's source is `login_code`, resolved from
+    # the fetch_login_code errand's answer at drive time (see ERRAND_REFS) — never the vault,
+    # never the answer store, never journaled.
+    #
+    # ONLY THE CODE MECHANISM IS DRIVEABLE. A wall that sent a verification LINK instead has no
+    # form here on purpose — the errand reads subject lines only (no read receipt), so the click
+    # is the operator's, and the seam says so instead of pretending.
+    "verify_email": {
+        # HYPOTHESIS, UNMEASURED (2026-08-22): no live verify screen has been scanned — every
+        # verification so far was done by the operator's hand (PowerSchool, LEARNINGS 2026-08-21).
+        # Workday is mapped first because it is the ledger's most-driven ATS and its create recipe
+        # has named this errand as the next step since 07-12. The names below are the generic
+        # Workday shape, not a measurement; the driver's exact-name addressing is the net — a
+        # wrong name fails loudly as not_found with nothing submitted, and the escalation still
+        # carries the errand's masked evidence. Whoever first SEES this screen live: correct these
+        # from the scan and drop this label, same as any other mapped form.
+        "workday": {
+            "fields": (("verification_code", "login_code"),),
+            "submit": "verify_email_submit",
         },
     },
     "sign_in": {

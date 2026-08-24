@@ -8,18 +8,22 @@
       "params": {
         "control": "Continue"
       }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue without tailoring"
+      }
     }
   ],
   "expected_exit": [
-    "indeed_apply_questions",
-    "indeed_apply_contact_info",
-    "indeed_apply_demographics",
-    "indeed_apply_review"
+    "indeed_apply_resume_highlights",
+    "indeed_apply_questions"
   ],
   "version": "v1",
   "compiled_from": [
     "476f34737439059b742d53f8254067b9645f30ffe22b9c9c14fa555dbe2e5c24"
   ],
-  "verified_at": "2026-07-20T00:52:56.552264+00:00",
-  "stale": true
+  "verified_at": "2026-08-23T03:01:34.047682+00:00",
+  "stale": false
 }

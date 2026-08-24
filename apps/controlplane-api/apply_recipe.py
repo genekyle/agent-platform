@@ -433,7 +433,8 @@ WORKDAY_CREATE_ACCOUNT_RECIPE = [
     {"step": 0, "state": "workday_create_account",
      "action": "fill Email Address (username) + Password + Verify New Password (the generated "
                "credential), CHECK the acknowledge checkbox, click Create Account. NEVER fill the "
-               "honeypot. May then require email verification (errand → gmail fetch_login_code).",
+               "honeypot. May then require email verification — WIRED 2026-08-22: the apply_account "
+               "seam fetches the code via the gmail errand and drives the verify_email leg.",
      "fields": {
          "email": {"role": "textbox", "name": "Email Address"},
          "password": {"role": "textbox", "name": "Password"},
@@ -461,7 +462,9 @@ WORKDAY_CREATE_ACCOUNT_RECIPE = [
          "workday_verify_email": {
              "meaning": "account created but GATED on email verification before it can be used",
              "detect": "'verify'/'check your email'/'code sent' copy; no application stepper",
-             "next": "ERRAND → gmail fetch_login_code, then resume. Human-gated; never guess a code."},
+             "next": "the verify_email leg (WIRED 2026-08-22): apply_account fetches the code via "
+                     "the gmail errand, enters it, and re-classifies. Ambiguous/stale/link-typed "
+                     "walls still escalate; never guess a code."},
      },
      # The stepper itself disambiguates: with the account step pending it reads 'step 1 of 7'
      # (Create Account/Sign In); once the account exists that step DISAPPEARS and My Information
@@ -508,8 +511,9 @@ APPVAULT_CREATE_ACCOUNT_RECIPE = [
      "action": "fill Email + Password + confirm-Password (the generated credential; must meet the "
                "8-18/upper/lower/non-alpha rule) + First Name + Last Name; Country of Residence and "
                "Profile Visibility default (United States / Any company recruiter); click 'Click Here "
-               "to Accept Terms of Use'; then click Continue. May then require email verification "
-               "(errand → gmail fetch_login_code).",
+               "to Accept Terms of Use'; then click Continue. May then require email verification — "
+               "the apply_account seam calls the gmail errand (WIRED 2026-08-22); AppVault's verify "
+               "screen is unmapped, so entering the code escalates until someone scans it.",
      "fields": {
          "email": {"label": "Email", "role": "textbox", "match": "label_or_first_text",
                    "note": "MUI floating label 'Email *'; input has no name/id — match by label or 1st text input"},

@@ -9,15 +9,17 @@ import { getJSON, postJSON, fmtTime } from "./workspace/api";
 // posting seen on Indeed and LinkedIn is ONE row that names both, and `platform` is a filter
 // rather than a partition.
 //
-// Three things the operator asked to be able to do, in three tabs:
+// Four things the operator asked to be able to do, in four tabs:
 //   Jobs        every posting, its description, and what happened to it
 //   Applied     only the ones with an application, with the reply timeline
 //   Duplicates  the review queue — nothing is ever folded away without a human saying so
+//   Inbox       the Gmail sweep — outcomes read off the mailbox, ambiguous matches held for review
 
 const TABS = [
   { id: "jobs", label: "Jobs" },
   { id: "applied", label: "Applied" },
   { id: "duplicates", label: "Duplicates" },
+  { id: "inbox", label: "Inbox" },
 ];
 
 // Event kinds worth one-click access on an application. The full vocabulary comes from the server
@@ -46,14 +48,22 @@ export function JobDatabaseSection({ domain }) {
   const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState("");
 
+  const [inboxPending, setInboxPending] = useState(0);
+
   const loadOverview = useCallback(() => {
     getJSON("/api/career_search/overview").then(setOverview).catch((e) => setErr(e.message));
+  }, []);
+  const loadInboxPending = useCallback(() => {
+    // `pending` is the server's true count; `total` is only the returned page's length.
+    getJSON("/api/career_search/inbox?status=needs_review&limit=1")
+      .then((d) => setInboxPending(d.pending ?? d.total ?? 0)).catch(() => {});
   }, []);
 
   useEffect(() => {
     loadOverview();
+    loadInboxPending();
     getJSON("/api/career_search/event_vocabulary").then(setVocab).catch(() => {});
-  }, [loadOverview]);
+  }, [loadOverview, loadInboxPending]);
 
   const pending = overview?.totals?.pending_duplicates || 0;
 
@@ -84,12 +94,15 @@ export function JobDatabaseSection({ domain }) {
                   onClick={() => setTab(t.id)}>
             {t.label}
             {t.id === "duplicates" && pending > 0 && ` (${pending})`}
+            {t.id === "inbox" && inboxPending > 0 && ` (${inboxPending})`}
           </button>
         ))}
       </div>
 
       {tab === "duplicates"
         ? <Duplicates onChange={loadOverview} />
+        : tab === "inbox"
+        ? <InboxQueue vocab={vocab} onChange={() => { loadOverview(); loadInboxPending(); }} />
         : <JobList key={tab} pinnedPlatform={pinnedPlatform} appliedOnly={tab === "applied"}
                    vocab={vocab} onChange={loadOverview} />}
     </div>
@@ -485,6 +498,167 @@ function SideBySide({ label, job }) {
         {job.has_description && " · has description"}
       </div>
       <div className="muted">{job.location || ""}</div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+// The inbox sweep — outcomes read off Gmail, ambiguous matches held for a human
+// --------------------------------------------------------------------------------------
+
+function InboxQueue({ vocab, onChange }) {
+  const [data, setData] = useState(null);
+  const [sweep, setSweep] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(null);
+
+  // Two fetches on purpose: the queue is SERVER-filtered so a pending row can never age out of
+  // the panel behind 100 newer resolved rows (the badge counted rows the panel could not show —
+  // review catch); the unfiltered page only feeds "recently resolved".
+  const load = useCallback(() => {
+    Promise.all([
+      getJSON("/api/career_search/inbox?status=needs_review"),
+      getJSON("/api/career_search/inbox"),
+    ])
+      .then(([pend, all]) => setData({
+        queue: pend.emails || [],
+        pending: pend.pending ?? (pend.emails || []).length,
+        done: (all.emails || []).filter((e) => e.status !== "needs_review"),
+      }))
+      .catch((e) => setErr(e.message));
+  }, []);
+  useEffect(load, [load]);
+
+  const runSweep = () => {
+    setBusy("sweep");
+    setSweep(null);
+    postJSON("/api/career_search/inbox/sweep", {})
+      .then((r) => { setSweep(r); load(); onChange?.(); })
+      .catch((e) => setErr(e.message))
+      .finally(() => setBusy(null));
+  };
+
+  const resolve = (id, body) => {
+    setBusy(id);
+    postJSON(`/api/career_search/inbox/${id}/resolve`, body)
+      .then(() => { load(); onChange?.(); })
+      .catch((e) => setErr(e.message))
+      .finally(() => setBusy(null));
+  };
+
+  const queue = data?.queue || [];
+  const done = data?.done || [];
+
+  return (
+    <div className="panel" style={{ marginTop: 14 }}>
+      <div className="panel-header">
+        <div>Gmail inbox <span className="muted">({data?.pending ?? queue.length} waiting)</span></div>
+        <button className="btn btn-sm btn-primary" disabled={busy === "sweep"} onClick={runSweep}>
+          {busy === "sweep" ? "Sweeping…" : "Sweep inbox"}
+        </button>
+      </div>
+      <p className="system-micro-copy" style={{ margin: "0 12px 10px" }}>
+        Reads the open Gmail tab's subject lines (never the mail itself) and writes what it is sure
+        of to the application timelines — confirmations and clearly-worded rejections. Anything a
+        human should glance at lands here instead. Re-sweeping an unchanged inbox writes nothing.
+      </p>
+      {err && <p className="mode-hint" style={{ color: "#f85149", margin: "0 12px 10px" }}>{err}</p>}
+      {sweep && (
+        <p className="stat-footnote" style={{ margin: "0 12px 10px" }}>
+          {sweep.ok
+            ? `Swept ${sweep.read} mails: ${sweep.recorded?.length || 0} recorded, `
+              + `${sweep.needs_review?.length || 0} for review, ${sweep.ignored} not ours, `
+              + `${sweep.skipped_known} already seen.`
+            : `Blocked: ${sweep.blocked}`}
+        </p>
+      )}
+      {data && queue.length === 0 && (
+        <p className="empty-state" style={{ margin: "0 12px 14px" }}>Nothing waiting on you.</p>
+      )}
+
+      <div style={{ display: "grid", gap: 10, padding: "0 12px 12px" }}>
+        {queue.map((row) => (
+          <InboxReviewRow key={row.id} row={row} vocab={vocab}
+                          busy={busy === row.id} onResolve={(body) => resolve(row.id, body)} />
+        ))}
+      </div>
+
+      {done.length > 0 && (
+        <div style={{ padding: "0 12px 12px" }}>
+          <div className="field-label">Recently resolved</div>
+          <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12 }}>
+            {done.slice(0, 12).map((row) => (
+              <li key={row.id} className="muted" style={{ marginBottom: 2 }}>
+                <span className="badge badge--muted">{row.status}</span>{" "}
+                {row.subject || "(no subject kept)"}
+                {row.kind && <> — <strong>{row.kind}</strong></>}
+                {row.decided_by && <> · {row.decided_by}</>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InboxReviewRow({ row, vocab, busy, onResolve }) {
+  // Prefills come from the matcher; the human may override either before confirming. Kinds are
+  // rendered from the server vocabulary, never a hardcoded list — this queue introduces new kinds
+  // and must be the first consumer that cannot drift from the validator.
+  const [kind, setKind] = useState(row.kind || "");
+  const [jobKey, setJobKey] = useState(row.job_key || "");
+  const [note, setNote] = useState("");
+
+  return (
+    <div style={{ border: "1px solid rgba(127,127,127,0.25)", borderRadius: 6, padding: 10, fontSize: 12 }}>
+      <div><strong>{row.subject || "—"}</strong></div>
+      <div className="muted" style={{ marginBottom: 4 }}>
+        {row.sender_name || row.from_address}
+        {row.sender_name && row.from_address && <> · {row.from_address}</>}
+        {row.ats_id && <> · <span className="badge badge--muted">{row.ats_id}</span></>}
+        {row.received_at && <> · {fmtTime(row.received_at)}</>}
+      </div>
+      {row.snippet && <div className="muted" style={{ marginBottom: 6 }}>{row.snippet}</div>}
+      <div className="stat-footnote" style={{ marginBottom: 6 }}>
+        {(row.reasons || []).join(" · ")}
+      </div>
+
+      {(row.candidates || []).length > 0 ? (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+          {row.candidates.map((c) => (
+            <button key={c.job_key}
+                    className={c.job_key === jobKey ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                    onClick={() => setJobKey(c.job_key)}
+                    title={(c.reasons || []).join(" · ")}>
+              {c.company} — {c.title}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <input className="form-input" style={{ marginBottom: 6, width: "100%" }} value={jobKey}
+               onChange={(e) => setJobKey(e.target.value)}
+               placeholder="No application matched — paste a job key to file it, or dismiss" />
+      )}
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <select className="form-select" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">what happened?</option>
+          {(vocab?.kinds || []).map((k) => (
+            <option key={k.kind} value={k.kind}>{k.kind}{k.is_response ? " (reply)" : ""}</option>
+          ))}
+        </select>
+        <button className="btn btn-sm btn-primary" disabled={busy || !kind || !jobKey}
+                onClick={() => onResolve({ action: "confirm", kind, job_key: jobKey })}>
+          Record it
+        </button>
+        <input className="form-input" style={{ flex: "1 1 140px" }} value={note}
+               onChange={(e) => setNote(e.target.value)} placeholder="why not? (optional)" />
+        <button className="btn btn-sm" disabled={busy}
+                onClick={() => onResolve({ action: "dismiss", note })}>
+          Not ours
+        </button>
+      </div>
     </div>
   );
 }

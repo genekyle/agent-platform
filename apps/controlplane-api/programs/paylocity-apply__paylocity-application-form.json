@@ -1,0 +1,32 @@
+{
+  "task": "paylocity_apply",
+  "state": "paylocity_application_form",
+  "guard_fields": [
+    "County",
+    "Apply with resume"
+  ],
+  "steps": [
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "County"
+      }
+    },
+    {
+      "intent": "upload",
+      "params": {
+        "field": "Apply with resume"
+      }
+    }
+  ],
+  "expected_exit": [
+    "paylocity_application_form"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "91d25e0dc2ca3fd8d703b24464dcc08018a8b48dd5b8a045e7f2557269fac276",
+    "9fa371f163fe76cc2e1636f28a50250ec7e8456be9fe3fd039f50ab01bbaff0e"
+  ],
+  "verified_at": "2026-08-23T03:01:34.437695+00:00",
+  "stale": false
+}

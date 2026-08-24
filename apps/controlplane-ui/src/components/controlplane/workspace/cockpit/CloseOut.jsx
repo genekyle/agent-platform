@@ -57,6 +57,18 @@ export default function CloseOut({ sessionId, panel, onClosed }) {
           <AppIcon name="checkCircle" size={13} /> Session closed out
         </div>
         <p className="rung__meta">{report.detail}</p>
+        {/* The drive-end inbox sweep's account. A blocked sweep MUST be visible: the whole point
+            of the automatic crank is outcomes landing without anyone pressing a button, and a
+            silently-dead crank looks identical to an empty mailbox (review catch). */}
+        {report.inbox_sweep && (
+          <p className="rung__meta">
+            {report.inbox_sweep.ok
+              ? `Inbox swept: ${(report.inbox_sweep.recorded || []).length} outcome(s) recorded, `
+                + `${(report.inbox_sweep.needs_review || []).length} for review, `
+                + `${report.inbox_sweep.skipped_known ?? 0} already seen.`
+              : `Inbox sweep blocked — ${report.inbox_sweep.blocked}`}
+          </p>
+        )}
         {(report.discarded || []).length > 0 && (
           <p className="rung__meta">
             Discarded on the record:{" "}

@@ -636,6 +636,30 @@ function ExecuteBody({ focus, panel, busy, call, decide }) {
         <ProposalBody proposal={focus.proposal} busy={busy} decide={decide} />
       )}
 
+      {/* The verification wall's card. Names the mailbox being read and the measured mechanism —
+          and NEVER the code: the one-time value exists only in flight between the errand and the
+          form, and a surface that rendered it would be the journal leak with a nicer font. */}
+      {focus.kind === "verify_email" && focus.verify && (
+        <div className="work__section">
+          <div className="work__section-head">
+            <AppIcon name="shield" size={13} />
+            Verify email — {focus.verify.company} ({focus.verify.ats})
+          </div>
+          <dl className="sc-account__creds">
+            <dt>Mailbox</dt><dd><code>{focus.verify.mailbox || "the shared Gmail identity"}</code></dd>
+            <dt>Mechanism</dt>
+            <dd>
+              {focus.verify.mechanism === "code" ? "a one-time code (readable from the inbox list)"
+                : focus.verify.mechanism === "link" ? "a verification link (the click is yours)"
+                  : focus.verify.mechanism === "second_factor"
+                    ? "a second factor — not email, so no inbox read is attempted"
+                    : "not measurable from the scan"}
+            </dd>
+          </dl>
+          {focus.verify.detail && <p className="rung__meta">{focus.verify.detail}</p>}
+        </div>
+      )}
+
       {/* The credential card. The one place credentials appear, and the boundary is loud. */}
       {account && (
         <div className="work__section">
@@ -791,8 +815,8 @@ function ProposalBody({ proposal, busy, decide }) {
 }
 
 const SETUP_KINDS = new Set(["declare", "clean_start", "login"]);
-const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "application", "gate",
-  "orient"]);
+const EXECUTE_KINDS = new Set(["proposal", "account_handoff", "account", "verify_email",
+  "application", "gate", "orient"]);
 
 export function WorkSurface({
   panel, cockpit, viewMoment, onExitDetour, onNewSearch, busy, error, call, decide, onFlag,

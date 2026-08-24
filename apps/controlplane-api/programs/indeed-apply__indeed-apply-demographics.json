@@ -2,7 +2,8 @@
   "task": "indeed_apply",
   "state": "indeed_apply_demographics",
   "guard_fields": [
-    "Are you authorized to work in the United States?"
+    "Are you authorized to work in the United States?",
+    "Voluntary Self-Identification of Disability Form CC-305 OMB Control Number 1250-0005 Expir"
   ],
   "steps": [
     {
@@ -22,18 +23,37 @@
       "params": {
         "control": "Review your application"
       }
+    },
+    {
+      "intent": "check_group",
+      "params": {
+        "field": "Voluntary Self-Identification of Disability Form CC-305 OMB Control Number 1250-0005 Expir"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "I decline to self-identify."
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Review your application"
+      }
     }
   ],
   "expected_exit": [
-    "indeed_apply_review",
-    "indeed_apply_demographics"
+    "indeed_apply_review"
   ],
   "version": "v1",
   "compiled_from": [
     "4cbaf7d667b5bd00d4986698af0c725f1c79db0586c0682a72491bb129312f06",
     "d9465186df040fc0826c79841f960ec91d9989b23a2b051f4e45da52950f6f70",
-    "47bdc9d8e7dabef8aa9a4a974f5a8dbc5ac1b264f607b9677709ce3ac55dc3e6"
+    "47bdc9d8e7dabef8aa9a4a974f5a8dbc5ac1b264f607b9677709ce3ac55dc3e6",
+    "cb773ea27bf25cc932f5a8723d423fbd8a76ce75a96d7ee5cb27182d50b52544",
+    "5a09cea98d6ba7687e4c6ae3bc3d406241d598c5ef470bf8029c46975fa0aa95"
   ],
-  "verified_at": "2026-07-20T00:52:56.553124+00:00",
+  "verified_at": "2026-08-23T03:01:34.412222+00:00",
   "stale": false
 }

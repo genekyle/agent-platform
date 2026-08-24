@@ -1,0 +1,55 @@
+{
+  "task": "apply",
+  "state": "indeed_apply_questions",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_questions",
+    "indeed_apply_contact_info",
+    "indeed_apply_demographics",
+    "indeed_apply_review"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "a164dcf945170ac1197c5ebd8106ceb739fefeded6b6ee7852c2272bcd0a03cf"
+  ],
+  "verified_at": "2026-08-23T03:01:34.425834+00:00",
+  "stale": false
+}

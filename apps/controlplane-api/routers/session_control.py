@@ -612,6 +612,46 @@ def _account_handoff(bb: Any) -> Optional[dict[str, Any]]:
         return stored
 
 
+def _account_verify(bb: Any) -> Optional[dict[str, Any]]:
+    """The pending email-verification wall, with its VOLATILE halves re-derived at render.
+
+    Same split as `_account_handoff`, same reason (the 08-21 snapshot lesson): WHICH WALL WAS MET —
+    job, company, ATS, the mailbox that will be read — is a fact about a moment and is stored.
+    WHICH LEG it interrupted and WHICH MECHANISM the wall uses (code vs link) move on their own:
+    the operator can settle the account in the Accounts panel, and the mechanism is re-measured on
+    every drive and written to the characteristics table — so both are asked again here rather than
+    replayed from the snapshot. The snapshot's own `mechanism` survives as the last-known fallback
+    for when the characteristics read is unavailable; falling back to a measurement that was true
+    when written beats inventing a value from a non-answer.
+    """
+    stored = (bb.world or {}).get("account_verify")
+    if not isinstance(stored, dict):
+        return None
+    company = stored.get("company") or ""
+    ats = stored.get("ats") or ""
+    fresh = dict(stored)
+    if company and ats:
+        try:
+            import ats_accounts
+            fresh["leg"] = ats_accounts.next_account_action(company, ats).get("leg")
+        except Exception:  # noqa: BLE001 — a read model must not break the panel
+            pass
+    if ats:
+        try:
+            import models
+            from db import SessionLocal
+            with SessionLocal() as _db:
+                row = (_db.query(models.AtsCharacteristic)
+                       .filter_by(ats_id=ats, kind="auth", key="verification_mechanism")
+                       .order_by(models.AtsCharacteristic.updated_at.desc())
+                       .first())
+                if row is not None and row.value:
+                    fresh["mechanism"] = row.value
+        except Exception:  # noqa: BLE001
+            pass
+    return fresh
+
+
 # --- arbitration: the ONE next action -----------------------------------------------------------
 # TWO SURFACES ANSWER "WHAT NEXT", AND SOMETHING HAS TO RESOLVE THEM.
 #
@@ -892,6 +932,9 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # met is stored; WHICH LEG IS DUE is asked again on every render, because the answer moves
         # without the rung being cranked. See `_account_handoff`.
         "account_handoff": _account_handoff(bb),
+        # A pending EMAIL-VERIFICATION wall for the step being worked — the identity stored, the
+        # leg and mechanism re-derived on every render. See `_account_verify`.
+        "account_verify": _account_verify(bb),
         # THE ACCOUNT'S STANDING STATE for the step being worked — which leg is due, and whether a
         # credential exists to run it. Separate from `account_handoff`, which is a pending REQUEST
         # and is cleared the moment the account is made. Without this the panel went blank at
@@ -1207,7 +1250,8 @@ def _queue_in_progress(bb: Any) -> bool:
 #: facts (auth state, window census) that a new search has no business resetting.
 _SEARCH_SCOPED_WORLD: tuple[str, ...] = (
     "page_results", "apply_queue", "open_pane", "applied_check", "tab_drift", "orient",
-    "apply_tab", "account_handoff", "apply_proposal", "radius_miles", "last_belief",
+    "apply_tab", "account_handoff", "account_verify", "apply_proposal", "radius_miles",
+    "last_belief",
     # THE SEARCH ROW ITSELF (`models.Search.id`), which outranked every other key here for damage.
     # It is minted by `review_page` and it is what every JobDecision joins through — so a search
     # that changed query while this key survived would file the NEXT search's decisions against the
@@ -3345,11 +3389,392 @@ _ACCOUNT_VERIFY_MARKERS = ("verification code", "verify your email", "check your
                            "enter the code", "one-time", "two-step", "two-factor", "authenticator")
 
 
+def _is_verification_wall(text: str) -> bool:
+    """Is this page an email/2FA verification wall? Code language OR link language — the two
+    mechanisms word themselves completely differently, and a detector that knew only the first
+    read a link wall as a finished signup (see `_VERIFY_LINK_LANGUAGE`). `text` is already
+    lowercased page text + candidate names."""
+    return (any(m in text for m in _ACCOUNT_VERIFY_MARKERS)
+            or any(m in text for m in _VERIFY_LINK_LANGUAGE))
+
+
 #: The account form table now lives in `account_forms`, because a router is the wrong home for a
 #: recipe: nothing outside an HTTP handler could read it, which is why the account rung produced no
 #: program the controller could step (see that module's header). This name stays as the local alias
 #: the driver already reads.
 _ACCOUNT_FORMS = account_forms.ACCOUNT_FORMS
+
+#: How long the verify seam waits for the verification mail. The mail usually lands in seconds;
+#: `not_found` is the errand's own "retryable" verdict, so three reads over ~25s cover the slow
+#: tail without parking the drive on a stall. Ambiguous/blocked stop the loop at once — those need
+#: a human, and re-reading the same inbox cannot change that.
+_VERIFY_CODE_ATTEMPTS = 3
+_VERIFY_CODE_WAIT_S = 12.0
+
+#: Copy the wall's page uses when it sent a LINK rather than a code. Matched lowercased against
+#: page text + candidate names, same corpus as `_ACCOUNT_VERIFY_MARKERS`.
+#:
+#: THESE ARE ALSO WALL MARKERS, and that is not a convenience. `_ACCOUNT_VERIFY_MARKERS` is
+#: code-centric — every phrase in it describes a page asking you to TYPE something — so a wall
+#: whose whole message is "we sent you an email, click the link" matched none of them and read as
+#: a clean signup. That is the expensive direction to be wrong in: the leg would call
+#: `mark_created` on an account the employer has not verified, the sign-in leg would be due
+#: forever against it, and every later rejection would read as a bad password. Found writing the
+#: link-mechanism test, 2026-08-22 — the fixture was honest and the detector was not.
+_VERIFY_LINK_LANGUAGE = ("click the link", "link in your email", "verification link",
+                         "sent you a link", "click on the link", "follow the link")
+
+
+def _gmail_browser_url(db: Session) -> str:
+    """The browser holding the signed-in google profile — where `/read_inbox` must look.
+
+    The errand's route names the domain (`providers.google.auth.code_delivery.via_domain`); a live
+    session on that domain names the port. Falls back to the errand route's own default (9222,
+    the shared-profile convention) — and a wrong answer here is honest downstream: the errand
+    reports BLOCKED with "is the shared browser running?", never a silent empty inbox.
+    """
+    try:
+        import errands
+        domain = (errands.route("fetch_login_code") or {}).get("domain_id") or "gmail"
+        from sqlalchemy import select as _select
+        rows = db.scalars(_select(TrainingSession)
+                          .where(TrainingSession.domain_id == domain)
+                          .order_by(TrainingSession.id.desc())).all()
+        # Newest-first, same rule as session_manager.port_owners: historical rows retain recycled
+        # ports, so only a session still claiming to run may answer.
+        for row in rows:
+            if row.chrome_debug_port and (row.status or "") in ("active", "starting"):
+                return f"http://127.0.0.1:{row.chrome_debug_port}"
+    except Exception:  # noqa: BLE001 — discovery is best-effort; the default is the convention
+        pass
+    return "http://127.0.0.1:9222"
+
+
+#: Factors that do NOT arrive by email, however code-shaped the wall looks. An authenticator app
+#: and an SMS both present a code box, so the box alone cannot tell them from an emailed code.
+_NON_EMAIL_FACTOR_LANGUAGE = ("authenticator", "authentication app", "text message", "sms",
+                              "your phone", "phone number", "mobile number", "call you")
+
+
+def _sender_domain(sender: str) -> str:
+    """The mail domain out of whatever the inbox reader called the sender, or "".
+
+    Two shapes arrive from the reader and neither is guaranteed: `"user@host Display Name"` (the
+    `span[email]` path) and a bare display name with no address at all (the `.yW` fallback). A
+    third arrives from anything that formats the header conventionally: `"Name <user@host>"` — and
+    the angle bracket is the one that bites, because `host>` stores as a measured characteristic
+    that can never match a later inbox read. A hint that silently never fires is worse than no
+    hint: it looks like knowledge and behaves like absence. `gmail_senders.classify_sender` strips
+    the same character for the same reason.
+    """
+    for token in str(sender or "").split():
+        if "@" in token:
+            return token.split("@", 1)[1].strip().strip("<>.,;").lower()
+    return ""
+
+
+def _verify_wall_mechanism(scan: dict[str, Any]) -> dict[str, Any]:
+    """Which verification mechanism the measured wall uses (PLAN_verify_email_leg).
+
+    Classified from the live scan, never from a stored flag: a code-entry textbox decides `code`;
+    its absence plus link language decides `link`; neither is `unknown`, which escalates with what
+    IS on screen — the same refusal an unmapped page gets, because a guess here types a one-time
+    code into whichever box happens to be first.
+
+    `second_factor` IS THE FOURTH ANSWER, AND IT EXISTS BECAUSE A CODE BOX IS AMBIGUOUS. An
+    authenticator app and an SMS both render exactly the code box an emailed code does, and
+    `_ACCOUNT_VERIFY_MARKERS` deliberately matches "two-factor"/"authenticator" walls — so without
+    this, those walls classify `code`, spend three inbox reads over ~25s on a code that is not in
+    any inbox, and then escalate with the errand's honest-but-wrong sentence: *"the mail may not
+    have arrived yet — retry, or check the inbox by hand."* Sending someone to their email for a
+    code sitting in their phone is the misleading kind of true. Named factor language wins over
+    the box UNLESS the page also says email — plenty of walls read "two-factor authentication:
+    enter the code we emailed you", and there the email wording is the specific one.
+    """
+    text = str(scan.get("page_text") or "").lower()
+    named_factor = next((w for w in _NON_EMAIL_FACTOR_LANGUAGE if w in text), "")
+    if named_factor and "email" not in text:
+        return {"mechanism": "second_factor", "factor": named_factor}
+    for c in scan.get("candidates") or []:
+        if c.get("role") == "textbox" and re.search(
+                r"\b(code|verification|one.?time|otp)\b", str(c.get("name") or ""), re.I):
+            return {"mechanism": "code", "code_field": str(c.get("name") or "")}
+    if any(w in text for w in _VERIFY_LINK_LANGUAGE):
+        return {"mechanism": "link"}
+    return {"mechanism": "unknown"}
+
+
+def _record_verification_fact(db: Session, *, ats: str, url: str, key: str, value: str,
+                              evidence: str, session_id: Optional[int] = None) -> None:
+    """One MEASURED fact about this instance's verification wall — mechanism or sender — written
+    where measured facts live (the characteristics table; the account wall's `wall_met` writer is
+    the sibling). Instance-scoped: a tenant's wall is a fact about the tenant. Best-effort and
+    loud on failure, never fatal — bookkeeping must not break the drive waiting on it."""
+    if not (ats and value):
+        return
+    try:
+        import ats_tenancy as ten
+        import models
+        tenant, _how = ten.tenant_of(url, ats)
+        instance = ten.instance_key(ats, tenant)
+        row = (db.query(models.AtsCharacteristic)
+               .filter_by(ats_id=ats, instance_key=instance, kind="auth", key=key)
+               .first())
+        if row is None:
+            row = models.AtsCharacteristic(ats_id=ats, instance_key=instance,
+                                           kind="auth", key=key)
+            db.add(row)
+            row.observations = 0
+        row.value = value
+        row.confidence = "measured"
+        row.observations = (row.observations or 0) + 1
+        row.evidence = evidence[:600]
+        row.session_id = session_id
+        db.flush()
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception(
+            "recording %s=%s for %s failed", key, value, ats)
+
+
+async def _fetch_verification_code(db: Session, *, company: str, ats: str, leg: str,
+                                   job_id: str) -> dict[str, Any]:
+    """Ask the Gmail errand for this signup's one-time code — the built-with-zero-callers errand's
+    first caller (LEARNINGS 2026-08-22).
+
+    Hints come from `gmail_senders.senders_for`, keyed by ATS and company, because the mail brand
+    here is the ATS's mail domain, which no stem of any domain_id produces. The errand's own rules
+    stand unmodified: freshness is proof, ambiguous/blocked escalate, an unlabelled number is
+    reported and never returned.
+
+    Returns `{"code", "status", "sender", "note"}`. `note` is human-facing and already masked (the
+    errand masks every code inside the evidence it quotes); `code` is present only on `ok` and is
+    the one value that must never reach a journal, an event, or the UI.
+    """
+    import errands
+    import gmail_senders
+    from routers import errands as errand_routes
+
+    hints = gmail_senders.senders_for(ats, company=company, db=db)
+    browser = _gmail_browser_url(db)
+    last: dict[str, Any] = {}
+    for attempt in range(_VERIFY_CODE_ATTEMPTS):
+        if attempt:
+            await asyncio.sleep(_VERIFY_CODE_WAIT_S)
+        last = await errand_routes.fetch_login_code(errand_routes.FetchLoginCodeRequest(
+            requested_by=ats,
+            reason=f"{company} {leg}: the signup asked for an email verification code "
+                   f"(job {job_id})",
+            sender_hints=hints,
+            browser_url=browser,
+            resume_hint={"job_id": job_id, "company": company, "ats": ats, "leg": leg},
+        ))
+        status = last.get("status")
+        if status == errands.OK:
+            evidence = last.get("evidence") or {}
+            return {"code": last.get("code"), "status": status,
+                    "sender": str(evidence.get("sender") or ""),
+                    "note": f"A fresh code was read off the inbox list "
+                            f"({evidence.get('sender')}: {evidence.get('subject')})"}
+        if status in errands.ESCALATING:
+            break
+    return {"code": None, "status": last.get("status") or "error",
+            "note": last.get("escalation") or "The code errand returned nothing readable."}
+
+
+async def _clear_verification_wall(db: Session, *, browser_url: str, tab_id: str, creds: dict,
+                                   company: str, ats: str, leg: str, job_id: str,
+                                   scan: dict[str, Any], live_url: str, session_id: int,
+                                   mode: str, initiator: str) -> dict[str, Any]:
+    """Measure the wall's mechanism and, when it is a CODE, fetch it from the inbox and enter it.
+
+    The caller records the mini-step and builds the view — this does the measurement and the drive
+    and nothing else. Returns `{"entered", "mechanism", "errand_status", "note", "report"}`;
+    `entered` is true only when the code went in, the submit landed, AND a re-scan shows the wall
+    gone — `expect_followup_factor` made flesh: a code gets you past the email wall, and whether
+    that got you IN is measured, never assumed (the 2026-07-10 Indeed lesson).
+
+    Every sighting writes the instance's `verification_mechanism` characteristic — LINK walls
+    included, though v1 does not automate them (the errand reads subject lines only, no read
+    receipt; a link-click errand is a new spine that gets built on this ledger's say-so).
+    """
+    import step_runner as sr
+
+    mech = _verify_wall_mechanism(scan)
+    out: dict[str, Any] = {"entered": False, "mechanism": mech["mechanism"],
+                           "errand_status": None, "note": "", "report": None}
+    _record_verification_fact(db, ats=ats, url=live_url, key="verification_mechanism",
+                              value=mech["mechanism"], session_id=session_id,
+                              evidence=("a code-entry box is on the wall"
+                                        f" ({mech.get('code_field')!r})"
+                                        if mech["mechanism"] == "code" else
+                                        "link language on the wall, no code box"
+                                        if mech["mechanism"] == "link" else
+                                        f"the wall names {mech.get('factor')!r} and not email"
+                                        if mech["mechanism"] == "second_factor" else
+                                        "neither a code box nor link language on the wall"))
+    if mech["mechanism"] == "second_factor":
+        # NOT an email wall at all — no inbox read is attempted, because none could succeed. This
+        # is the standing 2FA boundary (never auto-solved, on any form), reached through the verify
+        # seam rather than around it.
+        out["note"] = (f"This is a second factor, not an emailed code — the page asks for "
+                       f"{mech.get('factor')!r}. Nothing in the inbox can answer it: enter it "
+                       f"yourself in the window, then continue.")
+        return out
+    if mech["mechanism"] == "link":
+        out["note"] = ("The site sent a verification LINK, not a code. The inbox errand reads "
+                       "subject lines only — it never opens a mail, so no read receipt — which "
+                       "means the click is yours: open the message and press the link, then "
+                       "continue.")
+        return out
+    if mech["mechanism"] != "code":
+        on_screen = ", ".join(sorted({f"{c.get('role')} {c.get('name')!r}"
+                                      for c in (scan.get("candidates") or [])
+                                      if c.get("name") and c.get("role") in
+                                      ("textbox", "button", "checkbox", "combobox")})[:8])
+        out["note"] = (f"The page asks for verification but shows neither a code box nor link "
+                       f"language — not driving a guess. What IS on screen: "
+                       f"{on_screen or '(no named controls)'}. Finish it in the window, then "
+                       f"continue.")
+        return out
+
+    fetched = await _fetch_verification_code(db, company=company, ats=ats, leg=leg, job_id=job_id)
+    out["errand_status"] = fetched.get("status")
+    if not fetched.get("code"):
+        out["note"] = fetched.get("note") or ""
+        return out
+    # The sender is MEASURED the moment the errand proves a match — true whether or not the entry
+    # below lands, and it is what feeds `gmail_senders.senders_for` next time.
+    sender = fetched.get("sender") or ""
+    if _sender_domain(sender):
+        _record_verification_fact(db, ats=ats, url=live_url, key="verification_sender",
+                                  value=_sender_domain(sender),
+                                  evidence=f"the code errand matched this sender ({sender[:200]})",
+                                  session_id=session_id)
+
+    report = await sr.run_step(
+        lambda: _drive_account_form(browser_url, tab_id, creds, ats=ats, leg="verify_email",
+                                    submit=True, extra={"login_code": fetched["code"]}),
+        action={"action": "apply_account", "leg": "verify_email", "ats": ats,
+                "mode": mode, "initiator": initiator},
+        expect=sr.Expectation(kind="content_changed"),
+        capture_post=_capture_post, browser_url=browser_url, tab_id=tab_id,
+        session_id=session_id, rung_id=_ACCOUNT_RUNG, collect=False)
+    out["report"] = report
+    vdrive = report.result
+    if not (vdrive.get("ok") and vdrive.get("submitted")):
+        out["note"] = (f"{fetched['note']}, but it could not be entered automatically "
+                       f"({vdrive.get('detail') or vdrive.get('reason')}). Type it from the "
+                       f"inbox yourself, then continue.")
+        return out
+
+    check = await _capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id},
+                                timeout=20.0)
+    check_text = (str(check.get("page_text") or "")
+                  + " ".join(c.get("name", "") for c in (check.get("candidates") or []))).lower()
+    if _is_verification_wall(check_text):
+        out["note"] = (f"{fetched['note']} and it was entered, but the page still asks for "
+                       f"verification — a code gets you past the email wall, not necessarily in "
+                       f"(a second factor may be up). Check the window.")
+        return out
+    out["entered"] = True
+    out["note"] = f"{fetched['note']} and entered; the wall cleared."
+    return out
+
+
+def _has_stored_credential(company: str, ats: str) -> bool:
+    """Does the vault already hold a login for this company↔ATS account? Read-only, and False on
+    any failure — the caller uses this to decide whether to KEEP what is stored, and an unreadable
+    vault must not read as "nothing there" and license an overwrite."""
+    try:
+        import accounts as accounts_mod
+        import ats_accounts
+        rec = accounts_mod.get_account(ats_accounts.ats_account_id(company, ats))
+        return bool((rec or {}).get("has_creds"))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("credential probe failed for %s/%s", company, ats)
+        return True     # unreadable: assume something is there and do not overwrite it
+
+
+async def _account_secured_view(*, session: TrainingSession, bb: Any, ledger: cps.Ledger,
+                                queue: Any, step: Any, company: str, action: dict[str, Any],
+                                creds: dict[str, Any], browser_url: str,
+                                verification: Optional[dict[str, Any]],
+                                verified_note: str,
+                                credential_proven: bool = True) -> dict[str, Any]:
+    """Through the wall: the ATS accepted the leg and any verification gate has cleared.
+
+    Both success paths end here — the ordinary submit and the wall-cleared-on-entry one — because
+    everything in this function is a claim that a login now EXISTS and is usable, and a claim made
+    in two places is two places for it to drift.
+
+    STORE THE CREDENTIAL, at the one moment it is proven: the site just took it. Derivation is how
+    we chose this password, not a dependable way to recover it — the shared suffix and the company
+    string both drift, and both keep returning a plausible wrong answer when they do. Stored before
+    `mark_created` so an account can never be marked usable while its credential exists nowhere but
+    in this request. If the vault write fails the account still exists on the site, so that fact is
+    still recorded — the failure rides along in the detail rather than being swallowed.
+
+    `credential_proven` IS THAT SENTENCE'S PRECONDITION, MADE A PARAMETER. "The site just took it"
+    is true when this request drove the form; it is NOT true when this request only cleared a
+    verification wall that an EARLIER request's submit put up. The password the site actually holds
+    is the one that earlier call derived, and derivation drifts by design — one edit to
+    ATS_ACCOUNT_PW_SUFFIX, or the same employer arriving as "Teradyne, Inc." instead of "Teradyne",
+    and re-deriving now yields a different, plausible, wrong string. Overwriting the vault with it
+    manufactures exactly the silent wrong-password future this docstring warns about. So on the
+    unproven path an EXISTING vault entry wins and we write nothing; an empty vault still gets the
+    derivation, because a best guess beats no record at all.
+    """
+    import ats_accounts
+
+    signing_in = action.get("leg") == "sign_in"
+    if credential_proven or not _has_stored_credential(company, step.platform):
+        stored = ats_accounts.record_credentials(company, step.platform,
+                                                 creds.get("username") or "",
+                                                 creds.get("suggested_password") or "")
+    else:
+        stored = {"ok": True, "kept": True}
+    if not signing_in:
+        # Only a CREATE makes the account exist. Signing in must not re-stamp that — the
+        # lifecycle flag is what tells the next session which leg is due.
+        ats_accounts.mark_created(company, step.platform)
+    saved = bool(stored.get("ok"))
+    kept = bool(stored.get("kept"))
+    # A credential we did not manage to store is worth as much noise as a step that failed —
+    # the account is real either way, and the one that is unrecoverable is the quiet one. A KEPT
+    # one is neither: the vault already holds what the site was given, and leaving it alone is the
+    # correct outcome rather than a shortfall to warn about.
+    vault_note = ("" if saved else
+                  f" CREDENTIAL NOT STORED ({stored.get('detail')}) — save it in the Accounts "
+                  f"panel before this session ends.")
+    credit = (", stored credential kept (this call did not type it)" if kept else
+              ", credential stored" if saved else ", CREDENTIAL NOT STORED")
+    step.record(_ACCOUNT_RUNG, aps.OK,
+                ((f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
+                  f"create leg: created the {company} {step.platform} account automatically")
+                 + credit),
+                initiator="auto",
+                # Through the wall: the site accepted the form and we are signed in. What we
+                # typed lives on the site now, not in the page, so a reload costs nothing —
+                # and this is the state an application sits in longest before the form rung.
+                staged=False)
+    bb.world.pop("account_handoff", None)
+    bb.world.pop("account_verify", None)
+    _save_queue(bb, queue)
+    bb.log("account_signin" if signing_in else "account_create",
+           f"{company} {step.platform}: "
+           + ("signed in automatically" if signing_in else "account created automatically")
+           + (" (credential stored in the vault)" if saved else " (CREDENTIAL NOT STORED)"))
+    _persist(bb, ledger)
+    obs2 = await _observe(browser_url, bb, session_id=session.id)
+    return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
+                 last={"ok": True, "action": "apply_account", "queue": queue.summary(),
+                       "credentials_stored": saved,
+                       "verification": verification,
+                       "detail": (f"Signed in to {company} automatically." if signing_in else
+                                  f"Created the {company} account automatically.")
+                                 + verified_note
+                                 + " The application can continue — orient, then the form."
+                                 + vault_note})
 
 
 async def _drive_account_form(browser_url: str, tab_id: str, creds: dict, *,
@@ -3959,6 +4384,9 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                     staged=False)
         _save_queue(bb, queue)
         bb.world.pop("account_handoff", None)   # the handoff is resolved
+        # ...and so is any verification wall: "I entered the code" / "I clicked the link" land
+        # here, and a card left standing over a settled wall is the stale-affordance bug again.
+        bb.world.pop("account_verify", None)
         _persist(bb, ledger)
         obs = await _observe(_session_browser_url(session), bb, session_id=session.id)
         return _view(session, bb, ledger, obs, page=_current_page(obs, bb), awaiting="apply",
@@ -4021,6 +4449,109 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                "detail": "A challenge is up on the signup form — clear it yourself. "
                                          "We never auto-solve, on any form."})
         tab_id = _apply_tab(bb, obs).get("tab_id", "")
+
+        # --- the email-verification wall (PLAN_verify_email_leg, wired 2026-08-22) -----------
+        # Shared by the two moments the wall can be met: right after this call's own submit, and
+        # already on screen when the call arrives (an earlier escalation, a resume, the cockpit's
+        # "Fetch code" press). One escalate, one cleared — a wall handled in two places is two
+        # places for the handling to drift.
+        verified_note = ""
+        _verification: Optional[dict[str, Any]] = None
+
+        async def _verify_escalate(wall: dict[str, Any]) -> dict[str, Any]:
+            """The wall stands. Park with it OPEN in the live tab and the card beside it — the
+            08-20 account-rung shape: one action wide, named, staffed."""
+            bb.world["account_verify"] = {
+                # The stored half is the WALL'S IDENTITY — which job, which company, which ATS.
+                # The leg and the mechanism are re-derived at render (`_account_verify`); the
+                # mechanism kept here is only the last-known fallback for when the
+                # characteristics read is unavailable.
+                "job_id": step.job_id, "company": company, "ats": step.platform,
+                "mechanism": wall["mechanism"],
+                "errand_status": wall["errand_status"],
+                "mailbox": ats_accounts.default_username(),
+                "detail": wall["note"],
+                "measured_at": datetime.now(timezone.utc).isoformat(),
+            }
+            step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
+                        f"verify leg: email verification wall (mechanism {wall['mechanism']}"
+                        + (f", errand {wall['errand_status']}" if wall["errand_status"] else "")
+                        + ") — escalated",
+                        initiator=body.initiator,
+                        # Not typed input — the signup is submitted — but a signup waiting on a
+                        # one-time code is a transaction in flight, and a reload is exactly how
+                        # you lose the half of it the site is holding. Protected deliberately.
+                        staged=True)
+            _save_queue(bb, queue); _persist(bb, ledger)
+            obs2 = await _observe(browser_url, bb, session_id=session.id)
+            return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
+                         # NOT `operator_verify` — that key already means "the search was
+                         # submitted but not confirmed" (session_control:2469, and the cockpit
+                         # renders that meaning's copy). The `operator_2fa` precedent
+                         # (LEARNINGS:2912), applied before it bites instead of after.
+                         awaiting="account_verify_email",
+                         last={"ok": False, "action": "apply_account", "queue": queue.summary(),
+                               "verify": {"mechanism": wall["mechanism"],
+                                          "errand_status": wall["errand_status"]},
+                               "detail": f"The signup wants email verification. {wall['note']}"})
+
+        def _verify_cleared(wall: dict[str, Any]) -> None:
+            step.record(_ACCOUNT_RUNG, aps.OK, f"verify leg: {wall['note']}"[:200],
+                        initiator="auto",
+                        # Through the wall: the code lives on the site now, not in the page.
+                        staged=False)
+            bb.world.pop("account_verify", None)
+
+        # THE WALL MAY ALREADY BE ON SCREEN, and it outranks the leg. Due-ness is MEASURED, never
+        # stored: the stored card (or the observer naming a verify state) only prompts the LOOK —
+        # the scan decides. Without this, the cockpit's "Fetch code & continue" press would re-run
+        # `next_account_action`, get `create_account` (the account is still pending while its wall
+        # is up), and type a credential at a code prompt.
+        stored_wall = (bb.world or {}).get("account_verify") or {}
+        orient_state = str(((bb.world or {}).get("orient") or {}).get("state") or "")
+        entry_cleared = False
+        if stored_wall.get("job_id") == step.job_id or orient_state.endswith("_verify_email"):
+            wall_scan = await _capture_post("/ax_scan", {"browser_url": browser_url,
+                                                         "tab_id": tab_id}, timeout=20.0)
+            wall_text = (str(wall_scan.get("page_text") or "")
+                         + " ".join(c.get("name", "")
+                                    for c in (wall_scan.get("candidates") or []))).lower()
+            if _is_verification_wall(wall_text):
+                wall = await _clear_verification_wall(
+                    db, browser_url=browser_url, tab_id=tab_id, creds=creds, company=company,
+                    ats=step.platform, leg=action.get("leg") or "create_account",
+                    job_id=step.job_id, scan=wall_scan,
+                    live_url=_apply_tab_url(bb, obs) or live_url,
+                    session_id=session.id, mode=body.mode, initiator=body.initiator)
+                if not wall["entered"]:
+                    return await _verify_escalate(wall)
+                _verify_cleared(wall)
+                verified_note = " " + wall["note"]
+                _verification = wall["report"].verification() if wall.get("report") else None
+                entry_cleared = True
+            else:
+                # The wall is gone — a reload, the operator finished it by hand, or the site let
+                # it pass. The stored card only ever prompted the look; the scan has answered it.
+                bb.world.pop("account_verify", None)
+        if entry_cleared:
+            # The signup this wall was guarding had already been submitted; clearing the wall is
+            # what was left of the leg. Same claim, same one place it is made.
+            #
+            # AND THE CREATION CLAIM IS EARNED, NOT INFERRED FROM THE VERIFICATION. A wall asking
+            # to verify an account is itself evidence that an account exists to verify — but the
+            # claim does not rest on that: `_account_secured_view` asks `next_account_action`
+            # which leg is due, and an account already `active` takes the sign_in path, where
+            # `mark_created` is never re-stamped. So this only ever banks a creation whose submit
+            # actually landed and could not be banked while the wall stood.
+            return await _account_secured_view(
+                session=session, bb=bb, ledger=ledger, queue=queue, step=step, company=company,
+                action=action, creds=creds, browser_url=browser_url,
+                verification=_verification, verified_note=verified_note,
+                # THIS CALL TYPED NO PASSWORD — an earlier request's submit did, possibly in an
+                # earlier session. So the derivation in hand is not proof of what the site holds,
+                # and a stored credential outranks it. See `_account_secured_view`.
+                credential_proven=False)
+
         # Answers the form needs beyond the credential — resolved here, where the DB is.
         from sqlalchemy import select as _select
 
@@ -4121,70 +4652,30 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
                                     timeout=20.0)
         text = (str(after.get("page_text") or "")
                 + " ".join(c.get("name", "") for c in (after.get("candidates") or []))).lower()
-        if any(m in text for m in _ACCOUNT_VERIFY_MARKERS):
-            step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
-                        "verify leg: signup needs an email/2FA verification code — a real gate, "
-                        "escalated",
-                        initiator=body.initiator,
-                        # Not typed input — the form is already submitted — but a signup waiting on
-                        # a one-time code is a transaction in flight, and a reload is exactly how
-                        # you lose the half of it the site is holding. Protected deliberately.
-                        staged=True)
-            _save_queue(bb, queue); _persist(bb, ledger)
-            obs2 = await _observe(browser_url, bb, session_id=session.id)
-            return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb),
-                         awaiting="operator_verify",
-                         last={"ok": False, "action": "apply_account", "queue": queue.summary(),
-                               "detail": "Account submitted, but the signup wants an email/2FA "
-                                         "verification code. That is a real gate — grab the code "
-                                         "(a Gmail errand we can automate next), then continue."})
+        _verification = _report.verification()
+        if _is_verification_wall(text):
+            # THE GATE THE GMAIL ERRAND WAS BUILT FOR — and, until 2026-08-22, the seam whose
+            # escalation text literally named it as "a Gmail errand we can automate next" while
+            # the built errand sat with zero callers. A CODE wall is driven end to end (fetch →
+            # stage → submit → re-classify); a LINK wall, a missing mailbox, an ambiguous match
+            # all still escalate — the real gates hold, the busywork does not.
+            wall = await _clear_verification_wall(
+                db, browser_url=browser_url, tab_id=tab_id, creds=creds, company=company,
+                ats=step.platform, leg=action.get("leg") or "create_account",
+                job_id=step.job_id, scan=after,
+                live_url=_apply_tab_url(bb, obs) or live_url,
+                session_id=session.id, mode=body.mode, initiator=body.initiator)
+            if not wall["entered"]:
+                return await _verify_escalate(wall)
+            _verify_cleared(wall)
+            verified_note = " " + wall["note"]
+            if wall.get("report"):
+                _verification = wall["report"].verification()
 
-        signing_in = action.get("leg") == "sign_in"
-        # STORE THE CREDENTIAL, at the one moment it is proven: the site just took it. Derivation
-        # is how we chose this password, not a dependable way to recover it — the shared suffix and
-        # the company string both drift, and both keep returning a plausible wrong answer when they
-        # do. Stored before `mark_created` so an account can never be marked usable while its
-        # credential exists nowhere but in this request. If the vault write fails the account still
-        # exists on the site, so that fact is still recorded — the failure rides along in the detail
-        # rather than being swallowed or being allowed to erase what happened.
-        stored = ats_accounts.record_credentials(company, step.platform,
-                                                 creds.get("username") or "",
-                                                 creds.get("suggested_password") or "")
-        if not signing_in:
-            # Only a CREATE makes the account exist. Signing in must not re-stamp that — the
-            # lifecycle flag is what tells the next session which leg is due.
-            ats_accounts.mark_created(company, step.platform)
-        saved = bool(stored.get("ok"))
-        # A credential we did not manage to store is worth as much noise as a step that failed —
-        # the account is real either way, and the one that is unrecoverable is the quiet one.
-        vault_note = ("" if saved else
-                      f" CREDENTIAL NOT STORED ({stored.get('detail')}) — save it in the Accounts "
-                      f"panel before this session ends.")
-        step.record(_ACCOUNT_RUNG, aps.OK,
-                    ((f"sign_in leg: signed in to {company} {step.platform}" if signing_in else
-                      f"create leg: created the {company} {step.platform} account automatically")
-                     + (", credential stored" if saved else ", CREDENTIAL NOT STORED")),
-                    initiator="auto",
-                    # Through the wall: the site accepted the form and we are signed in. What we
-                    # typed lives on the site now, not in the page, so a reload costs nothing —
-                    # and this is the state an application sits in longest before the form rung.
-                    staged=False)
-        bb.world.pop("account_handoff", None)
-        _save_queue(bb, queue)
-        bb.log("account_signin" if signing_in else "account_create",
-               f"{company} {step.platform}: "
-               + ("signed in automatically" if signing_in else "account created automatically")
-               + (" (credential stored in the vault)" if saved else " (CREDENTIAL NOT STORED)"))
-        _persist(bb, ledger)
-        obs2 = await _observe(browser_url, bb, session_id=session.id)
-        return _view(session, bb, ledger, obs2, page=_current_page(obs2, bb), awaiting="apply",
-                     last={"ok": True, "action": "apply_account", "queue": queue.summary(),
-                           "credentials_stored": saved,
-                           "verification": _report.verification(),
-                           "detail": (f"Signed in to {company} automatically. " if signing_in else
-                                      f"Created the {company} account automatically. ")
-                                     + "The application can continue — orient, then the form."
-                                     + vault_note})
+        return await _account_secured_view(
+            session=session, bb=bb, ledger=ledger, queue=queue, step=step, company=company,
+            action=action, creds=creds, browser_url=browser_url,
+            verification=_verification, verified_note=verified_note)
 
     step.record(_ACCOUNT_RUNG, aps.HUMAN_REQUIRED,
                 f"{action.get('leg')} leg: {company} {step.platform}, operator creates it "
@@ -7004,13 +7495,30 @@ def _shadow_the_crank(rung: Any, step: Any, before: Any, acted: dict[str, Any],
             confidence=1.0, rung="teacher",
             rationale=acted.get("rationale") or f"the operator worked the {rung.id} rung",
             evidence=tuple(acted.get("evidence") or ("operator",)))
+        # THE TWO FACETS THE 2026-08-22 MINING FOUND MISSING, and they are both free here.
+        #
+        # `page_text`: without it the bundle's state came from the URL alone. Indeed survives that
+        # (its states ARE url-driven) but Workday keeps ONE url across a whole application, so all
+        # 61 workday_job_posting shadow pairs were really misfiled form-rung turns, and every
+        # company_site pair carried state=None while this very function knew the state. The names
+        # joined here are exactly what `_state_from_observation` feeds `describe_for_ats`, so the
+        # shadow now names the screen the same way the crank does instead of a worse way.
+        #
+        # `phase`: the rung being worked. The teacher's VERB is chosen by the rung
+        # (`_RUNG_INTENT`, just above) — consuming rungs look, entering rungs click — so without
+        # it the same (task, state) mapped to both verbs and no decision function could beat class
+        # frequency. 106 of 119 shadow disagreements were that one axis.
+        names = " ".join(str(c.get("name") or "")
+                         for c in (getattr(before, "candidates", None) or []))
         bundle = build_bundle(
             task="apply", url=getattr(before, "url", "") or "",
+            page_text=names,
             goal_text=f"{step.title or step.job_id} at {step.company or 'unknown'}",
             ats=step.platform or None,
             ax_candidates=list(getattr(before, "candidates", None) or []),
             belief=getattr(before, "belief", None),
-            window=getattr(before, "window", None))
+            window=getattr(before, "window", None),
+            phase=rung.id)
         shadow_step(teacher, bundle, session_id=str(session_id), outcome=outcome)
     except Exception:  # noqa: BLE001 — measuring ourselves must never break the drive
         pass
@@ -8091,7 +8599,18 @@ async def close_out(session_id: int, body: CloseOutBody,
         # stop was already a reportable outcome; an unexpected one is too.
         chrome = {"stopped": False, "detail": f"{type(exc).__name__}: {exc}"}
 
+    # The drive-end crank (tandem contract): the mailbox is read once per sitting through the
+    # SAME sweep the cockpit button turns, so outcomes land without anyone remembering to press
+    # it. Best-effort by construction — no Gmail tab, a signed-out profile, or an unreachable
+    # browser reports `{ok: false, blocked: …}` in the close-out account, never a raise. The
+    # browser is DISCOVERED, same as the verify leg one screen up: the google profile routinely
+    # runs on a provisioned port, and a hardcoded 9222 here would blocked-out every close-out
+    # the moment it does (review catch, three finders independently).
+    import inbox_sweep
+    inbox = await inbox_sweep.sweep_live(db, browser_url=_gmail_browser_url(db))
+
     return {"ok": True, "closed": True, "session_id": session_id,
+            "inbox_sweep": inbox,
             "kept_work": bool(body.keep_work),
             # Named by what actually happened to them, so a report can never read as a discard that
             # did not occur (or, worse, a keep that did not).

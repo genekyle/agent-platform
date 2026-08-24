@@ -1,0 +1,69 @@
+{
+  "task": "apply",
+  "state": "indeed_apply_resume_selection",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue without tailoring"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue without tailoring"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue without tailoring"
+      }
+    },
+    {
+      "intent": "click",
+      "params": {
+        "control": "Continue"
+      }
+    }
+  ],
+  "expected_exit": [
+    "indeed_apply_resume_highlights",
+    "indeed_apply_resume_review",
+    "indeed_apply_questions",
+    "indeed_apply_contact_info",
+    "indeed_apply_demographics",
+    "indeed_apply_review"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "d08549766ce1e566de7cff10225ac821885705bc2cc09c9a3e385901ca9e62b5"
+  ],
+  "verified_at": "2026-08-23T03:01:34.419398+00:00",
+  "stale": false
+}

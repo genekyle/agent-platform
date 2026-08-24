@@ -1,0 +1,20 @@
+{
+  "task": "apply",
+  "state": "cornerstone_unreadable",
+  "guard_fields": [],
+  "steps": [
+    {
+      "intent": "click",
+      "params": {
+        "control": "Apply Now"
+      }
+    }
+  ],
+  "expected_exit": [],
+  "version": "v1",
+  "compiled_from": [
+    "4a699541125345a518a757a9cfef205a0794c939b0f67265102e5539e1aca6cb"
+  ],
+  "verified_at": "2026-08-23T03:01:34.429789+00:00",
+  "stale": false
+}

@@ -1,0 +1,24 @@
+{
+  "task": "indeed_apply",
+  "state": "workday_my_information",
+  "guard_fields": [
+    "First Name"
+  ],
+  "steps": [
+    {
+      "intent": "set_text",
+      "params": {
+        "field": "First Name"
+      }
+    }
+  ],
+  "expected_exit": [
+    "workday_my_information"
+  ],
+  "version": "v1",
+  "compiled_from": [
+    "22b8026a677e37452f2d49b47500b846c963d2ada5bf4acea5fd861b36b026a7"
+  ],
+  "verified_at": "2026-08-23T03:01:34.415873+00:00",
+  "stale": false
+}

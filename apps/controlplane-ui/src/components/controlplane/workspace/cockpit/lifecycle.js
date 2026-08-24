@@ -69,6 +69,10 @@ export const BLOCKERS = {
   operator_clean_start: { stage: "session", text: "This window still holds tabs from a previous session. Clear them before we begin." },
   operator_search_box: { stage: "session", text: "Couldn't find the search box. Open the job search, then step again." },
   operator_verify: { stage: "session", text: "The search was submitted but not confirmed. Check the window before stepping." },
+  // NOT the same key as above — the account seam used to reuse `operator_verify` for this and the
+  // cockpit told the operator to check a SEARCH while the page wanted a 6-digit code. Same bug
+  // the `operator_2fa` split fixed, retired at this seam by PLAN_verify_email_leg.
+  account_verify_email: { stage: "page", text: "The new account wants email verification. The card on the work surface says which mechanism and what settles it." },
   operator_filter: { stage: "session", text: "The distance filter wouldn't set. We don't gather below the radius floor." },
   operator_results: { stage: "page", text: "Couldn't read this page's results. Check the window, then step again." },
   recover: { stage: "page", text: "Get back to the results we already have — do not search again." },
@@ -311,6 +315,11 @@ function decideFocus(p, results, picks, qs) {
 function executeFocus(p, step, nextAction) {
   const proposal = p.proposal && p.proposal.job_id === step.job_id ? p.proposal : null;
   const handoff = p.account_handoff && p.account_handoff.job_id === step.job_id ? p.account_handoff : null;
+  // The email-verification wall, scoped to the step being worked like its three siblings. The
+  // stored half is the wall's identity; `mechanism` and `leg` arrive re-derived from the read
+  // model (`_account_verify`), so the card cannot describe last week's wall.
+  const verify = p.account_verify && p.account_verify.job_id === step.job_id
+    ? p.account_verify : null;
   // SCOPED LIKE ITS THREE SIBLINGS. `applied_check` is written on landing and survives on the
   // blackboard until the NEXT landing overwrites it, so a step reached without one — a resume, a
   // repick, any path that does not re-open the pane — would render the previous job's verdict as
@@ -430,6 +439,47 @@ function executeFocus(p, step, nextAction) {
       // Correct is a PEER of Go, never quieter: the golden training rows come from disagreement,
       // and a surface whose easy path is always "yes" produces agreement and no signal.
       primary: null, alternates: [] };
+  }
+  // THE VERIFICATION WALL, before the account cards: a code prompt on screen is a wall the leg
+  // buttons cannot walk through — "Sign in automatically" over a verify screen is the same
+  // wrong-form press the Workday toggle lesson was about. Every mechanism gets a truthful exit;
+  // the CODE mechanism gets the one automation that exists; the code itself never renders.
+  if (verify) {
+    const code = verify.mechanism === "code";
+    const link = verify.mechanism === "link";
+    const factor = verify.mechanism === "second_factor";
+    // THE EXIT'S VERB FOLLOWS THE LEG, not the wall — the same rule the handoff card learned when
+    // "Create it automatically" appeared over a sign-in form. `mark_created` settles the rung
+    // either way, but a sign-in-leg wall is verifying an account that already exists, and telling
+    // the operator they are "recording it as made" describes a different act than the one they
+    // just performed.
+    const signingIn = verify.leg === "sign_in";
+    const done = { label: code ? "I entered the code" : "I finished the verification",
+      endpoint: "/apply_account", body: { mark_created: true },
+      why: signingIn
+        ? "You settled the wall by hand — mark this sign-in done and continue."
+        : "You settled the wall by hand — record the account as made and continue." };
+    return { ...base, kind: "verify_email", verify,
+      why: code
+        ? `The site emailed a one-time code to ${verify.mailbox || "the shared inbox"}. The `
+          + "errand reads it off the subject line — no mail is opened, and an ambiguous or "
+          + "stale match stops for you rather than guessing."
+        : link
+          ? "The site sent a verification LINK, not a code. The errand never opens a mail (no "
+            + "read receipt), so the click is yours — press it in Gmail, then continue."
+          : factor
+            ? "This is a second factor, not an emailed code — nothing in the inbox can answer "
+              + "it. Enter it yourself in the window, then continue. We never auto-solve these."
+            : (verify.detail
+               || "The page asks for verification but its mechanism couldn't be measured — "
+                + "finish it in the window, then continue."),
+      primary: code
+        ? { label: "Fetch code from Gmail & continue", endpoint: "/apply_account",
+            body: { mode: "auto" },
+            why: "Reads the code from the inbox and enters it on the wall. A missing mail, an "
+               + "ambiguous match, or a second factor still stops for you." }
+        : done,
+      alternates: code ? [done] : [] };
   }
   if (handoff) {
     // AND THE VERB IS THE LEG'S, for the same reason the label is the ATS's. The handoff's `leg`
@@ -812,7 +862,7 @@ export function deriveCockpit(panel, { picks = [] } = {}) {
   else focus = setupFocus(p, p.last_step);
 
   const pageMoments = new Set(["read", "recover", "choose", "proposal", "account_handoff",
-    "account", "application", "gate", "orient"]);
+    "account", "verify_email", "application", "gate", "orient"]);
   const current = pageMoments.has(focus.kind) ? `page:${page}` : "session";
   focus = { ...focus, group: current,
     groupLabel: current === "session" ? "Session" : `Page ${page}` };
