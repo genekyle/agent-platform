@@ -68,12 +68,14 @@ function OverviewHero({ summary, health, onOpenLabeler, onOpenQueue }) {
 
       <section className="overview-metrics" aria-label="Workspace summary">
         <Metric label="Needs you" value={attention} detail={attention ? "open handoffs" : "all clear"} tone={attention ? "warning" : "success"} />
+        {/* A null here is "the read failed", not "all clear" — the API sends None for a
+            broken read on purpose; painting it success-green would be the tile lying. */}
         <Metric label="Parked drives" value={parksOpen ?? "—"}
-          detail={parksOpen ? "waiting on a teacher answer" : "no drive is waiting"}
-          tone={parksOpen ? "warning" : "success"} />
+          detail={parksOpen == null ? "could not read" : parksOpen ? "waiting on a teacher answer" : "no drive is waiting"}
+          tone={parksOpen == null ? "neutral" : parksOpen ? "warning" : "success"} />
         <Metric label="Teacher queue" value={teacherQueue ?? "—"}
-          detail={teacherQueue ? "transitions to label" : "queue is clear"}
-          tone={teacherQueue ? "warning" : "success"} />
+          detail={teacherQueue == null ? "could not read" : teacherQueue ? "transitions to label" : "queue is clear"}
+          tone={teacherQueue == null ? "neutral" : teacherQueue ? "warning" : "success"} />
         <Metric label="Ready" value={`${ready}/${domains.length || 0}`} detail="connected domains" tone="success" />
         <Metric label="Learning queue" value={toLabel} detail={toLabel ? "waiting for review" : "nothing waiting"} />
         <Metric label="System" value={health?.ok ? "Online" : "Offline"} detail={health?.ok ? "services reachable" : "check connection"} tone={health?.ok ? "success" : "danger"} />

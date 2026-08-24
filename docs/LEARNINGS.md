@@ -10013,6 +10013,38 @@ pairs and re-measure per-scenario — the first promotion is one calibration axi
 flywheel its screen: the real label queue + one scorecard with the gate on it. Gmail-as-domain
 stays out of scope (Career Search until a family graduates); Gmail-as-reader is Career Search.
 
+## 2026-08-23 — the scorecard lane finished by the coach: the review's fixes, and the screen learns the second bar
+
+The UI lane's session ended at the 5-hour limit before its review fixes; the coach session
+finished the lane in its worktree (the owner's three commits untouched beneath).
+
+**THE PREFILL IS A PLACEHOLDER NOW, BECAUSE A MISMATCH ROW IS A DISPUTE.** The queue's correction
+form pre-filled both witness states as VALUES — so on a row queued precisely because the world
+disputed the step, a note plus one press taught the disputed belief back to the trainer as ground
+truth, and train-on-label refit on it. States start empty (the cockpit StepCorrection precedent);
+the witnesses' reading shows greyed in the placeholder; the caption's "note alone → annotated"
+path is reachable again.
+
+**THE SCREEN LEARNS THE TWO-BAR GATE FROM THE METRIC, NOT A SECOND COPY.** `passes` is the
+metric's own `eligible` (both bars, each over its own window); the scorecard's constants are
+reads of `controller_metrics.PROMOTION_*`; the table grows an Exact column with `exact_n` and
+its own shortfall line. Verified against the live journal: loose 0.5952/294, exact 0.6012/163,
+131 unscoreable, eligible none — the screen and the metric cannot disagree because only one of
+them computes.
+
+**AND THE TOTALS STOPPED LYING AT 1000.** Session totals now come from `list_corpora()`'s exact
+counts; the per-row walk keeps only today's slice (the newest tail, where today lives). Outcomes
+recorded = `source='gmail'` events (the matcher lane's sharper count: an operator-typed note is
+bookkeeping, an employer's email is an outcome). Null command-center reads render neutral, not
+success-green; pre-fetch placeholders say "loading", not a concrete falsehood; the Transitions
+poll gained the sibling's monotonic guard and stopped flipping loading/error every tick.
+
+Verified: full suite from the worktree 1839 green (the one red was the route-inventory pin
+catching the new scorecard route — regenerated, the additive-route guard doing its job), eslint
+clean, vite build green, endpoint exercised against the live DB + corpus with data-root envs
+(432 rows / 84 labels / queue 306: 5 no_belief + 301 witness_split — the mismatch head confirmed
+empty from the screen's own read).
+
 ## 2026-08-22 (later) — the flywheel gets its screen: the real queue, one scorecard, and the landing tells the truth
 
 **THE 373-ROW QUEUE HAS A SCREEN NOW (Learning → Queue).** `GET /api/transitions/label_queue` —

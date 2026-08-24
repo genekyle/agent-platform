@@ -29,13 +29,16 @@ from routers.transitions import build_label_queue
 
 router = APIRouter()
 
-#: The DISPLAYED promotion gate (CONTROLLER_PROMOTION.md): agreement >= 90% over >= 25 paired
-#: teacher steps, judged per scenario (ats:state) — never a global average. Displayed, not
-#: enforced: the ladder in `controller/maturity.py` is what `authority()` acts on, and that
-#: open decision is recorded in the promotion doc's 2026-08-20 entry. The scorecard shows the
-#: gate the operator reads; it must not imply the code branches on it.
-PROMOTION_MIN_AGREEMENT = 0.90
-PROMOTION_MIN_N = 25
+#: The DISPLAYED promotion gate (CONTROLLER_PROMOTION.md) — since 2026-08-23 a TWO-BAR gate:
+#: loose (intent) agreement AND exact (control-identity) agreement, each over its own >= 25
+#: window, judged per scenario (ats:state) — never a global average. The constants live in
+#: `controller/metrics.py` (the same module that computes eligibility), so the scorecard reads
+#: them rather than growing a second copy that can drift. Displayed, not enforced: the ladder in
+#: `controller/maturity.py` is what `authority()` acts on, and that open decision is recorded in
+#: the promotion doc's 2026-08-20 entry. The scorecard shows the gate the operator reads; it
+#: must not imply the code branches on it.
+PROMOTION_MIN_AGREEMENT = controller_metrics.PROMOTION_LOOSE_BAR
+PROMOTION_MIN_N = controller_metrics.PROMOTION_MIN_N
 
 #: Where the outcome clock started — the 2026-08-22 reflection audit measured the ledger
 #: write-only after submit (0 outcomes recorded, 5/68 flows closed). The week's progress is
@@ -94,17 +97,19 @@ def learning_scorecard(db: Session = Depends(get_db)) -> dict[str, Any]:
     against the displayed gate, the witness census, and applications per week."""
     today = datetime.now().astimezone().date().isoformat()
 
+    # Totals come from `list_corpora()`, which counts EVERY row; the per-row walk below is only
+    # for TODAY's slice, so its newest-tail `limit` cannot freeze the totals at 1000/corpus while
+    # the Transitions landing reports the true count (the review's screens-drift finding).
     rows_total = rows_today = labels_total = labels_today = 0
     for corpus in sr.list_corpora():
+        rows_total += corpus.get("rows", 0)
+        labels_total += corpus.get("corrected", 0)
         for row in sr.read_transitions(corpus["key"], limit=1000):
-            rows_total += 1
             if _day(row.get("ts")) == today:
                 rows_today += 1
             correction = row.get("teacher_correction")
-            if correction:
-                labels_total += 1
-                if _day(correction.get("ts")) == today:
-                    labels_today += 1
+            if correction and _day(correction.get("ts")) == today:
+                labels_today += 1
 
     queue = build_label_queue()
     by_reason: dict[str, int] = {}
@@ -113,11 +118,18 @@ def learning_scorecard(db: Session = Depends(get_db)) -> dict[str, Any]:
 
     parks = inbox_mod.counts()
 
+    # Eligibility is the METRIC's verdict (`is_promotable` — both bars, each over its own
+    # window), never recomputed here: a second copy of the gate is a second place for it to
+    # drift. `passes` is kept as an alias of `eligible` for the screen's existing read, with a
+    # loose-only fallback for a journal serialized before the exact bar existed.
     agreement = controller_metrics.shadow_agreement(decision_journal.read_rows())
     scenarios = [{**s,
-                  "passes": (s["n"] >= PROMOTION_MIN_N
-                             and s["agreement"] >= PROMOTION_MIN_AGREEMENT),
-                  "n_needed": max(0, PROMOTION_MIN_N - s["n"])}
+                  "passes": s.get("eligible",
+                                  s["n"] >= PROMOTION_MIN_N
+                                  and s["agreement"] >= PROMOTION_MIN_AGREEMENT),
+                  "n_needed": max(0, PROMOTION_MIN_N - s["n"]),
+                  "exact_n_needed": max(0, controller_metrics.PROMOTION_MIN_EXACT_N
+                                        - s.get("exact_n", 0))}
                  for s in agreement.get("by_scenario", [])]
 
     apps = list(db.scalars(select(Application)).all())
@@ -129,7 +141,11 @@ def learning_scorecard(db: Session = Depends(get_db)) -> dict[str, Any]:
     events_by_kind = {kind: n for kind, n in
                       db.execute(select(ApplicationEvent.kind, func.count())
                                  .group_by(ApplicationEvent.kind)).all()}
-    outcomes_recorded = sum(n for kind, n in events_by_kind.items() if kind != "applied")
+    # "Outcomes recorded" = events the WORLD sent back (source='gmail' — the inbox matcher's
+    # writes), not merely any non-applied kind: an operator-typed note is bookkeeping, an email
+    # from the employer is an outcome. The matcher lane named this the sharper count (2026-08-23).
+    outcomes_recorded = db.scalar(select(func.count()).select_from(ApplicationEvent)
+                                  .where(ApplicationEvent.source == "gmail")) or 0
     flows_total = db.scalar(select(func.count()).select_from(AtsFlow)) or 0
     flows_closed = db.scalar(select(func.count()).select_from(AtsFlow)
                              .where(AtsFlow.terminal.isnot(None))) or 0
@@ -146,11 +162,16 @@ def learning_scorecard(db: Session = Depends(get_db)) -> dict[str, Any]:
         "label_queue": {"remaining": len(queue), "by_reason": by_reason},
         "promotion": {
             "gate": {"min_agreement": PROMOTION_MIN_AGREEMENT, "min_n": PROMOTION_MIN_N,
+                     "bars": agreement.get("bars"),
                      "unit": "ats:state", "enforced": False,
-                     "note": "the displayed gate (CONTROLLER_PROMOTION.md); authority() enforces "
-                             "the maturity ladder, not this number"},
+                     "note": "the displayed TWO-BAR gate (CONTROLLER_PROMOTION.md): loose AND "
+                             "exact, each over its own window; authority() enforces the "
+                             "maturity ladder, not this number"},
             "overall": {"agreement": agreement.get("agreement", 0.0),
-                        "n": agreement.get("n", 0)},
+                        "n": agreement.get("n", 0),
+                        "exact_agreement": agreement.get("exact_agreement", 0.0),
+                        "exact_n": agreement.get("exact_n", 0),
+                        "exact_unscoreable": agreement.get("exact_unscoreable", 0)},
             "scenarios": scenarios,
         },
         "witnesses": _witness_census(),

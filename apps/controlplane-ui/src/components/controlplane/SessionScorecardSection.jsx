@@ -155,36 +155,53 @@ export function SessionScorecardSection() {
           <div>
             <h2>Promotion gate — per-scenario shadow agreement</h2>
             <p>
-              The displayed gate: agreement ≥ {Math.round((promo?.gate?.min_agreement ?? 0.9) * 100)}%
-              over ≥ {promo?.gate?.min_n ?? 25} paired teacher steps, judged per scenario
-              (ats:state) — never a global average. Note: this gate is what the operator reads;
-              what <code>authority()</code> enforces is the maturity ladder
-              (CONTROLLER_PROMOTION.md, 2026-08-20).
+              The displayed TWO-BAR gate: loose (intent) agreement ≥{" "}
+              {Math.round((promo?.gate?.bars?.loose ?? promo?.gate?.min_agreement ?? 0.9) * 100)}%
+              over ≥ {promo?.gate?.min_n ?? 25} paired teacher steps, AND exact (control-identity)
+              agreement ≥ {Math.round((promo?.gate?.bars?.exact ?? 0.85) * 100)}% over its own
+              ≥ {promo?.gate?.bars?.min_exact_n ?? 25} scoreable window — judged per scenario
+              (ats:state), never a global average. Loose cannot see which button a click chose;
+              exact can (CONTROLLER_PROMOTION.md, 2026-08-23). Note: this gate is what the
+              operator reads; what <code>authority()</code> enforces is the maturity ladder
+              (2026-08-20, decision open).
             </p>
           </div>
           {promo ? (
-            <Stat label="Overall (context only)" value={pct(promo.overall.agreement)}
-              sub={`${promo.overall.n} paired steps`} />
+            <div style={{ display: "flex", gap: 16 }}>
+              <Stat label="Loose (context only)" value={pct(promo.overall.agreement)}
+                sub={`${promo.overall.n} paired steps`} />
+              <Stat label="Exact (context only)" value={pct(promo.overall.exact_agreement)}
+                sub={`${promo.overall.exact_n ?? 0} scoreable · ${promo.overall.exact_unscoreable ?? 0} unscoreable`} />
+            </div>
           ) : null}
         </div>
 
         {promo?.scenarios?.length ? (
           <table className="data-table">
             <thead>
-              <tr><th>Scenario (ats:state)</th><th>Paired</th><th>Agreement</th><th>Gate</th></tr>
+              <tr><th>Scenario (ats:state)</th><th>Paired</th><th>Loose</th><th>Exact</th><th>Gate</th></tr>
             </thead>
             <tbody>
               {promo.scenarios.map((sc) => {
-                const agreementShort = sc.agreement < (promo.gate?.min_agreement ?? 0.9);
+                const looseBar = promo.gate?.bars?.loose ?? promo.gate?.min_agreement ?? 0.9;
+                const exactBar = promo.gate?.bars?.exact ?? 0.85;
+                const agreementShort = sc.agreement < looseBar;
+                const exactShort = (sc.exact_agreement ?? 0) < exactBar;
                 const need = [];
                 if (sc.n_needed > 0) need.push(`${sc.n_needed} more paired steps`);
-                if (agreementShort) need.push(`agreement below ${Math.round((promo.gate?.min_agreement ?? 0.9) * 100)}%`);
+                if (agreementShort) need.push(`loose below ${Math.round(looseBar * 100)}%`);
+                if ((sc.exact_n_needed ?? 0) > 0) need.push(`${sc.exact_n_needed} more scoreable controls`);
+                else if (exactShort) need.push(`exact below ${Math.round(exactBar * 100)}%`);
                 return (
                   <tr key={sc.scenario}>
                     <td className="mono">{sc.scenario}</td>
                     <td>{sc.agree}/{sc.n}</td>
                     <td style={{ color: agreementShort ? "var(--warning)" : "var(--success)" }}>
                       {pct(sc.agreement)}
+                    </td>
+                    <td style={{ color: exactShort ? "var(--warning)" : "var(--success)" }}>
+                      {pct(sc.exact_agreement)}
+                      <span className="chrome-label muted"> /{sc.exact_n ?? 0}</span>
                     </td>
                     <td>
                       {sc.passes
@@ -196,11 +213,13 @@ export function SessionScorecardSection() {
               })}
             </tbody>
           </table>
-        ) : (
+        ) : data ? (
           <div className="empty-state">
             No paired shadow rows yet — agreement appears once the controller decides silently
             beside the teacher.
           </div>
+        ) : (
+          <div className="empty-state">Loading the scorecard…</div>
         )}
       </section>
 
@@ -226,8 +245,10 @@ export function SessionScorecardSection() {
             <Stat label="Missing artifact" value={witnesses.missing_artifact}
               accent={witnesses.missing_artifact > 0} />
           </div>
-        ) : (
+        ) : data ? (
           <div className="empty-state">The witness census could not load — the corpus reader is unavailable.</div>
+        ) : (
+          <div className="empty-state">Loading the scorecard…</div>
         )}
       </section>
     </div>

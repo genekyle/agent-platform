@@ -50,8 +50,12 @@ function Shot({ name, label }) {
 function QueueItem({ item, onAnswered }) {
   const meta = WHY_META[item.why_queued] ?? { tone: "neutral", hint: "" };
   const [note, setNote] = useState("");
-  const [beforeState, setBeforeState] = useState(item.before?.state ?? "");
-  const [afterState, setAfterState] = useState(item.after?.state ?? "");
+  // The witnesses' own reading is a PLACEHOLDER, never a value: a mismatch row is queued
+  // precisely because the world disputed the step, and prefilled values would let one keypress
+  // (a note) teach the disputed belief back to the trainer as ground truth. The cockpit's
+  // StepCorrection starts empty for the same reason; states here are typed, or nothing retrains.
+  const [beforeState, setBeforeState] = useState("");
+  const [afterState, setAfterState] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const statesHalf = (beforeState.trim() === "") !== (afterState.trim() === "");
@@ -123,10 +127,12 @@ function QueueItem({ item, onAnswered }) {
           style={{ width: "100%", boxSizing: "border-box" }}
         />
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input style={{ minWidth: 180 }} value={beforeState} placeholder="true before-state"
+          <input style={{ minWidth: 180 }} value={beforeState}
+            placeholder={item.before?.state ? `witnesses read: ${item.before.state}` : "true before-state"}
             onChange={(e) => setBeforeState(e.target.value)} />
           <span aria-hidden>→</span>
-          <input style={{ minWidth: 180 }} value={afterState} placeholder="true after-state"
+          <input style={{ minWidth: 180 }} value={afterState}
+            placeholder={item.after?.state ? `witnesses read: ${item.after.state}` : "true after-state"}
             onChange={(e) => setAfterState(e.target.value)} />
           <button type="submit" className="ghost-btn small-btn"
             disabled={saving || !note.trim() || statesHalf}>

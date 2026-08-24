@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const API = import.meta.env.VITE_API_BASE_URL;
 
@@ -28,32 +28,38 @@ export function TransitionsSection() {
   const [training, setTraining] = useState(false);
   const [trainResult, setTrainResult] = useState(null);
 
-  const loadLanding = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // Monotonic guard, same device as TransitionQueueSection: a slow response that started
+  // before a just-saved correction must not resurrect the pre-correction row. Background
+  // (quiet) polls also must not flip the loading spinner or clear a visible error every tick.
+  const loadSeq = useRef(0);
+
+  const loadLanding = useCallback(async (quiet = false) => {
+    const seq = ++loadSeq.current;
+    if (!quiet) { setLoading(true); setError(null); }
     try {
       const r = await fetch(`${API}/api/transitions`);
       if (!r.ok) throw new Error(`transitions list failed: ${r.status}`);
-      setLanding(await r.json());
+      const body = await r.json();
+      if (seq === loadSeq.current) setLanding(body);
     } catch (e) {
-      setError(e.message);
+      if (seq === loadSeq.current) setError(e.message);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, []);
 
-  const loadCorpus = useCallback(async (key) => {
-    setLoading(true);
-    setError(null);
+  const loadCorpus = useCallback(async (key, quiet = false) => {
+    const seq = ++loadSeq.current;
+    if (!quiet) { setLoading(true); setError(null); }
     try {
       const r = await fetch(`${API}/api/transitions/${encodeURIComponent(key)}`);
       if (!r.ok) throw new Error(`corpus ${key} failed: ${r.status}`);
-      setCorpus(await r.json());
-      setCorpusKey(key);
+      const body = await r.json();
+      if (seq === loadSeq.current) { setCorpus(body); setCorpusKey(key); }
     } catch (e) {
-      setError(e.message);
+      if (seq === loadSeq.current) setError(e.message);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, []);
 
@@ -64,8 +70,8 @@ export function TransitionsSection() {
   // index+ts, so an expanded row's in-progress note survives the re-render.
   useEffect(() => {
     const t = setInterval(() => {
-      loadLanding();
-      if (corpusKey) loadCorpus(corpusKey);
+      loadLanding(true);
+      if (corpusKey) loadCorpus(corpusKey, true);
     }, 10000);
     return () => clearInterval(t);
   }, [loadLanding, loadCorpus, corpusKey]);

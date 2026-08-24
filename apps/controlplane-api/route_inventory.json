@@ -59,6 +59,7 @@
   "GET /api/inventory/overview",
   "GET /api/inventory/queue",
   "GET /api/job-decisions/dislikes",
+  "GET /api/learning/scorecard",
   "GET /api/models",
   "GET /api/models/eval-runs",
   "GET /api/models/eval-runs/{run_id}",
