@@ -10981,3 +10981,50 @@ pick's landing has to be claimed by identity, not by "the newest apply-ish tab".
 named (MACOM/Cornerstone upload), 1 abandoned honestly** (Indeed rotated the card away mid-session).
 Ledger for the whole run: applications 31, flows submitted 3, requisition ids 7 (from 0 this
 morning), gmail-sourced outcome events 5 (from 0).
+
+## 2026-08-24 (fourth) — three seams closed before the next cadence, and a park recorded on a false negative
+
+Operator: *"let's fix those parts first before picking up the next application cadence so that way
+we are more efficient... let's make sure we're clicking into the job post and capturing the
+description, that flow of clicking on the box on the left opens the listing on the right."*
+
+**THE FLOW THE OPERATOR DESCRIBED WAS ALREADY BUILT — FOR THE WRONG CALLER.** `/open_job_card`
+clicks the card by `data-jk`, confirms the right-hand pane actually switched, and scrapes
+description + salary + apply_type. The EXTRACTION SWEEP has always stored that. The APPLY LADDER's
+`open_pane` rung — which every single application passes through — read `title` and `apply_type`
+off the same response and **threw the description away**. Same shape as the requisition id two
+hours earlier: the value was in the response, the caller dropped it.
+
+Why it mattered in numbers: 79 of 633 sightings had a description, and **of the 31 jobs APPLIED
+to, only 7** — because the only writer was a sweep bounded by `max_details_per_page` (default 8),
+which a hand-picked job need never meet. Now wired at the rung, best-effort (a description must not
+be able to fail the open), and proven live: HP Hood's pane returned **6,094 chars + salary
+$98,000–$120,000**, stored through the real path, sighting → canonical Job. Pinned four ways,
+including the precondition worth knowing: **`sync_description` needs `canonical_job_key`** — an
+unresolved sighting keeps its text and pushes nothing up, and says so by returning None.
+
+**THE UPLOAD BUG WAS REAL, AND SO WAS THE FALSE NEGATIVE IT HID.** `setFileInputFiles` was being
+called on whatever the census resolved — and on an uploader that paints a button over a hidden
+`input[type=file]`, that is the BUTTON: `this.files` is undefined, the witness sees nothing, and
+the caller gets `not_staged` with no hint that the wrong ELEMENT was addressed. Fixed by resolving
+to the input itself (self, else the first one within 4 hops of its own container — the same bound
+the rendered witness uses, and for the same reason: a wider walk finds a NEIGHBOURING uploader,
+which is how a resume lands in the cover-letter box), and by refusing loudly with the tag name when
+no input exists. **But re-probing MACOM's parked tab showed `GM_Resume.pdf, 113 KB` attached** —
+one of the "failed" attempts had staged the file, the widget ingested it and re-rendered, and the
+witness polled the label it had been handed. So this morning's Cornerstone entry is CORRECTED: the
+park's stated mechanism ("blocked on the required resume upload") was wrong; the upload landed and
+the VERDICT lied. The witness now polls the input it actually fed.
+
+**AND THE TAB FALLBACK WAS POSITIONAL, WHICH ITS OWN DOCSTRING DENIED.** `_apply_tab` promised
+"identified, never positional", then fell back to *first non-search tab wins*. That held only while
+one application was open at a time — but **a park leaves its tab alive on purpose**, so a parked
+flow and a live one coexist routinely. Measured: MACOM parked on Cornerstone, CEDENT opened TAM,
+and `classify` read MACOM's tab and named the wrong platform for the step being worked. `tab_claims`
+— *"the durable record of whose tab is whose"* — already existed and was never consulted. Now it is:
+a tab claimed by ANOTHER job is refused, the step's own claim wins, an unclaimed ATS host beats a
+bare landing page, and the current step is derived from the queue rather than threaded through
+twenty call sites.
+
+*Suites:* controlplane-api **1878** green (1872 before), including four new description pins and
+two tab-identity pins written against the live MACOM/CEDENT shape.

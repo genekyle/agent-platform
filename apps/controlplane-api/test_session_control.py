@@ -6845,3 +6845,45 @@ def test_the_shadow_bundle_carries_the_phase_and_the_page_text(monkeypatch):
     assert seen.get("phase") == "verify_identity"
     # the SAME join `_state_from_observation` uses — AX names, space-joined
     assert seen.get("page_text") == "My Information Save and Continue"
+
+
+def test_a_parked_steps_tab_is_never_handed_to_the_step_being_worked():
+    """The apply-tab fallback was positional — first non-search tab wins — which held only while
+    one application was open at a time. A PARK LEAVES ITS TAB ALIVE by design, so a parked flow and
+    a live one coexist routinely. Measured live 2026-08-24: MACOM parked mid-form on Cornerstone,
+    CEDENT then opened theapplicantmanager.com, and `classify` read MACOM's tab and reported the
+    wrong platform for the step being worked. `tab_claims` already recorded whose tab was whose.
+    """
+    import routers.session_control as sc
+
+    class _BB:
+        world = {
+            "tab_claims": {"tab-macom": "indeed:macom", "tab-cedent": "indeed:cedent"},
+            "apply_queue": None,
+        }
+
+    obs = {"search_tab": {"tab_id": "tab-search"},
+           "tabs": [{"tab_id": "tab-search", "url": "https://www.indeed.com/jobs?q=data"},
+                    # the parked step's tab, listed FIRST — the positional trap
+                    {"tab_id": "tab-macom", "url": "https://macomtech.csod.com/ux/ats/x/application"},
+                    {"tab_id": "tab-cedent", "url": "https://theapplicantmanager.com/jobs?pos=dt1"}]}
+
+    got = sc._apply_tab(_BB(), obs, "indeed:cedent")
+    assert got["tab_id"] == "tab-cedent", "the claim, not the tab order, decides"
+    # And the other direction: the parked step still resolves to its own tab.
+    assert sc._apply_tab(_BB(), obs, "indeed:macom")["tab_id"] == "tab-macom"
+
+
+def test_an_unclaimed_ats_tab_still_wins_over_a_bare_landing_page():
+    """With no claim to go on the resolver must still prefer a real application host over the
+    first thing in the list — the pre-existing ROLE_APPLY preference, kept."""
+    import routers.session_control as sc
+
+    class _BB:
+        world = {"tab_claims": {}, "apply_queue": None}
+
+    obs = {"search_tab": {"tab_id": "tab-search"},
+           "tabs": [{"tab_id": "tab-search", "url": "https://www.indeed.com/jobs?q=data"},
+                    {"tab_id": "tab-careers", "url": "https://careers.example.com/overview"},
+                    {"tab_id": "tab-ats", "url": "https://boards.greenhouse.io/acme/jobs/42"}]}
+    assert sc._apply_tab(_BB(), obs)["tab_id"] == "tab-ats"

@@ -238,8 +238,47 @@ class TrajectoryDriver(ABC):
         if request.action_id == "upload":
             import asyncio
             files = [str(f) for f in (request.files or [])]
+            # RESOLVE TO THE INPUT, NEVER THE LABELLED CONTROL. A selector is re-resolved through
+            # the census, which answers with the control that carries the QUESTION — and on an
+            # uploader that renders a button ("Upload Resume/CV", "Attach") over a hidden
+            # input[type=file], that is the button. `setFileInputFiles` on a button does nothing
+            # observable: `this.files` is undefined, the witness poll sees no file, and the caller
+            # gets `not_staged` with no hint that the wrong ELEMENT was addressed (measured live
+            # 2026-08-24 — Cornerstone/MACOM staged files=0 against a button, while TAM's hidden
+            # input, addressed by its exact name, took the file first try).
+            #
+            # So: if the resolved node is not itself a file input, walk UP a bounded number of
+            # hops and take the first one inside its own container — the same bound the rendered
+            # witness uses below, and for the same reason: a wider walk finds a NEIGHBOURING
+            # uploader, which is exactly how a resume lands in the cover-letter box.
+            upload_node = request.backend_node_id
+            probe = await cdp.send("Runtime.callFunctionOn", {
+                "objectId": object_id, "returnByValue": False,
+                "functionDeclaration": "function(){"
+                                       " if(this.tagName==='INPUT'&&this.type==='file') return this;"
+                                       " var el=this,hops=0;"
+                                       " while(el&&hops++<4){"
+                                       "  var f=el.querySelector&&el.querySelector('input[type=file]');"
+                                       "  if(f) return f; el=el.parentElement; }"
+                                       " return null; }"})
+            found_id = ((probe.get("result") or {}).get("objectId"))
+            if found_id:
+                desc_up = await cdp.send("DOM.describeNode", {"objectId": found_id})
+                bn = (desc_up.get("node") or {}).get("backendNodeId")
+                if bn:
+                    upload_node = bn
+            else:
+                # Nothing file-shaped in the container: say WHICH element was addressed, because
+                # "not_staged" alone sent the last reader hunting for a selector that was fine.
+                tag = await cdp.send("Runtime.callFunctionOn", {
+                    "objectId": object_id, "returnByValue": True,
+                    "functionDeclaration": "function(){ return this.tagName+"
+                                           "(this.type?('[type='+this.type+']'):''); }"})
+                shape = (tag.get("result") or {}).get("value") or "?"
+                raise RuntimeError(f"upload target resolved to {shape}, not an input[type=file], "
+                                   f"and its container holds none")
             await cdp.send("DOM.setFileInputFiles",
-                           {"backendNodeId": request.backend_node_id, "files": files})
+                           {"backendNodeId": upload_node, "files": files})
             await cdp.send("Runtime.callFunctionOn", {
                 "objectId": object_id, "returnByValue": True,
                 "functionDeclaration": "function(){ if(this.files && this.files.length){"
@@ -251,7 +290,7 @@ class TrajectoryDriver(ABC):
             # Poll rather than sleep-once so the fast path stays fast.
             for attempt in range(10):
                 got = await cdp.send("Runtime.callFunctionOn", {
-                    "objectId": object_id, "returnByValue": True,
+                    "objectId": found_id or object_id, "returnByValue": True,
                     "functionDeclaration": _UPLOAD_WITNESS_JS,
                     "arguments": [{"value": names}]})
                 w = (got.get("result") or {}).get("value") or {}

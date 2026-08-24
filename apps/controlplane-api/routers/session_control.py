@@ -6203,6 +6203,33 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                         f"this step's job, opened by its data-jk",
                            "evidence": ("queue.job_id", "open_job_card.pane_identity")})
 
+            # THE DESCRIPTION, CAPTURED WHERE IT IS ALREADY ON SCREEN (2026-08-24).
+            # `/open_job_card` scrapes the right-hand pane and returns its description in THIS
+            # response — the sweep endpoint has always stored it, and this rung, which every
+            # application passes through, threw it away. Measured the day it was wired: 79 of 633
+            # sightings carried a description, and of the 31 jobs actually APPLIED to, only 7 did.
+            # The jobs that matter most were the least documented, because the only writer was a
+            # bounded sweep (`max_details_per_page`, default 8) that a picked job need never meet.
+            #
+            # Best-effort by construction: a description is bookkeeping, and bookkeeping must not
+            # be able to fail the rung that opened the pane (the record_flow rule, same week).
+            try:
+                _desc = (res.get("description") or "").strip()
+                if _desc:
+                    _sighting = db.get(ObservedJob, step.job_id)
+                    if _sighting is not None:
+                        if not (_sighting.description or "").strip():
+                            _sighting.description = _desc[:20000]
+                        if not (_sighting.salary or "").strip():
+                            _sighting.salary = ((res.get("salary") or "")[:200] or None)
+                        # The sighting is not what the dashboard (or applied_index) reads — carry
+                        # it to the canonical Job, which is the row a cross-engine match joins on.
+                        job_dedup.sync_description(db, _sighting)
+                        db.flush()
+            except Exception:  # noqa: BLE001 — never let a capture break the open
+                logging.getLogger(__name__).exception(
+                    "capturing the pane description for %s failed", step.job_id)
+
             # THE APPLIED CHECK, ON LANDING. Asked here — with the pane's own title, the richest
             # description of this job we will hold before entering — and not after a drive has
             # spent its way into an ATS to be told the same thing. `applied` HALTS the step;
@@ -6896,7 +6923,7 @@ def _ats_brief_for_view(bb: Any, observer: Any) -> Optional[dict[str, Any]]:
             db.close()
 
 
-def _apply_tab(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
+def _apply_tab(bb: Any, obs: dict[str, Any], job_id: str = "") -> dict[str, Any]:
     """The LIVE tab the application is on — {tab_id, url} — identified, never positional and never
     from a stale record.
 
@@ -6931,20 +6958,56 @@ def _apply_tab(bb: Any, obs: dict[str, Any]) -> dict[str, Any]:
                 if hopped is not None:
                     return {"tab_id": hopped.get("tab_id"), "url": hopped.get("url", "")}
             return {"tab_id": live.get("tab_id"), "url": live.get("url", "")}
+    # THE FALLBACK USED TO BE POSITIONAL — first non-search tab wins — which this docstring
+    # already promised it was not. It held only while one application was open at a time. A PARK
+    # LEAVES ITS TAB ALIVE ON PURPOSE ("parked means you are coming back to it"), so the moment a
+    # parked flow and a live one coexist, the loop hands back whichever the tab list happens to
+    # list first. Measured live 2026-08-24: MACOM was parked mid-form on Cornerstone, CEDENT then
+    # opened theapplicantmanager.com, and `classify` read MACOM's parked tab and reported the
+    # WRONG PLATFORM for the step being worked.
+    #
+    # `tab_claims` is the durable record of whose tab is whose and already exists; consult it
+    # rather than inventing an ordering rule. A tab claimed by ANOTHER job is never this step's,
+    # and that refusal is the half that matters.
+    claims = (bb.world or {}).get("tab_claims") or {}
+    if not job_id:
+        # Callers that do not name a step still deserve the right tab: the queue's CURRENT step is
+        # the step being worked, by definition. Derived here rather than threaded through twenty
+        # call sites, and defensively — a resolver that raised would take the rung with it.
+        try:
+            _cur = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
+            job_id = getattr(_cur, "job_id", "") or ""
+        except Exception:  # noqa: BLE001
+            job_id = ""
     search = (obs.get("search_tab") or {}).get("tab_id")
+    candidates = []
     for t in tabs:
         url = t.get("url", "") or ""
         if t.get("tab_id") == search or not url or url.startswith("about:"):
             continue
         if "indeed.com/jobs" in url:      # another results view is still not the application
             continue
-        return {"tab_id": t.get("tab_id"), "url": url}
+        claimed = claims.get(t.get("tab_id"))
+        if job_id and claimed and claimed != job_id:
+            continue                      # someone else's tab — a parked step's, most likely
+        candidates.append((t, claimed))
+    if job_id:
+        mine = next((t for t, c in candidates if c == job_id), None)
+        if mine is not None:
+            return {"tab_id": mine.get("tab_id"), "url": mine.get("url", "")}
+    ats_tab = next((t for t, _ in candidates
+                    if window_mod.classify_tab(t.get("url", "")) == window_mod.ROLE_APPLY), None)
+    if ats_tab is not None:
+        return {"tab_id": ats_tab.get("tab_id"), "url": ats_tab.get("url", "")}
+    if candidates:
+        t = candidates[0][0]
+        return {"tab_id": t.get("tab_id"), "url": t.get("url", "")}
     return {"tab_id": "", "url": ""}
 
 
-def _apply_tab_url(bb: Any, obs: dict[str, Any]) -> str:
+def _apply_tab_url(bb: Any, obs: dict[str, Any], job_id: str = "") -> str:
     """The live application tab's current URL (thin wrapper over `_apply_tab`)."""
-    return _apply_tab(bb, obs).get("url", "")
+    return _apply_tab(bb, obs, job_id).get("url", "")
 
 
 async def _read_apply_page(bb: Any, obs: dict[str, Any],
