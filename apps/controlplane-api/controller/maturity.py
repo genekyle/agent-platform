@@ -30,7 +30,13 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
-from interaction.authority import ControlMode, Maturity, TransitionKey, maturity_rank
+from interaction.authority import (
+    ControlMode,
+    Maturity,
+    PromotionStanding,
+    TransitionKey,
+    maturity_rank,
+)
 from interaction.supervision import FailureClass
 
 from controller import programs as programs_mod
@@ -318,6 +324,12 @@ class MaturityRegistry:
     def __init__(self, *, ttl_rows: Optional[int] = None) -> None:
         self._lock = threading.Lock()
         self._stats: dict[str, TransitionStat] = {}
+        #: scenario id -> the by_scenario entry from `metrics.shadow_agreement`. Computed in the
+        #: SAME refresh, off the SAME rows, so the promotion standing can never disagree with the
+        #: maturity view about what the corpus says — the module header's "a registry that can
+        #: disagree with the journal will eventually disagree with the journal", applied to the
+        #: second evidence source rather than re-learned later.
+        self._scenarios: dict[str, dict[str, Any]] = {}
         self._stamp: Optional[tuple[float, float]] = None
         self._loaded = False
         self._ttl_rows = ttl_rows
@@ -345,6 +357,11 @@ class MaturityRegistry:
                 return
             rows = decision_journal.read_rows(limit=self._ttl_rows)
             self._stats = derive(rows)
+            # Free: the same rows, already in memory. Imported here rather than at module scope
+            # to keep `maturity` importable by the offline suites without pulling the metric in.
+            from controller import metrics as metrics_mod
+            report = metrics_mod.shadow_agreement(rows)
+            self._scenarios = {s["scenario"]: s for s in report.get("by_scenario", ())}
             self._stamp = stamp
             self._loaded = True
 
@@ -363,6 +380,45 @@ class MaturityRegistry:
     def all(self) -> dict[str, TransitionStat]:
         self.refresh()
         return dict(self._stats)
+
+    def standing_for(self, ats: Optional[str], state: Optional[str]) -> PromotionStanding:
+        """Has this scenario cleared the two-bar promotion gate? The unit is per-state per-ATS,
+        which is what CONTROLLER_PROMOTION.md has always specified the promotion unit to be.
+
+        A scenario nobody has measured returns `unmeasured()`, which BLOCKS autonomy — the
+        registry's own "absence of evidence is the strictest answer" rule. The detail string is
+        written to be readable in an operator-facing refusal, naming the failing bar AND its n,
+        because "not promoted" without a number is not actionable.
+        """
+        from controller import metrics as metrics_mod
+
+        self.refresh()
+        row = self._scenarios.get(metrics_mod.scenario_key(ats, state))
+        if row is None:
+            return PromotionStanding.unmeasured()
+
+        n, ex_n = row.get("n", 0), row.get("exact_n", 0)
+        loose, exact = row.get("loose_agreement", 0.0), row.get("exact_agreement", 0.0)
+        if row.get("eligible"):
+            return PromotionStanding(
+                measured=True, eligible=True,
+                detail=(f"loose {loose:.0%} over {n}, exact {exact:.0%} over {ex_n}"))
+
+        # Name the FIRST unmet requirement, with its number. Windows before rates: "not enough
+        # evidence yet" and "measured and failing" are different problems with different fixes.
+        if n < metrics_mod.PROMOTION_MIN_N:
+            why = f"only {n} paired rows, needs {metrics_mod.PROMOTION_MIN_N}"
+        elif ex_n < metrics_mod.PROMOTION_MIN_EXACT_N:
+            why = (f"only {ex_n} of {n} rows can testify about which control was chosen, "
+                   f"needs {metrics_mod.PROMOTION_MIN_EXACT_N}")
+        elif loose < metrics_mod.PROMOTION_LOOSE_BAR:
+            why = (f"loose agreement {loose:.0%} over {n}, "
+                   f"needs {metrics_mod.PROMOTION_LOOSE_BAR:.0%}")
+        else:
+            why = (f"exact agreement {exact:.0%} over {ex_n}, "
+                   f"needs {metrics_mod.PROMOTION_EXACT_BAR:.0%} — the controller agrees on the "
+                   f"verb but not on which control")
+        return PromotionStanding(measured=True, eligible=False, detail=why)
 
 
 #: The process-wide registry. One instance so the mtime check is shared; it holds no state a

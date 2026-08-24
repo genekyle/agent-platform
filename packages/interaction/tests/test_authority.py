@@ -26,6 +26,7 @@ from interaction.authority import (
     ActuationReach,
     ControlMode,
     Maturity,
+    PromotionStanding,
     TransitionKey,
     authority,
     authority_to_prompt,
@@ -36,6 +37,13 @@ from interaction.belief import BeliefState
 
 REACHABLE = ActuationReach(can_operate=True)
 UNREACHABLE = ActuationReach(can_operate=False, gaps=("widget:signature_pad", "field:eeo_race"))
+
+#: A scenario that HAS cleared the two-bar promotion gate. Supplied explicitly by every test that
+#: expects GREEN, because since 2026-08-22 a track record alone does not grant autonomy — the
+#: controller must also have been measured to agree with the teacher on that scenario. Omitting it
+#: is what `test_an_unmeasured_scenario_can_never_be_green` pins.
+PROMOTED = PromotionStanding(measured=True, eligible=True,
+                             detail="loose 95% over 30, exact 90% over 28")
 
 SURE = BeliefState(state="workday_my_information",
                    uncertainty={"state": 0.05, "novelty": 0.10})
@@ -73,8 +81,9 @@ def test_mode_order_covers_every_member():
 
 
 # --- the truth table ----------------------------------------------------------------
-def test_certified_and_sure_and_reachable_is_green():
-    v = authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=REACHABLE)
+def test_certified_and_sure_and_reachable_and_promoted_is_green():
+    v = authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=REACHABLE,
+                  standing=PROMOTED)
     assert v.mode == ControlMode.GREEN.value
     assert v.locally_executed and not v.needs_teacher
 
@@ -145,7 +154,8 @@ def test_reach_outranks_novelty():
 
 
 def test_unprobed_reach_caps_a_certified_transition_at_yellow():
-    v = authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=None)
+    v = authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=None,
+                  standing=PROMOTED)
     assert v.mode == ControlMode.YELLOW.value
     assert "probed" in v.reason
 
@@ -153,20 +163,20 @@ def test_unprobed_reach_caps_a_certified_transition_at_yellow():
 def test_absent_belief_falls_back_to_maturity():
     """No observer fitted is still the default. An unassessed axis does not block — the
     deterministic state mapping that produced the maturity key is itself the evidence."""
-    assert authority(maturity=Maturity.CERTIFIED.value, belief=None,
-                     reach=REACHABLE).mode == ControlMode.GREEN.value
-    assert authority(maturity=Maturity.TESTING.value, belief=None,
-                     reach=REACHABLE).mode == ControlMode.YELLOW.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=None, reach=REACHABLE,
+                     standing=PROMOTED).mode == ControlMode.GREEN.value
+    assert authority(maturity=Maturity.TESTING.value, belief=None, reach=REACHABLE,
+                     standing=PROMOTED).mode == ControlMode.YELLOW.value
 
 
 def test_consequential_tightens_the_ceiling():
     """0.20 uncertainty is fine normally (ceiling 0.25) and blocks on an irreversible step
     (ceiling 0.10) — one flag, two answers, which is why it must be threaded and not guessed."""
     shaky = BeliefState(state="indeed_apply_review", uncertainty={"state": 0.20, "novelty": 0.1})
-    assert authority(maturity=Maturity.CERTIFIED.value, belief=shaky,
-                     reach=REACHABLE).mode == ControlMode.GREEN.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=shaky, reach=REACHABLE,
+                     standing=PROMOTED).mode == ControlMode.GREEN.value
     strict = authority(maturity=Maturity.CERTIFIED.value, belief=shaky, reach=REACHABLE,
-                       consequential=True)
+                       consequential=True, standing=PROMOTED)
     assert strict.mode == ControlMode.ORANGE.value
     assert strict.consequential and strict.blocking_axis == "state"
 
@@ -188,13 +198,64 @@ def test_unseen_transition_can_never_be_green():
         assert v.needs_teacher, (belief, reach, consequential)
 
 
+def test_an_unmeasured_scenario_can_never_be_green():
+    """The promotion gate's safety property, and the twin of the one above.
+
+    A transition can earn CERTIFIED on its ACTION history — `maturity.key_for_row` derives that
+    from acted rows and skips shadow rows entirely — while the controller, asked to choose for
+    itself on that page, has never once been measured against the teacher. Autonomy depends on
+    the second fact, so a missing standing must read as a refusal and never as permission.
+
+    Exhaustive over every belief/reach/consequential combination, exactly like the UNSEEN
+    property, because a gate with one unguarded corner is not a gate.
+    """
+    beliefs = [None, SURE, SURE.as_dict()]
+    reaches = [REACHABLE, ActuationReach.unprobed(), None]
+    for belief, reach, consequential in itertools.product(beliefs, reaches, (False, True)):
+        for standing in (None, PromotionStanding.unmeasured(),
+                         PromotionStanding(measured=True, eligible=False, detail="loose 66%")):
+            v = authority(maturity=Maturity.CERTIFIED.value, belief=belief, reach=reach,
+                          consequential=consequential, standing=standing)
+            assert v.mode != ControlMode.GREEN.value, (belief, reach, consequential, standing)
+
+
+def test_a_refusal_names_which_bar_failed_and_its_number():
+    """"Not promoted" without a number is not actionable. The refusal is what an operator reads
+    when a transition they expected to run free did not, so it must say why and how far off."""
+    v = authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=REACHABLE,
+                  standing=PromotionStanding(
+                      measured=True, eligible=False,
+                      detail="exact agreement 60% over 163, needs 85%"))
+    assert v.mode == ControlMode.YELLOW.value
+    assert "promotion gate is not cleared" in v.reason
+    assert "exact agreement 60% over 163, needs 85%" in v.reason
+    assert v.locally_executed and not v.needs_teacher      # YELLOW's usual partition, unchanged
+
+
+def test_the_gate_does_not_override_a_stronger_refusal():
+    """Ordering: an unreachable page is still RED and an unsure belief is still ORANGE, even with
+    no standing. The gate caps autonomy; it does not get to relabel a capability or knowledge gap
+    as a promotion problem."""
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=SURE,
+                     reach=UNREACHABLE).mode == ControlMode.RED.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=UNSURE_STATE,
+                     reach=REACHABLE).mode == ControlMode.ORANGE.value
+    # and a sub-certified maturity still names the maturity bar, not the gate
+    v = authority(maturity=Maturity.TESTING.value, belief=SURE, reach=REACHABLE)
+    assert v.mode == ControlMode.YELLOW.value and GREEN_AT in v.reason
+
+
 def test_every_mode_is_reachable():
     """A four-mode design with an unreachable mode is a three-mode design with extra prose."""
     produced = {
-        authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=REACHABLE).mode,
-        authority(maturity=Maturity.TESTING.value, belief=SURE, reach=REACHABLE).mode,
-        authority(maturity=Maturity.UNSEEN.value, belief=SURE, reach=REACHABLE).mode,
-        authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=UNREACHABLE).mode,
+        authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=REACHABLE,
+                  standing=PROMOTED).mode,
+        authority(maturity=Maturity.TESTING.value, belief=SURE, reach=REACHABLE,
+                  standing=PROMOTED).mode,
+        authority(maturity=Maturity.UNSEEN.value, belief=SURE, reach=REACHABLE,
+                  standing=PROMOTED).mode,
+        authority(maturity=Maturity.CERTIFIED.value, belief=SURE, reach=UNREACHABLE,
+                  standing=PROMOTED).mode,
     }
     assert produced == {m.value for m in ControlMode}
 

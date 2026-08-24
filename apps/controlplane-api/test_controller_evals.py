@@ -92,15 +92,20 @@ def test_authority_truth_table_is_pinned():
     """The four modes decide who acts on a live application, so a silent change to the ordering
     is exactly the kind of regression this suite exists to catch."""
     from interaction.authority import ActuationReach, ControlMode, Maturity, authority
+    from interaction.authority import PromotionStanding
     from interaction.belief import BeliefState
 
     reachable = ActuationReach(can_operate=True)
     sure = BeliefState(state="s", uncertainty={"state": 0.05, "novelty": 0.1})
     novel = BeliefState(state="s", uncertainty={"state": 0.05, "novelty": 0.97})
     blocked = ActuationReach(can_operate=False, gaps=("widget:x",))
+    # Since 2026-08-22 a track record alone does not grant autonomy: the scenario must also have
+    # cleared the two-bar promotion gate. Supplied explicitly wherever GREEN is asserted, and
+    # pinned by `test_an_unmeasured_scenario_can_never_be_green` in the interaction suite.
+    promoted = PromotionStanding(measured=True, eligible=True, detail="loose 95%, exact 90%")
 
-    assert authority(maturity=Maturity.CERTIFIED.value, belief=sure,
-                     reach=reachable).mode == ControlMode.GREEN.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=sure, reach=reachable,
+                     standing=promoted).mode == ControlMode.GREEN.value
     assert authority(maturity=Maturity.TESTING.value, belief=sure,
                      reach=reachable).mode == ControlMode.YELLOW.value
     assert authority(maturity=Maturity.UNSEEN.value, belief=sure,
@@ -109,12 +114,15 @@ def test_authority_truth_table_is_pinned():
     # meaning and the local executor still acts. Corrected 2026-07-22: grading it RED meant every
     # novelty block demanded a takeover, and a takeover accepts no instruction, so live drives had
     # no way to be taught at all. RED is the capability verdict now, and reach is what earns it.
-    assert authority(maturity=Maturity.CERTIFIED.value, belief=novel,
-                     reach=reachable).mode == ControlMode.ORANGE.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=novel, reach=reachable,
+                     standing=promoted).mode == ControlMode.ORANGE.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=sure, reach=blocked,
+                     standing=promoted).mode == ControlMode.RED.value
+    assert authority(maturity=Maturity.CERTIFIED.value, belief=novel, reach=blocked,
+                     standing=promoted).mode == ControlMode.RED.value
+    # …and the new row of the table: everything else perfect, gate not cleared -> YELLOW.
     assert authority(maturity=Maturity.CERTIFIED.value, belief=sure,
-                     reach=blocked).mode == ControlMode.RED.value
-    assert authority(maturity=Maturity.CERTIFIED.value, belief=novel,
-                     reach=blocked).mode == ControlMode.RED.value
+                     reach=reachable).mode == ControlMode.YELLOW.value
 
 
 def test_an_empty_registry_can_never_produce_green():

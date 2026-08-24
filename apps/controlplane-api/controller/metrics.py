@@ -109,10 +109,18 @@ def _category(row: dict[str, Any]) -> str:
     return "wrong_params"
 
 
+def scenario_key(ats: Any, state: Any) -> str:
+    """The promotion unit: `"{ats}:{state}"` — per-state, per-ATS (CONTROLLER_PROMOTION.md).
+
+    Public and used by BOTH directions: `_scenario_key` derives it from a journaled row, and the
+    authority seam derives it from the live Bundle. One definition, because a second rendering of
+    this string would silently look up nothing and read as "unmeasured" forever.
+    """
+    return f"{ats or '?'}:{state or '?'}"
+
+
 def _scenario_key(row: dict[str, Any]) -> str:
-    ats = row.get("ats") or "?"
-    state = row.get("state") or "?"
-    return f"{ats}:{state}"
+    return scenario_key(row.get("ats"), row.get("state"))
 
 
 def shadow_agreement(rows: list[dict[str, Any]], *, match: str = "loose") -> dict[str, Any]:

@@ -251,6 +251,41 @@ GREEN_AT = Maturity.CERTIFIED.value
 #: tab, 2026-07-19), so an unprobed turn may be reviewed but never run free.
 UNPROBED_CEILING = ControlMode.YELLOW
 
+#: Ceiling applied when the PROMOTION GATE has not been cleared for this scenario. Same value and
+#: the same logic as `UNPROBED_CEILING`: a check that was not performed, or was performed and did
+#: not pass, caps the turn at "local proposes, the teacher approves" — it never grants autonomy.
+UNPROMOTED_CEILING = ControlMode.YELLOW
+
+
+@dataclass(frozen=True)
+class PromotionStanding:
+    """Whether a scenario has cleared the two-bar promotion gate (CONTROLLER_PROMOTION.md).
+
+    Carried as a plain value object so this module stays pure and knows nothing about journals,
+    metrics or scenarios — the CALLER measures, this module only applies the consequence.
+
+    `measured=False` is the honest default and it BLOCKS, for the same reason
+    `ActuationReach.unprobed()` blocks: absence of evidence is the strictest answer, never
+    permission (this module's own header). A gate whose default answer is "yes" is not a gate —
+    the same rule `metrics.is_promotable` applies by defaulting `exact_n` to 0.
+    """
+
+    measured: bool = False
+    eligible: bool = False
+    detail: str = ""
+
+    @staticmethod
+    def unmeasured() -> "PromotionStanding":
+        return PromotionStanding(measured=False, eligible=False,
+                                 detail="no agreement measured for this scenario")
+
+    @property
+    def permits_autonomy(self) -> bool:
+        return self.measured and self.eligible
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"measured": self.measured, "eligible": self.eligible, "detail": self.detail}
+
 
 def _blocking_axis(belief: Any, *, consequential: bool) -> str:
     """Which belief axis should stop us, or "".
@@ -280,7 +315,8 @@ def _blocking_axis(belief: Any, *, consequential: bool) -> str:
 
 def authority(*, maturity: str, belief: Any = None,
               reach: Optional[ActuationReach] = None,
-              consequential: bool = False) -> AuthorityVerdict:
+              consequential: bool = False,
+              standing: Optional[PromotionStanding] = None) -> AuthorityVerdict:
     """Who owns this turn. PURE, $0, every turn — same discipline as `supervision.classify`.
 
     Checked in this order, first hit wins. The ORDER is the design:
@@ -370,7 +406,27 @@ def authority(*, maturity: str, belief: Any = None,
                   f"transition is {mat}, not {GREEN_AT} — local proposes, the teacher approves or "
                   f"corrects, local executes")
 
-    # 6 — certified. The only rung that acts without asking, and only if we checked we can act.
+    # 6 — CERTIFIED BY TRACK RECORD IS NOT ENOUGH. The transition has earned its rung on what it
+    # DID; the promotion gate asks the other question — does the local controller AGREE with the
+    # teacher on this scenario, on both bars (CONTROLLER_PROMOTION.md, ruled 2026-08-22)?
+    #
+    # Two different kinds of evidence, deliberately both required: maturity is derived from ACTED
+    # rows (`maturity.key_for_row` skips shadow rows), agreement from SHADOW/golden pairs. A
+    # transition can have a spotless action history while the controller, asked to choose for
+    # itself on that page, still picks differently from the teacher — and it is the second thing,
+    # not the first, that autonomy actually depends on.
+    #
+    # Note the ORDER: this sits AFTER the belief and maturity branches so their reasons still win
+    # when they apply, and BEFORE the GREEN return so nothing reaches autonomy around it.
+    stand = standing if standing is not None else PromotionStanding.unmeasured()
+    if not stand.permits_autonomy:
+        return _v(UNPROMOTED_CEILING,
+                  f"{mat} by track record, but the promotion gate is not cleared for this "
+                  f"scenario ({stand.detail or 'no standing supplied'}) — local proposes, the "
+                  f"teacher approves or corrects")
+
+    # 7 — certified AND promoted. The only rung that acts without asking, and only if we checked
+    # we can act.
     if not probe.probed:
         return _v(UNPROBED_CEILING,
                   "certified, but nobody probed whether the executor can operate this page — "

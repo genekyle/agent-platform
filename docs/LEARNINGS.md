@@ -10520,3 +10520,70 @@ loading the whole append-only history. Drive-end reads carry an 8s timeout so a 
 hold the close-out button for the CDP layer's 25s deadline. `_REVIEW_ONLY_KINDS` is now DERIVED
 from `EMPLOYER_RESPONSE_KINDS` (the hand copy had drifted: `offer` was missing — the one kind
 whose phrase family doesn't exist yet, which is exactly when the gate matters).
+
+## 2026-08-22 (last) — the gate stops being a scoreboard: enforced at the authority seam
+
+The 2026-08-20 audit found that `CONTROLLER_PROMOTION.md`'s gate was "computed and displayed,
+enforced nowhere" and left the decision open. It is closed: **enforce**, and the enforcement point
+is `interaction.authority.authority()`.
+
+**WHERE, AND WHY THAT PLACE.** `authority()` is the one function that decides who owns a turn, and
+its last branch was the only path to GREEN — the single rung that acts without asking. The gate is
+a new branch immediately before it: a scenario that has not cleared both bars caps at YELLOW
+(`UNPROMOTED_CEILING`). **The fall-through is intact by construction** — a blocked scenario keeps
+working, it just keeps working reviewed. The rule is pure and sits with the other rules; the
+measurement sits in the maturity registry; `authority_seam` only carries one to the other, which is
+what its own docstring demands ("a rule that lives in the wiring is a rule the offline suite cannot
+reach").
+
+**THE MEASUREMENT IS FREE, AND CANNOT DRIFT.** The registry already reads the journal and caches on
+its mtime, so agreement is computed **in the same refresh, off the same rows** as maturity. No
+second read, no second cache, nothing to fall out of sync — the module header's own rule ("a
+registry that can disagree with the journal will eventually disagree with the journal") applied to
+the second evidence source before it could be re-learned the hard way.
+
+**TWO KINDS OF EVIDENCE, AND THEIR ROW SETS ARE DISJOINT — which is the point.** Maturity is
+derived from ACTED rows (`key_for_row` skips shadow rows outright); agreement is derived from
+SHADOW and golden pairs. **A transition can have a spotless action history while the controller,
+asked to choose for itself on that page, has never once been measured against the teacher.**
+Autonomy depends on the second fact and only the first was ever consulted. The units differ too —
+maturity keys `(from_state, intent, ref)`, agreement keys `(ats, state)` — reconciled by gating
+every transition on a state with the scenario's standing, which is the per-state per-ATS unit the
+doc has specified since M5. `metrics.scenario_key` is the one definition used from both
+directions; a second rendering of that string would look up nothing and read as "unmeasured"
+forever.
+
+**ABSENCE OF MEASUREMENT BLOCKS, AND THAT CHOICE COST EIGHT TESTS.** `PromotionStanding` defaults
+to `measured=False`, which refuses. Every existing test asserting `CERTIFIED + sure + reachable ->
+GREEN` went red, because they were asserting a truth table that has gained a dimension. Updating
+them was the correct move and not test-fitting: each now supplies an explicit `PROMOTED` standing
+to say "everything else is fine", and the new dimension got its own exhaustive pin
+(`test_an_unmeasured_scenario_can_never_be_green`, the twin of the older UNSEEN property). *The
+precedent that made the default obvious was already in the file:* `ActuationReach.unprobed()` caps
+GREEN rather than granting it, so "a check that was not performed" already had a defined, strict
+consequence here. Same shape, same ceiling, one more axis.
+
+**REFUSALS NAME THE BAR AND THE NUMBER**, because "not promoted" is not actionable, and windows are
+named before rates — "not enough evidence yet" and "measured and failing" are different problems
+with different fixes. Live, right now:
+
+| scenario | what the operator is told |
+|---|---|
+| `indeed_quick_apply:indeed_job_posting` | only 1 of 67 rows can testify about which control was chosen, needs 25 |
+| `workday:workday_job_posting` | loose agreement 59% over 61, needs 90% |
+| `indeed:indeed_apply_questions` | only 15 paired rows, needs 25 |
+
+**NOTHING REGRESSED, CHECKED RATHER THAN ASSUMED.** `derive()` over the live journal grades **0
+transitions CERTIFIED** (44 unseen, 69 replayable, 5 regressed, 2 demonstrated), so nothing reached
+the GREEN branch before this change and nothing lost standing because of it. The gate starts
+mattering on the first scenario to earn CERTIFIED — by which time the post-wire rows will have
+given it agreement numbers to read.
+
+*And the worktree trap bit once more, in its third variant.* Measuring the new `standing_for`
+against the real corpus returned "no agreement measured" for a scenario with 67 known pairs —
+because putting the worktree's `packages/interaction` on the path also moves where
+`decision_journal._path()` resolves, to a worktree dir with no journal in it. The venv lesson
+(2026-08-11) and the node_modules lesson (2026-08-20) were both about CODE resolution; this one is
+**DATA resolution following the code**. `INTERACTION_ARTIFACTS_DIR=apps/mcp/output` pins it. A null
+result from a worktree still means "check what you actually loaded" — and now also "check what it
+loaded it FROM".

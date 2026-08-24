@@ -44,8 +44,11 @@ def default_authority(*, registry: Optional[maturity_mod.MaturityRegistry] = Non
             # A probe that raises must not decide the turn by accident. "Unprobed" is an honest
             # answer with a defined consequence (capped at YELLOW), unlike a swallowed exception.
             probe = ActuationReach.unprobed()
+        # The promotion gate, per-state per-ATS. Composition only — the RULE is `authority()`'s
+        # and the MEASUREMENT is the registry's; this just carries one to the other.
+        standing = reg.standing_for(bundle.ats, bundle.state)
         return authority(maturity=rung, belief=bundle.belief, reach=probe,
-                         consequential=consequential)
+                         consequential=consequential, standing=standing)
 
     return _authority
 
