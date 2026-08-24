@@ -10637,3 +10637,20 @@ reason. Now: an explicit `body.password` still wins outright (that IS the reques
 the site was given), silence never overwrites, and an unreadable vault refuses rather than assuming
 it is empty. *The rule worth carrying: only a credential this request can VOUCH for may overwrite a
 stored one — and "I re-derived it" is not a vouch.*
+
+*Review pass on the enforcement (2026-08-23) — SAFE AS MERGED, two Low findings, both fixed.*
+**(a) `standing_for` had no direct test.** The registry-side mapping — by_scenario row →
+`PromotionStanding`, the eligible happy path, and the four-rung why-string ladder — was pinned by
+nothing, so an edit inverting the `row.get("eligible")` read would have sailed through and
+silently opened the gate. Now covered by synthetic-row tests, and **falsified before being
+believed**: inverting that read on purpose fails 6 of them, and the file goes green again when it
+is put back. A test that passes either way pins nothing (the 08-20 lesson, applied to itself).
+**(b) `shadow_agreement` now runs inside `MaturityRegistry.refresh()`**, so a single malformed
+journal row — params present but not a dict — would have raised from `.items()` and taken down
+every registry consumer, the authority seam included. Verified it really did raise before the fix.
+Fail-CLOSED (a crash grants nothing), but *a corpus reader must survive its own corpus*: `derive()`
+already tolerated these rows and the metric beside it now does too, counting them into a loud
+`malformed` field rather than absorbing them silently. **The general shape: moving a computation
+inside a shared cached refresh silently widens its blast radius from "this number is wrong" to
+"every consumer of this registry is down" — re-ask what a crash costs the moment a function
+changes neighbourhood.**

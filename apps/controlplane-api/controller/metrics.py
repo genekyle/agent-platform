@@ -68,9 +68,26 @@ def _norm_param(v: Any) -> Any:
     return " ".join(str(v).split()).lower() if isinstance(v, str) else v
 
 
+def _is_malformed(row: dict[str, Any]) -> bool:
+    """Does this row carry a params value that is present but NOT a dict?
+
+    Such a row cannot be compared at all, and until 2026-08-23 it did not merely score wrong — it
+    RAISED, from `.items()` on a string. That mattered far more than it looks: since the promotion
+    gate landed, `shadow_agreement` runs inside `MaturityRegistry.refresh()`, so ONE malformed
+    journal row would have taken down every registry consumer, the authority seam included. The
+    failure was at least fail-CLOSED (a crash grants nothing), but a corpus reader must survive its
+    own corpus: `derive()` already tolerates these rows, and the metric beside it now does too.
+    """
+    for key in ("params", "proposed_params"):
+        v = row.get(key)
+        if v is not None and not isinstance(v, dict):
+            return True
+    return False
+
+
 def _params_agree(teacher: Any, proposed: Any) -> bool:
-    t = {k: _norm_param(v) for k, v in (teacher or {}).items()}
-    p = {k: _norm_param(v) for k, v in (proposed or {}).items()}
+    t = {k: _norm_param(v) for k, v in (teacher if isinstance(teacher, dict) else {}).items()}
+    p = {k: _norm_param(v) for k, v in (proposed if isinstance(proposed, dict) else {}).items()}
     return t == p
 
 
@@ -133,7 +150,7 @@ def shadow_agreement(rows: list[dict[str, Any]], *, match: str = "loose") -> dic
     pairs = [r for r in rows if r.get("proposed_intent") is not None]
     report: dict[str, Any] = {
         "match": match, "n": len(pairs), "agree": 0, "disagree": 0, "agreement": 0.0,
-        "loose_agreement": 0.0, "exact_agreement": 0.0,
+        "loose_agreement": 0.0, "exact_agreement": 0.0, "malformed": 0,
         "by_scenario": [], "by_category": {},
         "bars": {"loose": PROMOTION_LOOSE_BAR, "exact": PROMOTION_EXACT_BAR,
                  "min_n": PROMOTION_MIN_N, "min_exact_n": PROMOTION_MIN_EXACT_N},
@@ -144,14 +161,19 @@ def shadow_agreement(rows: list[dict[str, Any]], *, match: str = "loose") -> dic
 
     per_scenario: dict[str, dict[str, int]] = {}
     categories: dict[str, int] = {}
-    agree = loose_agree = exact_agree = exact_n = unscoreable = 0
+    agree = loose_agree = exact_agree = exact_n = unscoreable = malformed = 0
     for r in pairs:
+        # A row whose params are present but not a dict is COUNTED AND SKIPPED for the exact bar,
+        # never silently absorbed and never allowed to raise (see `_is_malformed`). It still scores
+        # loose, which has always been dict-guarded via `_field`.
+        bad = _is_malformed(r)
+        malformed += 1 if bad else 0
         ok = _matches(r, match)
         # BOTH bars are computed on every call regardless of `match`, so a caller can never be
         # handed one number and mistake it for the gate. `agreement` keeps meaning whatever mode
         # was asked for (unchanged); `loose_agreement`/`exact_agreement` are unambiguous.
         ok_loose = _matches(r, "loose")
-        scoreable = not _has_no_param_claim(r)
+        scoreable = not bad and not _has_no_param_claim(r)
         ok_exact = _matches(r, "exact") if scoreable else False
         agree += 1 if ok else 0
         loose_agree += 1 if ok_loose else 0
@@ -179,6 +201,9 @@ def shadow_agreement(rows: list[dict[str, Any]], *, match: str = "loose") -> dic
     report["exact_agreement"] = round(exact_agree / exact_n, 4) if exact_n else 0.0
     report["exact_n"] = exact_n
     report["exact_unscoreable"] = unscoreable
+    #: Loud rather than silent: a non-zero count here means the corpus holds rows nothing can
+    #: compare, which is a journaling bug to chase, not a number to shrug at.
+    report["malformed"] = malformed
     report["by_category"] = dict(sorted(categories.items(), key=lambda kv: kv[1], reverse=True))
     # ADDITIVE per-scenario shape: `agreement`/`agree`/`n` keep their existing meaning and place
     # (the cockpit's promotion panel reads them), and the two-bar keys are added beside them.

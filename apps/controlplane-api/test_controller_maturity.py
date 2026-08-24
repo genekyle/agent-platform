@@ -279,3 +279,91 @@ def test_one_history_is_not_split_by_a_drifting_task_label():
             + [row(rung="recipe", task="indeed_quick_apply")] * 2)
     s = graded(rows)          # `graded` asserts there is exactly ONE transition
     assert s.oks == 4
+
+
+# --- the promotion gate's registry-side mapping (2026-08-22) -------------------------
+def _pairs(n, *, ats="workday", state="workday_questions", loose_hits=None, exact_hits=None,
+           with_control=True):
+    """`n` shadow pairs for one scenario, `loose_hits` of which agree on intent and `exact_hits`
+    of which also agree on the control. Shaped like the rows `shadow_agreement` really reads."""
+    loose_hits = n if loose_hits is None else loose_hits
+    exact_hits = loose_hits if exact_hits is None else exact_hits
+    rows = []
+    for i in range(n):
+        teacher_params = {"control": "Continue"} if with_control else {}
+        if i < exact_hits:
+            proposed_intent, proposed_params = "click", {"control": "continue"}
+        elif i < loose_hits:
+            proposed_intent, proposed_params = "click", {"control": "Something Else"}
+        else:
+            proposed_intent, proposed_params = "observe", {}
+        rows.append({"intent": "click", "params": teacher_params, "ats": ats, "state": state,
+                     "proposed_intent": proposed_intent, "proposed_params": proposed_params,
+                     "shadow": True, "route": "r"})
+    return rows
+
+
+def _registry_over(rows, monkeypatch):
+    from interaction import decision_journal
+    monkeypatch.setattr(decision_journal, "read_rows", lambda **kw: list(rows))
+    reg = maturity_mod.MaturityRegistry()
+    reg.refresh(force=True)
+    return reg
+
+
+def test_a_scenario_nobody_measured_blocks_autonomy(monkeypatch):
+    """Absence of evidence is the strictest answer — the registry's own rule, applied to the
+    second evidence source."""
+    reg = _registry_over([], monkeypatch)
+    st = reg.standing_for("workday", "workday_questions")
+    assert not st.measured and not st.eligible and not st.permits_autonomy
+    assert "no agreement measured" in st.detail
+
+
+def test_a_scenario_clearing_both_bars_permits_autonomy(monkeypatch):
+    """The happy path — pinned because nothing else pins that `eligible` is read the right way
+    round. An edit inverting it would otherwise sail through."""
+    reg = _registry_over(_pairs(30), monkeypatch)
+    st = reg.standing_for("workday", "workday_questions")
+    assert st.measured and st.eligible and st.permits_autonomy
+    assert "loose 100%" in st.detail and "exact 100%" in st.detail
+
+
+@pytest.mark.parametrize("rows,expect", [
+    # too few pairs at all -> the window, named before any rate
+    (_pairs(10), "only 10 paired rows, needs 25"),
+    # enough pairs, but almost none can testify about which control was chosen
+    (_pairs(30, with_control=False), "can testify about which control was chosen"),
+    # enough of both, but the controller disagrees on the VERB
+    (_pairs(30, loose_hits=18), "loose agreement 60% over 30, needs 90%"),
+    # agrees on the verb, reaches for the wrong control — the blind spot the 2nd bar exists for
+    (_pairs(30, loose_hits=30, exact_hits=15), "exact agreement 50% over 30, needs 85%"),
+])
+def test_the_refusal_names_the_first_unmet_requirement_with_its_number(rows, expect, monkeypatch):
+    """Windows before rates: "not enough evidence yet" and "measured and failing" are different
+    problems with different fixes, and an operator reading a refusal needs to know which."""
+    reg = _registry_over(rows, monkeypatch)
+    st = reg.standing_for("workday", "workday_questions")
+    assert st.measured and not st.permits_autonomy
+    assert expect in st.detail, st.detail
+
+
+def test_the_standing_is_looked_up_by_the_same_key_the_metric_writes(monkeypatch):
+    """One definition of the scenario string, used from both directions. A second rendering would
+    look up nothing and read as "unmeasured" forever — a gate that silently never opens."""
+    reg = _registry_over(_pairs(30, ats="indeed_quick_apply", state="indeed_apply_questions"),
+                         monkeypatch)
+    assert reg.standing_for("indeed_quick_apply", "indeed_apply_questions").permits_autonomy
+    assert not reg.standing_for("workday", "indeed_apply_questions").permits_autonomy   # other ATS
+    assert not reg.standing_for("indeed_quick_apply", "other_state").permits_autonomy   # other state
+
+
+def test_a_malformed_row_cannot_take_down_the_registry(monkeypatch):
+    """`shadow_agreement` runs inside `refresh()` now, so a row the metric chokes on would break
+    every registry consumer — the authority seam included. `derive()` tolerates these; so must the
+    metric beside it."""
+    rows = _pairs(30) + [{"intent": "click", "params": "not-a-dict", "ats": "workday",
+                          "state": "workday_questions", "proposed_intent": "click",
+                          "proposed_params": {"control": "x"}, "shadow": True, "route": "r"}]
+    reg = _registry_over(rows, monkeypatch)                      # must not raise
+    assert reg.standing_for("workday", "workday_questions").measured
