@@ -1,7 +1,9 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-08-09 — **the refocus** (operator-directed, after the burnout audit; LEARNINGS
-2026-08-09). The full flywheel revolution is re-sequenced, not abandoned: **the controller is the
+_Last updated: 2026-08-23 — the reflection audit and the four-lane tandem (see that section
+below); priorities re-ordered: **drive, live** — the code is ahead of the world's evidence.
+Previous framing (2026-08-09, **the refocus**, operator-directed after the burnout audit; LEARNINGS
+2026-08-09) stands beneath it: The full flywheel revolution is re-sequenced, not abandoned: **the controller is the
 middle step and the priority, and legibility is its deliverable.** The teacher rung is re-priced:
 the teacher is literally the Claude session the operator already pays for — attended drives
 escalate recipe → session-Claude → human, and the Haiku API rung is demoted to unattended runs
@@ -89,6 +91,50 @@ label-write and drive-end — and `GET /api/transitions/label_queue` hands the s
 teacher only the rows self-supervision cannot claim, mismatches first. The measure stands: rows
 banked, labels written, parks answered — but each now feeds three organs instead of zero.
 
+## What landed 2026-08-22/23 (the reflection audit and the four-lane tandem)
+
+A step-back audit (LEARNINGS 2026-08-22, "the reflection audit") measured the flywheel's three
+bottlenecks — shadow agreement 59.5%/294 with 106/119 disagreements on one click↔observe axis,
+a 373-row label queue with no screen, and a ledger blind after submit (event kinds: `applied`
+only; 63/68 flows unterminated) — and found the Gmail errand fully built with **zero callers**.
+Four coordinated worktree sessions (lanes + merge order in `PLAN_verify_email_leg.md`, seam
+rulings included) then closed all three at once:
+
+1. **The `verify_email` leg** — the errand's first caller. The account seam measures the wall
+   (code | link | second_factor | unknown), drives the CODE mechanism end to end (fetch → stage
+   → submit → re-classify), escalates the rest honestly, and writes measured
+   `verification_mechanism`/`verification_sender` characteristics. `gmail_senders.py` is the one
+   sender table read both directions. Workday's verify-screen addressing is **HYPOTHESIS until a
+   live scan** — the first drive through a real wall corrects it.
+2. **The phase wire** — `Bundle.phase` + a phase-conditioned rail: the click↔observe axis was
+   the Bundle not knowing whose turn it was. Verified live: one Workday page, two phases, two
+   correct verbs. All historical rows carry `phase=None`; **the gate clock starts with the next
+   drive.** Teacher labels 17 → **84** (the queue's mismatch head cleared; 306 remain, none
+   mismatch); train-on-label recompiled 21 programs.
+3. **The outcome loop** — inbox rows → `ApplicationEvent` (sender→ATS via the shared table,
+   strong/weak phrase tiers, ≥0.75 company-token match; ambiguity always reviews, interviews
+   never auto-write; personal mail keeps fingerprint only). Drive-end sweep rides `close_out`;
+   the Inbox review tab lives in the career_search Database section.
+4. **The flywheel's screen** — Learning → Queue (the real `transitions/label_queue`, correction
+   form with states-as-placeholder, never prefilled values) and Learning → Scorecard (rows
+   banked / labels written / parks answered, apps/week, outcomes vs the frozen 2026-08-22
+   baseline, and the promotion gate).
+
+**The promotion gate grew a second bar** (CONTROLLER_PROMOTION.md 2026-08-23): loose match is
+intent-only for clicks by construction, so promotion now requires loose ≥0.90 AND exact
+(control-identity, case/whitespace-folded) ≥0.85, **each over its own ≥25 window**
+(`PROMOTION_MIN_EXACT_N`); teacher rows with no recorded control are `exact_unscoreable`, never
+silently scored. Current (all pre-wire): loose 0.5952/294, exact 0.6012/163, eligible **none**.
+
+**In flight as of 2026-08-23** (assigned to sessions; re-chip if they die): enforce the two-bar
+gate at the authority seam (closes the 08-20 open decision; ENFORCE was ruled); the crank
+journals the control it clicked (shrinks `exact_unscoreable`); the vault-overwrite fix on the
+sign_in leg's manual exit; the swallow-by-design seam audit (output-observing tests). **Open,
+un-owned:** split the two meanings of MISMATCH (`mismatch_kind`, + `verify()`'s missing
+`expected_next` branch); stop witnesses borrowing other ATS's state names on out-of-vocabulary
+platforms (the labeling pass measured five borrowings, incl. a wrong `workday_already_applied`
+that skips jobs).
+
 ## The per-step loop — status
 
 | Stage | Status | Where | Note |
@@ -106,24 +152,23 @@ banked, labels written, parks answered — but each now feeds three organs inste
 Guardrails unchanged and live: $5/week cap, never auto-solve captcha/2FA, Submit held for the
 operator, credential flows collect nothing, secrets never captured.
 
-## Priorities (ordered — everything else queues behind these)
+## Priorities (re-ordered 2026-08-23 — everything else queues behind these)
 
-1. **Occupy the seat: attended live drives.** Run the apply cadence through
-   `POST /api/controller/run` (attended, progressive) with the session-Claude teacher polling
-   `GET /api/controller/teacher/pending` and answering with real rationales. Every park answered
-   is a golden row **with its screenshot**; every drive advances the real backlog. The measure per
-   session: rows banked, teacher labels written, parks answered — visible in the cockpit Trace.
-2. **Label and let it train.** Work the Trace correction form (or the API) after every drive;
-   train-on-label refits the table + witnesses each time. Watch the witness census
-   (`from_transitions`) and shadow agreement climb toward the gate (≥90% over ≥25 steps) —
-   promotion stays per-state, per-ATS, fall-through intact (`CONTROLLER_PROMOTION.md`).
-3. **The revolution's remaining tail** — when (and only when) the numbers pass the gate: promote,
-   and measure teacher tokens per submitted application against the corpus. This closes
-   `PLAN_flywheel_first_revolution.md` §0 on the transition-spine terms.
-4. **Parked, explicitly** (do not resume until the wheel turns once, unless one blocks a drive):
-   element-level bbox faucet, L4 intent model (volume-gated: ≥500 journaled intents), Interaction
-   API Phase 2, `main.py` split, movement/diffusion input model, OmniParser removal, Account
-   Manager build-out, FB Marketplace expansion, cloud move.
+1. **Drive, live.** Everything built on 08-22/23 is verified in code and blind to the world:
+   the Workday verify addressing is HYPOTHESIS, no live errand read has happened (needs the
+   operator's signed-in Gmail tab in the capture browser), zero shadow rows carry phase, and
+   the inbox sweep has never seen a real mailbox. One attended apply session pays five ways
+   now: an application, phase-carrying rows for the gate, a verify-wall scan that corrects the
+   HYPOTHESIS labels, the first real inbox sweep, and the scorecard moving off its baseline.
+2. **Label the tail as the rows arrive** (queue 306, `witness_split` head now). Every label
+   still refits table + witnesses + programs on write.
+3. **Watch the two-bar gate per scenario** on the scorecard, and promote only through the
+   (soon-enforced) authority seam when a family clears BOTH bars on fresh rows — the 0.985/1.000
+   backtests are HYPOTHESIS with named leakage; only post-wire rows count.
+4. **Parked, explicitly** (unchanged): element-level bbox faucet, L4 intent model (volume-gated:
+   ≥500 journaled intents), Interaction API Phase 2, `main.py` split, movement/diffusion input
+   model, OmniParser removal, Account Manager build-out, FB Marketplace expansion, cloud move,
+   Gmail-as-domain (reader ≠ domain; actions stay out of scope).
 
 ## Endgame (unchanged from 2026-07-22, sharpened 2026-08-09)
 
