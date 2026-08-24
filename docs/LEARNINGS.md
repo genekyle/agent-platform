@@ -10520,3 +10520,54 @@ loading the whole append-only history. Drive-end reads carry an 8s timeout so a 
 hold the close-out button for the CDP layer's 25s deadline. `_REVIEW_ONLY_KINDS` is now DERIVED
 from `EMPLOYER_RESPONSE_KINDS` (the hand copy had drifted: `offer` was missing — the one kind
 whose phrase family doesn't exist yet, which is exactly when the gate matters).
+
+## 2026-08-23 (second) — the crank finally says which control it clicked, and one more "proven" precondition
+
+Two small fixes in `session_control`, both handed over from the tandem's close-out, both the same
+species: **a record that omits what it knew at the time.**
+
+**THE 61 UNSCOREABLE PAIRS WERE ONE OMISSION, AND IT WAS OURS.** `metrics._has_no_param_claim`
+excludes a shadow pair whose teacher side named no params — it can testify neither for nor against
+the rail, so counting it either way would blame or flatter the controller for a JOURNALING gap.
+Measured today against the live journal (506 rows, 294 paired, 131 unscoreable): the 131 split
+cleanly into **70** `observe`/`click` pairs — already fixed going forward by the phase wire, since
+the rail now proposes `observe` on the looking rungs — and **61** `click`/`click` pairs where the
+intent already agreed and only the control was missing. Splitting those 61 by the rung named in
+their own rationale: **33 `open_pane`, 28 `enter_apply`** — the two ENTERING rungs, both of which
+knew the control at act time and neither of which wrote it down. `submit` and the advance rungs
+have journaled `{"control": ...}` since they were written; these two simply never did. Fixed at
+both sites, in the shape the rail proposes so the two are comparable.
+
+*The observe rungs stay empty deliberately, and that is not an oversight to tidy later.* A look
+drives nothing, so `{}` is the TRUE record; the rail proposes `observe` with `{}` on those phases
+and the pair scores as an exact agreement. Inventing a control there would manufacture a
+disagreement out of a turn that had none.
+
+**ONE CAVEAT RECORDED AT THE SITE, BECAUSE A MISS THERE WILL MEAN SOMETHING ELSE.** `enter_apply`
+journals an AX accessible name — the same vocabulary the rail proposes, no caveat. `open_pane`
+cannot: `/open_job_card` addresses the card by `data-jk` and returns the title read off the pane it
+opened, while the card's own AX name wraps that title in chrome ("…View full details of <title>").
+So a rail that one day proposes the *right* card can still miss on `exact` for a naming reason
+rather than a choosing one — the exact hazard `_norm_param` exists to prevent, one level up from
+case. Journaled anyway (a row naming which job we opened can testify; an empty one cannot), with
+the caveat in the source for whoever teaches the rail to propose cards: settle the canonical name
+first.
+
+**PREDICTION, so the next reader scores it rather than rediscovering it.** `exact_n` grows from
+this commit FORWARD only — the 294 historical rows are already written and stay unscoreable,
+correctly. And exact_agreement should FALL at first, not rise: the rail cannot propose a results
+card at all today, so most new `open_pane` pairs will be honest disagreements. *That is the metric
+working.* If it instead rises, or the new `open_pane` pairs come back agreeing, suspect the
+comparison before celebrating.
+
+**AND THE SECOND "PROVEN" PRECONDITION, one file over from the first.** Yesterday's verify-leg fix
+gave `_account_secured_view` a `credential_proven` parameter because "store it the moment the site
+took it" is false for a caller that typed nothing. The `mark_created` branch had the same hole and
+an older one: it re-derives and overwrites the vault whenever `body.password` is absent, and it is
+reachable from the account card's "I signed in" and the verify card's manual exit — presses where
+nobody typed anything. On an account that already holds a credential that replaces a working
+password with a plausible wrong one, surfacing weeks later as a sign-in that fails for no visible
+reason. Now: an explicit `body.password` still wins outright (that IS the request vouching for what
+the site was given), silence never overwrites, and an unreadable vault refuses rather than assuming
+it is empty. *The rule worth carrying: only a credential this request can VOUCH for may overwrite a
+stored one — and "I re-derived it" is not a vouch.*

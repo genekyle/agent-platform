@@ -4370,14 +4370,33 @@ async def apply_account(session_id: int, body: ApplyAccountBody,
         # `body.credentials` is what the operator ACTUALLY used, for the case where they departed
         # from the suggestion (a site-specific rule, a password already in use). Absent, we record
         # the derived pair the handoff card showed them.
-        used_pw = body.password or (ats_accounts.suggested_credentials(company, step.platform)
-                                    .get("suggested_password") or "")
-        used_user = body.username or ats_accounts.default_username()
-        stored = ats_accounts.record_credentials(company, step.platform, used_user, used_pw)
+        #
+        # ...UNLESS THE VAULT ALREADY HOLDS ONE AND THE OPERATOR NAMED NOTHING. Re-deriving is a
+        # GUESS about what the site was given, not a reading of it: the derivation is a pure
+        # function of ATS_ACCOUNT_PW_SUFFIX and a company string that arrives from a job board,
+        # and both drift (one .env edit; "Teradyne" becoming "Teradyne, Inc."). This press is
+        # reachable from the account card's "I signed in" and from the verify card's manual exit —
+        # neither of which typed anything — so on an account that already has a stored credential
+        # the re-derivation can overwrite a working password with a plausible wrong one, and the
+        # symptom arrives weeks later as a sign-in that fails for no visible reason.
+        #
+        # The rule is the one `_account_secured_view` states: only a credential this request can
+        # VOUCH for may overwrite a stored one. An explicit `body.password` is exactly that vouch —
+        # the operator is telling us what they used, and it wins outright. Silence is not.
+        explicit = bool(body.password)
+        if explicit or not _has_stored_credential(company, step.platform):
+            used_pw = body.password or (ats_accounts.suggested_credentials(company, step.platform)
+                                        .get("suggested_password") or "")
+            used_user = body.username or ats_accounts.default_username()
+            stored = ats_accounts.record_credentials(company, step.platform, used_user, used_pw)
+        else:
+            stored = {"ok": True, "kept": True}
         saved = bool(stored.get("ok"))
+        kept = bool(stored.get("kept"))
         step.record(_ACCOUNT_RUNG, aps.OK,
                     f"handoff leg: {company} {step.platform} account created by the operator"
-                    + (", credential stored" if saved else ", CREDENTIAL NOT STORED"),
+                    + (", stored credential kept (this press typed nothing)" if kept else
+                       ", credential stored" if saved else ", CREDENTIAL NOT STORED"),
                     initiator=body.initiator,
                     # The OPERATOR typed this form, in their own browser, and it is already
                     # submitted. Nothing of ours is staged in the page.
@@ -6165,6 +6184,25 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             bb.world["open_pane"] = {"title": res.get("title", ""),
                                      "apply_type": res.get("apply_type", "")}
 
+            # WHICH CARD WE OPENED, ON THE RECORD. 33 of the 61 unscoreable shadow pairs on
+            # 2026-08-22 were this rung: `click` with empty params, which cannot testify about
+            # control choice and so is excluded from the exact bar in both directions.
+            #
+            # ONE CAVEAT, STATED SO NOBODY READS MORE INTO A MISS THAN IS THERE. Every other
+            # journaller here records an AX accessible name, because that is what it clicked.
+            # This rung does not: `/open_job_card` addresses the card by `data-jk` and returns the
+            # title read off the PANE it opened. The card's own AX name wraps that title in
+            # chrome ("...View full details of <title>"), so a rail that one day proposes the
+            # right card can still miss on `exact` for a naming reason rather than a choosing one
+            # — the very thing `_norm_param` exists to prevent, one level up from case. Recorded
+            # anyway, because a row that says which job we opened can testify and an empty one
+            # cannot; whoever teaches the rail to propose cards should settle the canonical name
+            # here first, and the external id below is the unambiguous half.
+            _acted.update({"intent": "click", "params": {"control": res.get("title") or ""},
+                           "rationale": f"the {step.job_id.split(':', 1)[-1]!r} results card is "
+                                        f"this step's job, opened by its data-jk",
+                           "evidence": ("queue.job_id", "open_job_card.pane_identity")})
+
             # THE APPLIED CHECK, ON LANDING. Asked here — with the pane's own title, the richest
             # description of this job we will hold before entering — and not after a drive has
             # spent its way into an ATS to be told the same thing. `applied` HALTS the step;
@@ -6252,6 +6290,18 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             detail = "I cannot see an Apply button on this pane. Scroll it into view, or flag it."
         else:
             before = {t.get("tab_id") for t in (obs.get("tabs") or [])}
+            # THE CONTROL WE DROVE, ON THE RECORD — same shape the rail proposes ({"control": ...})
+            # and the same moment `_work_advance_rung` reports its own. Without it the shadow pair
+            # for this rung carried `click` with EMPTY params, which `metrics._has_no_param_claim`
+            # correctly refuses to score either way: 28 of the 61 unscoreable pairs on 2026-08-22
+            # were this rung declining to say what it clicked. Journaled BEFORE the dispatch, like
+            # its two siblings — this records what was DRIVEN, and whether it worked is the pair's
+            # separate `outcome`.
+            _acted.update({"intent": "click", "params": {"control": ctrl.get("name")},
+                           "rationale": f"the apply matcher chose {ctrl.get('name')!r} as this "
+                                        f"pane's entering control"
+                                        + (f" (apply_type={apply_type})" if apply_type else ""),
+                           "evidence": ("open_pane.apply_type", "ax_identities")})
             res = await _capture_post("/execute", {
                 "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
                 "target_bbox": {},
