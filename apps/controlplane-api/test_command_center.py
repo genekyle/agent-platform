@@ -76,3 +76,20 @@ def test_needs_attention_items_flip_tile_status(monkeypatch):
     fb = next(d for d in summary["domains"] if d["id"] == "facebook_marketplace")
     assert fb["status"] == "attention"
     assert fb["attention_count"] >= 1
+
+
+def test_a_broken_errand_reader_is_named_not_a_plausible_zero(monkeypatch):
+    # Seam-audit finding (2026-08-23): "no escalations" and "the reader is broken" rendered
+    # identically as zeros. The failure path must NAME itself — the label and a warn chip carry
+    # it, because the UI renders a null value as 0 either way.
+    import errand_log
+
+    def _broken():
+        raise RuntimeError("reader down")
+
+    monkeypatch.setattr(errand_log, "recent_stats", _broken)
+    tile = command_center._errand_metrics()
+    assert tile["primary"]["value"] is None
+    assert "unreachable" in tile["primary"]["label"]
+    assert any(c.get("warn") and "unreachable" in c["label"] for c in tile["chips"])
+    assert tile["needs_attention"] == 0

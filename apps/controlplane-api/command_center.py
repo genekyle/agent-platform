@@ -169,7 +169,12 @@ def _errand_metrics() -> dict[str, Any]:
         import errand_log
         stats = errand_log.recent_stats()
     except Exception:  # best-effort like every other source here — never blank the landing
-        return {"primary": {"label": "Errands served", "value": 0}, "chips": [], "needs_attention": 0}
+        # But never a PLAUSIBLE zero: "no escalations" and "the reader is broken" must not
+        # render identically (seam-audit finding, 2026-08-23). The tile still shows — the label
+        # and a warn chip carry the difference, since the UI renders a null value as 0.
+        return {"primary": {"label": "Errands (reader unreachable)", "value": None},
+                "chips": [{"label": "reader unreachable", "warn": True}],
+                "needs_attention": 0}
     return {
         "primary": {"label": "Errands served", "value": stats["served"]},
         "chips": [
