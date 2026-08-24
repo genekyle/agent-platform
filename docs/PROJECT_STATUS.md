@@ -126,8 +126,16 @@ intent-only for clicks by construction, so promotion now requires loose ≥0.90 
 (`PROMOTION_MIN_EXACT_N`); teacher rows with no recorded control are `exact_unscoreable`, never
 silently scored. Current (all pre-wire): loose 0.5952/294, exact 0.6012/163, eligible **none**.
 
-**In flight as of 2026-08-23** (assigned to sessions; re-chip if they die): enforce the two-bar
-gate at the authority seam (closes the 08-20 open decision; ENFORCE was ruled); the crank
+**The two-bar gate is ENFORCED as of 2026-08-23**, which closes the 2026-08-20 open decision. It
+attaches at `interaction.authority.authority()`, one branch before the only path to GREEN: a
+scenario that has not cleared both bars caps at YELLOW, so the fall-through is intact — a blocked
+scenario keeps working, reviewed. Absence of measurement BLOCKS (the `ActuationReach.unprobed()`
+precedent), refusals name the failing bar with its number, and the standing is computed in the
+maturity registry's existing cached refresh, off the same rows, so it cannot drift. Nothing
+regressed: `derive()` grades **0 transitions CERTIFIED** today, so nothing reached that branch
+before the change.
+
+**In flight as of 2026-08-23** (assigned to sessions; re-chip if they die): the crank
 journals the control it clicked (shrinks `exact_unscoreable`); the vault-overwrite fix on the
 sign_in leg's manual exit; the swallow-by-design seam audit (output-observing tests). **Open,
 un-owned:** split the two meanings of MISMATCH (`mismatch_kind`, + `verify()`'s missing
