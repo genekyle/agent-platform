@@ -141,7 +141,10 @@ sign_in leg's manual exit; the swallow-by-design seam audit (output-observing te
 un-owned:** split the two meanings of MISMATCH (`mismatch_kind`, + `verify()`'s missing
 `expected_next` branch); stop witnesses borrowing other ATS's state names on out-of-vocabulary
 platforms (the labeling pass measured five borrowings, incl. a wrong `workday_already_applied`
-that skips jobs).
+that skips jobs); audit computations folded into hot shared paths — moving work inside a shared
+cached refresh widens its blast radius from "this number is wrong" to "every consumer is down"
+(measured: one malformed journal row crashed the whole authority seam via
+`MaturityRegistry.refresh()` before the 2026-08-23 hardening; LEARNINGS has the write-up).
 
 ## The per-step loop — status
 
