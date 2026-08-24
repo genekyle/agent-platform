@@ -10768,3 +10768,62 @@ verify-leg writers have never met a live wall. So every auth-family writer is wi
 family's first real row, and until then any consumer preferring "measured over constant" is
 correctly falling through to the constant. Dated evidence so the next reader checks the current
 date against 08-21 rather than re-deriving the whole chain.
+
+## 2026-08-23 (open brain) — one submitted through the whole loop, and the drive graded its own machinery
+
+An operator-directed "open brain" session: run a real Indeed drive and let the friction itself be
+the deliverable. Result: **Beacon Communities' Enterprise Applications Analyst SUBMITTED** (the
+26th flow's first confirmed send since Ocean Spray; operator answered the AI-recruiter gate and
+solved two captcha arms; recorded with override_verifier — the tab closed on completion — so the
+Gmail matcher's confirmation email is the second witness). Alongside it: ~20 phase-carrying
+transition rows (the gate clock's first), 10 teach rows with rationales, 2 answer-store rows
+upgraded, BPS re-parked with its mechanism named. The friction ledger, each item measured live:
+
+**THE RESUME GAP IS REAL AND HAS NO TRANSITION.** A relaunched browser leaves the flow claiming
+its archived mid-form state; apply_step/reconcile_step/apply_account all correctly refuse against
+the live world, and apply_step's OWN detail promises "re-walks this application from the posting"
+— prose with no code: flow state never demotes, so enter_apply is never selectable and the crank
+loops honest refusals forever (the WAHVE loop met from the resume side). Exit used:
+parked:operator + a fresh flow. The fix is the demotion the prose already describes.
+
+**THE RADIO MISFIRES, FULLY CHARACTERIZED.** Three wrong-radio landings out of ~10 check_group
+teaches, EVERY one reporting ok: a No-request landing Yes, then a correction flipping its
+NEIGHBOR (the pendulum). Mechanism: each answered question removes its validation message and
+shifts the layout ~40px, so the next teach's addressing is stale — node-ids-go-stale in
+miniature. The cure, verified 1/1: fresh scan → backend_node_id click in the same breath (the
+SchoolSpring radio rule GENERALIZES to all of smartapply). The deep fix: check_group must read
+back the group's checked state inside the intent — a census cannot catch it (answeredness, not
+correctness) and the screenshots were the only witness, twice. Corollary: ax_scan carries NO
+checked state and NO page_text, and /locate is VIEWPORT-bound (sharper than 08-20's version) —
+for radio state, pixels are the only witness the system has.
+
+**THE CENSUS IS WORSE THAN ITS INPUT.** "This screen still wants 3 answer(s) — No, No, No" and
+"3-5 years, 6-8 years, More than 8 years" as question labels, while the AX tree held every full
+radiogroup name all along. The label-attacher, not AX poverty — the observation-profiles gap's
+sharpest instance. Same drive, apply_fill reported "Planned 0 of 0 fields. Every field has a
+value. The page's own required form: 12 unanswered" (three claims, mutually exclusive) and later
+"Planned 3 of 3" with nothing reaching the page.
+
+**SCROLL EXISTS AND NOTHING CAN REACH IT.** /execute action_id "scroll" is a humanized wheel
+with a cursor anchor (driver.py:382) — but LiveActuator has no dispatch for it, so every rung
+and teach that needs to LOOK below the fold is stuck. A one-entry dispatch gap, not a missing
+capability; scroll_job_list refuses honestly off the results list as designed.
+
+**THE STORE KNEW; THE PATTERNS MISSED; CHAT BEAT THE PARK.** "Are you at least 18" was held as
+work_permit_under_18; the language question that PARKED BPS on 08-21 was answered permanently in
+two minutes because the operator was in chat (Yes — Filipino/Tagalog, now in the store with both
+live phrasings as patterns). The teach seam + an operator-in-the-loop question is a rung the
+cockpit could render: ask-now beats park when the human is present.
+
+**SMALLER, EACH ONE PAID FOR:** the view's two competing "next"s (checkpoint vs rung) with no
+stated precedence — the step endpoint re-provisions and then offers a query recovery while
+/resume, built precisely to avoid re-spending the search, sits unrouted one endpoint over;
+staleness withheld a refresh to protect "unsaved work" in a browser with zero tabs; `last` sits
+empty while `last_step` carries the real report (two cranks read as mute); the actuator's
+field-less fall-through reuses the wrong error string ("no dispatch for intent" when the truth
+is "no params.field to address") and sends the reader to the wrong table; challenge state flips
+fast (solved → expired → re-solved inside minutes) so captcha-first must be re-run at the moment
+of a dead press, not remembered from an earlier screen; and indeed_apply_ai_recruiter_gate has
+no rung — it is SUBMISSION-CONTINGENT with a ONE-HOUR clock ("complete these steps before your
+application is submitted"), so its future card must carry the deadline and the operator handoff,
+not just the park.
