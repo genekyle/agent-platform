@@ -10688,3 +10688,51 @@ by design (no row, no error); worth a unit pin if the journal is ever touched. (
 `command_center._errand_metrics` returns PLAUSIBLE ZEROS on failure — "no escalations" and "the
 reader is broken" render identically; that is a design smell beyond this audit's mandate, not a
 missing test.
+
+## 2026-08-23 (third) — the fake that could not be asked a question, and the three ledgers behind it
+
+The seam audit's blocked item, unblocked — and it was hiding more than the seam it was filed
+against. `test_session_control._FakeDB` had no `query()`. Every recorder that reaches for one is
+swallow-by-design, so the missing method never failed a test; it silently routed the whole file
+through those seams' FAILURE paths.
+
+**WHAT WAS INVISIBLE, MEASURED BY PROBE BEFORE FIXING ANYTHING.**
+* `_record_verification_fact` — the verify seam's characteristic write. Never once succeeded in
+  this suite (the audit's finding).
+* `gmail_senders._measured_senders` — the READ that consumes it, swallowing into `[]`. So the
+  write→consume contract the whole measured-sender design rests on ("a measurement outranks a
+  constant") was unobservable end to end: both halves failed, and the fallback looked like
+  success because the static column answered anyway.
+* `ats_backfill.record_flow`, via `/apply_flag` — and this is the wide one. It raised on its
+  first lookup, logged, returned None, and the `if` guarding `db.commit()` was therefore False.
+  **Three tables never written by any test in the file that covers the endpoint that writes
+  them**: `ats_instances`, `ats_flows`, and the `wall_met` characteristic. Verified after the
+  fix: one flag now writes all three.
+* `_account_verify` — a fourth, found sanity-checking the rest of the verify path. It opens its
+  OWN session (a panel render has no db in hand), so under test it reached for a real database,
+  failed, and fell back to the stored snapshot EVERY time. Its entire contract is that identity
+  is stored while leg and mechanism are re-derived at render — and the re-derivation had never
+  run, so a card could have gone on saying `code` forever after a site switched to a link.
+
+**THE FAKE'S NEW RULE, WHICH IS THE OLD RULE.** `scalars` already carried it: *a fake that lies
+about which question it was asked is worse than no fake.* So `query()` dispatches on the entity
+and filters by real attribute equality. `order_by` models insertion order and reverses on `desc`
+— honest for these seams (they insert in time order and sort by `updated_at`) and a lie for
+anything sorting by a value column, which is said out loud in the docstring: a test needing real
+ordering wants `test_seam_outputs.real_db`, not a fake that quietly answers a question it cannot.
+
+**FIVE NEW PINS, each confirmed red with its wire cut**: the endpoint path writing both
+characteristics (mechanism + sender, instance-scoped, evidence carrying no code); a measured
+sender reaching the errand ahead of the catalogue; the verify card re-deriving its mechanism
+instead of replaying the snapshot; the flow-ledger row and its `wall_met`; plus `_FakeDB.query()`
+itself falsified by removal.
+
+**THE LESSON, WHICH IS NOT "ADD query() TO FAKES".** A swallow-by-design seam and an incomplete
+test double are individually reasonable and jointly blind: the seam declines to raise, the double
+declines to answer, and the suite reports green over a code path that has never run. The audit
+found this by ENUMERATING the swallowers and asking what observes each; the enumeration is what
+worked, and the same question is worth asking of every fake in the suite — *what does this double
+refuse to answer, and which silent path does that refusal select?* Note also that both halves of
+a write→consume loop failing can look exactly like success when a fallback answers plausibly —
+which is the `command_center._errand_metrics` "plausible zeros" smell the audit flagged, wearing
+different clothes.

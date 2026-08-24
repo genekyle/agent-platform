@@ -218,11 +218,17 @@ def test_verification_fact_lands_and_feeds_the_sender_hints(real_db):
     """The measured-sender loop, closed: the verify seam's write must produce the row that
     `gmail_senders.senders_for` prefers over every static column.
 
-    NOT driven through /apply_account — the shared harness's fake DB has no `query()`, so the
-    endpoint path swallows an AttributeError on every existing apply_account test (this audit's
-    finding; the fix belongs to that harness's owners). This test pins the write→consume contract
-    against a real session so the seam has, for the first time, a test in which it actually
-    writes. The endpoint-path assertion is listed as blocked in LEARNINGS.
+    Pins the write→consume contract against a REAL session: two writes converge on one row, and
+    `senders_for` prefers the measured value over every static column.
+
+    The ENDPOINT path is no longer blocked. When this was written the shared harness's fake DB had
+    no `query()`, so every apply_account test drove the seam's failure path and swallowed an
+    AttributeError — the audit's finding, fixed 2026-08-23 by `_FakeDB.query()`. The endpoint-path
+    assertions now live beside that harness, in `test_session_control`:
+    `test_the_verify_seam_writes_its_measurement_through_the_real_endpoint` (a real wall produces
+    both rows) and `test_a_measured_sender_reaches_the_errand_through_the_endpoint` (the
+    measurement outranks the catalogue in the errand's hints). This test keeps the real-session
+    half, which those cannot cover: an in-memory fake cannot prove the row survives a commit.
     """
     import gmail_senders
     from models import AtsCharacteristic

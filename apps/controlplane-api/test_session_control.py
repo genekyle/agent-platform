@@ -100,15 +100,63 @@ class _FakeSession:
     chrome_debug_port = 9222
 
 
-class _FakeDB:
-    """Enough SQLAlchemy Session for the panel: TrainingSession lookup, ObservedJob get/add."""
+class _FakeQuery:
+    """The `query(Model).filter_by(...).first()/.all()` shape, over rows held in memory.
 
-    def __init__(self, observed=None, answers=None, applied=None):
+    ORDERING IS MODELLED AS INSERTION ORDER, AND ONLY THAT. `order_by(col.desc())` reverses;
+    anything else is left alone. That is honest for the seams this fake serves — they insert in
+    time order and sort by `updated_at`, so reverse-insertion IS newest-first — and it is a lie
+    for anything sorting by a value column. A test that needs real ordering wants a real session
+    (`test_seam_outputs.real_db`), not a fake that quietly answers a question it cannot.
+    """
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def filter_by(self, **kw):
+        return _FakeQuery([r for r in self._rows
+                           if all(getattr(r, k, None) == v for k, v in kw.items())])
+
+    def order_by(self, *clauses):
+        rows = list(self._rows)
+        if any(str(c).upper().rstrip().endswith("DESC") for c in clauses):
+            rows.reverse()
+        return _FakeQuery(rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
+
+class _FakeDB:
+    """Enough SQLAlchemy Session for the panel: TrainingSession lookup, ObservedJob get/add.
+
+    `query()` EXISTS BECAUSE ITS ABSENCE WAS INVISIBLE. Every recorder that reaches for it here
+    is swallow-by-design — `_record_verification_fact` logs and moves on, `gmail_senders.
+    _measured_senders` returns `[]` — so a missing method did not fail a test, it silently routed
+    every apply_account test in this file through the seam's FAILURE path. The verify seam's
+    characteristic write had therefore never once succeeded in this suite, and the write→consume
+    contract it feeds (a measured sender outranking the static columns) could not be observed
+    through the endpoint at all. Found by the 2026-08-23 swallow-by-design audit, which pinned the
+    contract against a real session and named this harness as the blocker.
+    """
+
+    def __init__(self, observed=None, answers=None, applied=None, records=None):
         self.rows = {}
         self.added = []
         self.observed = observed or {}      # job_id -> (title, company) for ObservedJob.get
         self._answers = answers or []       # ApplicationAnswer-like rows for scalars()
         self._applied = applied or []       # ObservedJob rows the applied-index should find
+        # ORM rows already "in the table" before this request — seeded so a test can put a prior
+        # measurement on the record and watch a seam prefer it.
+        self.added.extend(records or [])
+
+    def query(self, model):
+        # Dispatch on the ENTITY, same rule `scalars` follows: a fake that answers with rows from
+        # a table it was not asked about is worse than one that answers nothing.
+        return _FakeQuery([r for r in self.added if isinstance(r, model)])
 
     def scalars(self, stmt):
         # Dispatch on the queried ENTITY. One canned list for every select() made the fake answer
@@ -168,7 +216,7 @@ class _Harness:
 
 
 def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=None,
-             answers=None, applied=None):
+             answers=None, applied=None, records=None):
     """Wire the seams, an in-memory blackboard, and the DB override. Returns the harness plus a
     one-element list holding the persisted blackboard so tests can read the ledger back.
 
@@ -198,7 +246,12 @@ def _install(monkeypatch, responses, *, blackboard=None, frames=None, observed=N
     monkeypatch.setattr(sc.asyncio, "sleep", _nosleep)
 
     def _override_db():
-        yield _FakeDB(observed=observed, answers=answers, applied=applied)
+        # The LAST session handed to a request, kept so a test can read back what a seam wrote.
+        # A fresh one per request is right (that is what the real dependency does); losing the
+        # reference to it is what made every DB-writing seam here unobservable from the outside.
+        db = _FakeDB(observed=observed, answers=answers, applied=applied, records=records)
+        saved["db"] = db
+        yield db
     main.app.dependency_overrides[get_db] = _override_db
     return harness, saved
 
@@ -1200,6 +1253,54 @@ def test_flagging_a_step_terminal_moves_the_queue_along(monkeypatch):
     assert "Next up: Two" in r["last_step"]["detail"]
     back = aps.Queue.from_dict(saved["bb"].world["apply_queue"])
     assert back.steps[0].terminal == "parked:unknown_ats"
+
+
+def test_flagging_a_terminal_writes_the_flow_ledger_row(monkeypatch):
+    """THE LEDGER THE WHOLE FILE WAS HIDING, and the widest consequence of the missing `query()`.
+
+    `/apply_flag`'s tail calls `ats_backfill.record_flow`, which is best-effort by contract — a
+    bookkeeping row must never fail the terminal it describes. Under the old fake it raised
+    `AttributeError: no attribute 'query'` on its very first lookup, logged, and returned None,
+    so the `if` guarding `db.commit()` was False and NOTHING in this file had ever exercised the
+    flow ledger: not `ats_instances`, not `ats_flows`, not the account-wall characteristic that
+    `record_flow` writes on a `parked:account_wall`. Three tables, invisible, in the suite that
+    covers the endpoint that writes them.
+
+    Pinned here rather than left to the module's own tests because the endpoint path is the half
+    those cannot reach: `record_flow` only flushes, and a flush with nothing after it is rolled
+    back at request teardown — which is exactly how the first live run wrote nothing while the
+    same call succeeded when driven directly against a session.
+    """
+    from models import AtsCharacteristic, AtsFlow, AtsInstance
+
+    bb = _at_start_line()
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "indeed:a1", "title": "One", "platform": "workday"}])
+    st = aps.Queue.from_dict(q.as_dict()).steps[0]
+    st.record("open_pane", aps.OK)
+    q.steps[0] = st
+    bb.world["apply_queue"] = q.as_dict()
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_flag",
+                    json={"job_id": "indeed:a1", "flag": "parked:account_wall",
+                          "detail": "the wall is up"})
+    finally:
+        _teardown()
+
+    added = saved["db"].added
+    assert any(isinstance(r, AtsInstance) for r in added), "the ATS instance was never recorded"
+    flow = next((r for r in added if isinstance(r, AtsFlow)), None)
+    assert flow is not None, "the flow ledger row was never written"
+    assert flow.terminal == "parked:account_wall"
+    # A wall MET is a measurement, and this is the moment it is measured — instance-scoped.
+    wall = next((r for r in added if isinstance(r, AtsCharacteristic)
+                 and r.key == "wall_met"), None)
+    assert wall is not None and wall.value == "account"
 
 
 def test_an_invented_terminal_flag_is_refused_by_the_api(monkeypatch):
@@ -3029,7 +3130,7 @@ def test_an_unmeasurable_verification_wall_escalates_after_submit(monkeypatch):
 _CODE_WALL_TEXT = "Please enter the verification code we sent to your email"
 
 
-def _verify_harness(monkeypatch, tmp_path, *, rows, mechanism="code"):
+def _verify_harness(monkeypatch, tmp_path, *, rows, mechanism="code", records=None):
     """A workday create-leg drive that lands on a verification wall, with the INBOX faked at the
     errand's own seam. The wall stays up until the code is actually typed into it, so the seam's
     re-classification reads a real transition rather than a canned one."""
@@ -3073,7 +3174,7 @@ def _verify_harness(monkeypatch, tmp_path, *, rows, mechanism="code"):
         monkeypatch,
         {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
          "/auth_state": {"ok": True, "logged_in": True}, "/execute": _execute, "/ax_scan": _scan},
-        blackboard=_wd_at_wall())
+        blackboard=_wd_at_wall(), records=records)
     return harness, saved, typed
 
 
@@ -3264,6 +3365,116 @@ def test_clearing_a_wall_on_a_later_press_keeps_the_credential_the_site_actually
     assert written == []                                 # ...and the vault was left alone
     step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
     assert any("kept" in m.detail for m in step.minis if m.rung == "account")
+
+
+def test_the_verify_seam_writes_its_measurement_through_the_real_endpoint(monkeypatch, tmp_path):
+    """THE ASSERTION THE 2026-08-23 SEAM AUDIT LISTED AS BLOCKED, un-blocked.
+
+    `_record_verification_fact` is swallow-by-design, and the shared `_FakeDB` had no `query()` —
+    so every apply_account test in this file drove the seam's FAILURE path and logged an
+    AttributeError nobody read. The write had never once succeeded here. The audit pinned the
+    write→consume contract against a real session; this pins the ENDPOINT path, which is the half
+    a unit test cannot reach: that driving a real verification wall actually produces the rows.
+    """
+    from models import AtsCharacteristic
+
+    _, saved, _typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[_mail("Your Workday verification code is 418302")])
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "auto"})
+    finally:
+        _teardown()
+
+    written = [r for r in saved["db"].added if isinstance(r, AtsCharacteristic)]
+    by_key = {r.key: r for r in written}
+    assert "verification_mechanism" in by_key, \
+        "the wall's mechanism must be measured on every sighting"
+    assert by_key["verification_mechanism"].value == "code"
+    assert by_key["verification_mechanism"].confidence == "measured"
+    # Instance-scoped: a tenant's wall is a fact about the tenant, never about the vendor.
+    assert by_key["verification_mechanism"].instance_key
+    assert by_key["verification_mechanism"].instance_key != "workday"
+    # And the SENDER, which is what feeds the next drive's hints.
+    assert by_key["verification_sender"].value == "myworkday.com"
+    # The evidence cites the sender, and the code is nowhere in it.
+    assert "418302" not in (by_key["verification_sender"].evidence or "")
+
+
+def test_a_measured_sender_reaches_the_errand_through_the_endpoint(monkeypatch, tmp_path):
+    """The consume half of the same loop, and the SECOND seam the missing `query()` was hiding:
+    `gmail_senders._measured_senders` swallows its failure into `[]`, so under the old fake a
+    stored measurement was silently dropped and the errand fell back to the static columns. The
+    preference contract — a measurement outranks a constant — could not be observed end to end.
+    """
+    from models import AtsCharacteristic
+
+    seeded = AtsCharacteristic(ats_id="workday", instance_key="workday:mfs", kind="auth",
+                               key="verification_sender", value="mail.mfs-tenant.example",
+                               confidence="measured", observations=3)
+    hints = {}
+    import gmail_senders
+    real_senders_for = gmail_senders.senders_for
+
+    def _spy(ats_id, company=None, instance_domain=None, db=None):
+        out = real_senders_for(ats_id, company=company, instance_domain=instance_domain, db=db)
+        hints["order"] = out
+        return out
+
+    monkeypatch.setattr(gmail_senders, "senders_for", _spy)
+
+    _, _saved, _typed = _verify_harness(
+        monkeypatch, tmp_path, rows=[_mail("Your Workday verification code is 418302")],
+        records=[seeded])
+    try:
+        client.post("/api/session_control/1/apply_account", json={"mode": "auto"})
+    finally:
+        _teardown()
+
+    assert hints.get("order"), "the seam never asked for sender hints at all"
+    assert hints["order"][0] == "mail.mfs-tenant.example", (
+        "a MEASURED sender must reach the errand ahead of the static columns — under the old "
+        "fake this silently degraded to the registry catalogue")
+
+
+def test_the_verify_card_re_derives_its_mechanism_instead_of_replaying_the_snapshot(monkeypatch):
+    """THE THIRD SEAM THE AUDIT'S FINDING GENERALISES TO, found sanity-checking the rest of the
+    verify path.
+
+    `_account_verify` opens its OWN session (the panel render has no db in hand), so under test it
+    reached for a real database, failed, and swallowed — falling back to the stored snapshot every
+    single time. The card's whole contract is that the wall's IDENTITY is the stored half while
+    the leg and the mechanism are re-derived at render (PLAN_verify_email_leg Part 1, and the
+    08-21 snapshot-split rule), and that re-derivation had never once run in this suite: a card
+    could have gone on saying `code` forever after the site switched to a link.
+    """
+    from models import AtsCharacteristic
+
+    measured = AtsCharacteristic(ats_id="workday", instance_key="workday:mfs", kind="auth",
+                                 key="verification_mechanism", value="link",
+                                 confidence="measured", observations=2)
+
+    class _Ctx(_FakeDB):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    import db as db_mod
+    monkeypatch.setattr(db_mod, "SessionLocal", lambda: _Ctx(records=[measured]))
+
+    bb = SimpleNamespace(world={"account_verify": {
+        "job_id": "indeed:a1", "company": "MFS", "ats": "workday",
+        # The SNAPSHOT still says code — stale, because the site changed its mind since.
+        "mechanism": "code", "mailbox": "x@example.com"}})
+    fresh = sc._account_verify(bb)
+
+    assert fresh["mechanism"] == "link", \
+        "the card must follow the measurement, not the snapshot it was written with"
+    # The stored half is untouched: which wall, which account, which mailbox.
+    assert (fresh["company"], fresh["ats"]) == ("MFS", "workday")
+    assert fresh["mailbox"] == "x@example.com"
+    assert bb.world["account_verify"]["mechanism"] == "code", "the read model must not write"
 
 
 def test_the_verification_wall_does_not_borrow_the_searchs_awaiting_key(monkeypatch, tmp_path):
