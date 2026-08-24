@@ -10889,3 +10889,55 @@ a permanent asset rather than a per-application interruption.
 recipe still lacks; a Dayforce "Application Update" arrived for Beacon within hours of submitting,
 which the sweep matched by itself; and one pick was abandoned honestly (`abandoned:ats_unavailable`)
 when Indeed's page-1 rotation retired the card mid-session.
+
+## 2026-08-24 (second) — the identity column nothing ever filled, and Cornerstone's first drive
+
+Operator: *"we need to also start gathering more data like job descriptions to really start doing
+more with making sure if we applied to the positions or not, most likely stored in as data in db
+rather than coded in."* Measured, then built.
+
+**THE REQUISITION TIER HAS BEEN DEAD SINCE IT WAS WRITTEN.** `applied_index` scores four tiers and
+the third — requisition, *"certain enough to act on"* — sits between the canonical tier and the
+fuzzy warning. **`jobs.requisition_id` was 0 of 614.** Nothing was broken; nothing ever filled the
+column, so the tier could never once fire. The cause was one discarded value: `record_flow` is the
+only place holding the ATS url and the job_key at the same moment (its own docstring says so) and
+it classified the url, then threw it away. It now stamps the canonical Job, and upgrades
+`canonical_url` **board → ATS only, never the reverse** — a search url is where we MET a job, the
+ATS url is where the job LIVES (607 of 614 canonical urls were the Indeed *search* url).
+
+*Why a table, not code:* each vendor prints its req id in its own path grammar, so `requisition.py`
+is one row per ATS that a new vendor extends. A **board url never yields a requisition** — an
+Indeed jk rotates per search session and a LinkedIn id is LinkedIn's alone, so extracting from
+either manufactures a cross-engine match that means nothing, and the consuming tier does not warn,
+it ACTS. That refusal is the first test. Backfilled 6 from urls already held; **MACOM's `3553` was
+then stamped automatically at flag time** — the wire proven live the same session.
+
+**THE DATA GAP, IN NUMBERS:** descriptions 79/633 sightings (avg 6,505 chars when present, so it
+is rich when captured), and **of the 31 jobs we have APPLIED to, only 7 carry a description and 6 a
+requisition id.** The jobs that matter most are the least documented, because description is only
+captured from a pane we happened to open — never from the ATS posting we always land on.
+
+**CORNERSTONE, DRIVEN FOR THE FIRST TIME** (MACOM, `macomtech.csod.com`, req3553) to step 2 of 6.
+Three findings, each measured:
+- **TWO IDENTICAL "Apply Now" BUTTONS** (y=411 visible, y=2269 off-screen). Name resolution picked
+  the off-screen twin, so two enter attempts reported *"the screen has not moved"* with no other
+  tell. A duplicate accessible name is not a wrong name — the visible one has to win.
+- **THE STEP COUNT LIED IN THE SAFE DIRECTION:** our recipe said 1 step to submit; the site's own
+  stepper says 6.
+- **THE UPLOAD CANNOT BE STAGED**, and this is the real blocker: Cornerstone renders two file
+  inputs with **dynamic ids** (`attachment_upload_0_116_0`) behind a visible button, and BOTH the
+  mapped `#resumeFileUpload` and an id-prefix selector **re-resolve through AX to the button**
+  (node 899/901), so `setFileInputFiles` reports `files=0`. The upload path needs to address the
+  INPUT and refuse to re-resolve to a button. Parked resumable with the mechanism named.
+
+**AND A SELF-INFLICTED ONE WORTH KEEPING, BECAUSE IT IS THE SAME SIN TWICE IN ONE CALL.** Filling
+the phone, I took `next(key containing 'phone')` from the answer store and got
+**`country_phone_code` = "+1"**, then typed it into `textbox[0]`, which was **Address Line 1**.
+Wrong value AND wrong field: *first match wins* on a vague question, twice, and only the screenshot
+caught it. The correlate-target-to-question rule applies to the ANSWER lookup exactly as it applies
+to the control. Fixed by mapping every field by bbox position against the visible labels — after
+which all six landed correctly on one pass.
+
+*Also:* the empty-AX-name widget family appeared a fifth and sixth time (Cornerstone's three
+contact textboxes, and its self-ID radios), so position-mapping is now the routine answer, not the
+exception.
