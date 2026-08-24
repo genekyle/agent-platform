@@ -472,18 +472,21 @@ def record_flow(db, *, url: str, job_key: Optional[str], terminal: str,
         # `applied_index`'s requisition tier, "certain enough to act on", could never once fire.
         # The board url a job was FOUND at cannot answer this (an Indeed jk rotates per search);
         # the ATS url we DROVE can, and it is the same identity the employer uses.
-        if job_key:
-            job = db.get(models.Job, job_key)
-            if job is not None:
-                req = requisition.extract(url, ats_id)
-                if req and not job.requisition_id:
-                    job.requisition_id = req
-                # The canonical url is upgraded only board -> ATS, never the reverse: a search
-                # url is where we MET the job, the ATS url is where the job LIVES.
-                if not requisition.is_board_url(url) and requisition.is_board_url(job.canonical_url or ""):
-                    job.canonical_url = url[:1000]
-                if job.ats is None:
-                    job.ats = ats_id
+        # Read through getattr: this runs inside the terminal-recording path, and a row that does
+        # not answer these (an older schema, a test double that returns a bare object) must be
+        # SKIPPED, never allowed to fail the terminal it is describing.
+        job = db.get(models.Job, job_key) if job_key else None
+        if job is not None and hasattr(job, "requisition_id"):
+            req = requisition.extract(url, ats_id)
+            if req and not getattr(job, "requisition_id", None):
+                job.requisition_id = req
+            # The canonical url is upgraded only board -> ATS, never the reverse: a search url is
+            # where we MET the job, the ATS url is where the job LIVES.
+            if not requisition.is_board_url(url) and requisition.is_board_url(
+                    getattr(job, "canonical_url", "") or ""):
+                job.canonical_url = url[:1000]
+            if getattr(job, "ats", None) is None:
+                job.ats = ats_id
         db.flush()
         return key
     except Exception:  # noqa: BLE001 — never let bookkeeping break a recorded terminal
