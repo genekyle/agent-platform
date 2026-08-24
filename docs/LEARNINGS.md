@@ -10827,3 +10827,65 @@ of a dead press, not remembered from an earlier screen; and indeed_apply_ai_recr
 no rung — it is SUBMISSION-CONTINGENT with a ONE-HOUR clock ("complete these steps before your
 application is submitted"), so its future card must carry the deadline and the operator handoff,
 not just the park.
+
+## 2026-08-24 — three submitted in one night, and the errand's first live fire named its own boundary
+
+The open-brain drive continued to its end. **Three applications submitted** (Beacon Communities
+via smartapply, Odyssey Systems via iCIMS, HP Hood via Greenhouse), the inbox reader met a real
+Gmail for the first time, and the outcome ledger went from a frozen zero to **5 gmail-sourced
+events**. Every one of the day's findings below was measured live.
+
+**THE ERRAND FIRED LIVE AND FOUND ITS REAL BOUNDARY — IN THE HONEST DIRECTION.** Greenhouse's
+security-code mail was top of the inbox, sender and subject both matching the hints
+(`no-reply@us.greenhouse-mail.io` / *"Security code for your application to HP Hood"*), and the
+errand still returned `not_found`. The reason is structural, not a bug: **the subject ANNOUNCES
+the code, the BODY carries it**, and the reader is subject-line-only by design (no read receipts,
+`gmail_recipe` §"read the subject, never open the thread"). So the code-fetch capability splits in
+two: subject-borne codes (Indeed's shape) are automatable today; **body-borne codes (Greenhouse,
+and likely most ATS) need a thread-open the current design deliberately forbids.** That is a
+product decision — accept read receipts on machine-sent mail, or leave this class to the operator
+— and it is now measured rather than assumed. `not_found` cost one human glance, exactly as
+designed.
+
+**THE READER'S OTHER FAILURE MODE, ALSO HONEST:** with the Gmail tab absent from the session
+browser it reported `blocked` and NAMED the open targets; when the tab was present but the view
+was an open MESSAGE rather than the list, `list_found:false, rows:0` — never a silent empty. The
+first live read returned 50 rows with sender/subject/timestamp intact: the "careful guesses" of
+2026-05 (`tr.zA`, `.bog`, `.y2`) are now MEASURED-correct against production Gmail.
+
+**THE SWEEP WORKS ON REAL MAIL.** 50 rows → 43 skipped-known (idempotency holding across runs),
+3 ignored (personal mail, fingerprint only), and it auto-recorded HP Hood's and Beacon's
+confirmations by itself. Two went to review and both were RIGHT to: the Odyssey autoreply
+(`odysseyconsult+autoreply@talent.icims.com` — an ATS talent-domain sender the company-token match
+cannot see) and, notably, **the security-code mail itself, classified `confirmation`** — a code
+request is not an outcome, and the phrase tiers should learn that. Ocean Spray needed a human join
+too: *"Ocean Spray"* is 2 of 3 tokens of *"Ocean Spray Cranberries"* = 0.67 against a 0.75 bar.
+**Every miss was a company-alias problem, not a matcher-logic problem** — an alias table (or the
+canonical-tier's known aliases) is the whole fix.
+
+**iCIMS, DRIVEN END TO END FOR THE FIRST TIME.** Odyssey (Hanscom AFB) went posting → identifier
+gate → password → profile → 11 candidate questions → VEVRAA → CC-305 → submitted. Findings: the
+tenant renders an **identifier-first paged gate** (`ACCOUNT_FORMS.icims` expects `first_name` on
+page 1 and refused honestly — the PowerSchool `pages` lesson recurring on a new ATS); the profile
+advance is **"Update Profile"**, not the recipe's Continue; **/execute RE-RESOLVES a stale node
+itself** (`re-resolved 'Email' -> node 1324`) while `/ax_scan` and the teach seam's selector path
+do not — the driver is more robust than the layers above it; and the self-ID radios carry **empty
+AX names** (fourth sighting today), so pixels remain the only witness for that widget family.
+
+**THE ACCOUNT STORE HELD THE ANSWER BEFORE THE WALL RENDERED, AND NOTHING ASKED.**
+`ats_odyssey_consulting_icims` existed WITH credentials while the flow opened
+`ats_odyssey_systems_consulting_group_ltd_icims` (pending, no creds) — same employer, two rows,
+split by legal-suffix normalization. The operator's own words: *"we had the creds on file, should've
+checked there first."* The vault check belongs BEFORE the identifier gate, and account keys need
+the canonical-company tier the JOBS table already has.
+
+**FIVE NEW STANDING FACTS, ASKED ONCE AND STORED FOREVER**: `us_citizen`, `dual_citizenship`
+(Philippines), `security_clearance`=None, `relocation_open`, `conus_travel`/`oconus_travel` — plus
+`additional_languages` = Filipino (Tagalog), the exact question that PARKED the BPS application on
+08-21. **Ask-now beat park-and-return every time the operator was in chat**, and each answer is now
+a permanent asset rather than a per-application interruption.
+
+*Also banked:* the Beacon AI-recruiter gate (submission-CONTINGENT, one-hour clock) is a state the
+recipe still lacks; a Dayforce "Application Update" arrived for Beacon within hours of submitting,
+which the sweep matched by itself; and one pick was abandoned honestly (`abandoned:ats_unavailable`)
+when Indeed's page-1 rotation retired the card mid-session.
