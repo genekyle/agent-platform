@@ -6987,7 +6987,12 @@ def _apply_tab(bb: Any, obs: dict[str, Any], job_id: str = "") -> dict[str, Any]
             continue
         if "indeed.com/jobs" in url:      # another results view is still not the application
             continue
-        claimed = claims.get(t.get("tab_id"))
+        # A claim is a RECORD, not a bare id: {job_id, url, title}. Read the field, and tolerate
+        # a plain string in case an older blackboard wrote one — comparing the whole record to an
+        # id silently skips every claimed tab, which is "no application tab open" on a session
+        # whose tab is plainly there (caught live the first time this ran, 2026-08-24).
+        _claim = claims.get(t.get("tab_id"))
+        claimed = (_claim.get("job_id") if isinstance(_claim, dict) else _claim) or ""
         if job_id and claimed and claimed != job_id:
             continue                      # someone else's tab — a parked step's, most likely
         candidates.append((t, claimed))

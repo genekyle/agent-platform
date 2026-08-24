@@ -108,3 +108,19 @@ def test_applicantmanager_needs_its_hint_because_the_generic_prose_is_weak():
     # With it, the hint tier supplies the evidence the generic signals could not.
     confirmed = generic + " You applied with this email: genomags@gmail.com"
     assert sv.verify(url=url, title="CEDENT", text=confirmed, platform="applicantmanager").submitted is True
+
+
+def test_applicantmanager_confirms_from_its_applied_route_when_the_text_is_gone():
+    """TAM's tab moves off the confirmation body to /applied?app=<id>, whose visible text is a
+    Google-Translate language list. A flag re-verified at that moment was refused on a genuinely
+    submitted application (live 2026-08-24) — the route carries the evidence the body lost."""
+    import submission_verifier as sv
+
+    v = sv.verify(url="https://theapplicantmanager.com/applied?co=DT&app=1343244",
+                  title="", text="Select Language Abkhaz Acehnese Afar Afrikaans",
+                  platform="applicantmanager")
+    assert v.submitted is True
+    # A TAM url WITHOUT an application id is not a confirmation — a bare /applied route could be
+    # a listing of applications, which is a place you visit, not a thing you just did.
+    assert sv.verify(url="https://theapplicantmanager.com/applied",
+                     title="", text="", platform="applicantmanager").submitted is False

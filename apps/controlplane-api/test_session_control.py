@@ -6858,7 +6858,13 @@ def test_a_parked_steps_tab_is_never_handed_to_the_step_being_worked():
 
     class _BB:
         world = {
-            "tab_claims": {"tab-macom": "indeed:macom", "tab-cedent": "indeed:cedent"},
+            # The real shape: a claim is a record, not a bare id (live blackboard, 2026-08-24).
+            "tab_claims": {
+                "tab-macom": {"job_id": "indeed:macom", "url": "https://macomtech.csod.com/x",
+                              "title": "Supply Chain Optimization Analyst"},
+                "tab-cedent": {"job_id": "indeed:cedent", "url": "https://theapplicantmanager.com/x",
+                               "title": "Tableau Dashboard Developer"},
+            },
             "apply_queue": None,
         }
 

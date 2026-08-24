@@ -11028,3 +11028,46 @@ twenty call sites.
 
 *Suites:* controlplane-api **1878** green (1872 before), including four new description pins and
 two tab-identity pins written against the live MACOM/CEDENT shape.
+
+## 2026-08-24 (fifth) — the tab bug's downstream bill, paid at the flag
+
+Resuming the cadence after the three fixes, the first crank exposed a chain worth writing down,
+because every link was invisible from the one before it.
+
+**MY OWN FIX WAS WRONG THE FIRST TIME, AND THE LIVE PAGE SAID SO IN ONE CRANK.** `tab_claims`
+values are RECORDS — `{job_id, url, title}` — not bare ids. Comparing the whole record to a job id
+matched nothing, so every claimed tab was skipped and a session with its tab plainly open reported
+*"there is no application tab open to advance."* The unit test I had just written passed, because
+I had invented the claim shape instead of reading it. Fixed to read `.get("job_id")` (tolerating a
+plain string), and **the test now models the real record** — the shape a live blackboard actually
+holds.
+
+**THEN THE FIX WORKED, AND ITS FIRST HONEST ANSWER LOOKED LIKE A SECOND BUG.** With claims read
+correctly the resolver pointed at CEDENT's tab, not MACOM's — correct, because CEDENT was still the
+CURRENT step: its `submitted` flag had never registered. The earlier flag call returned a null body
+and I read the null as "recorded". **A write whose response you did not read is not a write.**
+
+**AND THE FLAG THEN REFUSED THE SUBMISSION IT HAD ALREADY EARNED — THE TAB BUG'S REAL BILL.**
+`apply_flag` re-verifies the LIVE window with `platform=step.platform`, and CEDENT's step carried
+`cornerstone`, because at classify-time the pre-fix `_apply_tab` had handed it MACOM's parked tab.
+So a TAM confirmation was scored against Cornerstone's hints and refused, twice, on an application
+that was genuinely sent. The misclassification outlived the misclassifying call by hours — which is
+the argument for fixing resolvers rather than working around them.
+
+*Three durable things came out of it:* **TAM is a registered ATS** now (`applicantmanager`,
+`theapplicantmanager.com`) with what the drive measured — posting and form are the SAME page, no
+account required, proper accessible names, hidden file inputs that stage by exact name, a State
+select whose option TEXT is the full name while its value is the abbreviation. Its verifier hint
+gained the **`/applied?...app=<id>`** route, because TAM's confirmation body is replaced minutes
+later by a page whose visible text is a Google-Translate language list — a confirmation is not less
+true for having been read late, and a bare `/applied` with no id is still refused (that is a
+listing, not an event). And the flag was recorded with `override_verifier` and the whole chain
+written into its detail, which is what that flag is for: a confirmation we could not read HERE,
+marked unverified forever rather than quietly promoted.
+
+**ALSO, THE SYSTEM ALREADY KNEW ABOUT THE DOUBLE APPLY BUTTON.** `ats_registry`'s cornerstone note
+has said since 2026-08-11: *"its apply control is a plain button named 'Apply Now' (rendered twice
+— masthead and footer — so drive the VISIBLE one)"*. Tonight that cost two failed cranks and a
+screenshot to rediscover. Seventh instance of the fact-existed-and-nothing-asked shape, and the
+first where the fact was sitting in the registry the classifier had ALREADY consulted to name the
+platform.

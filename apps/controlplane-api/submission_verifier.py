@@ -103,12 +103,19 @@ ATS_HINTS: dict[str, dict[str, Any]] = {
                "'Application Submitted — Thank you for applying!' dialog",
     },
     "applicantmanager": {
-        # TAM posts its confirmation back to the SAME url the form was on, so there is no terminal
-        # route to read — the whole verdict has to come from the text. Its prose is otherwise the
-        # weak kind this module warns about ("thank you for your interest", "we will contact"),
-        # which appears on rejection pages too and scored 0.75/low on a page that HAD submitted.
-        # The decisive line is first-person and past-tense: the site telling the applicant what
-        # they just did, which no rejection page says.
+        # TAM confirms in TWO places and neither is the obvious one. First it posts the
+        # confirmation body back to the SAME url the form was on — no terminal route to read, and
+        # prose of the weak kind this module warns about ("thank you for your interest", "we will
+        # contact"), which rejection pages share and which scored 0.75/low on a page that HAD
+        # submitted. The decisive line there is first-person and past-tense: what the applicant
+        # just did, which no rejection page says.
+        #
+        # THEN IT MOVES ON. Minutes later that tab rests at `/applied?co=..&app=<id>` whose BODY
+        # is dominated by a Google-Translate language list, so the text signal is gone while the
+        # route carries an application id — and a flag re-verified at that moment was refused on a
+        # genuinely submitted application (live 2026-08-24). Both are accepted: a confirmation is
+        # not less true for having been read late.
+        "url_re": r"/applied\?.*\bapp=\d+",
         "text_re": r"you applied with this email",
         "why": "measured live 2026-08-24 (CEDENT, Tableau Dashboard Developer via "
                "theapplicantmanager.com): the generic signals alone scored 0.75 and refused, "

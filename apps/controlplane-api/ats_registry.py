@@ -106,6 +106,20 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
      "notes": "legacy Kenexa; account-gated.", "seed_companies": []},
     {"ats_id": "jobvite", "display_name": "Jobvite", "icon": "🟨",
      "hosts": ["jobvite.com"], "recipe": "seed", "auth": "none", "notes": "", "seed_companies": []},
+    {"ats_id": "applicantmanager", "display_name": "The Applicant Manager (TAM)", "icon": "🟩",
+     "hosts": ["theapplicantmanager.com"], "recipe": "seed", "auth": "none",
+     "notes": "DRIVEN END TO END 2026-08-24 (CEDENT, Tableau Dashboard Developer) — no account "
+              "required, which is why it finished in one pass. The posting and the application "
+              "are the SAME page: /jobs?pos=<id>&src=Indeed renders the JD with the form inline "
+              "below it, so there is no separate apply control to hunt — the fields are already "
+              "on screen and carry proper accessible names (a relief on a night of empty ones). "
+              "Hidden file inputs behind Attach/Dropbox/Paste links (app_pers_post[14] = resume, "
+              "[16] = cover letter) stage cleanly when addressed by exact name. State is a select "
+              "whose OPTION TEXT is the full name ('New Hampshire') while its value is the "
+              "abbreviation. Confirms in two places: the confirmation body says 'You applied with "
+              "this email: <address>', then the tab settles at /applied?co=..&app=<id> — both are "
+              "measured hints in submission_verifier.",
+     "seed_companies": ["CEDENT"]},
     {"ats_id": "cornerstone", "display_name": "Cornerstone OnDemand", "icon": "🟤",
      "hosts": ["csod.com"], "recipe": "seed", "auth": "unknown",
      "notes": "<tenant>.csod.com, reached straight from an Indeed 'Apply on company site' "
