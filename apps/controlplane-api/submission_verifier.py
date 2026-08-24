@@ -102,6 +102,18 @@ ATS_HINTS: dict[str, dict[str, Any]] = {
                "/en-US/<tenant>/jobTasks/completed/application?source=LinkedIn with an "
                "'Application Submitted — Thank you for applying!' dialog",
     },
+    "applicantmanager": {
+        # TAM posts its confirmation back to the SAME url the form was on, so there is no terminal
+        # route to read — the whole verdict has to come from the text. Its prose is otherwise the
+        # weak kind this module warns about ("thank you for your interest", "we will contact"),
+        # which appears on rejection pages too and scored 0.75/low on a page that HAD submitted.
+        # The decisive line is first-person and past-tense: the site telling the applicant what
+        # they just did, which no rejection page says.
+        "text_re": r"you applied with this email",
+        "why": "measured live 2026-08-24 (CEDENT, Tableau Dashboard Developer via "
+               "theapplicantmanager.com): the generic signals alone scored 0.75 and refused, "
+               "while 'You applied with this email: <address>' is unambiguous",
+    },
 }
 
 #: Below this a page is not called submitted. One STRONG signal clears it; two SUPPORTING ones do

@@ -92,3 +92,19 @@ def test_extra_hints_let_a_caller_teach_it_a_new_ats_without_editing_the_module(
                                "text_re": r"we got it", "why": "taught at the call site"})
     assert v.submitted
     assert any(s.id.startswith("hint:") for s in v.signals)
+
+
+def test_applicantmanager_needs_its_hint_because_the_generic_prose_is_weak():
+    """TAM (measured live 2026-08-24, CEDENT): posts its confirmation back to the SAME url, so
+    there is no terminal route, and its generic prose ("thank you for your interest", "we will
+    contact") also appears on rejection pages — it scored 0.75 and refused a page that HAD
+    submitted. The first-person past-tense line is what carries it."""
+    import submission_verifier as sv
+
+    url = "https://theapplicantmanager.com/jobs?pos=dt10072&src=Indeed"
+    generic = "Thank you for your interest in employment opportunities with CEDENT. we will contact you."
+    # Without the decisive line the module must still REFUSE — weak prose never carries a verdict.
+    assert sv.verify(url=url, title="CEDENT", text=generic, platform="applicantmanager").submitted is False
+    # With it, the hint tier supplies the evidence the generic signals could not.
+    confirmed = generic + " You applied with this email: genomags@gmail.com"
+    assert sv.verify(url=url, title="CEDENT", text=confirmed, platform="applicantmanager").submitted is True

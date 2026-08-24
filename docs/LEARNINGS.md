@@ -10941,3 +10941,43 @@ which all six landed correctly on one pass.
 *Also:* the empty-AX-name widget family appeared a fifth and sixth time (Cornerstone's three
 contact textboxes, and its self-ID radios), so position-mapping is now the routine answer, not the
 exception.
+
+## 2026-08-24 (third) — CEDENT via a platform nobody had seen, and the verifier refusing a page that HAD submitted
+
+Fourth submission of the run: **CEDENT's Tableau Dashboard Developer, through
+`theapplicantmanager.com` (TAM)** — a platform with no recipe, no registry entry and no prior
+sighting. Driven end to end in one pass: contact block, resume, work authorization, and six
+free-text staffing questions.
+
+**THE VERIFIER REFUSED A PAGE THAT HAD SUBMITTED, AND WAS RIGHT TO.** TAM posts its confirmation
+back to the SAME url the form was on, so there is no terminal route to read, and its prose is the
+weak kind this module warns about — *"thank you for your interest"*, *"we will contact you"* —
+which appears on rejection pages too. Score 0.75, confidence low, `submitted: false`, on a page
+that genuinely had sent. The decisive line was elsewhere on it and is first-person and past-tense:
+**"You applied with this email: genomags@gmail.com"** — what no rejection page says. Added as a
+TEXT-ONLY hint (the additive tier, exactly as Workday's was on 08-21); re-scored 1.5/medium,
+submitted. Pinned both directions: generic prose alone must still refuse.
+
+**THE UPLOAD WORKS ON A HIDDEN INPUT — CORNERSTONE'S FAILURE WAS THE SELECTOR, NOT THE PATH.**
+TAM hides its uploader behind Attach/Dropbox/Paste links with two hidden inputs
+(`app_pers_post[14]`, `[16]`). Addressed by EXACT name, `setFileInputFiles` staged cleanly —
+verified by probing the input's own `files.length` rather than trusting the outcome, because
+Cornerstone had reported `ok` while staging `files=0` two hours earlier. So this morning's
+Cornerstone entry needs narrowing: the upload dispatch is fine against a hidden input; what fails
+is a **prefix/dynamic-id selector**, which AX re-resolves to the visible button.
+
+**"OK" LIED TWICE MORE, BOTH CAUGHT BY PIXELS.** The State select reported `ok` and left the field
+blank — its options are full names (*New Hampshire*) while the stored value is `NH`; the option's
+VALUE is `NH`, so a second attempt committed it and the screenshot confirmed. And the rung that
+opened the pane reported *"I cannot see an Apply button"* while a fresh scan found it at node
+18325, y=419 — the same fresh-scan-then-node-id rescue that carried every stuck control today.
+
+**THE TAB THE LADDER READ WAS NOT THE TAB THE APPLY OPENED.** `classify` reported
+`cornerstone_application_form` — MACOM's parked tab, still open by design (parked means come back)
+— while CEDENT's apply had opened TAM in a third tab. A park leaves a tab alive, so the NEXT
+pick's landing has to be claimed by identity, not by "the newest apply-ish tab".
+
+*Where the queue ended:* page 2 — **2 submitted (HP Hood, CEDENT), 1 parked with its mechanism
+named (MACOM/Cornerstone upload), 1 abandoned honestly** (Indeed rotated the card away mid-session).
+Ledger for the whole run: applications 31, flows submitted 3, requisition ids 7 (from 0 this
+morning), gmail-sourced outcome events 5 (from 0).
