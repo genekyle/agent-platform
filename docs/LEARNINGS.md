@@ -10752,3 +10752,19 @@ refuse to answer, and which silent path does that refusal select?* Note also tha
 a write→consume loop failing can look exactly like success when a fallback answers plausibly —
 which is the `command_center._errand_metrics` "plausible zeros" smell the audit flagged, wearing
 different clothes.
+
+## 2026-08-23 (coach) — the ledger question answered: a test gap, not a production gap
+
+The `_FakeDB.query()` entry above asks somebody to sanity-check whether `/apply_flag`'s
+never-tested writes left a REAL hole in the live ledger. Measured against the live DB, same
+session: **no.** `ats_instances` holds 41 rows and all 68 flows were written live — the
+production path works; only the tests were blind. The zero that IS real: **the `auth`
+characteristic family has never been written in production** (live keys: observer_traces,
+predicted_vs_observed, tenant_style — no wall row, no verification_mechanism, no
+verification_sender). Not a bug either: the two `parked:account_wall` flows are dated 08-20 and
+the wall-row writer landed 08-21 (`c54bfd7`) — no qualifying flow has ended since, and the
+verify-leg writers have never met a live wall. So every auth-family writer is wired, tested, and
+**zero-fired**: the first live drive that hits an account or verification wall writes the
+family's first real row, and until then any consumer preferring "measured over constant" is
+correctly falling through to the constant. Dated evidence so the next reader checks the current
+date against 08-21 rather than re-deriving the whole chain.
