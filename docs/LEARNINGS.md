@@ -10520,3 +10520,54 @@ loading the whole append-only history. Drive-end reads carry an 8s timeout so a 
 hold the close-out button for the CDP layer's 25s deadline. `_REVIEW_ONLY_KINDS` is now DERIVED
 from `EMPLOYER_RESPONSE_KINDS` (the hand copy had drifted: `offer` was missing — the one kind
 whose phrase family doesn't exist yet, which is exactly when the gate matters).
+
+## 2026-08-23 — the swallow-by-design audit: every quiet recorder gets a loud witness
+
+The shadow session's near-miss generalised (a stray cp erased a wire; the seam swallows by
+design; 2000+ tests green over the missing call; caught only by luck), so every swallow-by-design
+recording seam was enumerated and given an OUTPUT-observing test — one that drives the real
+entry point and asserts the journaled row / written file / DB row through the reader the product
+uses. The swallowing itself stays everywhere: failing to take an observation about ourselves must
+never cost the operator the step they asked for. `test_seam_outputs.py` is the compensation; a
+falsification pass cut all five wires and confirmed exactly the five guards went red, then
+re-greened on restore.
+
+**WHAT THE INVENTORY FOUND BEFORE THE TESTS EXISTED.** `/apply_step` fires three recorders on
+its tail — `record_transition`, `_shadow_the_crank`, `_score_the_orienter` — and not one had its
+output observed through the crank; deleting any of the three calls left the whole suite green.
+The errand's OBSERVE journal row is double-swallowed (`_journal`'s except-pass inside
+`log_intent`'s) and was never asserted, while its sibling `errand_log` had exactly the right
+test — the contrast is the pattern to copy. The close-out's inbox sweep returned its account and
+no test read it. And the sharpest one: **`_record_verification_fact` had never once successfully
+written a row in the entire suite** — the shared `_FakeDB` has no `query()`, so every existing
+apply_account test exercises the seam's failure path and swallows an AttributeError, invisibly.
+
+**NOW PINNED (9 tests, each red if its wire is cut):** the crank's transition row, shadow row,
+and orienter prediction; the close-out's `inbox_sweep` account; the errand's OBSERVE row (with
+the redaction contract — the journal knows a code was read, never the code); the verification
+fact's write→consume loop (`senders_for` prefers the measured sender); the train-on-label crank's
+stage-1 artifact (the fitted transition table on disk); the api-access ring behind the activity
+feed; the spend ledger's writer→summary roundtrip (a severed wire there renders as free-looking
+spend against the $5/week cap).
+
+**HOW THE UNOBSERVABLE ONES BECAME OBSERVABLE.** orientation_log refuses to write under pytest
+(the corpus-pollution guard) — the test lifts `ALLOW_TEST_WRITES` and repoints `_path`, the same
+two knobs its own unit fixture uses; that guard is why no endpoint test had ever existed. The
+orienter also only predicts on a CLASSIFIED step (platform None until the classify rung), and the
+observation's url comes from the SCAN's `target_url`, not `/list_tabs` — both facts a fixture
+must honour and neither written down before.
+
+**STILL UNOBSERVED, WITH REASONS.** (1) `_record_verification_fact` through the real
+`/apply_account` path — blocked on `_FakeDB.query()`; the write→consume contract is pinned
+against a real session instead, and the harness fix belongs to whoever owns
+`test_session_control` this round. (2) `train_after_label` stages 2–3 (witness promotion,
+program recompile) — stage 1's artifact is asserted; recompile is covered writer-direct
+elsewhere; promotion needs a fitted-witness fixture that is its own piece of work. (3)
+`_persist_live_capture` / the LiveProposer on_capture hook — the pre-StepRunner live loop has no
+fake-seam harness to drive it through; building one for a path the StepRunner pivot is retiring
+is not worth it, noted instead. (4) `_journal_login_step` — needs the search-engine login-leg
+harness. (5) `decision_journal`'s silent `return None` on a blank route — writer-level, sneaky
+by design (no row, no error); worth a unit pin if the journal is ever touched. (6)
+`command_center._errand_metrics` returns PLAUSIBLE ZEROS on failure — "no escalations" and "the
+reader is broken" render identically; that is a design smell beyond this audit's mandate, not a
+missing test.
