@@ -18,7 +18,13 @@ The other two that carry weight:
 from __future__ import annotations
 
 
-from interaction.authority import ActuationReach, ControlMode, Maturity, authority
+from interaction.authority import (
+    ActuationReach,
+    ControlMode,
+    Maturity,
+    PromotionStanding,
+    authority,
+)
 from interaction.contract import Outcome
 from interaction.decision import Bundle, Decision
 
@@ -80,13 +86,20 @@ class ScriptedSeat:
         return self._takeover
 
 
-def fixed_authority(mode_maturity, *, reach=None):
-    """An AuthorityFn pinned to one maturity, so a test names the mode it is exercising."""
+def fixed_authority(mode_maturity, *, reach=None, standing=None):
+    """An AuthorityFn pinned to one maturity, so a test names the mode it is exercising.
+
+    Defaults to a PROMOTED standing: these tests are about the MODE MACHINERY, not about the
+    promotion gate, so the gate is held open and the maturity argument stays the single variable.
+    The gate's own behaviour is pinned in `test_authority.py`.
+    """
     probe = reach if reach is not None else ActuationReach(can_operate=True)
+    stand = standing if standing is not None else PromotionStanding(
+        measured=True, eligible=True, detail="gate held open for a mode-machinery test")
 
     def _fn(bundle, decision):
         return authority(maturity=mode_maturity, belief=bundle.belief, reach=probe,
-                         consequential=False)
+                         consequential=False, standing=stand)
     return _fn
 
 

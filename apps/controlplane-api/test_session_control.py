@@ -2667,6 +2667,63 @@ def test_account_handoff_is_a_resume_not_a_terminal_park(monkeypatch):
     assert "continue" in r["last_step"]["detail"]
 
 
+def test_a_press_that_typed_nothing_never_overwrites_a_stored_credential(monkeypatch):
+    """THE VAULT-CORRUPTION PATH ON THE OTHER LEG.
+
+    `mark_created` is reachable from the account card's "I signed in" and the verify card's manual
+    exit — presses where NOBODY typed a password. Re-deriving one there is a guess about what the
+    site was given (the suffix and the company string both drift), so on an account that already
+    holds a credential it can replace a working password with a plausible wrong one, and the
+    symptom surfaces weeks later as an unexplained sign-in failure. Silence must not overwrite.
+    """
+    import ats_accounts
+
+    written = []
+    monkeypatch.setattr(ats_accounts, "record_credentials",
+                        lambda *a, **k: written.append(a) or {"ok": True})
+    monkeypatch.setattr(ats_accounts, "mark_created", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(sc, "_has_stored_credential", lambda *_a: True)
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=_wd_at_wall())
+    try:
+        r = client.post("/api/session_control/1/apply_account",
+                        json={"mark_created": True}).json()
+    finally:
+        _teardown()
+    assert r["last_step"]["ok"] is True             # the rung still settles
+    assert written == []                            # ...and the vault was left alone
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert any("kept" in m.detail for m in step.minis if m.rung == "account")
+
+
+def test_a_password_the_operator_names_still_wins_outright(monkeypatch):
+    """The other half of the same rule, and the reason the guard is not simply "never overwrite":
+    an explicit `password` IS this request vouching for what the site was given — the operator is
+    telling us they departed from the suggestion. That must reach the vault even when one is
+    already stored, or the site and the record part ways in the other direction."""
+    import ats_accounts
+
+    written = []
+    monkeypatch.setattr(ats_accounts, "record_credentials",
+                        lambda *a, **k: written.append(a) or {"ok": True})
+    monkeypatch.setattr(ats_accounts, "mark_created", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(sc, "_has_stored_credential", lambda *_a: True)
+
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_wd_at_wall())
+    try:
+        client.post("/api/session_control/1/apply_account",
+                    json={"mark_created": True, "password": "TheyTypedThisOne!"})
+    finally:
+        _teardown()
+    assert [a[-1] for a in written] == ["TheyTypedThisOne!"]
+
+
 def test_account_handoff_refuses_without_a_classified_ats(monkeypatch):
     bb = _with_queue(("indeed:a1", "Some Co", "Some Co"))   # platform not set
     _install(monkeypatch,
@@ -6447,6 +6504,107 @@ def test_the_phase_vocabularies_agree_with_the_rung_intent_table():
     # And nothing may appear in a phase set that the ladder never works.
     for phase in _OBSERVE_PHASES | _ENTER_PHASES:
         assert phase in sc._RUNG_INTENT, f"{phase!r} is a phase the crank never journals"
+
+
+def _shadow_rows_after(fn):
+    """Run `fn`, return the decision-journal rows it appended.
+
+    OBSERVES THE OUTPUT, not a stand-in for it. `_shadow_the_crank` swallows every exception by
+    design — measuring ourselves must never cost the operator their step — so a test that only
+    asserted "no exception" would pass just as happily if the seam had silently written nothing,
+    which is the precise failure mode this whole wire exists to end. The conftest already points
+    the journal at a throwaway dir, so reading it back is free and safe.
+    """
+    from interaction import decision_journal
+    before = len(decision_journal.read_rows())
+    fn()
+    return decision_journal.read_rows()[before:]
+
+
+def test_the_crank_journals_which_control_it_clicked_on_the_entering_rungs(monkeypatch):
+    """THE UNSCOREABLE 61, at their source.
+
+    `metrics._has_no_param_claim` refuses to score a pair whose teacher side named no params — it
+    can testify neither for nor against the rail, so it is excluded from the `exact` denominator
+    in both directions. Measured 2026-08-22: 61 of 294 pairs, all of them the two ENTERING rungs
+    (33 open_pane, 28 enter_apply) declining to say which control they drove — while the control
+    was sitting right there at act time. The observe rungs stay empty on purpose: a look drives
+    nothing, and `{}` is the true answer there, not a missing one.
+    """
+    harness, _saved = _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL + "&vjk=a1"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/open_job_card": {"ok": True, "title": "Compliance Reporting Analyst",
+                            "apply_type": "indeed_apply"}},
+        blackboard=_with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS")))
+    try:
+        rows = _shadow_rows_after(
+            lambda: client.post("/api/session_control/1/apply_step", json={}))
+    finally:
+        _teardown()
+
+    assert rows, "the crank journalled no decision row at all"
+    row = rows[-1]
+    assert row["intent"] == "click"
+    # The card we opened, named — the shape the rail proposes, so the two are comparable.
+    assert row["params"] == {"control": "Compliance Reporting Analyst"}
+    # And the row is now SCOREABLE, which is the whole point of naming it.
+    from controller import metrics
+    assert metrics._has_no_param_claim({**row, "proposed_params": {"control": "next page"}}) is False
+
+
+def test_the_entering_click_journals_the_apply_control_it_chose(monkeypatch):
+    """`enter_apply`, the other entering rung and the cleaner of the two: it drives an AX control
+    it found by name, so what it journals is the same vocabulary the rail proposes — no caveat
+    about card naming, just the control."""
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["open_pane"] = {"title": "Compliance Reporting Analyst",
+                             "apply_type": "company_site"}
+    _install(
+        monkeypatch,
+        {"/list_tabs": _tabs(SEARCH_URL + "&vjk=a1"),
+         "/auth_state": {"ok": True, "logged_in": True},
+         "/execute": {"outcome": "ok"},
+         "/ax_scan": {"ok": True, "page_text": "Compliance Reporting Analyst", "candidates": [
+             {"role": "link", "name": "Apply on company site", "backend_node_id": 3}]}},
+        blackboard=bb)
+    try:
+        rows = _shadow_rows_after(
+            lambda: client.post("/api/session_control/1/apply_step", json={}))
+    finally:
+        _teardown()
+    assert rows, "the crank journalled no decision row at all"
+    assert rows[-1]["intent"] == "click"
+    assert rows[-1]["params"] == {"control": "Apply on company site"}
+
+
+def test_a_look_still_journals_no_control_because_it_drove_none(monkeypatch):
+    """The other half of the same rule, and the reason this is not "fill in the params everywhere".
+    `verify_identity` reads the pane and clicks nothing, so empty params is the TRUE record. The
+    rail proposes `observe` with `{}` on these phases, so the pair scores as an exact agreement —
+    inventing a control here would manufacture a disagreement out of a turn that had none."""
+    bb = _with_queue(("indeed:a1", "Compliance Reporting Analyst", "MFS"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("open_pane", aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["open_pane"] = {"title": "Compliance Reporting Analyst", "apply_type": "indeed_apply"}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL + "&vjk=a1"),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        rows = _shadow_rows_after(
+            lambda: client.post("/api/session_control/1/apply_step", json={}))
+    finally:
+        _teardown()
+    assert rows, "the crank journalled no decision row at all"
+    assert rows[-1]["intent"] == "observe"
+    assert rows[-1]["params"] == {}
 
 
 def test_the_shadow_bundle_carries_the_phase_and_the_page_text(monkeypatch):

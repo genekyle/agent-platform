@@ -155,12 +155,8 @@ that answers the question, the four thresholds are named tunable constants, and
 `GET /api/controller/summary` carries all of it so no screen can render gate-passing on `loose`
 alone.
 
-**NOT changed, and this is the same caveat the 08-20 audit raised:** *nothing branches on it.* No
-code path consults `is_promotable()` to decide anything; `controller/maturity.py`'s `authority()`
-is still the only enforced gate, with its own units and evidence. This document still describes a
-**scoreboard**, and promotion via it is still a human reading the summary. The 08-20 decision —
-fold this into `maturity.grade()` or rewrite this doc as the dashboard spec — remains open. Nothing
-here should be quoted as an enforcement claim.
+**NOT changed at the time this was written:** nothing branched on it. That is no longer true —
+see the next section, which closes the 08-20 decision.
 
 **Fresh numbers (294 pairs, superseding the 08-20 line above):** loose **0.5952**; exact **0.6012**
 over 163 scoreable rows (131 unscoreable). Per scenario, the three with real volume:
@@ -171,3 +167,74 @@ exact 0.486/35. **Eligible scenarios: none.**
 **Every one of those numbers is pre-wire.** They were journaled before `Bundle.phase` reached the
 shadow seam, so they measure a controller that could not see whose turn it was. They are the
 baseline the fresh rows will be read against, not a verdict on the rail.
+
+
+## 2026-08-22 (later) — the 08-20 decision CLOSES: the gate is enforced at the authority seam
+
+**Ruling: enforce.** Of the two options the 08-20 audit left open — fold this into the maturity
+ladder, or rewrite this document as a dashboard spec — the first is now implemented. This document
+describes an **enforced gate**, and the sentence "nothing here should be quoted as an enforcement
+claim" is retired.
+
+### Where it attaches, and why there
+
+`interaction.authority.authority()` is the one function that decides who owns a turn, and its
+branch 6 was the only path to GREEN — the single rung that acts without asking. The gate is a new
+branch immediately before it: **a scenario that has not cleared both bars cannot reach GREEN**, and
+the turn caps at `UNPROMOTED_CEILING` (YELLOW — local proposes, the teacher approves or corrects).
+The fall-through is therefore intact by construction: a blocked scenario keeps working, it just
+keeps working *reviewed*.
+
+The rule is pure and lives with the other rules; the measurement lives in
+`controller/maturity.py`'s registry, which already reads exactly these rows and caches them on the
+journal's mtime — so the standing is computed **in the same refresh, off the same rows**, and
+cannot drift from the maturity view it sits beside. `authority_seam.py` only carries one to the
+other, which is what that module's own docstring requires of it.
+
+### Two kinds of evidence, deliberately both required
+
+**Maturity is derived from ACTED rows** — `maturity.key_for_row` skips shadow rows entirely.
+**Agreement is derived from SHADOW and golden pairs.** The row sets are disjoint, and that is the
+point: a transition can have a spotless action history while the controller, asked to choose for
+itself on that page, still picks differently from the teacher. Autonomy depends on the second
+fact, and until now only the first was consulted.
+
+Note the units differ and are reconciled deliberately: maturity is keyed per
+`(from_state, intent, ref)`, agreement per `(ats, state)`. The scenario gates every transition on
+that state for that ATS, which is exactly the per-state, per-ATS unit this document has specified
+since M5. `metrics.scenario_key` is the single definition, used from both directions — a second
+rendering of that string would look up nothing and read as "unmeasured" forever.
+
+### Absence of measurement BLOCKS
+
+`PromotionStanding.measured=False` is the default and it refuses. This is the same rule the module
+already applies to `ActuationReach.unprobed()` (which caps at YELLOW rather than granting GREEN)
+and the same one `metrics.is_promotable` applies by defaulting `exact_n` to 0: **a gate whose
+default answer is "yes" is not a gate.** Pinned exhaustively by
+`test_an_unmeasured_scenario_can_never_be_green`, the twin of the older
+`test_unseen_transition_can_never_be_green`.
+
+Ordering was chosen so the gate never relabels a different problem: an unreachable page is still
+RED, an unsure belief is still ORANGE, and a sub-certified maturity still names the maturity bar.
+The gate caps autonomy; it does not take over the explanation.
+
+### Refusals are specific, because "not promoted" is not actionable
+
+The standing carries a detail string naming the FIRST unmet requirement **with its number**, and
+windows are named before rates — "not enough evidence yet" and "measured and failing" are
+different problems with different fixes. Measured against the live corpus:
+
+| scenario | verdict |
+|---|---|
+| `indeed_quick_apply:indeed_job_posting` | only 1 of 67 rows can testify about which control was chosen, needs 25 |
+| `workday:workday_job_posting` | loose agreement 59% over 61, needs 90% |
+| `company_site:?` | loose agreement 51% over 45, needs 90% |
+| `indeed:indeed_apply_questions` | only 15 paired rows, needs 25 |
+| anything unmeasured | no agreement measured for this scenario |
+
+### Nothing regressed, and that was checked rather than assumed
+
+`derive()` over the live journal grades **0 transitions CERTIFIED** (44 unseen, 69 replayable, 5
+regressed, 2 demonstrated), so nothing reached branch 6 before this change and nothing lost
+standing because of it. The gate begins to matter on the first scenario that earns CERTIFIED — by
+which time the fresh post-wire rows will have given it agreement numbers to read.

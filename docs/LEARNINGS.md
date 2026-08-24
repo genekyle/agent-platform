@@ -10521,6 +10521,123 @@ hold the close-out button for the CDP layer's 25s deadline. `_REVIEW_ONLY_KINDS`
 from `EMPLOYER_RESPONSE_KINDS` (the hand copy had drifted: `offer` was missing — the one kind
 whose phrase family doesn't exist yet, which is exactly when the gate matters).
 
+## 2026-08-22 (last) — the gate stops being a scoreboard: enforced at the authority seam
+
+The 2026-08-20 audit found that `CONTROLLER_PROMOTION.md`'s gate was "computed and displayed,
+enforced nowhere" and left the decision open. It is closed: **enforce**, and the enforcement point
+is `interaction.authority.authority()`.
+
+**WHERE, AND WHY THAT PLACE.** `authority()` is the one function that decides who owns a turn, and
+its last branch was the only path to GREEN — the single rung that acts without asking. The gate is
+a new branch immediately before it: a scenario that has not cleared both bars caps at YELLOW
+(`UNPROMOTED_CEILING`). **The fall-through is intact by construction** — a blocked scenario keeps
+working, it just keeps working reviewed. The rule is pure and sits with the other rules; the
+measurement sits in the maturity registry; `authority_seam` only carries one to the other, which is
+what its own docstring demands ("a rule that lives in the wiring is a rule the offline suite cannot
+reach").
+
+**THE MEASUREMENT IS FREE, AND CANNOT DRIFT.** The registry already reads the journal and caches on
+its mtime, so agreement is computed **in the same refresh, off the same rows** as maturity. No
+second read, no second cache, nothing to fall out of sync — the module header's own rule ("a
+registry that can disagree with the journal will eventually disagree with the journal") applied to
+the second evidence source before it could be re-learned the hard way.
+
+**TWO KINDS OF EVIDENCE, AND THEIR ROW SETS ARE DISJOINT — which is the point.** Maturity is
+derived from ACTED rows (`key_for_row` skips shadow rows outright); agreement is derived from
+SHADOW and golden pairs. **A transition can have a spotless action history while the controller,
+asked to choose for itself on that page, has never once been measured against the teacher.**
+Autonomy depends on the second fact and only the first was ever consulted. The units differ too —
+maturity keys `(from_state, intent, ref)`, agreement keys `(ats, state)` — reconciled by gating
+every transition on a state with the scenario's standing, which is the per-state per-ATS unit the
+doc has specified since M5. `metrics.scenario_key` is the one definition used from both
+directions; a second rendering of that string would look up nothing and read as "unmeasured"
+forever.
+
+**ABSENCE OF MEASUREMENT BLOCKS, AND THAT CHOICE COST EIGHT TESTS.** `PromotionStanding` defaults
+to `measured=False`, which refuses. Every existing test asserting `CERTIFIED + sure + reachable ->
+GREEN` went red, because they were asserting a truth table that has gained a dimension. Updating
+them was the correct move and not test-fitting: each now supplies an explicit `PROMOTED` standing
+to say "everything else is fine", and the new dimension got its own exhaustive pin
+(`test_an_unmeasured_scenario_can_never_be_green`, the twin of the older UNSEEN property). *The
+precedent that made the default obvious was already in the file:* `ActuationReach.unprobed()` caps
+GREEN rather than granting it, so "a check that was not performed" already had a defined, strict
+consequence here. Same shape, same ceiling, one more axis.
+
+**REFUSALS NAME THE BAR AND THE NUMBER**, because "not promoted" is not actionable, and windows are
+named before rates — "not enough evidence yet" and "measured and failing" are different problems
+with different fixes. Live, right now:
+
+| scenario | what the operator is told |
+|---|---|
+| `indeed_quick_apply:indeed_job_posting` | only 1 of 67 rows can testify about which control was chosen, needs 25 |
+| `workday:workday_job_posting` | loose agreement 59% over 61, needs 90% |
+| `indeed:indeed_apply_questions` | only 15 paired rows, needs 25 |
+
+**NOTHING REGRESSED, CHECKED RATHER THAN ASSUMED.** `derive()` over the live journal grades **0
+transitions CERTIFIED** (44 unseen, 69 replayable, 5 regressed, 2 demonstrated), so nothing reached
+the GREEN branch before this change and nothing lost standing because of it. The gate starts
+mattering on the first scenario to earn CERTIFIED — by which time the post-wire rows will have
+given it agreement numbers to read.
+
+*And the worktree trap bit once more, in its third variant.* Measuring the new `standing_for`
+against the real corpus returned "no agreement measured" for a scenario with 67 known pairs —
+because putting the worktree's `packages/interaction` on the path also moves where
+`decision_journal._path()` resolves, to a worktree dir with no journal in it. The venv lesson
+(2026-08-11) and the node_modules lesson (2026-08-20) were both about CODE resolution; this one is
+**DATA resolution following the code**. `INTERACTION_ARTIFACTS_DIR=apps/mcp/output` pins it. A null
+result from a worktree still means "check what you actually loaded" — and now also "check what it
+loaded it FROM".
+## 2026-08-23 (second) — the crank finally says which control it clicked, and one more "proven" precondition
+
+Two small fixes in `session_control`, both handed over from the tandem's close-out, both the same
+species: **a record that omits what it knew at the time.**
+
+**THE 61 UNSCOREABLE PAIRS WERE ONE OMISSION, AND IT WAS OURS.** `metrics._has_no_param_claim`
+excludes a shadow pair whose teacher side named no params — it can testify neither for nor against
+the rail, so counting it either way would blame or flatter the controller for a JOURNALING gap.
+Measured today against the live journal (506 rows, 294 paired, 131 unscoreable): the 131 split
+cleanly into **70** `observe`/`click` pairs — already fixed going forward by the phase wire, since
+the rail now proposes `observe` on the looking rungs — and **61** `click`/`click` pairs where the
+intent already agreed and only the control was missing. Splitting those 61 by the rung named in
+their own rationale: **33 `open_pane`, 28 `enter_apply`** — the two ENTERING rungs, both of which
+knew the control at act time and neither of which wrote it down. `submit` and the advance rungs
+have journaled `{"control": ...}` since they were written; these two simply never did. Fixed at
+both sites, in the shape the rail proposes so the two are comparable.
+
+*The observe rungs stay empty deliberately, and that is not an oversight to tidy later.* A look
+drives nothing, so `{}` is the TRUE record; the rail proposes `observe` with `{}` on those phases
+and the pair scores as an exact agreement. Inventing a control there would manufacture a
+disagreement out of a turn that had none.
+
+**ONE CAVEAT RECORDED AT THE SITE, BECAUSE A MISS THERE WILL MEAN SOMETHING ELSE.** `enter_apply`
+journals an AX accessible name — the same vocabulary the rail proposes, no caveat. `open_pane`
+cannot: `/open_job_card` addresses the card by `data-jk` and returns the title read off the pane it
+opened, while the card's own AX name wraps that title in chrome ("…View full details of <title>").
+So a rail that one day proposes the *right* card can still miss on `exact` for a naming reason
+rather than a choosing one — the exact hazard `_norm_param` exists to prevent, one level up from
+case. Journaled anyway (a row naming which job we opened can testify; an empty one cannot), with
+the caveat in the source for whoever teaches the rail to propose cards: settle the canonical name
+first.
+
+**PREDICTION, so the next reader scores it rather than rediscovering it.** `exact_n` grows from
+this commit FORWARD only — the 294 historical rows are already written and stay unscoreable,
+correctly. And exact_agreement should FALL at first, not rise: the rail cannot propose a results
+card at all today, so most new `open_pane` pairs will be honest disagreements. *That is the metric
+working.* If it instead rises, or the new `open_pane` pairs come back agreeing, suspect the
+comparison before celebrating.
+
+**AND THE SECOND "PROVEN" PRECONDITION, one file over from the first.** Yesterday's verify-leg fix
+gave `_account_secured_view` a `credential_proven` parameter because "store it the moment the site
+took it" is false for a caller that typed nothing. The `mark_created` branch had the same hole and
+an older one: it re-derives and overwrites the vault whenever `body.password` is absent, and it is
+reachable from the account card's "I signed in" and the verify card's manual exit — presses where
+nobody typed anything. On an account that already holds a credential that replaces a working
+password with a plausible wrong one, surfacing weeks later as a sign-in that fails for no visible
+reason. Now: an explicit `body.password` still wins outright (that IS the request vouching for what
+the site was given), silence never overwrites, and an unreadable vault refuses rather than assuming
+it is empty. *The rule worth carrying: only a credential this request can VOUCH for may overwrite a
+stored one — and "I re-derived it" is not a vouch.*
+
 ## 2026-08-23 — the swallow-by-design audit: every quiet recorder gets a loud witness
 
 The shadow session's near-miss generalised (a stray cp erased a wire; the seam swallows by
