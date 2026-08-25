@@ -240,6 +240,37 @@ def test_the_generic_posting_control_is_apply_and_never_an_sso_detour():
                             ["button|Sign In", "button|Create Account"]) == ""
 
 
+def test_the_workday_posting_advances_on_continue_application_once_a_draft_exists():
+    """A saved draft RENAMES the posting's control, and "application" does not contain "apply".
+
+    Measured live 2026-08-25 on SolutionHealth (wd1, JR13051): the orange control read "Continue
+    Application", the substring matcher found no "apply" inside "application", and the drive
+    stalled twice on a page whose only control was in plain sight.
+    """
+    import apply_recipe as ar
+    draft = ["button|Continue Application", "button|Continue Application", "link|Read More"]
+    assert ar.named_control("workday", "workday_job_posting", draft) == "Continue Application"
+    # The fresh posting is untouched — this adds a name, it does not replace one.
+    assert ar.named_control("workday", "workday_job_posting",
+                            ["button|Apply", "button|Save"]) == "Apply"
+    # Where a page renders both, the draft wins: it is the path that keeps the work already done.
+    assert ar.named_control("workday", "workday_job_posting",
+                            ["button|Apply", "button|Continue Application"]) == "Continue Application"
+    # And the exclusions still hold on this screen — a detour is not the control.
+    assert ar.named_control("workday", "workday_job_posting",
+                            ["button|Apply with LinkedIn"]) == ""
+
+
+def test_the_workday_posting_prediction_admits_the_draft_branch():
+    """Apply opens the front door; Continue Application re-enters the FORM at the saved step. The
+    recipe cannot see WHICH step from the posting, so the spread is wide on purpose."""
+    import apply_recipe as ar
+    spread = ar.expected_after("workday", "workday_job_posting")
+    assert "workday_apply_method" in spread, "the fresh path still predicts the method modal"
+    assert "workday_my_information" in spread and "workday_review" in spread, (
+        "a resumed draft lands inside the form, not on the front door")
+
+
 def test_the_generic_prediction_is_wide_and_says_so():
     import apply_recipe as ar
     spread = ar.expected_after("cornerstone", "cornerstone_job_posting")

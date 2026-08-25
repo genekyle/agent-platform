@@ -66,7 +66,10 @@ ATS_PLATFORMS: list[dict[str, Any]] = [
      "hosts": ["myworkdayjobs.com", "myworkday.com", "wd1.", "wd3.", "wd5."],
      "recipe": "apply_recipe.WORKDAY_APPLY_RECIPE", "auth": "account",
      "notes": "data-automation-id selectors are stable across tenants (see WORKDAY_LESSONS). "
-              "'Use My Last Application' prefills from the candidate account.",
+              "'Use My Last Application' prefills from the candidate account. Once a draft is "
+              "saved the posting's own control is renamed 'Continue Application' — same button, "
+              "same destination, but it re-enters the form at the saved step rather than the "
+              "method modal (SolutionHealth wd1, 2026-08-25).",
      "seed_companies": ["State Street", "Takeda", "Point32Health"]},
     {"ats_id": "icims", "display_name": "iCIMS", "icon": "🔵",
      "hosts": ["icims.com"], "recipe": "seed", "auth": "account",

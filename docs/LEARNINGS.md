@@ -11123,3 +11123,55 @@ precisely so a recipe can address a prompt the stable way rather than by accessi
 2026-08-11 note), and it had never once run. And the upload probe from earlier today was made
 ADVISORY rather than vetoing: its first cut raised when it could not read an objectId, turning a
 failed CHECK into a failed UPLOAD — strictly worse than the false negative it was written to remove.
+
+## 2026-08-25 — the button that renamed itself, and the refresh that cost the session
+
+Resuming SolutionHealth's ITSM Operations Analyst (Workday, JR13051) from a stale tab. Four
+findings; the first two are the same bug seen from opposite ends.
+
+**A SAVED DRAFT RENAMES THE POSTING'S CONTROL, AND "APPLICATION" DOES NOT CONTAIN "APPLY".** The
+posting's orange button read **"Continue Application"**, not "Apply" — and `_named_control` is
+substring-based, so `["apply"]` matched nothing: a-p-p-l-i-c-a-t-i-o-n has no "apply" in it. The
+rung could only ever refuse, and the orienter had already logged two misses reading
+`workday_job_posting -> workday_job_posting` before this session started. The stall was invisible
+from the inside precisely because the page was *fine* — the control was in plain sight and the
+matcher was blind to it. Fixed in `_WORKDAY_TAIL` with `"continue application"` listed FIRST (the
+matcher tries most-specific first, and where a page renders both, the draft is the path that keeps
+the work already done), pinned in `test_apply_recipe.py`, and written into `ats_registry`'s workday
+note — the eighth instance of the fact-existed-and-nothing-asked shape, and the fix belongs where
+the classifier already looks.
+
+**AND ITS DESTINATION IS NOT THE FRONT DOOR.** Measured: the click skipped `workday_apply_method`
+AND `workday_apply_auth` entirely and landed on `workday_my_information` with the draft's data
+prefilled (How Did You Hear About Us = Indeed, Country = USA, First Name = Gene Kyle),
+steps-to-submit 9 -> 4. So Workday resumes a draft at **step 1**, not at the furthest-saved step —
+My Experience was already complete and it still re-entered at My Information. `expect` is now
+deliberately bimodal, because the recipe cannot see which step a draft was left on from the
+posting; the only tell is the control's own name.
+
+**THE CONTROL NAME IS A WITNESS TO SESSION STATE — WORTH MORE THAN THE FIX.** After the refresh
+below logged us out, the SAME posting rendered **"Apply"** again. So "Continue Application" is not
+a tenant skin: it is displayed only when signed in AND a draft exists. A posting that says "Apply"
+when we believe we hold a draft is telling us the session is gone, one page-read before
+`/auth_state` says so.
+
+**THE ERROR PAGE'S OWN REMEDY CURED THE PAGE AND COST THE SESSION.** Application Questions saved
+(the rail showed My Information / My Experience / Application Questions all ticked) and *Voluntary
+Disclosures* then failed to render — `workday_error_retry` fired correctly on its first live
+outing, the classifier added on 08-24. But the rung vocabulary has no such state, so `next_action`
+fell back to "Unrecognised page — orient", and **nothing routed the classified error to its
+remedy**: naming a state is not the same as knowing what to do on it. Following the page's stated
+"Please refresh the page and then try again" reloaded `/apply` — and came back **logged out**, on
+the Start-Your-Application modal. Staleness had said *"a reload cures this — but the page holds
+unsaved work, so refresh is withheld"*, which was exactly backwards here: the error page held NO
+unsaved work, and the refresh it withheld was the one that cost the session. Open: a
+`workday_error_retry` rung whose action is refresh-then-reauth, and a staleness guard that knows an
+error page has nothing to lose.
+
+*Also measured:* the target-vs-intent guard paid for itself. Workday's three question textareas
+carry **empty accessible names**, so `/execute` resolves them by proximity — and the relatives box's
+own selector resolved to *"What is your desired Annual Salary or Hourly Rate?*"*. `expect_question`
+refused rather than typing "NA" over the salary answer; addressing the node id directly (7224, by
+elimination from two measured anchors) landed it. And the page named its own escape token again —
+*"If the answer is no, please put NA in the box below"* — the `resolution: "stated"` shape from
+08-24, now seen on a second block of the same tenant.

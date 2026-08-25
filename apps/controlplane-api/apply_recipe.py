@@ -1352,12 +1352,31 @@ def before_the_wall(platform: Optional[str], state: Optional[str]) -> bool:
 
 #: The Workday tail's advance controls, keyed by the state they advance FROM — the same shape the
 #: generic spine's entries carry, sourced from WORKDAY_APPLY_RECIPE's own selectors. The posting
-#: advances on its Apply button; the method modal takes the manual path (Use-My-Last needs an
-#: account that, pre-wall, does not exist yet).
+#: advances on its Apply button — or, once a draft exists, on "Continue Application"; the method
+#: modal takes the manual path (Use-My-Last needs an account that, pre-wall, does not exist yet).
 _WORKDAY_TAIL: dict[str, dict[str, Any]] = {
-    "workday_job_posting": {"action": "click Apply — the posting's own control",
-                            "controls": ["apply"],
-                            "expect": ["workday_apply_method", "workday_apply_auth"]},
+    # A POSTING THAT ALREADY HAS A DRAFT NAMES ITS CONTROL DIFFERENTLY, AND "APPLICATION" DOES NOT
+    # CONTAIN "APPLY". Measured live 2026-08-25 on SolutionHealth (wd1, JR13051): once the
+    # candidate account existed and a step had been saved, the posting's orange control read
+    # **"Continue Application"** — same button, same destination mechanic — and the substring
+    # matcher returned "" because a-p-p-l-i-c-a-t-i-o-n has no "apply" in it. The drive stalled on
+    # a page whose only control was in plain sight, and the orienter logged two misses reading
+    # workday_job_posting -> workday_job_posting. Listed FIRST because _named_control tries the
+    # most-specific token first: where a page renders both, the draft is the path that keeps the
+    # work already done.
+    #
+    # ITS DESTINATION IS NOT THE FRONT DOOR, WHICH IS WHY THE PREDICTION IS BIMODAL. Apply on a
+    # fresh posting opens the method modal or the auth gate; Continue Application re-enters the
+    # FORM at whichever step was last saved. The recipe cannot see which step that is from the
+    # posting — the only tell is the control's own name — so this branch is deliberately wide
+    # rather than falsely precise, the same judgement the generic spine's `expect` already makes.
+    "workday_job_posting": {"action": "click Apply — or Continue Application, when a saved draft "
+                                      "has renamed the posting's own control",
+                            "controls": ["continue application", "apply"],
+                            "expect": ["workday_apply_method", "workday_apply_auth",
+                                       "workday_my_information", "workday_my_experience",
+                                       "workday_questions", "workday_voluntary_disclosures",
+                                       "workday_review"]},
     "workday_apply_method": {"action": "choose the apply method — Apply Manually unless the "
                                        "candidate account already exists",
                              "controls": ["apply manually"],
