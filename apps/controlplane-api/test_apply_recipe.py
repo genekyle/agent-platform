@@ -482,3 +482,46 @@ def test_the_plain_mapper_keeps_its_signature():
     assert ar.map_workday_state("https://x.wd1.myworkdayjobs.com/j", "") == "workday_job_posting"
     assert ar.map_workday_state("https://x.myworkdayjobs.com/job/y",
                                 "current step 3 of 6 Application Questions") == "workday_questions"
+
+
+def test_workdays_error_page_outranks_its_own_step_rail():
+    """THE STEPPER IS CHROME AND IT SURVIVES THE FAILURE (live 2026-08-24, SolutionHealth JR13051).
+
+    Workday renders "Something went wrong — Please refresh the page and then try again" in the
+    CONTENT while the progress rail above keeps showing the step you were on. The state mapper read
+    the rail first, so an error page came back named `workday_voluntary_disclosures` — an ordinary
+    step name for a page with no form on it. Nothing matched `*_error_retry`, so the PLATFORM_ERROR
+    recovery class (promoted 2026-08-20 for pages "whose entire content is try again") never fired
+    and the rung sat reporting `mismatch` until the operator read the screen himself.
+    """
+    import apply_recipe as ar
+
+    rail = ("ITSM Operations Analyst My Information My Experience Application Questions "
+            "Voluntary Disclosures Self Identify Review ")
+    state, named_by = ar.map_workday_state_verbose(
+        "https://solutionhealth.wd1.myworkdayjobs.com/x/apply/applyManually",
+        rail + "Something went wrong Please refresh the page and then try again.")
+    assert state == "workday_error_retry", "the rail won over the page's own failure"
+    assert named_by == ar.NAMED_BY_PAGE
+
+
+def test_an_ordinary_step_is_still_read_from_the_rail():
+    """The guard on the guard: a normal page must not be dragged into the error class."""
+    import apply_recipe as ar
+
+    state, _ = ar.map_workday_state_verbose(
+        "https://solutionhealth.wd1.myworkdayjobs.com/x",
+        "My Information My Experience Voluntary Disclosures Self Identify Review My Information")
+    assert state != "workday_error_retry"
+
+
+def test_a_field_validation_error_is_not_a_platform_error():
+    """Both halves are required — a statement of failure AND the site's own remedy. A form error
+    names a FIELD and is the census's business; routing it to recovery would retry a page that is
+    waiting on an answer, which is the loop this rule exists to avoid."""
+    import apply_recipe as ar
+
+    state, _ = ar.map_workday_state_verbose(
+        "https://solutionhealth.wd1.myworkdayjobs.com/x",
+        "My Information Errors Found Error - The field State is required and must have a value.")
+    assert state != "workday_error_retry"

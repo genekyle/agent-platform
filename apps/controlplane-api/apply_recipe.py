@@ -1670,6 +1670,15 @@ NAMED_BY_PAGE, NAMED_BY_MARKER, NAMED_BY_URL_DEFAULT, NAMED_BY_NOTHING = (
     "page_said", "marker", "url_default", "nothing")
 
 
+#: Workday's own failure page, which keeps the step rail above it. Both halves are required: the
+#: statement of failure AND the stated remedy, so an ordinary page that happens to say "wrong"
+#: somewhere in its copy cannot be mistaken for one (the 08-19 census lesson — a name that matches
+#: by accident is worse than no match).
+_WORKDAY_ERROR_RE = re.compile(
+    r"something went wrong.{0,120}?(?:refresh|try again)|"
+    r"(?:please\s+)?refresh the page and (?:then\s+)?try again", re.I | re.S)
+
+
 def map_workday_state_verbose(url: str, page_text: str = "") -> tuple[str, str]:
     """(state, how it was named) — so a caller can tell a reading from a guess.
 
@@ -1688,6 +1697,22 @@ def map_workday_state_verbose(url: str, page_text: str = "") -> tuple[str, str]:
     is not the same as having recognised it**, and the suffix check cannot see the difference
     because the default is spelled like a real state.
     """
+    # THE ERROR PAGE OUTRANKS THE STEPPER, BECAUSE THE STEPPER IS CHROME. Workday renders
+    # "Something went wrong — Please refresh the page and then try again" in the CONTENT while the
+    # progress rail above it keeps showing the step you were on. `_workday_current_step` reads that
+    # rail, so the rail won and the state came back `workday_voluntary_disclosures` — an ordinary
+    # step name for a page with no form on it at all. Nothing then matched `*_error_retry`, so the
+    # PLATFORM_ERROR recovery class (its first graduate, promoted 2026-08-20 precisely for pages
+    # "whose entire content is try again") never fired, and the rung sat reporting `mismatch`.
+    # Measured live 2026-08-24, SolutionHealth JR13051; the operator read the screen and said what
+    # the system could not: *"it's actually asking me to refresh"*.
+    #
+    # Checked FIRST, and narrowly: the site must be stating BOTH that something failed AND its own
+    # remedy, which is the shape that distinguishes a platform error from a form-validation error
+    # (those name a FIELD, and are the census's business, not recovery's).
+    if _WORKDAY_ERROR_RE.search(page_text or ""):
+        return "workday_error_retry", NAMED_BY_PAGE
+
     # THE PAGE'S OWN STATEMENT FIRST. Only then the markers, which are inference.
     said = _workday_current_step(page_text)
     if said:

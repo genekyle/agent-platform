@@ -6225,7 +6225,13 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                         # The sighting is not what the dashboard (or applied_index) reads — carry
                         # it to the canonical Job, which is the row a cross-engine match joins on.
                         job_dedup.sync_description(db, _sighting)
-                        db.flush()
+                        # COMMIT, NOT FLUSH. A flush with no commit after it is the trap
+                        # `record_flow` already paid for: the rung path that follows this may
+                        # return through a branch that never commits, and the row is silently
+                        # lost. The sweep endpoint — the only other writer of this value — has
+                        # always committed here. Caught live 2026-08-24 on the first drive after
+                        # wiring it: the pane returned 2,533 chars and the corpus stayed at 0.
+                        db.commit()
             except Exception:  # noqa: BLE001 — never let a capture break the open
                 logging.getLogger(__name__).exception(
                     "capturing the pane description for %s failed", step.job_id)
