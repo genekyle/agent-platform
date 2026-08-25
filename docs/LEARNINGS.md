@@ -11252,3 +11252,39 @@ genuinely trusted pointer gesture into the calendar popup — the element path u
 which is untrusted, and the coordinate path needs the popup's live bbox after scroll. **That is the
 next thing to try, and it is written here so the next session starts at attempt twelve rather than
 attempt one.**
+
+## 2026-08-25 (third) — RESOLVED: an untrusted click is not a click, and SolutionHealth is submitted
+
+**THE ENTRY ABOVE IS CORRECTED — IT COMMITTED, AND THE ANSWER WAS NEVER THE TYPING.** Attempt
+twelve was the one the entry named as untried: a **trusted pointer gesture** on the calendar day
+cell. It worked first time, the save passed with no errors, and the application went on to Review
+and **SUBMITTED** (JR13051; Candidate Home reads *Application Received · August 25, 2026*; verifier
+high / 6.5 on "your application has been received").
+
+**`_element_act` drives clicks with JS `.click()`, which fires ONLY a `click` event, untrusted.** A
+widget that commits on `mousedown`/`pointerdown` — or that gates on `isTrusted` — never hears it.
+Coordinate mode goes through `Input.dispatchMouseEvent` and sends the real press/release sequence,
+which is why the SAME cell, addressed by bbox instead of by node id, committed instantly. Eleven
+failures on that field were eleven ways of writing a VALUE into a widget whose problem was that it
+had never received a GESTURE.
+
+**THE RECOGNIZER, AND IT IS CHEAPER THAN EVERY PROBE IN THE ENTRY ABOVE.** *A click that reports
+`outcome: ok` and changes nothing is an untrusted-click symptom — retry the same target in
+coordinate mode before diagnosing anything else.* It costs one call. It explains this widget, and it
+is the same shape as the Indeed radio that needed a native `input.click()`, the Cornerstone button
+rendered twice, and every other "the action reported ok, but nothing observable changed" verdict
+this repo keeps recording — a verdict `apply_step` already computes and names.
+
+Note what this does NOT invalidate: the two driver fixes (full `code`/`windowsVirtualKeyCode` on
+keystrokes, and `keys_only`) are independently correct — a keyDown whose `code` is `""` really is
+unhearable, and the double-entry that produced `02/02/8252` was real. They were just not this bug.
+The honest summary is that a deep, correct diagnosis of the TYPING path cost eleven attempts because
+nobody checked whether the CLICK path was trusted, and the click path is the cheaper question.
+
+*Also measured, and worth keeping:* Workday's Review screen surfaced a CONDITIONAL follow-up that no
+census had ever seen — *"You answered 'Yes' to the previous question. Please choose the answer below
+which most accurately fits your situation."* — sitting at `No Response`. It appears only after the
+parent question is answered, so a census taken on arrival cannot know it exists, and Workday does
+not require it. **The Review screen is therefore a real observation surface, not a formality: it is
+the only place the whole application is visible at once**, and it is where an unanswered conditional
+gets caught. Surfaced to the operator before Submit, who chose to send as-is.
