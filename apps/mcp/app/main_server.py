@@ -163,6 +163,7 @@ class ExecuteRequest(BaseModel):
     tab_url: Optional[str] = None
     browser_url: str = "http://127.0.0.1:9222"
     driver: Optional[str] = None         # 'direct' (default) | 'record_only' (dry-run)
+    keys_only: bool = False              # type with keystrokes only — no authoritative value write
     # Act-by-NAME: when set, re-resolve the target's backend_node_id from a FRESH AX scan at act time
     # (matched by role + accessible-name), immune to the node-id churn that makes a captured id stale
     # between select and act. Falls back to backend_node_id when not provided / not found.
@@ -712,6 +713,7 @@ async def execute_action(body: ExecuteRequest):
     req = ActionRequest(
         action_id=body.action_id, target_bbox=body.target_bbox, value=body.value,
         backend_node_id=node_id, files=body.files, device_scale_factor=body.device_scale_factor,
+        keys_only=body.keys_only,
     )
     result = await driver.move_and_act(
         browser_url=body.browser_url, request=req, tab_id=body.tab_id, tab_url=body.tab_url)

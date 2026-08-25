@@ -11175,3 +11175,80 @@ refused rather than typing "NA" over the salary answer; addressing the node id d
 elimination from two measured anchors) landed it. And the page named its own escape token again —
 *"If the answer is no, please put NA in the box below"* — the `resolution: "stated"` shape from
 08-24, now seen on a second block of the same tenant.
+
+## 2026-08-25 (second) — four resolvers, four notions of identity, and a widget that hears none of them
+
+Same drive, continued. The operator's read was the useful one: *"if we keep doing something the
+interaction layers should be more fluid."* This session measured exactly what that costs.
+
+**TWO CORRECTIONS TO THIS MORNING'S ENTRY, BOTH FROM LATER MEASUREMENT.** First: I wrote that
+Application Questions had *saved* because the step rail showed it ticked. **It had not.** After the
+session was restored, all six answers were blank and had to be re-entered — the rail advanced while
+the save failed, which is the same lesson the 08-24 entry drew about the rail surviving on the error
+page, and I re-learned it by trusting the rail one screen later. **The rail is chrome. Persistence
+is only proved by leaving the page and coming back.** Second: I wrote that "Continue Application" is
+displayed only when signed in with a draft, offering it as a live witness to session state. It is a
+**render-time** signal only: after the in-page vault login the posting still read "Apply" — same
+node id, never re-rendered — and only showed "Continue Application" once Candidate Home re-rendered
+it. A stale posting says nothing about the session.
+
+**THE DRAFT IS SAFE ON CANDIDATE HOME, AND THAT IS THE RE-ENTRY PATH.** When the method modal
+("Start Your Application": Autofill / Apply Manually / Use My Last Application) offers no *resume*,
+none of those three is the right door — `/userHome` lists the application as **`Not Submitted`**, and
+its title link re-renders the posting with the draft's own control. Measured twice today. Guessing
+at the modal risks orphaning a draft that is sitting one click away.
+
+**THE ACCOUNT LOGIN PROTOCOL WORKS AND IS THE RIGHT LEVER.** `/api/accounts/{id}/login` resolves the
+credential from the vault SERVER-SIDE and returns status only; two live sign-ins today, three steps
+each (click → fill_credentials → done). Its one flake was a reasoner API timeout that reported
+`reasoner_escalate` — retrying from the state it had already reached succeeded. Worth knowing: the
+protocol's failure mode is the REASONER, not the credential path, so a retry is cheap and correct.
+
+### The recognizer we actually needed: four resolvers, four identities
+
+Every "the control is right there and the layer said no" moment today came from a different notion
+of what identifies a control. Written down so the next drive names the shape in one probe instead of
+seven attempts:
+
+| Layer | Identifies by | Failed on | Tell |
+|---|---|---|---|
+| `apply_prompt_select` | prompt `field_name` | an `aria_listbox` | *"prompt field not found"* on a control you can see |
+| `check_group` | its own label derivation | a checkbox whose AX name reads verbatim | `no_option` while `n_boxes: 1` |
+| `/execute` selector path | nearest label by PROXIMITY | 3 textareas with EMPTY accessible names | resolves to a NEIGHBOUR's question — stably, not flakily |
+| `set_date` / any value write | `.value` | a widget with no `onChange`/`onInput` | reports ok; the site says the field is empty |
+
+**The AX layer — role + accessible name → `backend_node_id` — was correct every time it was used
+directly.** That is the argument for one resolver, and for a contract where "I wrote it" is not the
+same claim as "the widget committed it".
+
+**THE STAGED-NOT-COMMITTED SIGNATURE, AND HOW TO SPOT IT IN ONE CALL.** `describe_widget` returning
+a rendered value together with `answered=False` — *"segmented_date · 08 / 25 / 2026 · answered=False"*
+— **is the whole diagnosis**, and it was on screen from the first probe. Confirm it by asking the
+page for the element its own `aria-labelledby` names: Workday's date wrapper points at
+`hiddenDateValueId-<field>`, **and that node does not exist until the widget commits**. Present
+segments + absent hidden node + a site error naming the field = the value was never entered, no
+matter what the pixels say. The generalisation, cheap on any stack: read the wrapper's React props
+(`/probe` — the sanctioned hole for exactly this) and see which handlers exist. Workday's date
+wrapper exposes `onKeyDown / onFocus / onBlur / onCopy / onCut / onPaste` and **no `onChange` and no
+`onInput` at all**, which says in one line why every value write is invisible to it by construction.
+
+**TWO DRIVER FIXES CAME OUT OF IT, BOTH GENERAL.** (1) `_human_type` was dispatching `keyDown` with
+only `text`/`key` — so `code` is `""` and `keyCode` is `0`, and any handler switching on either
+never fires. The tell was already in the file: `clear` and `submit` always sent the full set, and
+they were the only two verbs that ever moved this widget. `_key_fields()` now supplies `code` +
+`windowsVirtualKeyCode` for digits, ASCII letters and common punctuation, and returns `{}` rather
+than guessing — a wrong `code` is worse than an absent one. (2) `keys_only` on the type action:
+skip BOTH the pre-clear and the authoritative write, and send `rawKeyDown` (no `text`, so the
+browser performs no default insertion) — because on a widget that also composes in its own handler,
+a keyDown carrying `text` is counted twice. Measured: "08252026" typed with `text` produced
+`02/02/8252`. Suites green: mcp **159**, controlplane-api **1890**.
+
+**AND IT STILL DID NOT COMMIT — WHICH IS ALSO A RESULT.** Eleven mechanisms on one field (value
+write, selector type, node type, focus-then-type, calendar pick by node, direct-driver insertText,
+Enter, JS keydown with keyCode, full-fidelity keys, keys_only rawKeyDown, trusted coordinate click).
+`rawKeyDown` alone changed nothing, so the widget does not compose from `onKeyDown` for digits
+either; the visible value comes from the browser's own default insertion. What remains untried is a
+genuinely trusted pointer gesture into the calendar popup — the element path uses JS `.click()`,
+which is untrusted, and the coordinate path needs the popup's live bbox after scroll. **That is the
+next thing to try, and it is written here so the next session starts at attempt twelve rather than
+attempt one.**

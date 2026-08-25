@@ -55,6 +55,13 @@ class ActionRequest:
     value: Optional[str] = None
     files: Optional[list[str]] = None   # absolute local paths for an `upload` action (file input)
     device_scale_factor: float = 1.0
+    #: Enter the value with KEYSTROKES ONLY — no authoritative value write afterwards.
+    #: For the widget that composes its value from key handling and exposes no `onChange`/`onInput`
+    #: (Workday's segmented date), the write is not a safety net but the thing that destroys the
+    #: entry: it replaces a segment the component had just built, and the component never hears it.
+    #: Off by default — the write is right for every ordinary field, where a dropped keystroke is
+    #: the likelier failure. See HumanizedDriver._human_type.
+    keys_only: bool = False
 
 
 @dataclass

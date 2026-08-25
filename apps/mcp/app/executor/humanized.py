@@ -133,8 +133,13 @@ class HumanizedDriver(DirectDriver):
     async def _apply_value(self, cdp, request: ActionRequest,
                            object_id: Optional[str] = None) -> None:
         if request.action_id in ("type", "select") and request.value:
-            await self._clear_focused(cdp)          # don't append onto residue
-            await self._human_type(cdp, request.value, object_id=object_id)
+            if not request.keys_only:
+                await self._clear_focused(cdp)      # don't append onto residue
+            # keys_only skips the clear too: `_clear_focused` is itself an authoritative write, and
+            # a widget that cannot hear writes cannot hear this one either. Segmented widgets
+            # overwrite as you type, so there is no residue to strip.
+            await self._human_type(cdp, request.value, object_id=object_id,
+                                   keys_only=request.keys_only)
         elif request.action_id == "clear":
             # `clear` used to fall through to the base driver's select-all + Delete, whose select-all
             # is Ctrl+A (`modifiers: 2`). ON macOS THAT IS NOT SELECT-ALL — it is the emacs
@@ -210,7 +215,39 @@ class HumanizedDriver(DirectDriver):
                        {"expression": self._set_focused_value_js("''"), "returnByValue": True})
         await asyncio.sleep(self._rng.uniform(0.05, 0.12))
 
-    async def _human_type(self, cdp, text: str, object_id: Optional[str] = None) -> None:
+    #: THE FIELDS THAT MAKE A SYNTHETIC KEYSTROKE BELIEVABLE. `Input.dispatchKeyEvent` carrying only
+    #: `text`/`key` produces an event whose `code` is "" and whose `keyCode`/`which` are 0. A handler
+    #: that switches on either never fires — and some widgets expose NO other way in. Measured live
+    #: 2026-08-25 on Workday's segmented date (CC-305 "Date"): its wrapper's React props are
+    #: `onKeyDown`, `onFocus`, `onBlur`, `onCopy/onCut/onPaste` and **no `onChange` or `onInput` at
+    #: all**, so the authoritative native-setter write below is invisible to it by construction. The
+    #: field displayed 08/25/2026 while the component held nothing, and Workday answered "The field
+    #: Date is required and must have a value" through seven different ways of entering it.
+    #:
+    #: The tell was already in this file: `clear` (select-all + Delete) and `submit` (Enter) always
+    #: sent `code` AND `windowsVirtualKeyCode`, and those were the only two verbs that ever moved
+    #: that widget — clearing its year when nothing else could write one.
+    @staticmethod
+    def _key_fields(ch: str) -> dict:
+        """`code` + `windowsVirtualKeyCode` for a printable character, or {} when unmapped.
+
+        Unmapped characters degrade to the old text-only event rather than guessing a wrong code:
+        a wrong `code` is worse than an absent one, because a handler that filters on it will act
+        on the wrong key instead of ignoring the event."""
+        if ch.isdigit():
+            return {"code": f"Digit{ch}", "windowsVirtualKeyCode": ord(ch)}
+        if ch.isascii() and ch.isalpha():
+            return {"code": f"Key{ch.upper()}", "windowsVirtualKeyCode": ord(ch.upper())}
+        punct = {" ": ("Space", 32), "-": ("Minus", 189), "/": ("Slash", 191),
+                 ".": ("Period", 190), ",": ("Comma", 188), ";": ("Semicolon", 186),
+                 "'": ("Quote", 222), "[": ("BracketLeft", 219), "]": ("BracketRight", 221)}
+        if ch in punct:
+            code, vk = punct[ch]
+            return {"code": code, "windowsVirtualKeyCode": vk}
+        return {}
+
+    async def _human_type(self, cdp, text: str, object_id: Optional[str] = None,
+                          keys_only: bool = False) -> None:
         """Per-character entry with jittered pauses for a realistic TIMING signal, then an
         authoritative value set for CORRECTNESS. Per-char synthetic key events race a
         framework-controlled input's value/caret (interleaving), so the keystrokes provide the human
@@ -235,9 +272,21 @@ class HumanizedDriver(DirectDriver):
         # native-setter write fires `input`, so a filter re-runs over the complete text.
         deadline = asyncio.get_event_loop().time() + self._TYPE_CADENCE_MAX_SECONDS
         for ch in text[: self._TYPE_CADENCE_MAX_CHARS]:
-            await cdp.send("Input.dispatchKeyEvent",
-                           {"type": "keyDown", "text": ch, "key": ch, "unmodifiedText": ch})
-            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
+            keyf = self._key_fields(ch)
+            if keys_only:
+                # RAW, BECAUSE `text` MAKES THE BROWSER INSERT THE CHARACTER ITSELF. On a widget
+                # that also composes the value in its own onKeyDown, a keyDown carrying `text` is
+                # counted TWICE — once by the default action, once by the handler. Measured live
+                # 2026-08-25: "08252026" into Workday's segmented date produced `02/02/8252`.
+                # rawKeyDown fires the handler and performs no default insertion, so the widget's
+                # own key handling is the only writer — which is the whole point of keys_only.
+                await cdp.send("Input.dispatchKeyEvent",
+                               {"type": "rawKeyDown", "key": ch, **keyf})
+            else:
+                await cdp.send("Input.dispatchKeyEvent",
+                               {"type": "keyDown", "text": ch, "key": ch, "unmodifiedText": ch,
+                                **keyf})
+            await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch, **keyf})
             delay = self._rng.uniform(0.04, 0.16)
             if ch == " " or ch in ",.;:":
                 delay += self._rng.uniform(0.05, 0.15)
@@ -246,6 +295,9 @@ class HumanizedDriver(DirectDriver):
             await asyncio.sleep(delay)
             if asyncio.get_event_loop().time() >= deadline:
                 break
+        if keys_only:
+            # The keystrokes ARE the entry; a write here would clobber what they composed.
+            return
         await self._set_value_react_safe(cdp, text, object_id=object_id)
 
     #: The authoritative write, targeted at a NODE WE ALREADY RESOLVED rather than at whatever is

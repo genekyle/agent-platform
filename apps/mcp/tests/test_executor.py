@@ -338,3 +338,27 @@ def test_long_text_types_a_prefix_and_always_lands_whole():
 
     assert calls["keys"] <= HumanizedDriver._TYPE_CADENCE_MAX_CHARS
     assert calls["set_value"] == long_text, "the authoritative write must carry the whole text"
+
+
+def test_key_fields_carry_code_and_keycode_so_a_handler_can_hear_them():
+    """A keyDown with only `text`/`key` has `code == ""` and `keyCode == 0`, and a widget that
+    switches on either never fires. Measured live 2026-08-25 on Workday's segmented date, whose
+    wrapper exposes onKeyDown and NO onChange/onInput — `clear` and `submit` moved it because they
+    always sent the full set, and `type` did not because it never had."""
+    from app.executor.humanized import HumanizedDriver as H
+    assert H._key_fields("8") == {"code": "Digit8", "windowsVirtualKeyCode": 56}
+    assert H._key_fields("g") == {"code": "KeyG", "windowsVirtualKeyCode": 71}
+    assert H._key_fields("G") == {"code": "KeyG", "windowsVirtualKeyCode": 71}
+    assert H._key_fields("/") == {"code": "Slash", "windowsVirtualKeyCode": 191}
+    # Unmapped degrades to the text-only event rather than guessing: a WRONG code is worse than an
+    # absent one, because a handler filtering on it acts on the wrong key instead of ignoring it.
+    assert H._key_fields("é") == {}
+    assert H._key_fields("→") == {}
+
+
+def test_keys_only_is_off_by_default_and_reaches_the_request():
+    """`keys_only` skips the authoritative value write — right for a widget that composes from key
+    handling, wrong for every ordinary field, where a dropped keystroke is the likelier failure."""
+    req = ActionRequest(action_id="type", target_bbox={}, value="08252026")
+    assert req.keys_only is False, "the write stays the default safety net"
+    assert ActionRequest(action_id="type", target_bbox={}, value="x", keys_only=True).keys_only
