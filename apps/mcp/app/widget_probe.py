@@ -66,8 +66,18 @@ DESCRIBE_WIDGET_JS = r"""
   // see the searchBox without opening, so classify on the STABLE tenant-independent tell —
   // the data-automation-id — plus a listbox/button opener.
   const aid = attr(el, 'data-automation-id') || attr(wrap, 'data-automation-id') || '';
-  const promptish = /^formField-/.test(aid) &&
-                    !!wrap.querySelector('[data-automation-id=promptIcon], [role=button], button');
+  // THE WIDGET'S OWN DECLARATION, ASKED FIRST. Workday tags its prompt engine on the element
+  // itself as data-uxi-widget-type="selectinput" — and on School or University / Field of Study
+  // that is the ONLY tell there is: measured live 2026-08-24 (SolutionHealth JR13051) the node is
+  // `INPUT type=text` with NO role, NO aria-haspopup, NO aria-expanded, NOT readonly, and an
+  // EMPTY data-automation-id, so every ARIA test below and the formField- test above both miss it.
+  // It reads as free text, typing into it reports ok, and the answer never commits — the operator
+  // caught it from the outside: "while it is technically an input, it's actually a drop down and
+  // must select". A widget that names its own engine should never be classified by inference.
+  const uxi = attr(el, 'data-uxi-widget-type') || attr(wrap, 'data-uxi-widget-type') || '';
+  const promptish = /select/i.test(uxi) ||
+                    (/^formField-/.test(aid) &&
+                     !!wrap.querySelector('[data-automation-id=promptIcon], [role=button], button'));
 
   // Workday segmented date: dateSectionMonth/Day/Year-input spinbuttons, linked and
   // auto-advancing. Must be caught BEFORE `number`, which is what they look like.

@@ -11071,3 +11071,55 @@ has said since 2026-08-11: *"its apply control is a plain button named 'Apply No
 screenshot to rediscover. Seventh instance of the fact-existed-and-nothing-asked shape, and the
 first where the fact was sitting in the registry the classifier had ALREADY consulted to name the
 platform.
+
+## 2026-08-24 (sixth) — the widget that names itself, and the instruction that governs the field
+
+Driving SolutionHealth's ITSM Operations Analyst (Workday, JR13051) — a job the OPERATOR picked
+after reading its description, which is itself the argument for capturing them. Four findings, two
+of them operator-taught, and each one closes a class rather than a case.
+
+**A WIDGET THAT DECLARES ITS OWN ENGINE MUST NEVER BE CLASSIFIED BY INFERENCE.** Workday's School
+or University and Field of Study scan as `INPUT type=text` with NO role, NO aria-haspopup, NO
+aria-expanded, NOT readonly and an EMPTY data-automation-id — every ARIA test in the classifier and
+its `formField-` prompt test all miss, so they fall through to `text`. Typing into them reports OK
+and commits nothing, and the census then reads them UNANSWERED, which invites the retry this repo
+already warns is unsafe on stateful widgets. The operator caught it from outside: *"while it is
+technically an input, it's actually a drop down and must select"*. The one tell present is
+Workday's own `data-uxi-widget-type="selectinput"` — the widget naming its engine. Added to
+`promptish`, and `/describe_widget` now answers `prompt_hierarchical / opens_on: keystrokes /
+value_read_at: multiselect_selected_items` for the exact node that read as free text an hour
+earlier. Pinned as TEXT against the JS blob, the `test_js_blob_tells` enforcement style.
+
+**THE INSTRUCTION IS PER-SECTION, AND THAT IS THE WHOLE ANSWER.** Told the escape-hatch problem —
+*"check for true statements like University of Santo Tomas or if they have an 'other' option ...
+'N/A', 'Unavailable', 'Other'"* — the first cut was a generic ladder. It was not enough, and the
+page said why: **SolutionHealth's Education block reads "please type OTHER and hit the ENTER
+button" while its Certifications block, inches lower on the SAME screen, reads "please select NO
+CERTIFICATION NEEDED and hit enter button."** Education's token typed into the certification field
+looked filled and committed nothing, because that list has no such entry. Operator: *"we need to
+have questions lined up to which input we're dealing with and know that there's very important
+CONTEXT."* So `prompt_escape.plan` now takes the governing instruction and prefers the token the
+SITE names (`resolution: "stated"`) over its own ladder — quoting the site rather than guessing —
+while prose that merely advises ("please select the most recent completed degree") is rejected by
+requiring the token to be SHOUTED, which is how these are always written.
+
+**THE LADDER'S GUARD IS THE HALF THAT MATTERS.** An escape is a shrug on a school list and a CLAIM
+on sponsorship, citizenship, clearance, veteran/disability self-ID, salary or start date. Those
+fields refuse both the ladder and a stated token and escalate instead — a site telling us to type
+OTHER would not make it true about the operator's status, and that is the exact class where the
+08-21 radio silently held the disqualifying answer.
+
+**AND THE FIX ORDER MATTERED: TRUTH, THEN THE SITE'S TOKEN, THEN THE LADDER, THEN ESCALATE.** The
+school list turned out to be empty for EVERY query including the empty one — verified alive by a
+differential test (Degree still fetched 26 options in the same session, so this was not the 08-21
+expired-session trap). No search, no browse and no create-entry could reach a value; only the
+page's stated OTHER + a real ENTER key populated it. `submit` was already the Enter key in the
+intent vocabulary, so no new verb was needed.
+
+*Also fixed on the way:* `/select_prompt`'s selector path unpacked a 2-tuple from a resolver that
+has returned 3 since the correlation work, so **every selector-addressed prompt had died on
+"ValueError: too many values to unpack"** — surfaced as a bare `outcome: error`. That path exists
+precisely so a recipe can address a prompt the stable way rather than by accessible name (the
+2026-08-11 note), and it had never once run. And the upload probe from earlier today was made
+ADVISORY rather than vetoing: its first cut raised when it could not read an objectId, turning a
+failed CHECK into a failed UPLOAD — strictly worse than the false negative it was written to remove.

@@ -861,7 +861,15 @@ async def select_prompt(body: SelectPromptRequest):
 
     resolve_why = ""
     if body.selector:
-        node_id, resolve_why = await _resolve_node_by_selector(
+        # THREE VALUES, NOT TWO. `_resolve_node_by_selector` has returned
+        # `(node, why, target_question)` since the correlation work; this caller kept the old
+        # two-value unpack, so EVERY selector-addressed prompt died on
+        # "ValueError: too many values to unpack" — rendered by the endpoint as a bare
+        # `outcome: error` with the ValueError as its detail. The selector path exists precisely
+        # so a recipe can address a prompt the stable way (`[data-automation-id=formField-source]`,
+        # 2026-08-11) rather than by accessible name; it had never once run. Found 2026-08-24
+        # driving Workday's School or University, which has no usable accessible name at all.
+        node_id, resolve_why, _target_q = await _resolve_node_by_selector(
             body.browser_url, body.tab_id, body.tab_url, body.selector)
     else:
         node_id = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,

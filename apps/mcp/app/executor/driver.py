@@ -267,16 +267,13 @@ class TrajectoryDriver(ABC):
                 bn = (desc_up.get("node") or {}).get("backendNodeId")
                 if bn:
                     upload_node = bn
-            else:
-                # Nothing file-shaped in the container: say WHICH element was addressed, because
-                # "not_staged" alone sent the last reader hunting for a selector that was fine.
-                tag = await cdp.send("Runtime.callFunctionOn", {
-                    "objectId": object_id, "returnByValue": True,
-                    "functionDeclaration": "function(){ return this.tagName+"
-                                           "(this.type?('[type='+this.type+']'):''); }"})
-                shape = (tag.get("result") or {}).get("value") or "?"
-                raise RuntimeError(f"upload target resolved to {shape}, not an input[type=file], "
-                                   f"and its container holds none")
+            # NO OBJECT ID => WE COULD NOT LOOK, WHICH IS NOT THE SAME AS "IT IS NOT AN INPUT".
+            # The first cut raised here, and that turned a failed CHECK into a failed UPLOAD —
+            # strictly worse than the false negative this block exists to remove, and it broke
+            # three suites whose CDP double answers every callFunctionOn with one canned payload.
+            # So: use the input when we found one, and otherwise fall through to the node we were
+            # given, exactly as before. The witness poll below is still the judge of whether the
+            # file landed; this block only ever improves the TARGET, never vetoes the act.
             await cdp.send("DOM.setFileInputFiles",
                            {"backendNodeId": upload_node, "files": files})
             await cdp.send("Runtime.callFunctionOn", {
