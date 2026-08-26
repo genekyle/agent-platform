@@ -146,3 +146,58 @@ def test_the_most_specific_hint_wins():
         ("combobox", "Job title, keywords, or company"),
         ("button", "Search")))
     assert got["query"]["name"] == "Job title, keywords, or company"
+
+
+def test_the_home_feed_is_an_appending_surface_with_nothing_to_paginate():
+    """Indeed's front page is a THIRD traversal shape — not a page of results, not a virtualised
+    inner column. Measured live 2026-08-25, session 32: the window scrolls, batches of 15 append at
+    the bottom, and there is no page number to click."""
+    import search_cadence as sc
+
+    t = sc.home_feed_traversal()
+    assert t["appending"] is True and t["virtualised"] is False
+    assert t["scroll_container"] == "window"
+    assert t["batch_size"] == 15
+    # There is nothing to paginate — asking "which page next" is the wrong question on a feed.
+    assert t["paginate_by"] is None
+    # It is a COPY: a caller that edits the traversal must not edit it for everyone.
+    t["batch_size"] = 999
+    assert sc.home_feed_traversal()["batch_size"] == 15
+
+
+def test_the_batch_evidence_is_new_ids_and_never_mere_motion():
+    """Three consecutive wheels moved the window 900px each and rendered NOTHING (doc height flat at
+    3717); the fourth appended 15 and the height jumped to 6906. A walker that read motion as
+    progress would score three empty passes as three reviewed batches."""
+    import search_cadence as sc
+
+    t = sc.home_feed_traversal()
+    assert "new_ids" in t["batch_evidence"]
+    assert "motion alone is not a batch" in t["batch_evidence"]
+    assert "exhausted" in t["stop_scrolling_when"]
+
+
+def test_the_feed_mode_has_no_query_and_bounds_itself():
+    """The one mode with no query, no distance pill and no pagination — Indeed already did the
+    matching. What replaces them is the batch, and a feed that never ends needs a BOUND rather than
+    a termination proof."""
+    import search_cadence as sc
+
+    mode = sc.CADENCE_MODES["suggested_feed_apply"]
+    joined = " ".join(mode["does_not"]).lower()
+    assert "type a query" in joined and "distance filter" in joined
+    assert "unbounded" in joined, "a feed with no measured end must bound its own run"
+    assert "moved" in joined, "motion must not be mistaken for a batch reviewed"
+    # The consequential gate does not relax on this surface either.
+    assert any("per-application" in s or "operator confirm" in s for s in mode["steps"])
+    assert sc.cadence_spec()["modes"] is sc.CADENCE_MODES or "suggested_feed_apply" in sc.cadence_spec()["modes"]
+
+
+def test_the_feed_ships_a_row_that_is_not_a_job():
+    """`data-jk="cdef0123456789ab"` — a literal hex placeholder — renders at height 0. Anything
+    reading [data-jk] directly must drop it, or the cadence opens a card that cannot be clicked."""
+    import search_cadence as sc
+
+    t = sc.home_feed_traversal()
+    assert "cdef0123456789ab" in t["not_a_card"]
+    assert "zero-height" in t["not_a_card"]

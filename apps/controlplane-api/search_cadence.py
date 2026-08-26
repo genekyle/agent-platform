@@ -234,6 +234,79 @@ _DEFAULT_TRAVERSAL = {
 }
 
 
+
+# Indeed's signed-in HOME FEED is a THIRD shape, and neither of the two above describes it. Measured
+# live 2026-08-25, session 32: the front page under "Matches your preferences" is not a page of
+# results and not a virtualised inner column — it is an APPENDING feed. The window scrolls; the
+# cards are ordinary DOM; and when the wheel reaches the bottom the document GROWS and a new batch
+# lands. There is no pagination to click, so `paginate_by` is the wrong question entirely: the list
+# does not turn over, it extends.
+#
+# THE BATCH IS THE UNIT OF REVIEW, and that is the operator's own framing: *"the jobs keep
+# generating as you scroll down, so we select as we scroll down — each one is considered with each
+# scroll we pass."* One `/scroll_job_list` call returns one batch's `new_ids`, which is exactly the
+# unit to triage, so the cadence below reviews a batch at a time rather than "a page".
+#
+# AND `moved` IS NOT EVIDENCE OF A BATCH. Measured: three consecutive wheels moved the window 900px
+# each and rendered NOTHING new (document height flat at 3717), then the fourth hit the bottom and
+# appended 15 while the height jumped to 6906. A walker that treated motion as progress would count
+# three empty passes as three reviewed batches. The evidence is `new_ids` — and the document height
+# growing is the corroborating witness, the same two-witness rule the LinkedIn traversal uses.
+INDEED_HOME_FEED_TRAVERSAL = {
+    "surface": "indeed.com signed-in home — the 'Matches your preferences' feed",
+    "reached_by": "CLICK the Home nav item from wherever the session already is (never a URL jump)",
+    "virtualised": False,
+    "appending": True,                  # the distinguishing property; neither other traversal has it
+    "scroll_container": "window",
+    "scroll_by": "wheel",
+    "scroll_pointer": "over the card column — the list probe reports `kind: 'window'` here, and the "
+                      "cursor still belongs in the column whose content we want rendered",
+    "scroll_endpoint": "/scroll_job_list",
+    #: MEASURED: the card is `div.job_seen_beacon` (492x269) and the id is `data-jk`, carried by the
+    #: title anchor INSIDE it (`a.jcs-JobTitle[role=button]`, 249x23). The id comes from the anchor;
+    #: the BOX comes from the beacon, because hovering a 23px link is not hovering the column.
+    "card_selector": "div.job_seen_beacon (id from the inner a[data-jk])",
+    "card_identity": "data-jk — the same job key Indeed uses everywhere, so it dedupes against "
+                     "rows already gathered from search",
+    "batch_size": 15,
+    "batch_evidence": "NEW `data-jk` ids rendered (`new_ids`), corroborated by the document height "
+                      "growing — motion alone is not a batch",
+    "stop_scrolling_when": "a wheel neither moves the window nor renders a new id (`exhausted`)",
+    "paginate_by": None,                # there is nothing to click; the feed extends
+    #: A TEMPLATE ROW SHIPS WITH THE FEED AND IS NOT A JOB. `data-jk="cdef0123456789ab"` — a literal
+    #: hex placeholder — renders at height 0 with a concatenated title. The list probe's zero-size
+    #: filter already drops it; anything reading `[data-jk]` directly must drop it too, or the
+    #: cadence will try to open a card that cannot be clicked.
+    "not_a_card": "zero-height rows, and the placeholder jk `cdef0123456789ab`",
+    #: CONSIDER FROM THE CARD, OPEN ONLY THE CANDIDATES. Title, company, location, commute, salary
+    #: and the "Easily apply" badge are all ON the card, which is everything the floor-and-fit
+    #: triage needs. Opening all 15 panes per batch would spend a description read on jobs the pay
+    #: floor rejects outright — the resource-efficiency constraint, applied to traversal.
+    "click_into": "shortlist",
+    "click_endpoint": "/open_job_card",
+    "click_by": "trusted CDP click at the card's measured centre (a synthetic .click() does not "
+                "switch the React pane)",
+    "click_evidence": "the pane switched to the id we clicked (`switched`) — the feed AUTO-OPENS "
+                      "the first card, so an unconfirmed click returns the previous job intact",
+    "verified_live": ("2026-08-25, session 32: /scroll_job_list returned kind='window', moved=496 "
+                      "and new_ids=15 on the first call after the reader learned `[data-jk]`; "
+                      "/open_job_card switched=True and read title/company/apply_type/salary plus a "
+                      "3502-char description off the pane."),
+    "still_unverified": ("Where the feed ENDS — seven wheels reached 30 cards without `exhausted`, "
+                         "so the tail is unmeasured and the run needs a bound rather than a "
+                         "termination proof. Whether ids repeat or re-order across batches over a "
+                         "session is unmeasured. And whether dismissing a card (the thumbs-down on "
+                         "each card) changes what later batches surface is unknown — so the cadence "
+                         "below does not touch it."),
+}
+
+
+def home_feed_traversal() -> dict:
+    """How Indeed's front-page suggestion feed must be walked. Separate from `traversal_for`, which
+    answers "how does this ENGINE's results list behave" — this is a different SURFACE on an engine
+    whose results list is already described by the default."""
+    return dict(INDEED_HOME_FEED_TRAVERSAL)
+
 def traversal_for(platform: str) -> dict:
     """How to walk THIS engine's results list — the per-domain half of the sweep.
 
@@ -376,6 +449,60 @@ CADENCE_MODES = {
                      "auto-solve captchas/2FA", "auto-submit without the per-application approval",
                      "open job-detail URLs / churn tabs to browse", "gather below min_radius_miles",
                      "handpick or skip results — the sweep applies to everything it can reach"],
+    },
+    # ---- TASK 4: the FRONT PAGE — a feed, not a search ----------------------
+    # Operator-directed 2026-08-25: *"apply to all of the possible jobs on our suggested page ...
+    # the jobs keep generating as you scroll down, so we select as we scroll down. each one is
+    # considered with each scroll we pass."* This is the one mode with NO QUERY: Indeed has already
+    # done the matching from previous searches, so there is nothing to type, no distance pill to
+    # set, and no page number to click. What replaces all three is the BATCH — see
+    # INDEED_HOME_FEED_TRAVERSAL, which is where the mechanics and their evidence live.
+    #
+    # The pay floor does more work here than anywhere else. A search we ran is bounded by the query
+    # we chose; a feed is bounded by nothing, and it demonstrably surfaces part-time and $1/hr rows
+    # alongside real ones (measured on the first batch). Triage is therefore FROM THE CARD, which
+    # already carries pay, and the floor rejects before a description is ever read.
+    "suggested_feed_apply": {
+        "goal": "Walk the front-page suggestion feed batch by batch: consider every card as it "
+                "arrives, apply to the ones that clear the floor and fit, keep scrolling.",
+        "steps": [
+            "STATE CHECK: signed in, on a fresh Indeed page. Not logged in / a challenge -> "
+            "ESCALATE (never type a password, never auto-solve). Gates everything below.",
+            "Reach the feed by CLICKING the Home nav from wherever the session already is. Never a "
+            "URL jump — same rule as every other surface.",
+            "READ THE FEED'S OWN PREMISE FIRST: the heading states what it is matching on. A feed "
+            "matching the wrong preferences is not a feed to apply from, and that is the operator's "
+            "call to make before any applying, not ours to work around.",
+            "Per BATCH (one /scroll_job_list call = one batch of `new_ids`): consider EVERY new id "
+            "from its CARD — title, company, location/commute, pay, and the Easily-apply badge are "
+            "all on it. Record them all -> observed_jobs (deduped by indeed:<data-jk>).",
+            "Reject on the card where the card is enough: below the pay floor, part-time when "
+            "full-time is wanted, or plainly out of role. A rejection is RECORDED, not silent — the "
+            "rows the floor rejects are exactly the boundary a model would learn from.",
+            "For each survivor: /open_job_card by its data-jk, CONFIRM `switched` (the feed "
+            "auto-opens the first card, so an unconfirmed click reads the previous job), then read "
+            "the pane and decide.",
+            "Apply to the decided set through the ordinary apply cadence — quick-apply drive or the "
+            "cross-site recipe by classify_apply_platform. The final Submit stays a per-application "
+            "operator confirm; batch-approving the FEED authorizes entering an apply, never sending "
+            "one.",
+            "APPLY EPILOGUE per job: close the ONE finished apply tab and refocus the feed tab. "
+            "Returning to the feed must not lose the scroll position — the batch already reviewed "
+            "is above us and re-reviewing it is the repeat this cadence exists to avoid.",
+            "Only when the batch is fully handled: scroll for the NEXT batch. Stop on `exhausted`, "
+            "on the run's bound, or when the operator pauses.",
+        ],
+        "records": ["observed_jobs (every card considered, deduped by indeed:<data-jk>)",
+                    "the floor/fit rejection and its reason (the boundary rows)",
+                    "application_status + provenance, with the feed as the source instead of a query"],
+        "stops_when": "`exhausted`, the run's bound is hit, a live captcha/challenge, logout, the "
+                      "weekly budget cap, or the operator pauses",
+        "does_not": ["type a query or set a distance filter — this surface has neither",
+                     "treat a wheel that MOVED as a batch reviewed",
+                     "open a pane for a card the floor already rejected",
+                     "dismiss (thumbs-down) a card — its effect on later batches is unmeasured",
+                     "auto-submit without the per-application approval",
+                     "run unbounded because the feed is unbounded"],
     },
 }
 

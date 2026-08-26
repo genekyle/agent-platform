@@ -1708,6 +1708,43 @@ _LINKEDIN_CARD_TELLS_JS = r"""
     return pick(document.querySelectorAll('a[href*="/jobs/view/"]'), __idFromHref);
   };
 """
+
+#: INDEED RENDERS A THIRD WAY, AND ONLY THE SCROLLER NEEDS TO KNOW. Measured live 2026-08-25 on
+#: indeed.com's signed-in HOME feed: the card is `div.job_seen_beacon` (492x269) and the job id is
+#: `data-jk` on the title anchor INSIDE it (`a.jcs-JobTitle[role=button]`, 249x23). So the id comes
+#: from the anchor and the BOX comes from the beacon — hovering the anchor would put the cursor on
+#: a 23px-tall link instead of the card column, which is the same "wheel over the wrong thing"
+#: failure the LinkedIn note above was written for.
+#:
+#: Deliberately NOT added to the card READER: that one extracts LinkedIn-shaped fields, and feeding
+#: it Indeed cards would manufacture wrong rows. The list probe only needs {id, el, rect}, which is
+#: exactly what this supplies. Tried AFTER the LinkedIn renderings and never mixed, per the same
+#: rule — a page serves one of these, not two.
+#:
+#: The zero-size filter earns its keep here: Indeed's feed ships a template row whose jk is the
+#: literal placeholder `cdef0123456789ab` at height 0. It is not a job, and a cadence that counted
+#: it would try to open a card that cannot be clicked.
+_INDEED_CARD_TELLS_JS = r"""
+  const __linkedinCards = __cards;
+  const __cardsAny = () => {
+    const li = __linkedinCards();
+    if (li.length) return li;
+    const best = new Map();
+    for (const a of document.querySelectorAll('[data-jk]')) {
+      const id = (a.getAttribute && a.getAttribute('data-jk')) || '';
+      if (!id) continue;
+      const box = (a.closest && a.closest('.job_seen_beacon')) || a;
+      const r = box.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;          // the template row, and anything unrendered
+      const prev = best.get(id);
+      if (!prev || r.width * r.height > prev.rect.width * prev.rect.height) {
+        best.set(id, { id, el: box, rect: r });
+      }
+    }
+    return [...best.values()];
+  };
+"""
+
 _LINKEDIN_JOBS_JS = r"""
 (() => {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
@@ -1916,14 +1953,14 @@ _LINKEDIN_JOBS_JS = r"""
 # `lazy-column` / `SearchResultsMainContent`; anything else under the cursor is the wrong column.
 _LINKEDIN_LIST_PROBE_JS = r"""
 (() => {
-""" + _LINKEDIN_CARD_TELLS_JS + r"""
+""" + _LINKEDIN_CARD_TELLS_JS + _INDEED_CARD_TELLS_JS + r"""
   const vw = window.innerWidth, vh = window.innerHeight;
-  const cards = __cards();
+  const cards = __cardsAny();
   const ids = cards.map((c) => c.id);
   if (!cards.length) {
     return { ok: false, cards: 0, ids: [],
-             reason: 'no job cards on this page (no [componentkey^=job-card-component-ref-] and no '
-                   + 'visible /jobs/view/ anchor)',
+             reason: 'no job cards on this page (no [componentkey^=job-card-component-ref-], '
+                   + 'no [data-jk] card, and no visible /jobs/view/ anchor)',
              hover: { x: Math.round(vw / 2), y: Math.round(vh / 2) } };
   }
 
