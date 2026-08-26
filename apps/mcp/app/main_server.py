@@ -4029,7 +4029,22 @@ _LINKEDIN_CARD_BBOX_JS = r"""
             || document.querySelector(`li[data-occludable-job-id="${esc}"]`)
             || document.querySelector(`div[data-job-id="${esc}"]`)
             || document.querySelector(`[data-entity-urn$=":${esc}"]`);
-  if (!card) return {found:false, reason:'no node for this id (not rendered yet?)'};
+  if (!card) {
+    // WHICH KIND OF MISSING? "not rendered yet" and "not in this list at all" are different facts
+    // with the same symptom, and saying only the first sent a whole session hunting scroll
+    // directions for a card that had been filtered out from under it (2026-08-26, session 34).
+    // Counting what IS rendered separates them for free: a full list that does not contain this id
+    // is a CHANGED RESULT SET, not a row we have yet to scroll to.
+    const rendered = [...document.querySelectorAll(
+        '[role=button][componentkey^="job-card-component-ref-"]')]
+      .map((e) => (e.getAttribute('componentkey') || '').replace('job-card-component-ref-', ''));
+    return {found:false, rendered: rendered.length, rendered_ids: rendered.slice(0, 3),
+            reason: (rendered.length
+              ? `no node for this id, but ${rendered.length} other cards ARE rendered — this row is `
+                + 'either past the rendered window or NOT IN THIS LIST (the result set may have '
+                + 'changed: a filter, a re-query, or a page turn)'
+              : 'no job cards are rendered on this page at all')};
+  }
   const el = card.matches('a') ? card
            : (card.getAttribute('componentkey') ? card
               : (card.querySelector('a[href*="/jobs/view/"]') || card));
@@ -4157,32 +4172,66 @@ async def _bring_card_into_view(cdp, driver, measure, box: Optional[dict] = None
     """Wheel the results list until this card is pressable. Returns (final measurement, batches).
 
     Two cases, one mechanism. If the row is RENDERED but off-screen we know exactly how far to go
-    (`delta_y` from the measurement). If it is not rendered at all — the virtualised list has not
-    reached it — we do not know where it is, so we walk DOWN a batch at a time and re-measure, which
+    (`delta_y` from the measurement, signed — a row above us wheels the list back up). If it is not
+    rendered at all we do not know where it is, so we hunt a batch at a time and re-measure, which
     is what a person scanning the list does. Both are the same humanized wheel over the same column;
     neither touches `scrollTop`.
 
-    Stops as soon as the row is in view, when the list stops moving/growing (`landed=False` — the
-    end, honestly reached), or at `max_batches`. The caller decides what a still-missing card means;
-    this returns the evidence rather than a bare failure.
+    THE HUNT GOES BOTH WAYS. It used to walk only DOWN, on the assumption that a caller works a
+    list top-first and so a missing row is always ahead. That is one-sided in a function whose own
+    contract says "we do not know where it is": a list that evicts the rows it has scrolled past
+    reports a card ABOVE the pointer exactly as it reports one it has not reached — not rendered —
+    and every recovery batch would walk further from it. So a blind hunt that lands nothing turns
+    round ONCE and spends what is left of the budget the other way, and each step records which way
+    it was going, because "we looked and it was not there" is only true if we looked both ways.
+
+    HONESTY ABOUT WHERE THIS CAME FROM, because the diagnosis that produced it was WRONG. It was
+    written while chasing a half-failed live sweep (2026-08-26, session 34, LinkedIn's preferences
+    landing) in which six detail reads returned "no node for this id". That surface turned out to
+    render all 25 cards at once and evict NOTHING — a card ~3000px above the fold was found and
+    opened by the measured-delta path on the first try — and the real cause was the RESULT SET
+    changing underneath the sweep (an Easy-Apply filter flipped between the extract and the detail
+    pass), which reports as "not rendered" too. See the bbox reader, which now separates those two.
+
+    So this is a symmetry repair on a latent assumption, not a fix for anything measured. It costs
+    one bounded batch. Kept because the blind hunt should do what it says it does — and labelled,
+    so nobody later reads it as evidence that eviction-above was ever observed here.
+
+    Stops as soon as the row is in view, when the list stops moving/growing in BOTH directions
+    (`landed=False` after the turn — the end, honestly reached), or at `max_batches`. The caller
+    decides what a still-missing card means; this returns the evidence rather than a bare failure.
     """
     steps: list[dict] = []
     cur = box if box is not None else await measure()
     probe = None
+    hunt, turned = 700.0, False
     for _ in range(max(1, max_batches)):
         if cur.get("found") and cur.get("in_view"):
             return cur, steps
-        # A rendered-but-offscreen row tells us the distance; an unrendered one gets a page-ish
-        # batch downward. Clamped so one measurement error cannot fling the list to the bottom.
-        delta = float(cur.get("delta_y") or 0) if cur.get("found") else 700.0
-        delta = max(-1200.0, min(1200.0, delta or 700.0))
+        # A rendered-but-offscreen row tells us the distance and its sign; an unrendered one gets a
+        # page-ish batch in whichever direction we are currently hunting. Clamped so one
+        # measurement error cannot fling the list to the far end.
+        blind = not cur.get("found")
+        delta = hunt if blind else float(cur.get("delta_y") or 0)
+        delta = max(-1200.0, min(1200.0, delta or hunt))
         step = await _scroll_job_list(cdp, driver=driver, notch_px=delta, settle_seconds=0.7,
                                       before=probe)
-        steps.append({k: step.get(k) for k in ("moved", "landed", "at_end", "detail")})
+        steps.append({**{k: step.get(k) for k in ("moved", "landed", "at_end", "detail")},
+                      "hunting": ("measured" if not blind else
+                                  ("down" if delta > 0 else "up"))})
         probe = step.get("probe")
         cur = await measure()
-        if not step.get("landed"):
-            break
+        if step.get("landed"):
+            continue
+        # The wheel accomplished nothing in this direction. A row we were hunting BLIND may be
+        # behind us — evicted because we scrolled past it — so turn round once and spend what is
+        # left of the budget looking the other way. A row with a measured distance needs no such
+        # guess: its delta already carries the direction, and a wheel that will not move for it is
+        # the end of the list, not a wrong turn.
+        if blind and not turned:
+            turned, hunt = True, -hunt
+            continue
+        break
     return cur, steps
 
 

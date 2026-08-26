@@ -151,20 +151,49 @@ def test_a_rendered_but_offscreen_card_is_wheeled_by_the_measured_distance():
     assert cdp.mouse("mouseWheel")[0]["deltaY"] == 1000.0   # the distance it measured, not a guess
 
 
-def test_an_unrendered_card_is_hunted_downward_and_gives_up_honestly():
-    """The virtualised list has not reached the row, so there is no distance to use — we walk down a
-    batch at a time like a person scanning. When the list stops moving we stop, and the caller gets
-    the batches as evidence instead of a bare "not found"."""
+def test_an_unrendered_card_is_hunted_BOTH_WAYS_and_gives_up_honestly():
+    """The virtualised list has not reached the row, so there is no distance to use — we walk a
+    batch at a time like a person scanning. When the list stops moving we turn round ONCE and look
+    the other way; when that stops too we stop, and the caller gets the batches as evidence instead
+    of a bare "not found". Two batches, not five: giving up is allowed, but only after both ways."""
     from app.main_server import _bring_card_into_view
 
     async def measure():
         return {"found": False, "reason": "no node for this id (not rendered yet?)"}
 
     stuck = _probe(at=3000, cards=7, ids=["a"], at_end=True)
-    cdp = FakeCDP(probes=[stuck, dict(stuck)])
+    cdp = FakeCDP(probes=[stuck, dict(stuck), dict(stuck)])
     box, steps = asyncio.run(_bring_card_into_view(cdp, DirectDriver(), measure, max_batches=5))
     assert box["found"] is False
-    assert len(steps) == 1 and steps[0]["landed"] is False   # stopped at the end, not after 5 tries
+    assert [s["landed"] for s in steps] == [False, False]
+    assert [s["hunting"] for s in steps] == ["down", "up"]   # looked both ways before saying no
+
+
+def test_a_card_ABOVE_the_pointer_is_found_by_turning_round():
+    """The blind hunt looks both ways. A list that evicts the rows it has scrolled past reports a
+    card ABOVE the pointer exactly as it reports one it has not reached yet — not rendered — so a
+    hunt that only ever walks DOWN can never reach it.
+
+    PROVENANCE, HONESTLY: written while chasing a half-failed live sweep (2026-08-26, session 34)
+    whose six "no node for this id" failures looked exactly like this and WERE NOT. That surface
+    renders all 25 cards at once and evicts nothing; the result set had changed underneath the
+    sweep. So this pins a latent asymmetry, not an observed failure — and the case it guards
+    against has never been seen live on either engine."""
+    from app.main_server import _bring_card_into_view
+
+    measures = [{"found": False, "reason": "no node for this id (not rendered yet?)"},
+                {"found": False, "reason": "no node for this id (not rendered yet?)"},
+                {"found": True, "in_view": True, "x": 300, "y": 400, "delta_y": 0}]
+
+    async def measure():
+        return measures.pop(0)
+
+    bottom = _probe(at=2800, cards=25, at_end=True)     # downward is spent: we are at the end
+    cdp = FakeCDP(probes=[bottom, dict(bottom), _probe(at=1600, cards=25)])
+    box, steps = asyncio.run(_bring_card_into_view(cdp, DirectDriver(), measure, max_batches=5))
+    assert box["found"] is True and box["in_view"] is True
+    assert [s["hunting"] for s in steps] == ["down", "up"]
+    assert [w["deltaY"] for w in cdp.mouse("mouseWheel")] == [700.0, -700.0]
 
 
 def test_a_move_measured_on_two_different_containers_is_not_a_move():

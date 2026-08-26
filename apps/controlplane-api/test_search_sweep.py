@@ -490,6 +490,40 @@ def test_the_detail_cap_reports_what_it_dropped(monkeypatch):
     assert r["details_skipped_by_cap"] == 1
 
 
+def test_a_detail_read_that_FAILED_is_counted_and_explained(monkeypatch):
+    """THE HALF-FAILED SWEEP (live 2026-08-26, session 34). Six of twelve `/open_job_card` calls
+    came back `card <id> not found` — the list had scrolled past the row and the blind hunt walked
+    the wrong way — and the run reported `descriptions_captured: 6` with nothing else. That number
+    is indistinguishable from a cap doing its job, and `/open_job_card` is not journaled, so the
+    swallow here was the only record that would ever have existed. A failure has to be counted
+    separately from a card we chose not to open, and it has to carry the engine's own reason."""
+    def capture(path, b):
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True}
+        if path == "/extract_jobs":
+            return {"ok": True, "jobs": _CARDS}
+        if path == "/open_job_card":
+            return {"ok": False, "detail": f"card {(b or {}).get('external_id')} not found "
+                                           f"(no node for this id (not rendered yet?))"}
+        if path == "/next_page":
+            return {"ok": True, "has_next": False}
+        return {"ok": True}
+
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=capture, db=_both_rows("linkedin"))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    assert r["descriptions_captured"] == 0
+    assert r["details_failed"] == len(_CARDS)          # every attempt, not just the ones we saw
+    assert r["details_skipped_by_cap"] == 0            # and NOT reported as a cap
+    assert "not rendered yet" in r["detail_failures"][0]["detail"]
+    assert r["detail_failures"][0]["page"] == 1
+
+
 def test_a_sweep_does_not_stop_over_a_filter_the_engine_does_not_have(monkeypatch):
     """The distance gate is the FIRST thing the sweep does, so on LinkedIn it stopped the run
     before a single card was read — enforcing a 50-mile floor about a widget that does not exist

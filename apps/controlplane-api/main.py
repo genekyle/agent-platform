@@ -2049,7 +2049,15 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
         return random.uniform(pace_base, pace_base + extra)
 
     pages_swept = total_found = total_new = total_short = total_desc = total_uncapped = 0
+    total_failed = 0
     scroll_log: list[dict] = []
+    #: WHY A DETAIL READ DID NOT HAPPEN, in the engine's own words. A sweep that opened six cards
+    #: and lost six more reported "descriptions_captured: 6" and nothing else, which is
+    #: indistinguishable from a cap doing its job (live 2026-08-26, session 34: every failure was
+    #: `card <id> not found` and none of it reached the operator, the summary, or any journal —
+    #: /open_job_card is not a journaled endpoint, so the swallow here was the ONLY record there
+    #: would have been). Bounded: the count is complete, the reasons are a sample.
+    detail_failures: list[dict] = []
     shortlist_refs: list[str] = list(bb.search_state.shortlist or [])
     stopped_reason = "max_pages"
     # The search is the query, the session is the browser (2026-08-10): one Search row for this
@@ -2117,6 +2125,12 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
                 if jid not in shortlist_refs:
                     shortlist_refs.append(jid)
                 db.commit()
+            else:
+                total_failed += 1
+                if len(detail_failures) < 6:
+                    detail_failures.append(
+                        {"page": pages_swept, "external_id": card.get("external_id"),
+                         "detail": (d.get("detail") or "")[:200]})
             await asyncio.sleep(_jitter(2.0))
 
         # SIGNATURE BEFORE THE CLICK, on a SPA. Indeed navigates to the next page, so a pause is a
@@ -2154,7 +2168,8 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     bb.log("sweep", f"{platform}: {query!r} @ {min_miles}mi: {pages_swept}p, {total_found} found, "
                     f"{total_desc} descriptions ({stopped_reason})"
                     + (f"; {total_uncapped} cards left unopened by max_details_per_page="
-                       f"{body.max_details_per_page}" if total_uncapped else ""))
+                       f"{body.max_details_per_page}" if total_uncapped else "")
+                    + (f"; {total_failed} detail reads FAILED" if total_failed else ""))
     store.save(bb)
     return {"ok": True, "stopped_reason": stopped_reason, "pages_swept": pages_swept,
             "jobs_found": total_found, "new": total_new, "shortlisted": total_short,
@@ -2164,6 +2179,9 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
             # What the engine's traversal asked for, and what the caps actually allowed.
             "click_into": traversal.get("click_into"),
             "details_skipped_by_cap": total_uncapped,
+            # ...and what was ATTEMPTED and lost, which the cap number cannot say.
+            "details_failed": total_failed,
+            "detail_failures": detail_failures,
             "scroll": scroll_log}
 
 
