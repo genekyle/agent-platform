@@ -867,6 +867,21 @@ def _process_of(bb) -> str:
 
 
 
+
+def _cards_tab(bb, obs: dict[str, Any]) -> dict[str, Any]:
+    """The tab that actually HAS the result cards for the process being run.
+
+    A search's cards are on its results page; a feed's are on the feed. `search_tab` answers only
+    the first — its marker is `indeed.com/jobs` — so on a feed it correctly returns nothing, and a
+    caller that stopped there aimed the card lookup at a tab that never held the card. Measured
+    2026-08-26, and the refusal was the good kind: *"No target whose URL contains
+    'indeed.com/jobs' … Refusing to fall back to another tab"*.
+    """
+    if _process_of(bb) == cps.FEED_PROCESS:
+        return next((t for t in (obs.get("tabs") or [])
+                     if _is_feed_url(str(t.get("url") or ""))), {}) or {}
+    return obs.get("search_tab") or {}
+
 def _unit_word(bb) -> str:
     """What this process calls its review unit, for anything a human reads."""
     return "Batch" if _process_of(bb) == cps.FEED_PROCESS else "Page"
@@ -6205,6 +6220,16 @@ def _title_matches(expected: str, seen: str) -> bool:
 
 class ApplyStepBody(BaseModel):
     initiator: str = "operator"
+    #: THE GATE'S OWN EVIDENCE. `initiator` cannot serve as it: it DEFAULTS to "operator", so an
+    #: empty body asserted that the human pressed Submit when nobody had. Measured 2026-08-26 —
+    #: `apply_step {}` walked an application to the review screen and pressed "Submit your
+    #: application" with no confirmation anywhere in the loop. A field that defaults to "the human
+    #: did this" is not evidence the human did anything.
+    #:
+    #: So the one irreversible rung needs an affirmative that CANNOT be reached by omission. Every
+    #: other rung is unaffected: this is read only at the submit gate, and stepping the rest of an
+    #: application never needs it.
+    confirm_submit: bool = False
     #: Optional ASSERTION of which application the caller believes it is working. The queue is
     #: sequential — `queue.current()` decides, not the caller — but a caller that names a job and
     #: is silently handed a different one is the wrong-job failure waiting to happen. Passing
@@ -6415,14 +6440,15 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # results page all along and this reported "card data-jk=… not found", which reads as a
         # rotated listing rather than a misaddressed click (live 2026-07-27, with the submitted
         # iCIMS tab still open). The search tab is the only document that HAS result cards.
-        search_tab = (obs.get("search_tab") or {})
+        cards_tab = _cards_tab(bb, obs)
         res = await _capture_post("/open_job_card",
                                   {"browser_url": browser_url, "external_id": ext,
-                                   "tab_id": search_tab.get("tab_id") or None,
-                                   # THIS engine's search tab. Naming Indeed's here sent a
-                                   # LinkedIn card lookup at an Indeed page, where it could only
-                                   # ever report the card missing.
-                                   "tab_url": None if search_tab.get("tab_id")
+                                   "tab_id": cards_tab.get("tab_id") or None,
+                                   # THIS engine's card list. Naming Indeed's search tab here sent
+                                   # a LinkedIn card lookup at an Indeed page, where it could only
+                                   # ever report the card missing — and on a FEED it named a
+                                   # results page the feed's cards were never on.
+                                   "tab_url": None if cards_tab.get("tab_id")
                                    else _search_focus_url(bb, obs)})
         if not res.get("ok"):
             step.record("open_pane", aps.FAILED, res.get("detail") or "card did not open",
@@ -6783,6 +6809,17 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                         f"refused: {body.initiator!r} may not submit an application",
                         initiator=body.initiator)
             detail = ("Submitting is the operator's, on every platform, always. Nothing was sent.")
+        elif not body.confirm_submit:
+            # AND THE AFFIRMATIVE MUST BE EXPLICIT. The check above passed on a DEFAULT for months:
+            # `initiator` is "operator" unless someone says otherwise, so a bare `apply_step {}`
+            # read as the human pressing send. Refusing here costs one deliberate call and is the
+            # difference between an application the operator chose to send and one that happened.
+            step.record("submit", aps.HUMAN_REQUIRED,
+                        "held at the gate — awaiting the operator's explicit confirmation",
+                        initiator=body.initiator)
+            detail = (f"At the Submit gate for {step.title or step.job_id}. Nothing was sent. "
+                      f"This is the irreversible step, so it needs an explicit confirmation rather "
+                      f"than a defaulted one — step again with confirm_submit=true to send it.")
         else:
             _ok, detail = await _work_submit_rung(step, bb, obs, browser_url, style,
                                                   initiator=body.initiator, acted=_acted)

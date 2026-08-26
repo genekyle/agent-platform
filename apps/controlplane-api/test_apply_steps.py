@@ -604,3 +604,23 @@ def test_the_grind_counter_counts_the_streak_not_the_history():
     # And a fresh mismatch after the OK starts a NEW streak of one.
     step.record("advance", aps.MISMATCH, "new page, new problem")
     assert step.stall_count("advance") == 1
+
+
+def test_the_submit_gate_cannot_be_reached_by_omission():
+    """THE GUARD THAT PASSED ON A DEFAULT. The submit rung refused any initiator that was not the
+    operator — but `initiator` DEFAULTS to "operator", so a bare `apply_step {}` asserted that the
+    human pressed send when nobody had. Measured live 2026-08-26: a feed application walked to the
+    review screen and "Submit your application" was pressed with no confirmation in the loop.
+
+    A field that defaults to "the human did this" is not evidence the human did anything, so the
+    one irreversible rung now needs an affirmative that cannot be reached by leaving it out.
+    """
+    from routers.session_control import ApplyStepBody
+
+    # The shape that pressed Submit.
+    assert ApplyStepBody().confirm_submit is False
+    assert ApplyStepBody().initiator == "operator", "the default that could not serve as consent"
+    # Only an explicit affirmative opens the gate.
+    assert ApplyStepBody(confirm_submit=True).confirm_submit is True
+    # And it is not something a stray string can satisfy by truthiness at the boundary.
+    assert ApplyStepBody(confirm_submit=False).confirm_submit is False
