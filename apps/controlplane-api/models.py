@@ -496,6 +496,13 @@ class Search(Base):
     query: Mapped[str] = mapped_column(String(300), default="", index=True)
     location: Mapped[str] = mapped_column(String(300), default="")
     radius_miles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    #: THE FILTERS THIS SET WAS GATHERED UNDER, as the engine's own URL states them
+    #: (`{"f_AL": "true", "keywords": "…"}`, JSON). Provenance travels WITH the data or it is not
+    #: provenance: on 2026-08-26 an Easy-Apply filter turned on mid-sweep and 23 rows landed under a
+    #: row claiming nothing about it, and there was no column in which that could have been noticed.
+    #: Written once, at creation, from the live results URL — never overwritten, because a filter
+    #: that changed later is a DIFFERENT set and the sweep's job is to stop, not to relabel.
+    filters: Mapped[str] = mapped_column(String, default="")
     #: active | exhausted | abandoned — set by the ladder/operator; re-declaring the same query
     #: while active reuses the row rather than minting a twin.
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)

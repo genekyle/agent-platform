@@ -2063,9 +2063,10 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
     # The search is the query, the session is the browser (2026-08-10): one Search row for this
     # sweep's tuple, so every page's sightings join it and the sweep is queryable afterwards.
     import searches as searches_mod
-    sweep_search = searches_mod.ensure_active_search(
-        db, session_id=body.training_session_id, engine=platform,
-        query=query, location=location, radius_miles=min_miles)
+    #: THE SET WE AGREED TO GATHER, in the engine's own words — filled from the first extract's URL
+    #: below, then defended on every page. Until then it is empty, which reads as "no claim".
+    baseline: dict = {}
+    sweep_search = None
     for _ in range(max_pages):
         # `/extract_jobs` walks a virtualised list itself (wheel over the list column, re-read until
         # it stops growing) and reports what the scrolling did in `meta.scroll`. That is carried out
@@ -2079,6 +2080,27 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
         if scroll_meta:
             scroll_log.append({"page": pages_swept + 1, "batches": scroll_meta.get("batches"),
                                "moved": scroll_meta.get("moved"), "cards": len(cards)})
+        # WHICH SET IS THIS? Read off the engine's own URL, which /extract_jobs already returns.
+        # The first page teaches it; every page after is checked against it, because a result set
+        # that changed identity mid-run is a different search and its rows must not join this one.
+        identity = search_cadence.result_set_identity(ex.get("url") or "", platform)
+        if not baseline and identity:
+            baseline = identity
+            bb.world["result_set"] = dict(baseline)
+        drift = search_cadence.result_set_drift(baseline, identity)
+        if drift["changed"]:
+            store.save(bb)
+            return _sweep_stop("result_set_changed", platform=platform, pages_swept=pages_swept,
+                               jobs_found=total_found, new=total_new,
+                               descriptions_captured=total_desc,
+                               result_set={"agreed": baseline, "found": identity},
+                               detail=drift["detail"])
+        # The row is minted only once we know what set it names — a Search row that cannot say
+        # which filters produced it is the hole this whole guard exists to close.
+        if sweep_search is None:
+            sweep_search = searches_mod.ensure_active_search(
+                db, session_id=body.training_session_id, engine=platform,
+                query=query, location=location, radius_miles=min_miles, filters=baseline)
         new_c, _dup = upsert_observed_jobs(db, cards, platform, query,
                                            search=sweep_search, page=pages_swept + 1)
         db.commit()
@@ -2105,6 +2127,29 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
         # that asked for every card, and a summary reading "25 found, 8 descriptions" looks like
         # success. Count what the cap dropped and return it.
         total_uncapped += max(0, len(to_open) - body.max_details_per_page)
+
+        # AND AGAIN BEFORE SPENDING A SINGLE CLICK. This is the exact seam that failed on
+        # 2026-08-26: the filter flipped BETWEEN the extract and the detail pass, so the page's
+        # identity was still right when the cards were read and wrong by the time they were
+        # clicked. One cheap read-only signature is the whole price of not finding that out six
+        # failed opens later — and of not attributing the next page to this search.
+        # SPA ONLY, and gated on the same discriminator as the other two signature calls: a page
+        # that NAVIGATES cannot change its result set without a load, and nothing between the
+        # extract and the detail pass navigates — so on Indeed this round trip would buy an answer
+        # that the next extract's URL already gives for free.
+        if is_spa and to_open[:body.max_details_per_page]:
+            sig_now = await _capture_post("/results_signature",
+                                          {"browser_url": browser_url, "tab_url": search_tab})
+            live = search_cadence.result_set_identity(
+                (sig_now.get("signature") or {}).get("url") or "", platform)
+            drift = search_cadence.result_set_drift(baseline, live)
+            if drift["changed"]:
+                store.save(bb)
+                return _sweep_stop("result_set_changed", platform=platform,
+                                   pages_swept=pages_swept, jobs_found=total_found, new=total_new,
+                                   descriptions_captured=total_desc,
+                                   result_set={"agreed": baseline, "found": live},
+                                   detail=drift["detail"] + " — caught before the detail pass")
 
         # CLICK INTO each card (in-page pane) to grab the full description.
         for card in to_open[:body.max_details_per_page]:
@@ -2155,6 +2200,18 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
             settled = await _capture_post("/await_results",
                                           {"browser_url": browser_url, "tab_url": search_tab,
                                            "before": sig_before}, timeout=40.0)
+            turned = search_cadence.result_set_identity(
+                (settled.get("signature") or {}).get("url") or "", platform)
+            drift = search_cadence.result_set_drift(baseline, turned)
+            if drift["changed"]:
+                # The click advanced onto a DIFFERENT set. Stopping keeps the rows already banked
+                # honest; extracting would file someone else's search under this one.
+                store.save(bb)
+                return _sweep_stop("result_set_changed", platform=platform,
+                                   pages_swept=pages_swept, jobs_found=total_found, new=total_new,
+                                   descriptions_captured=total_desc,
+                                   result_set={"agreed": baseline, "found": turned},
+                                   detail=drift["detail"] + " — the page turn landed on another set")
             if not settled.get("changed"):
                 # Positive evidence the click did NOT land. Stopping here keeps the run honest:
                 # the alternative is extracting the page we just recorded and counting it twice.
@@ -2182,6 +2239,8 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
             # ...and what was ATTEMPTED and lost, which the cap number cannot say.
             "details_failed": total_failed,
             "detail_failures": detail_failures,
+            # The set these rows belong to, so the summary itself carries the provenance.
+            "result_set": baseline,
             "scroll": scroll_log}
 
 

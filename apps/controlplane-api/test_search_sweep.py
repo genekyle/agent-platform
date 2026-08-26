@@ -524,6 +524,84 @@ def test_a_detail_read_that_FAILED_is_counted_and_explained(monkeypatch):
     assert r["detail_failures"][0]["page"] == 1
 
 
+# --- the result set has to stay the same set ----------------------------------------------
+# THE CONTAMINATION (live 2026-08-26, session 34). Between a page's extract and its detail pass,
+# LinkedIn's Easy-Apply filter turned on. The six cards the pass then hunted were no longer in the
+# list, every open failed, and the run carried on and banked 23 rows from a DIFFERENT result set
+# under a Search row that said nothing about any filter. /results_signature could not catch it: it
+# answers "are these different cards", and a page turn answers yes too.
+def test_a_filter_that_flips_between_the_extract_and_the_detail_pass_stops_the_sweep(monkeypatch):
+    """The exact seam that failed. The cards are read from an unfiltered list, the signature taken
+    before the first click says f_AL=true, and the run must stop THERE — before spending six clicks
+    hunting rows that are gone, and before attributing anything else to this search."""
+    calls: list[str] = []
+
+    def capture(path, _b):
+        calls.append(path)
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True}
+        if path == "/extract_jobs":
+            return {"ok": True, "jobs": _CARDS,
+                    "url": "https://www.linkedin.com/jobs/search-results/?keywords=analyst&start=0"}
+        if path == "/results_signature":       # …and by now the filter is on
+            return {"ok": True, "signature": {"url": "https://www.linkedin.com/jobs/search-results/"
+                                                     "?keywords=analyst&f_AL=true&start=0"}}
+        return {"ok": True}
+
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=capture, db=_both_rows("linkedin"))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    assert r["ok"] is False and r["stopped_reason"] == "result_set_changed"
+    assert "f_AL" in r["detail"] and "caught before the detail pass" in r["detail"]
+    assert r["result_set"]["found"]["f_AL"] == "true"
+    assert "/open_job_card" not in calls, "spent clicks on a list that had already changed"
+    # the page that WAS read honestly still counts — stopping is not discarding
+    assert r["jobs_found"] == len(_CARDS)
+
+
+def test_the_sweep_records_the_filters_its_rows_were_gathered_under(monkeypatch):
+    """Provenance travels WITH the data or it is not provenance. The Search row is minted only once
+    the sweep knows which set it names, and it is minted with that set."""
+    seen: dict = {}
+    import searches as searches_mod
+    real = searches_mod.ensure_active_search
+    monkeypatch.setattr(searches_mod, "ensure_active_search",
+                        lambda *a, **k: (seen.update(k), real(*a, **k))[1])
+
+    def capture(path, _b):
+        if path == "/auth_state":
+            return {"ok": True, "logged_in": True}
+        if path == "/extract_jobs":
+            return {"ok": True, "jobs": _CARDS,
+                    "url": "https://www.linkedin.com/jobs/search-results/?keywords=analyst"
+                           "&f_AL=true&f_TPR=r604800&start=0&currentJobId=99&trackingId=xy"}
+        if path == "/results_signature":
+            return {"ok": True, "signature": {"url": "https://www.linkedin.com/jobs/search-results/"
+                                                     "?keywords=analyst&f_AL=true&f_TPR=r604800"
+                                                     "&start=25&currentJobId=41"}}
+        if path == "/next_page":
+            return {"ok": True, "has_next": False}
+        return {"ok": True}
+
+    _install(monkeypatch, tabs=[{"url": "https://www.linkedin.com/jobs/search"}], block=None,
+             capture=capture, db=_both_rows("linkedin"))
+    try:
+        r = client.post("/api/search/sweep",
+                        json={"training_session_id": 1, "domain_id": "linkedin_jobs",
+                              "query": "reporting analyst"}).json()
+    finally:
+        _teardown()
+    # position and tracking params are NOT identity — otherwise every page turn is a new search
+    assert seen["filters"] == {"f_AL": "true", "f_TPR": "r604800", "keywords": "analyst"}
+    assert r["result_set"] == seen["filters"]
+    assert r["stopped_reason"] == "no_next_page"     # start=25 vs start=0 is not drift
+
+
 def test_a_sweep_does_not_stop_over_a_filter_the_engine_does_not_have(monkeypatch):
     """The distance gate is the FIRST thing the sweep does, so on LinkedIn it stopped the run
     before a single card was read — enforcing a 50-mile floor about a widget that does not exist

@@ -11,7 +11,7 @@ cadence we follow by hand. Exposed at GET /api/search/cadence.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 # Bounds keep the cadence SAFE + human-paced (see feedback_bot_safety_live_sessions):
 # don't sweep endlessly, don't churn tabs, reach apply pages like a human.
@@ -522,6 +522,83 @@ CADENCE_MODES = {
 # (project_application_is_cross_site: Workday majority, but many others.) The ATS host map and the
 # per-ATS structure now live in ats_registry.py (each ATS is domain-like, with company→ATS
 # generalization); this function delegates so there's ONE source of truth for "which ATS is this."
+# --- WHICH RESULT SET IS ON SCREEN — the witness /results_signature could never be -------------
+# THE FAILURE THIS EXISTS TO STOP (measured live 2026-08-26, session 34). A sweep extracted page 1,
+# and between that read and the detail pass the page's Easy-Apply filter turned on. The six cards it
+# then went looking for were no longer in the list, every open returned "not found", and the run
+# carried on to page 2 and banked 23 rows from a DIFFERENT result set under a `Search` row that says
+# nothing about any filter. Nothing raised, and nothing could have: the sweep's only guard is
+# `/results_signature`, which answers *"are these different cards than before"* — and a page turn and
+# a filter flip both answer yes. It is the right witness for "did the click land" and the wrong one
+# for "is this still the same search".
+#
+# The engine already tells us, in the one place we were not reading: its own URL. LinkedIn writes
+# `f_AL=true` when Easy Apply is on; Indeed writes `radius`, `fromage`, `jt`. So the identity of a
+# result set is its query terms plus its filters — and everything else in a results URL is either
+# POSITION (`start`, `currentJobId`, `vjk`) or tracking noise (`eBP`, `refId`, `trackingId`), which
+# must not count as drift or every page turn would read as a new search.
+#
+# `origin` is deliberately NOT identity, and that is a judgement worth writing down: it names the
+# ROUTE that produced the set (PREFERENCES_LANDING, JOBS_HOME_SEARCH, GLOBAL_SEARCH_HEADER), it is
+# rewritten as you interact, and we have exactly one measurement of it surviving a page turn. Making
+# it identity would trade today's silent contamination for a sweep that stops on nothing.
+_POSITION_PARAMS = frozenset({
+    "start", "page", "pageNum", "from", "vjk", "currentJobId", "refId", "trackingId", "eBP",
+    "referralSearchId", "origin", "position", "pageNum", "originToLandingJobPostings",
+})
+
+#: What DEFINES the set, per engine. The `f_` prefix rule matters more than the enumeration: the
+#: filter that bit us (`f_AL`) would have been caught by the prefix even though nothing had ever
+#: written it down, and an engine keeps shipping filters we have not met.
+_RESULT_SET_PARAMS: dict[str, frozenset[str]] = {
+    "linkedin": frozenset({"keywords", "geoId", "location", "distance", "sortBy"}),
+    "indeed": frozenset({"q", "l", "radius", "fromage", "jt", "explvl", "salaryType",
+                         "remotejob", "sc"}),
+}
+_FILTER_PREFIXES: dict[str, tuple[str, ...]] = {"linkedin": ("f_",), "indeed": ()}
+
+
+def result_set_identity(url: str, platform: str = DEFAULT_SEARCH_PLATFORM) -> dict[str, str]:
+    """The params that say WHICH result set this is — query terms and filters, never position.
+
+    Sorted so two identities compare as dicts and store as a stable string. An unknown engine gets
+    an empty identity, which is the safe direction: it claims nothing rather than inventing drift
+    out of params it does not understand.
+    """
+    from urllib.parse import parse_qsl, urlparse
+
+    plat = (platform or "").strip().lower()
+    known = _RESULT_SET_PARAMS.get(plat, frozenset())
+    prefixes = _FILTER_PREFIXES.get(plat, ())
+    out: dict[str, str] = {}
+    for key, value in parse_qsl(urlparse(url or "").query, keep_blank_values=True):
+        if key in _POSITION_PARAMS:
+            continue
+        if key in known or (prefixes and key.startswith(prefixes)):
+            out[key] = value
+    return dict(sorted(out.items()))
+
+
+def result_set_drift(before: dict[str, str], after: dict[str, str]) -> dict[str, Any]:
+    """Did the result set change identity between two reads? Names WHICH params, in the engine's
+    own vocabulary, because "the result set changed" is not actionable and "f_AL: '' -> 'true'" is.
+
+    An empty `after` is not drift: an identity is only readable from a results URL, and a read that
+    caught the tab mid-navigation should not stop a sweep that is otherwise fine.
+    """
+    if not after:
+        return {"changed": False, "changes": {}, "detail": "no identity readable on this URL"}
+    changes = {k: {"before": before.get(k, ""), "after": after.get(k, "")}
+               for k in sorted(set(before) | set(after))
+               if before.get(k, "") != after.get(k, "")}
+    if not changes:
+        return {"changed": False, "changes": {}, "detail": ""}
+    return {"changed": True, "changes": changes,
+            "detail": "the result set changed identity: "
+                      + "; ".join(f"{k}: {v['before']!r} -> {v['after']!r}"
+                                  for k, v in changes.items())}
+
+
 def classify_apply_platform(url: str) -> str:
     """Map an apply destination URL to its ATS platform id (see ats_registry.classify_ats).
     Unknown external host = 'company_site'; empty = 'unknown'. Drives which per-platform apply

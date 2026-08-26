@@ -229,3 +229,71 @@ def test_the_feed_is_a_process_inside_the_session_not_a_new_one():
     assert any("new session" in d for d in mode["does_not"])
     assert any("ensure_active_feed" in s for s in mode["steps"]), \
         "the mode must name the process it opens, or nothing attributes its sightings"
+
+
+# --- which result set is on screen ----------------------------------------------------------
+# The URLs here are VERBATIM from the live drive that produced this code (2026-08-26, session 34),
+# trimmed of the eBP blob. That matters: the failure was a filter nobody had written down, so the
+# reader is tested against what the engine actually shipped, not against a tidy invention.
+_LIVE_BEFORE = ("https://www.linkedin.com/jobs/search-results/?currentJobId=4440270103"
+                "&refId=cXuPiw6FRjUyEsMLRxs15g%3D%3D&trackingId=T0yoEAb%2Bl1FOw%2FUNlo%2Fmhg%3D%3D"
+                "&keywords=Software%20Engineer%20or%20Frontend%20Web%20Developer"
+                "&origin=PREFERENCES_LANDING&geoId=90000049%2C90000070%2C102354641")
+_LIVE_AFTER = ("https://www.linkedin.com/jobs/search-results/?currentJobId=4439354063&f_AL=true"
+               "&geoId=90000049%2C90000070%2C102354641"
+               "&keywords=Software%20Engineer%20or%20Frontend%20Web%20Developer"
+               "&origin=PREFERENCES_LANDING&referralSearchId=cXuPiw6FRjUyEsMLRxs15g%3D%3D&start=50")
+
+
+def test_the_identity_is_the_query_and_the_filters_never_the_position():
+    """A page turn must not read as a new search, or the guard stops every healthy sweep on page 2.
+    `start`, `currentJobId` and the tracking blobs are position; `keywords` and `geoId` are not."""
+    ident = sc.result_set_identity(_LIVE_BEFORE, "linkedin")
+    assert set(ident) == {"keywords", "geoId"}
+    assert ident["geoId"] == "90000049,90000070,102354641"
+    for positional in ("currentJobId", "refId", "trackingId", "start", "origin"):
+        assert positional not in ident
+
+
+def test_the_filter_that_bit_us_is_caught_by_the_PREFIX_not_the_enumeration():
+    """`f_AL` had never been written down anywhere in this repo when it flipped mid-sweep. An
+    enumeration of known filters would have missed it exactly as everything else did; the `f_`
+    prefix is what makes the reader catch a filter it has never met."""
+    assert "f_AL" not in sc._RESULT_SET_PARAMS["linkedin"]        # deliberately not enumerated
+    assert sc.result_set_identity(_LIVE_AFTER, "linkedin")["f_AL"] == "true"
+
+
+def test_the_live_flip_reads_as_drift_and_names_the_param():
+    """The whole point: the two URLs the drive actually produced, and a verdict that says which
+    param changed rather than "the result set changed"."""
+    before = sc.result_set_identity(_LIVE_BEFORE, "linkedin")
+    after = sc.result_set_identity(_LIVE_AFTER, "linkedin")
+    drift = sc.result_set_drift(before, after)
+    assert drift["changed"] is True
+    assert list(drift["changes"]) == ["f_AL"]
+    assert "f_AL" in drift["detail"] and "'true'" in drift["detail"]
+
+
+def test_paging_the_same_search_is_not_drift():
+    """start=0 -> start=50 with everything else equal is the healthy case, and it has to stay
+    silent — a guard that fires on it is worse than no guard, because it stops real sweeps."""
+    paged = _LIVE_BEFORE.replace("currentJobId=4440270103", "currentJobId=4439354063") + "&start=50"
+    before = sc.result_set_identity(_LIVE_BEFORE, "linkedin")
+    assert sc.result_set_drift(before, sc.result_set_identity(paged, "linkedin"))["changed"] is False
+
+
+def test_indeeds_own_filters_are_identity_too():
+    """The guard is not LinkedIn's: Indeed states its radius and recency in the URL the same way."""
+    a = sc.result_set_identity("https://www.indeed.com/jobs?q=analyst&l=Nashua&radius=50", "indeed")
+    b = sc.result_set_identity("https://www.indeed.com/jobs?q=analyst&l=Nashua&radius=25&start=10",
+                               "indeed")
+    assert a == {"q": "analyst", "l": "Nashua", "radius": "50"}
+    assert sc.result_set_drift(a, b)["changes"]["radius"] == {"before": "50", "after": "25"}
+
+
+def test_an_unreadable_url_claims_nothing_rather_than_inventing_drift():
+    """A read that caught the tab mid-navigation returns no identity, and an empty identity must not
+    stop a sweep that is otherwise fine — silence is not evidence of change."""
+    before = sc.result_set_identity(_LIVE_BEFORE, "linkedin")
+    assert sc.result_set_drift(before, sc.result_set_identity("", "linkedin"))["changed"] is False
+    assert sc.result_set_identity(_LIVE_AFTER, "some_engine_we_have_never_driven") == {}

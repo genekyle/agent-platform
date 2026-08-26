@@ -90,6 +90,11 @@ def migrate_schema() -> None:
         # what this table already modelled, so it got a discriminator rather than a twin table.
         ("searches", "kind", "VARCHAR(20) NOT NULL DEFAULT 'query'"),
         ("searches", "surface", "VARCHAR(60) NOT NULL DEFAULT ''"),
+        # searches: the FILTERS the set was gathered under (v21), as the engine's own URL states
+        # them. A filter that flips mid-sweep is invisible to /results_signature — it answers "are
+        # these different cards", which a page turn satisfies too — so rows were landing under a
+        # search that could not describe them (2026-08-26).
+        ("searches", "filters", "TEXT NOT NULL DEFAULT ''"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:

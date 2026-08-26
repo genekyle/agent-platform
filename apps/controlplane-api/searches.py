@@ -12,6 +12,7 @@ running it creates the record. Re-recording under the same active tuple reuses t
 pagination and re-reads never mint twins; a NEW query in the same session simply creates a second
 row beside the first, which is the whole point.
 """
+import json
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -31,9 +32,18 @@ def _norm(s: Optional[str]) -> str:
 
 def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
                          query: str, location: str = "",
-                         radius_miles: Optional[int] = None) -> Optional[Search]:
+                         radius_miles: Optional[int] = None,
+                         filters: Optional[dict[str, Any]] = None) -> Optional[Search]:
     """The active Search row for this tuple, created on first use. None for a blank query —
-    a sweep of an undeclared search records sightings but cannot claim an identity for them."""
+    a sweep of an undeclared search records sightings but cannot claim an identity for them.
+
+    `filters` is what the ENGINE said its result set was, read off the live results URL
+    (`search_cadence.result_set_identity`). It is stored on creation and BACKFILLED onto a row that
+    has none, but never overwritten: a row whose filters have changed is not this row's set any
+    more, and quietly relabelling it would erase exactly the provenance the column exists to keep
+    (2026-08-26 — 23 rows gathered under an Easy-Apply filter, recorded under a row that said
+    nothing about one). Detecting that drift is the sweep's job; this only refuses to lie about it.
+    """
     q = _norm(query)
     if not q:
         return None
@@ -41,11 +51,14 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
         Search.session_id == session_id, Search.engine == (engine or "indeed"),
         Search.query == q, Search.location == _norm(location),
         Search.status == "active"))
+    encoded = json.dumps(filters, sort_keys=True) if filters else ""
     if row is None:
         row = Search(session_id=session_id, engine=engine or "indeed", query=q,
-                     location=_norm(location), radius_miles=radius_miles)
+                     location=_norm(location), radius_miles=radius_miles, filters=encoded)
         db.add(row)
         db.flush()
+    elif encoded and not (row.filters or "").strip():
+        row.filters = encoded
     return row
 
 
@@ -131,6 +144,10 @@ def summarize(db: Session, *, session_id: Optional[int] = None,
             "label": (s.query or "").strip() or (f"{(getattr(s, 'surface', '') or 'feed').replace('_', ' ')}"
                                                  if (getattr(s, "kind", "") == "feed") else ""),
             "query": s.query, "location": s.location, "radius_miles": s.radius_miles,
+            # What the engine said this set WAS. Surfaced rather than kept in the row, so the
+            # operator can see "gathered with f_AL=true" without curling anything (LEARNINGS
+            # 2026-08-26: the contamination was invisible because nothing displayed it either).
+            "filters": json.loads(s.filters) if (s.filters or "").strip() else {},
             "status": s.status, "pages_swept": s.pages_swept, "results_seen": s.results_seen,
             "jobs_found": int(jobs), "applications": int(apps),
             "started_at": s.started_at.isoformat() if s.started_at else None,
