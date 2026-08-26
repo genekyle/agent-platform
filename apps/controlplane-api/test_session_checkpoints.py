@@ -205,3 +205,97 @@ def test_every_consuming_rung_carries_a_recovery_that_is_not_a_repeat():
         if cp.kind == cps.CONSUMING:
             assert cp.recovery, f"{cp.id} has no recovery"
     assert cps.page_rung(1).recovery
+
+
+def test_the_feed_preamble_shares_the_session_rungs_and_nothing_else():
+    """A feed run is the same browser and the same sign-in — that is what makes it one session.
+    What it does NOT have is a query to spend or a radius to say what the results mean, and it
+    lacks them for a reason rather than by omission."""
+    import session_checkpoints as cps
+
+    assert [c.id for c in cps.FEED_PREAMBLE] == ["provisioned", "authenticated", "feed_opened"]
+    # The shared head is the SAME objects, not copies — copies drift.
+    assert cps.FEED_PREAMBLE[0] is cps.PREAMBLE[0]
+    assert cps.FEED_PREAMBLE[1] is cps.PREAMBLE[1]
+    # Opening the feed is CONSUMING: measured 2026-08-26, re-opening reshuffles the suggestions
+    # and drops every batch already walked.
+    assert cps.FEED_PREAMBLE[2].kind == cps.CONSUMING
+    assert "reshuffl" in cps.FEED_PREAMBLE[2].recovery.lower()
+
+
+def test_the_search_ladder_recovers_on_the_feed_and_the_feed_ladder_reviews():
+    """THE LIVE FAILURE, both halves. Measured 2026-08-26: navigating from the results page to
+    Indeed's home feed made `query_entered` observe False — correctly, the URL no longer carries
+    the query — so next_step returned RECOVER and /choose refused the operator's picks with "Not
+    at the start line yet". Read as a FEED process, the same ledger is at its start line."""
+    import session_checkpoints as cps
+
+    led = cps.Ledger()
+    for cid in ("provisioned", "authenticated", "query_entered", "radius_set"):
+        led.mark(cid, evidence="x", initiator="operator")
+
+    on_feed_as_search = {"provisioned": True, "authenticated": True,
+                         "query_entered": False, "radius_set": None}
+    nxt = cps.next_step(led, on_feed_as_search)
+    assert nxt.kind == cps.RECOVER and nxt.checkpoint.id == "query_entered"
+    assert cps.at_start_line(led, on_feed_as_search) is False
+
+    led.mark("feed_opened", evidence="clicked Home", initiator="operator")
+    on_feed = {"provisioned": True, "authenticated": True, "feed_opened": True}
+    nxt = cps.next_step(led, on_feed, page=1, process=cps.FEED_PROCESS)
+    assert nxt.kind == cps.REVIEW and nxt.checkpoint.id == "batch:1"
+    assert cps.at_start_line(led, on_feed, cps.FEED_PROCESS) is True
+
+
+def test_a_feed_reviews_batches_and_says_so_on_its_rungs():
+    """The review unit is the batch, and the rungs must name it — a ladder that said "Page 3
+    reviewed" on a feed would be describing a page nobody turned."""
+    import session_checkpoints as cps
+
+    assert cps.review_rung(3, cps.FEED_PROCESS).id == "batch:3"
+    assert cps.review_rung(3).id == "page:3"
+    assert cps.batch_rung(3).label == "Batch 3 reviewed"
+    assert cps.batch_of("batch:7") == 7 and cps.batch_of("page:7") is None
+    # The selection rung sits under its batch and cannot collide with a page's.
+    assert cps.select_rung(2, cps.FEED_PROCESS).id == "select:batch:2"
+    assert cps.select_rung(2).id == "select:2"
+    assert cps.select_rung(2, cps.FEED_PROCESS).label == "Batch 2 picks made"
+
+
+def test_progress_counts_the_right_preamble_and_keeps_the_old_key():
+    """The cockpit binds to `pages_reviewed`; a feed's own word for its unit rides alongside rather
+    than renaming a field every existing reader already uses."""
+    import session_checkpoints as cps
+
+    led = cps.Ledger()
+    for cid in ("provisioned", "authenticated", "feed_opened", "batch:1", "batch:2"):
+        led.mark(cid, evidence="x", initiator="operator")
+    obs = {"provisioned": True, "authenticated": True, "feed_opened": True}
+
+    p = cps.progress(led, obs, page=2, process=cps.FEED_PROCESS)
+    assert p["preamble_total"] == 3 and p["preamble_held"] == 3      # not the search's 4
+    assert p["pages_reviewed"] == [1, 2] and p["batches_reviewed"] == [1, 2]
+    assert p["process"] == "feed" and p["batch"] == 2
+
+    # And a query-kind session is untouched: same call, the search preamble, no batch keys.
+    q = cps.progress(led, {"provisioned": True, "authenticated": True}, page=1)
+    assert q["preamble_total"] == 4 and "batches_reviewed" not in q and q["process"] == "query"
+
+
+def test_the_feed_ladder_renders_its_own_rungs():
+    """status_rows is the panel's view — on a feed it must show feed_opened and batch rungs, and
+    never invite a choice on a page that does not exist here."""
+    import session_checkpoints as cps
+
+    led = cps.Ledger()
+    for cid in ("provisioned", "authenticated", "feed_opened", "batch:1"):
+        led.mark(cid, evidence="x", initiator="operator")
+    obs = {"provisioned": True, "authenticated": True, "feed_opened": True}
+
+    rows = cps.status_rows(led, obs, page=2, has_results=True,
+                           engine="Indeed", process=cps.FEED_PROCESS)
+    ids = [r["id"] for r in rows]
+    assert "feed_opened" in ids and "batch:1" in ids and "batch:2" in ids
+    assert "select:batch:2" in ids
+    assert not any(i.startswith("page:") for i in ids)
+    assert not any(i in ("query_entered", "radius_set") for i in ids)

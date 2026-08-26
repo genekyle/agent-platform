@@ -42,6 +42,7 @@ from starlette.concurrency import run_in_threadpool
 
 import account_forms
 import applied_index
+import searches
 import apply_fields
 from urllib.parse import urlparse
 
@@ -854,6 +855,31 @@ def _parked_all(bb: Any, queue: aps.Queue,
             for r in rows.values()]
 
 
+
+def _process_of(bb) -> str:
+    """Which PROCESS this session is running: a search, or the engine's own feed.
+
+    A session is a browser with a signed-in account and can run either; the ladder is per-process
+    (see session_checkpoints.FEED_PREAMBLE). Defaults to the search, so every session written
+    before feeds existed reads back exactly as it did.
+    """
+    return ((bb.world or {}).get("process") or cps.QUERY_PROCESS)
+
+
+
+def _unit_word(bb) -> str:
+    """What this process calls its review unit, for anything a human reads."""
+    return "Batch" if _process_of(bb) == cps.FEED_PROCESS else "Page"
+
+def _unit_index(bb, page: int) -> int:
+    """The number of the review unit in play — the PAGE on a search, the BATCH on a feed."""
+    if _process_of(bb) == cps.FEED_PROCESS:
+        try:
+            return max(1, int((bb.world or {}).get("batch") or 1))
+        except (TypeError, ValueError):
+            return 1
+    return page
+
 def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, Any], *,
           page: int, results: Optional[list[dict]] = None,
           awaiting: Optional[str] = None, last: Optional[dict] = None,
@@ -876,7 +902,13 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     # to the wrong site — found the first time a LinkedIn session was started, 2026-07-27.
     engine_label = engine_for(session, obs.get("search_tab"))["label"]
     cached_perception = _freshest_snapshot(session.id, (bb.world or {}).get("last_belief") or None)
+    # WHICH PROCESS'S LADDER THIS IS. The rungs past `authenticated` differ entirely between a
+    # search and a feed, and rendering one against the other is what made a feed page report
+    # "recover the query" (measured 2026-08-26).
+    process = _process_of(bb)
+    unit = _unit_index(bb, page)
     return {
+        "process": process,
         "session_id": session.id,
         "goal": bb.goal,
         "query": ss.query,
@@ -884,11 +916,13 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         "radius_miles": (bb.world or {}).get("radius_miles"),
         "page": page,
         "engine": engine_label,
-        "ladder": cps.status_rows(ledger, observed, page=page, engine=engine_label,
+        "ladder": cps.status_rows(ledger, observed, page=unit, engine=engine_label,
+                                  process=process,
                                   has_results=bool(results if results is not None
                                                    else (bb.world or {}).get("page_results"))),
-        "next": cps.next_step(ledger, observed, page=page, engine=engine_label).as_dict(),
-        "progress": cps.progress(ledger, observed, page=page),
+        "next": cps.next_step(ledger, observed, page=unit, engine=engine_label,
+                              process=process).as_dict(),
+        "progress": cps.progress(ledger, observed, page=unit, process=process),
         "observed": observed,
         # THE OBSERVER'S VERDICT, computed fresh for this render (None when no apply tab is open).
         # The panel renders this INSTEAD of trusting the recipe position — where they disagree,
@@ -2532,15 +2566,28 @@ async def _run_query(*, engine: dict[str, Any], bb: Any, ledger: cps.Ledger, bro
 
 
 async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
-                       engine: dict[str, Any]) -> dict[str, Any]:
-    """At the start line: read this page's cards and hand them to the operator.
+                       engine: dict[str, Any],
+                       process: str = cps.QUERY_PROCESS,
+                       tab_url: Optional[str] = None,
+                       only_ids: Optional[set[str]] = None) -> dict[str, Any]:
+    """At the start line: read this unit's cards and hand them to the operator.
 
-    This is the stop-and-go half. It does NOT mark the page rung — the operator does that by
-    choosing (`/choose`). Reading a page is free; deciding on it is theirs.
+    This is the stop-and-go half. It does NOT mark the review rung — the operator does that by
+    choosing (`/choose`). Reading is free; deciding is theirs.
+
+    ONE FUNCTION FOR BOTH PROCESSES, because the work is the same work: read the cards, attribute
+    them to whatever produced them, canonicalise, check what we already applied to, and hand the
+    operator a decision made against history rather than against a title. Only three things differ
+    on a feed — the unit is a BATCH, the identity its sightings hang off is a feed row rather than
+    a query, and the tab is the feed's rather than the engine's search tab. A parallel
+    `_review_batch` would have had to re-earn all of the above and would drift the first time one
+    half was fixed.
     """
     from observed_jobs import upsert_observed_jobs
+    feed = process == cps.FEED_PROCESS
     ex = await _capture_post("/extract_jobs",
-                             {"browser_url": browser_url, "tab_url": engine["search_tab"]})
+                             {"browser_url": browser_url,
+                              "tab_url": tab_url or engine["search_tab"]})
     if not ex.get("ok"):
         return {"ok": False, "action": "review_page", "awaiting": "operator_results",
                 "detail": f"Could not read the results ({ex.get('detail') or 'extractor said no'})."}
@@ -2571,10 +2618,17 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     # moment a search becomes real, so the row is ensured here — same tuple reuses, a new query
     # in the same session mints a sibling — and every card on the page joins it.
     import searches as searches_mod
-    search = searches_mod.ensure_active_search(
-        db, session_id=bb.session_id, engine=engine["platform"],
-        query=bb.search_state.query, location=bb.search_state.location,
-        radius_miles=(bb.world or {}).get("radius_miles"))
+    if feed:
+        # The feed's identity is its SURFACE — there is no query to key on, and filling one in
+        # would be a lie the provenance then has to carry.
+        search = searches_mod.ensure_active_feed(
+            db, session_id=bb.session_id, engine=engine["platform"],
+            surface=(bb.world or {}).get("feed_surface") or "home_feed")
+    else:
+        search = searches_mod.ensure_active_search(
+            db, session_id=bb.session_id, engine=engine["platform"],
+            query=bb.search_state.query, location=bb.search_state.location,
+            radius_miles=(bb.world or {}).get("radius_miles"))
     new_count, dup_count = upsert_observed_jobs(db, cards, engine["platform"],
                                                 bb.search_state.query,
                                                 search=search, page=page)
@@ -2619,9 +2673,16 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
             "description_chars": len((row.description or "") if row else ""),
         }
 
+    # A BATCH IS THE CARDS THAT JUST ARRIVED, NOT EVERYTHING ON SCREEN. After a feed scroll the
+    # DOM holds every card walked so far, so handing the operator all of them would re-present the
+    # batch they already decided — the repeat the review rung exists to prevent. Every card is
+    # still UPSERTED above (seeing one again is a real sighting and bumps seen_count); only what is
+    # SHOWN is narrowed.
     results = []
     for c in cards:
         if not c.get("external_id"):
+            continue
+        if only_ids is not None and c.get("external_id") not in only_ids:
             continue
         job_id = f"{engine['platform']}:{c.get('external_id')}"
         results.append({
@@ -2639,7 +2700,8 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     bb.world = dict(bb.world or {})
     bb.world["page_results"] = results
     bb.log("review", f"page {page}: {len(results)} results ({new_count} new, {dup_count} seen before)")
-    return {"ok": True, "action": "review_page", "page": page, "results": results,
+    return {"ok": True, "action": "review_batch" if feed else "review_page",
+            "page": page, "results": results,
             "awaiting": "choose",
             "applied_summary": {"applied": already, "likely": maybe},
             "detail": f"Page {page}: {len(results)} results — {new_count} new, "
@@ -5508,6 +5570,196 @@ async def adopt_from_window(session_id: int, body: AdoptWindowBody,
                  last={"ok": bool(adopted), "action": "adopt_from_window", "detail": detail,
                        "adopted": adopted, "refused": refused})
 
+
+
+def _is_feed_url(url: str) -> bool:
+    """The engine's own front page, where the suggestions live — not a results page.
+
+    Deliberately narrow: a results URL carries the query in its path or params, and calling one a
+    feed would let the feed ladder run over a search and mark a batch rung on a page of results.
+    """
+    u = (url or "").strip().lower()
+    if not u:
+        return False
+    if "/jobs?" in u or "q=" in u or "/jobs/search" in u or "search-results" in u:
+        return False
+    return u.rstrip("/").endswith(("indeed.com", "linkedin.com/jobs")) or "indeed.com/?" in u
+
+
+
+class OpenFeedBody(BaseModel):
+    surface: str = "home_feed"
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/open_feed")
+async def open_feed(session_id: int, body: OpenFeedBody,
+                    db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Open the engine's own suggestion feed as a PROCESS inside this session.
+
+    A session is a browser with a signed-in account; a process is the unit of work inside it. The
+    ladder past `authenticated` is per-process, and the feed's is short by design — no query to
+    spend, no radius to say what the results mean, because nobody asked for these jobs. What
+    scopes a feed run is simply having the feed open.
+
+    THE RUNG IS CONSUMING, so this endpoint refuses to re-open a feed that is already open.
+    Measured 2026-08-26: clicking Home again RESHUFFLES the suggestions and drops every batch
+    already scrolled, so the cards the operator was deciding between are gone. Re-opening is not a
+    free retry, it is throwing the work away — which is exactly what `consuming` means.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb, session_id=session.id)
+
+    if not obs["observed"].get("authenticated", True):
+        raise HTTPException(
+            status_code=409,
+            detail="Not signed in — the feed is personalised, so a logged-out one is somebody "
+                   "else's. Sign in first; nothing here types a password.")
+
+    world = dict(bb.world or {})
+    already = world.get("process") == cps.FEED_PROCESS and ledger.holds("feed_opened")
+    # THE FEED IS NOT A "SEARCH TAB", and asking for one is how this first refused a tab that was
+    # plainly on the feed (measured 2026-08-26). The engine's search-tab marker is
+    # `indeed.com/jobs`; the feed lives at `indeed.com/?…`, so that resolver correctly returns
+    # nothing here — the feed has to be found among the session's OWN tabs instead.
+    tab = next((t for t in (obs.get("tabs") or [])
+                if _is_feed_url(str(t.get("url") or ""))), None) or {}
+    on_feed = bool(tab)
+
+    if already and on_feed:
+        return _view(session, bb, ledger, obs, page=_unit_index(bb, 1),
+                     last={"ok": True, "action": "open_feed",
+                           "detail": "The feed is already open and this process already owns it. "
+                                     "Re-opening would reshuffle the suggestions and drop the "
+                                     "batches already walked — scroll for the next batch instead."})
+
+    if not on_feed:
+        raise HTTPException(
+            status_code=409,
+            detail="This tab is not on the feed. Reach it by CLICKING the engine's Home nav from "
+                   "wherever the session already is — never a URL jump — then open the process.")
+
+    feed = searches.ensure_active_feed(db, session_id=session.id,
+                                       engine=(session.domain_id or "indeed").split("_")[0],
+                                       surface=body.surface)
+    db.commit()
+
+    ledger.mark("feed_opened",
+                evidence=f"on {tab.get('url') or 'the feed'} — {body.surface}",
+                initiator=body.initiator)
+    world["process"] = cps.FEED_PROCESS
+    world["batch"] = int(world.get("batch") or 1)
+    world["feed_search_id"] = getattr(feed, "id", None)
+    world["feed_surface"] = body.surface
+    bb.world = world
+    bb.log("checkpoint",
+           f"feed_opened — working the {body.surface.replace('_', ' ')} as a process inside this "
+           f"session",
+           why="A feed is not a search: there is no query to spend and no radius to define what "
+               "its results mean, so it runs its own short preamble on the same browser and the "
+               "same sign-in.",
+           next_up="Scroll for a batch, then choose from it — the review unit is the batch, not a "
+                   "page.")
+
+    # A MARK WITHOUT A PERSIST IS NOT A MARK. The ledger is rebuilt from the blackboard on every
+    # request, so a rung marked in memory and never written back is simply gone by the next call —
+    # which is how this first left `/choose` still refusing with "not at the start line" on a feed
+    # whose own panel reported it was there (measured 2026-08-26).
+    _persist(bb, ledger)
+
+    obs = await _observe(browser_url, bb, session_id=session.id)
+    return _view(session, bb, ledger, obs, page=_unit_index(bb, 1),
+                 last={"ok": True, "action": "open_feed", "feed_id": getattr(feed, "id", None),
+                       "detail": f"Feed process open on {body.surface.replace('_', ' ')}. "
+                                 f"Scroll for batch 1, then choose from it."})
+
+
+class NextBatchBody(BaseModel):
+    initiator: str = "operator"
+
+
+@router.post("/api/session_control/{session_id}/next_batch")
+async def next_batch(session_id: int, body: NextBatchBody,
+                     db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Bring in the next batch of the feed and hand it to the operator.
+
+    The feed's answer to "page forward", and deliberately not called that: there is no page to
+    turn. Indeed appends about fifteen more cards when the wheel reaches the bottom, and that
+    arrival IS the review unit — the operator's own framing, *"the jobs keep generating as you
+    scroll down, so we select as we scroll down."*
+
+    THE EVIDENCE IS `new_ids`, NEVER `moved`. Measured 2026-08-26: three consecutive wheels moved
+    the window 900px each and rendered nothing at all before the fourth appended fifteen. A step
+    that counted motion as progress would report three batches nobody could pick from, and mark
+    three rungs for work that never happened.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    if _process_of(bb) != cps.FEED_PROCESS:
+        raise HTTPException(
+            status_code=409,
+            detail="This session is running a search, not a feed. Open the feed process first — "
+                   "the two have different ladders on purpose.")
+
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb, session_id=session.id)
+    tab = next((t for t in (obs.get("tabs") or [])
+                if _is_feed_url(str(t.get("url") or ""))), None)
+    if tab is None:
+        raise HTTPException(status_code=409,
+                            detail="The feed tab is not open any more. Reopen the feed before "
+                                   "asking it for another batch.")
+
+    world = dict(bb.world or {})
+    engine = engine_for(session, obs.get("search_tab"))
+    only: Optional[set[str]] = None
+
+    # HOW MANY BATCHES THIS FEED HAS READ — its own counter, not `page_results`. That key holds
+    # whatever the last review wrote, and on a session that ran a SEARCH first it is a page of
+    # search results: keying off it made the feed's very first call believe batch 1 was already
+    # read, wheel past it, and hand back ten cards from a search the operator had finished with
+    # (measured 2026-08-26).
+    read = max(0, int(world.get("feed_batch_read") or 0))
+    batch = read + 1
+
+    # The FIRST batch is already on screen — opening the feed rendered it, and wheeling before
+    # reading it would skip past cards the operator never saw.
+    if read >= 1:
+        scrolled = await _capture_post("/scroll_job_list",
+                                       {"browser_url": browser_url,
+                                        "tab_id": tab.get("tab_id"),
+                                        "scrolls": 2, "notch_px": 700,
+                                        "settle_seconds": 1.2}, timeout=90.0)
+        new_ids = [i for i in (scrolled.get("new_ids") or []) if i]
+        if not new_ids:
+            done = bool(scrolled.get("exhausted") or scrolled.get("at_end"))
+            bb.log("next_batch",
+                   "wheeled the feed and nothing new rendered"
+                   + (" — the feed is out of suggestions" if done else ""),
+                   why="A wheel that moves without rendering is not a batch; marking one here "
+                       "would record a review of cards that do not exist.")
+            _persist(bb, ledger)
+            return _view(session, bb, ledger, obs, page=read,
+                         last={"ok": False, "action": "next_batch",
+                               "awaiting": None if done else "operator_results",
+                               "detail": ("The feed has no more suggestions to give — "
+                                          "`exhausted`. Nothing further to review here."
+                                          if done else
+                                          "The wheel moved but no new cards rendered, so there is "
+                                          "no batch to review. Try again, or the feed is done.")})
+        only = set(new_ids)
+
+    world["batch"] = batch
+    world["feed_batch_read"] = batch
+    bb.world = world
+    out = await _review_page(bb=bb, browser_url=browser_url, page=batch, db=db, engine=engine,
+                             process=cps.FEED_PROCESS, tab_url=tab.get("url"), only_ids=only)
+    _persist(bb, ledger)
+    obs = await _observe(browser_url, bb, session_id=session.id)
+    return _view(session, bb, ledger, obs, page=batch,
+                 results=out.get("results"), last=out)
 
 class ReconcileStepBody(BaseModel):
     initiator: str = "operator"
@@ -8958,7 +9210,7 @@ async def choose(session_id: int, body: ChooseBody,
     page = _current_page(obs, bb)
     engine = engine_for(session, obs.get("search_tab"))
 
-    if not cps.at_start_line(ledger, obs["observed"]):
+    if not cps.at_start_line(ledger, obs["observed"], _process_of(bb)):
         raise HTTPException(status_code=409,
                             detail="Not at the start line yet — step until the preamble is held "
                                    "before choosing.")
@@ -9082,7 +9334,7 @@ async def choose(session_id: int, body: ChooseBody,
     # THE SELECTION IS A STEP, and this is where it lands on the ladder. Marked STANDING, so
     # adding to your picks later re-marks it rather than being refused — choosing costs nothing.
     # The evidence line is the audit: how many of how many, and who decided.
-    ledger.mark(cps.select_rung(page).id,
+    ledger.mark(cps.select_rung(_unit_index(bb, page), _process_of(bb)).id,
                 evidence=f"{len(body.picks)} of {len(known)} picked by {body.decided_by}"
                          + (f" — {body.note}" if body.note else ""),
                 initiator=body.initiator)
@@ -9131,11 +9383,17 @@ async def choose(session_id: int, body: ChooseBody,
         obs_now = await _observe(browser_url, bb, session_id=session.id)
         return _view(session, bb, ledger, obs_now, page=page, awaiting="apply",
                      last={"ok": True, "action": "choose", "page": page, "queue": summary,
-                           "detail": f"{summary['remaining']} application(s) queued from page "
-                                     f"{page}. This page stays open until each one reaches a "
-                                     f"terminal flag — nothing is skipped."})
+                           "detail": f"{summary['remaining']} application(s) queued from "
+                                     f"{_unit_word(bb).lower()} {_unit_index(bb, page)}. It stays "
+                                     f"open until each one reaches a terminal flag — nothing is "
+                                     f"skipped."})
 
-    rung = cps.page_rung(page)
+    # THE RUNG MUST NAME THE UNIT IT MARKS. Hardcoding the page rung here would have marked
+    # `page:N` on a feed — a page nobody turned — and left `batch:N` unmarked forever, so the
+    # ladder would keep offering a batch the operator had already picked from.
+    _proc = _process_of(bb)
+    _unit = _unit_index(bb, page)
+    rung = cps.review_rung(_unit, _proc)
     ledger.mark(rung.id, evidence=f"{len(body.picks)} picked of {len(known)}; "
                                   f"{queue.summary()['submitted']} submitted"
                                   + (f" — {body.note}" if body.note else ""),
@@ -9143,7 +9401,8 @@ async def choose(session_id: int, body: ChooseBody,
 
     advanced: dict[str, Any] = {"ok": True, "action": "choose", "page": page,
                                 "queue": queue.summary(),
-                                "detail": f"Page {page} reviewed; {len(body.picks)} picked."}
+                                "detail": f"{_unit_word(bb)} {_unit} reviewed; "
+                                          f"{len(body.picks)} picked."}
     if body.advance:
         # On a SPA the click re-renders in place, so "has_next" alone is not evidence the NEXT page
         # is what is now on screen. Take a signature first and require it to change; otherwise the

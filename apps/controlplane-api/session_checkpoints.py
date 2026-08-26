@@ -149,6 +149,54 @@ SESSION_RUNGS: frozenset[str] = frozenset({"provisioned", "authenticated"})
 #: the guard becomes "have we spent THIS query", not "have we spent any query".
 SEARCH_SCOPED: frozenset[str] = frozenset({"query_entered", "radius_set"})
 
+#: Rungs that belong to ONE FEED RUN. The feed's equivalent of SEARCH_SCOPED, and deliberately
+#: much shorter: there is no query to spend and no radius to define what the results mean, because
+#: nobody asked for them. All that scopes a feed run is HAVING THE FEED OPEN.
+FEED_SCOPED: frozenset[str] = frozenset({"feed_opened"})
+
+#: The two PROCESSES a session can be running. A session is a browser with a signed-in account; a
+#: process is the unit of work inside it (see the `Search` model, which carries the same
+#: discriminator). Operator, 2026-08-26: working the front page *"shouldn't require a new session
+#: since all actions are still being performed on indeed — so instead it will be a new process or
+#: workflow within a domain."*
+#:
+#: THE LADDER PREVIOUSLY ASSUMED THERE WAS ONLY ONE. Measured live 2026-08-26: navigating from the
+#: results page to Indeed's home feed made `query_entered` observe False — correctly, the URL no
+#: longer carries the query — so `next_step` returned RECOVER ("get back to the results we already
+#: have") and `/choose` refused the operator's picks with "Not at the start line yet". Nothing was
+#: broken; the ladder was saying it only knew how to be a search. A feed run needs its own
+#: preamble rather than a softened version of the search's, because the rungs it lacks are lacked
+#: for a REASON, not by omission.
+QUERY_PROCESS = "query"
+FEED_PROCESS = "feed"
+
+_FEED_ONLY: tuple[Checkpoint, ...] = (
+    Checkpoint(
+        id="feed_opened",
+        label="{engine} feed open",
+        kind=CONSUMING,
+        why="The feed is reached by clicking Home, and doing that again is not free: measured "
+            "2026-08-26, re-opening it RESHUFFLES the suggestions and drops every batch already "
+            "walked, so the cards the operator was deciding between are simply gone. That is the "
+            "consuming shape exactly — the effect is spent, and recovering beats repeating.",
+        action="open_feed",
+        recovery="Refocus the feed tab that is already open. Re-opening the feed reshuffles it and "
+                 "throws away the batches already scrolled and reviewed.",
+    ),
+)
+
+#: The shared head is the SAME objects as the search preamble, not a copy — provisioned and
+#: authenticated are session rungs, and a session running a feed is the same browser with the same
+#: sign-in. Copying them would let the two ladders drift.
+FEED_PREAMBLE: tuple[Checkpoint, ...] = tuple(
+    cp for cp in PREAMBLE if cp.id in SESSION_RUNGS) + _FEED_ONLY
+
+
+def preamble_for(process: str = QUERY_PROCESS) -> tuple[Checkpoint, ...]:
+    """The rungs THIS process must hold before it reaches its start line."""
+    return FEED_PREAMBLE if process == FEED_PROCESS else PREAMBLE
+
+
 #: Search 1 is UNSCOPED so every ledger written before searches existed reads back unchanged.
 SEARCH_PREFIX = "s"
 FIRST_SEARCH = 1
@@ -171,6 +219,46 @@ def page_rung(page: int) -> Checkpoint:
     )
 
 
+BATCH_PREFIX = "batch:"
+
+
+def batch_rung(batch: int) -> Checkpoint:
+    """The feed's rolling rung: 'we have reviewed batch N'.
+
+    CONSUMING for the same reason the page rung is, but the traffic sits in a different place. On a
+    search, paging back re-queries. On a feed, scrolling back up costs nothing — the cards are
+    still in the DOM — but reaching FORWARD past the end is what makes Indeed append the next
+    fifteen. So the spend is getting a batch, and re-reviewing one we already recorded buys nothing
+    while the operator's picks from it are already made.
+    """
+    return Checkpoint(
+        id=f"{BATCH_PREFIX}{batch}",
+        label=f"Batch {batch} reviewed",
+        kind=CONSUMING,
+        why="The batch's cards are recorded and the operator has made their picks. Scrolling back "
+            "to re-review buys nothing, and the batch after it is the one that costs traffic.",
+        action="review_batch",
+        recovery="Read the recorded cards for this batch instead of scrolling back to it.",
+    )
+
+
+def batch_of(checkpoint_id: str) -> Optional[int]:
+    """The batch number in a rolling feed rung id, or None if it isn't one."""
+    bare = unscoped(checkpoint_id)
+    if not bare.startswith(BATCH_PREFIX):
+        return None
+    try:
+        return int(bare[len(BATCH_PREFIX):])
+    except ValueError:
+        return None
+
+
+def review_rung(index: int, process: str = QUERY_PROCESS) -> Checkpoint:
+    """The rung that says 'this unit of results has been reviewed' — a page on a search, a batch on
+    a feed. One accessor so a caller never has to know which process it is looking at."""
+    return batch_rung(index) if process == FEED_PROCESS else page_rung(index)
+
+
 SELECT_PREFIX = "select:"
 
 #: WHO (or what) chose which jobs to apply to. The selection is a real decision with a real
@@ -185,7 +273,7 @@ def valid_decider(decided_by: str) -> bool:
     return decided_by == DECIDER_OPERATOR or decided_by.startswith(DECIDER_PREFIXES)
 
 
-def select_rung(page: int) -> Checkpoint:
+def select_rung(page: int, process: str = QUERY_PROCESS) -> Checkpoint:
     """'We have decided what to apply to on page N.'
 
     STANDING, not consuming: choosing again costs nothing and spends nothing — it is a decision
@@ -198,9 +286,11 @@ def select_rung(page: int) -> Checkpoint:
     actually makes — was an `awaiting` flag and a log line. Operator, 2026-07-26: *"it feels like
     it's not an actual step."* It was not.
     """
+    unit = "Batch" if process == FEED_PROCESS else "Page"
+    ident = f"{BATCH_PREFIX}{page}" if process == FEED_PROCESS else f"{page}"
     return Checkpoint(
-        id=f"{SELECT_PREFIX}{page}",
-        label=f"Page {page} picks made",
+        id=f"{SELECT_PREFIX}{ident}",
+        label=f"{unit} {page} picks made",
         kind=STANDING,
         why="Choosing what to apply to is a decision with a decider, and both belong on the "
             "record. Re-choosing is free — this rung spends nothing, unlike the page it sits on.",
@@ -327,6 +417,16 @@ class Ledger:
         results from search 1's, and mixing them would report a walk nobody took."""
         pages = [page_of(cid) for cid in self.reached if search_of(cid) == self.search]
         return sorted(p for p in pages if p is not None)
+
+    def batches_reviewed(self) -> list[int]:
+        """Batches walked IN THE CURRENT FEED RUN — the feed's `pages_reviewed`. Same scoping rule
+        for the same reason: a second feed run's batch 1 is fifteen different cards."""
+        ns = [batch_of(cid) for cid in self.reached if search_of(cid) == self.search]
+        return sorted(n for n in ns if n is not None)
+
+    def units_reviewed(self, process: str = QUERY_PROCESS) -> list[int]:
+        """Whichever unit THIS process reviews, so a caller need not branch."""
+        return self.batches_reviewed() if process == FEED_PROCESS else self.pages_reviewed()
 
     # --- searches: several per session, and the record of each one kept ------------------------
     def note_query(self, query: str) -> None:
@@ -505,12 +605,13 @@ def for_engine(cp: Checkpoint, engine: str = DEFAULT_ENGINE) -> Checkpoint:
                       action=cp.action, recovery=_f(cp.recovery))
 
 
-def preamble(engine: str = DEFAULT_ENGINE) -> tuple[Checkpoint, ...]:
-    return tuple(for_engine(cp, engine) for cp in PREAMBLE)
+def preamble(engine: str = DEFAULT_ENGINE,
+             process: str = QUERY_PROCESS) -> tuple[Checkpoint, ...]:
+    return tuple(for_engine(cp, engine) for cp in preamble_for(process))
 
 
 def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1,
-              engine: str = DEFAULT_ENGINE) -> NextStep:
+              engine: str = DEFAULT_ENGINE, process: str = QUERY_PROCESS) -> NextStep:
     """The one decision this module exists to make: what does the next crank work on?
 
     Walks the preamble in order. The first rung that isn't satisfied wins — and HOW it is
@@ -524,7 +625,7 @@ def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1,
     Past the preamble the ladder is open-ended, so we always land on REVIEW for the current
     page: there is no terminal rung and therefore nothing to flag as "done".
     """
-    for cp in preamble(engine):
+    for cp in preamble(engine, process):
         if not ledger.holds(cp.id):
             return NextStep(ADVANCE, cp, reason=f"{cp.label} has not been reached yet.")
         if observed.get(cp.id) is False:
@@ -535,13 +636,15 @@ def next_step(ledger: Ledger, observed: dict[str, Any], *, page: int = 1,
             return NextStep(RECOVER, cp,
                             reason=f"{cp.label} was already spent this session but its effect is "
                                    f"gone. Recovering instead of repeating it.")
-    return NextStep(REVIEW, page_rung(page), page=page,
-                    reason=f"At the start line. Page {page} is ready for the operator to review.")
+    unit = "Batch" if process == FEED_PROCESS else "Page"
+    return NextStep(REVIEW, review_rung(page, process), page=page,
+                    reason=f"At the start line. {unit} {page} is ready for the operator to review.")
 
 
 def status_rows(ledger: Ledger, observed: dict[str, Any], *,
                 page: int = 1, has_results: bool = False,
-                engine: str = DEFAULT_ENGINE) -> list[dict[str, Any]]:
+                engine: str = DEFAULT_ENGINE,
+                process: str = QUERY_PROCESS) -> list[dict[str, Any]]:
     """The ladder as the panel renders it: every preamble rung plus the page rungs walked so
     far, each with its status and provenance. Read-only view over `next_step`.
 
@@ -549,9 +652,9 @@ def status_rows(ledger: Ledger, observed: dict[str, Any], *,
     whether the SELECTION rung is the operator's next move or still pending. Without it the panel
     would invite a choice between fifteen jobs nobody has looked at yet.
     """
-    nxt = next_step(ledger, observed, page=page, engine=engine)
+    nxt = next_step(ledger, observed, page=page, engine=engine, process=process)
     rows: list[dict[str, Any]] = []
-    for cp in preamble(engine):
+    for cp in preamble(engine, process):
         held = ledger.holds(cp.id)
         ok = observed.get(cp.id)
         if cp.id == nxt.checkpoint.id:
@@ -567,8 +670,8 @@ def status_rows(ledger: Ledger, observed: dict[str, Any], *,
             row["reached"] = ledger.row_for(cp.id).as_dict()
         rows.append(row)
 
-    for p in ledger.pages_reviewed():
-        cp = page_rung(p)
+    for p in ledger.units_reviewed(process):
+        cp = review_rung(p, process)
         rows.append({"id": cp.id, "label": cp.label, "kind": cp.kind, "status": HELD,
                      "why": cp.why, "observed": None,
                      "reached": ledger.row_for(cp.id).as_dict()})
@@ -582,7 +685,7 @@ def status_rows(ledger: Ledger, observed: dict[str, Any], *,
         # actionable once the cards have been read — otherwise it is a choice between jobs nobody
         # has seen. HELD carries who decided and what they picked, so the ladder can be read back
         # as "6 of 15, by operator" long after the fact.
-        sel = select_rung(page)
+        sel = select_rung(page, process)
         held = ledger.holds(sel.id)
         row = {"id": sel.id, "label": sel.label, "kind": sel.kind,
                "status": HELD if held else (NEXT if has_results else PENDING),
@@ -593,23 +696,34 @@ def status_rows(ledger: Ledger, observed: dict[str, Any], *,
     return rows
 
 
-def at_start_line(ledger: Ledger, observed: dict[str, Any]) -> bool:
+def at_start_line(ledger: Ledger, observed: dict[str, Any],
+                  process: str = QUERY_PROCESS) -> bool:
     """True once every preamble rung is satisfied — the moment the session stops running
     continuously and becomes stop-and-go. This is the phase boundary the operator described:
     get yourself to the start line unattended, then ask me about every page."""
-    return next_step(ledger, observed).kind == REVIEW
+    return next_step(ledger, observed, process=process).kind == REVIEW
 
 
-def progress(ledger: Ledger, observed: dict[str, Any], *, page: int = 1) -> dict[str, Any]:
+def progress(ledger: Ledger, observed: dict[str, Any], *, page: int = 1,
+             process: str = QUERY_PROCESS) -> dict[str, Any]:
     """The header summary: how far up, how many pages walked, and the honest answer to 'are we
     done'. `can_grow` is None until we know whether a next page exists — we never guess it."""
-    preamble_held = sum(1 for cp in PREAMBLE if ledger.holds(cp.id))
-    pages = ledger.pages_reviewed()
-    return {
+    rungs = preamble_for(process)
+    preamble_held = sum(1 for cp in rungs if ledger.holds(cp.id))
+    units = ledger.units_reviewed(process)
+    started = at_start_line(ledger, observed, process)
+    out = {
         "preamble_held": preamble_held,
-        "preamble_total": len(PREAMBLE),
-        "at_start_line": at_start_line(ledger, observed),
-        "pages_reviewed": pages,
+        "preamble_total": len(rungs),
+        "at_start_line": started,
+        "pages_reviewed": units,
         "page": page,
-        "phase": "start_line" if at_start_line(ledger, observed) else "climbing",
+        "process": process,
+        "phase": "start_line" if started else "climbing",
     }
+    # A feed reviews BATCHES. The key above stays for every existing reader; the feed's own name
+    # for its unit rides alongside rather than renaming a field the cockpit already binds to.
+    if process == FEED_PROCESS:
+        out["batches_reviewed"] = units
+        out["batch"] = page
+    return out
