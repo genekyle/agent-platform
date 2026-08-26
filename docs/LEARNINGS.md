@@ -11433,3 +11433,71 @@ explain the cause. And Search 13's 23 page-2 rows remain of uncertain filter pro
 is a fence built after the horse, and that row is the horse.
 
 *Suite: controlplane-api 1906 → 1914.*
+
+## 2026-08-26 (third) — the corpus was being told things, and it had no way to refuse
+
+Operator: *"make sure everything jumping into the corpus is correct in the first place."* So the
+audit went to the DOOR rather than to the data. Three holes, all measured in the live corpus, and
+**not one of them was caught by a test** — the suite went 1914 green with the gate installed and
+every existing caller unchanged, which is precisely how all three shipped.
+
+**1. A FEED BATCH TAGGED WITH THE SESSION'S LAST QUERY.** `ensure_active_feed`'s docstring says
+filling in a query would be *"a lie the provenance then has to carry"* — and **the very next line of
+its only caller** passed `bb.search_state.query` straight into the upsert. **14 rows** whose only
+sighting is Indeed's suggestion feed claimed they were found by searching *"data analyst"*. Nobody
+searched anything; the feed offered them. The docstring was right and alone: a rule stated where it
+is not enforced is a comment, and the code one line below it disagreed for as long as it existed.
+
+**2. A QUERY WITH NO SEARCH TO JUSTIFY IT.** `/api/jobs/extract` recorded `search_query` on every
+row it wrote and passed **no `search` at all**, so the query landed on the job and nothing linked it
+to anything. **20 rows** carry a query no sighting of theirs supports, and — this is the part worth
+keeping — **no evidence can now adjudicate them**. They are permanently ambiguous. That is the
+argument for a door rather than an audit: an audit run later can only sort the damage into
+*provable* and *unknowable*, and the unknowable pile never shrinks.
+
+**3. A PLATFORM THE PAGE DISAGREES WITH.** `job_id` is `f"{platform}:{external_id}"`, so a caller's
+wrong platform does not mislabel a row — **it mints a different row that can never dedupe against
+the real one**. The extractor has always returned the platform it read off the live tab's host; two
+of the three call sites passed their own guess instead. Now checked, and **refused rather than
+silently corrected**: rewriting the caller's claim to the observed one would hide the actual fault,
+which is a call aimed at the wrong tab, and rows read from the wrong tab are what must not enter.
+
+**THE RULE IS ONE SENTENCE AND IT LIVES AT THE SHARED DOOR.** *A row records the query of the search
+that surfaced it, on the platform the page itself says it is.* In `upsert_observed_jobs`, because
+three call sites each remembering a rule is how a rule gets forgotten — and this one was already
+written down in a docstring one line above the code that broke it.
+
+**AND CASING IS NOT A MISMATCH.** Three live rows carry both *"Reporting Analyst"* and *"reporting
+analyst"* — the same query from the target list, stored twice, because `_norm` collapses whitespace
+and not case. A case-sensitive check would have raised on honest data on its first run. The first
+version of the audit reported 37 bad rows; separating case from contamination gave the real
+answer, **14 / 20 / 3**. *A guard's first job is to not cry wolf on the corpus it is auditing.*
+
+### Repairing what got in before the door had a lock
+
+`GET /api/career_search/provenance` audits; `POST /api/career_search/provenance/repair` strips, dry
+by default. **The adjudicator is the join table**: `search_queries` is a display field that
+accumulated whatever any caller asserted, while `SearchSighting` records which search actually
+surfaced which job — so where a row's history is joined, the second settles the first.
+
+Deliberate limits, each of which is the interesting part:
+* **Only one class is repairable** — rows a FEED alone ever surfaced, which therefore cannot have
+  been found by any query. Ran live: **14 repaired, 0 remaining**, and the feed's 15 sighting links
+  untouched, because the true provenance was never the thing being edited.
+* **The other 20 are refused and counted.** A repair that guesses is just a second caller asserting
+  things.
+* **A row with no sighting links is never called a liar.** Rows predating the join table have
+  queries and no links; absence of a link is not evidence of a lie, and an audit that counted them
+  would have reported the whole corpus (694 rows, 250 joined) as contaminated.
+* **Audit and repair are separate endpoints**, because an audit that also repairs is one nobody
+  dares run, and a repair that cannot be previewed is one nobody should.
+
+**AND THE FIX FOR THE MORNING'S FIX: `filters` NEEDED TO BE A TRI-STATE.** The column added earlier
+today encoded "we looked and there were no filters" and "nobody looked" **identically** as `{}` —
+the same mistake `page_meta.has_next` already carries a note about, made again on the same day by
+the person who had just read that note. It matters concretely: **Search 13** — the LinkedIn sweep
+whose result set demonstrably changed under it — would have rendered as *confirmed unfiltered*.
+Now `""` means nobody looked (`filters: null`, `filters_recorded: false`) and `"{}"` means the set
+carried none. Search 13 reads **not recorded**, which is the only honest thing it can say.
+
+*Suite: controlplane-api 1914 → 1924. Repair run live: 14 rows, 0 repairable remaining, 20 standing.*

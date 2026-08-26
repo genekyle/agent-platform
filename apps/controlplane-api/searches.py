@@ -51,7 +51,7 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
         Search.session_id == session_id, Search.engine == (engine or "indeed"),
         Search.query == q, Search.location == _norm(location),
         Search.status == "active"))
-    encoded = json.dumps(filters, sort_keys=True) if filters else ""
+    encoded = json.dumps(filters, sort_keys=True) if filters is not None else ""
     if row is None:
         row = Search(session_id=session_id, engine=engine or "indeed", query=q,
                      location=_norm(location), radius_miles=radius_miles, filters=encoded)
@@ -79,7 +79,7 @@ def ensure_active_feed(db: Session, *, session_id: Optional[int], engine: str,
     row = db.scalar(select(Search).where(
         Search.session_id == session_id, Search.engine == (engine or "indeed"),
         Search.kind == "feed", Search.surface == surf, Search.status == "active"))
-    encoded = json.dumps(filters, sort_keys=True) if filters else ""
+    encoded = json.dumps(filters, sort_keys=True) if filters is not None else ""
     if row is None:
         row = Search(session_id=session_id, engine=engine or "indeed", query="",
                      location="", kind="feed", surface=surf, filters=encoded)
@@ -151,7 +151,12 @@ def summarize(db: Session, *, session_id: Optional[int] = None,
             # What the engine said this set WAS. Surfaced rather than kept in the row, so the
             # operator can see "gathered with f_AL=true" without curling anything (LEARNINGS
             # 2026-08-26: the contamination was invisible because nothing displayed it either).
-            "filters": json.loads(s.filters) if (s.filters or "").strip() else {},
+            # TRI-STATE, for the same reason `has_next` is one: "" means NOBODY LOOKED and "{}"
+            # means we looked and the set carried no filters. Collapsing them to {} would let a
+            # search gathered before this column existed — Search 13, the 08-26 LinkedIn sweep whose
+            # result set demonstrably changed under it — read as "confirmed unfiltered".
+            "filters": json.loads(s.filters) if (s.filters or "").strip() else None,
+            "filters_recorded": bool((s.filters or "").strip()),
             "status": s.status, "pages_swept": s.pages_swept, "results_seen": s.results_seen,
             "jobs_found": int(jobs), "applications": int(apps),
             "started_at": s.started_at.isoformat() if s.started_at else None,

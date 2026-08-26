@@ -208,6 +208,19 @@ def test_a_search_and_a_feed_both_record_the_filters_they_were_gathered_under(db
     assert bare.filters == '{"f_AL": "true"}'
 
 
+def test_nobody_looked_and_there_were_none_do_not_encode_alike(db):
+    """The same tri-state `has_next` already keeps. A search gathered before this column existed
+    must not read as "confirmed unfiltered" — that is precisely the claim we cannot make about
+    Search 13, whose result set demonstrably changed under it."""
+    never = searches_mod.ensure_active_search(db, session_id=9, engine="indeed", query="analyst")
+    looked = searches_mod.ensure_active_search(db, session_id=9, engine="indeed", query="welder",
+                                               filters={})
+    assert never.filters == "" and looked.filters == "{}"
+    rows = {r["query"]: r for r in searches_mod.summarize(db, session_id=9)}
+    assert rows["analyst"]["filters"] is None and rows["analyst"]["filters_recorded"] is False
+    assert rows["welder"]["filters"] == {} and rows["welder"]["filters_recorded"] is True
+
+
 # --- adjudicating what got in before the door had a lock ---------------------------------------
 def test_the_audit_repairs_the_feed_lie_and_refuses_what_it_cannot_prove(db):
     """Two rows, two different reasons for an unbacked query, and only one of them is knowable.
