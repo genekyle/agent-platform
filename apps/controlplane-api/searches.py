@@ -49,6 +49,30 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
     return row
 
 
+def ensure_active_feed(db: Session, *, session_id: Optional[int], engine: str,
+                      surface: str = "home_feed") -> Optional[Search]:
+    """The active FEED process for this session, created on first use.
+
+    The query-kind sibling above refuses a blank query, and rightly: a sweep of an undeclared
+    search has no identity to attribute its sightings to. A feed run has no query and is not
+    undeclared — its identity is the SURFACE, so it is keyed on (session, engine, surface) and the
+    query column stays empty rather than being filled with a lie like "(feed)".
+
+    Same lifecycle as a search, for the same reason: re-entering the feed in a living session
+    reuses the row instead of minting a twin, and closing it must never close the browser.
+    """
+    surf = _norm(surface) or "home_feed"
+    row = db.scalar(select(Search).where(
+        Search.session_id == session_id, Search.engine == (engine or "indeed"),
+        Search.kind == "feed", Search.surface == surf, Search.status == "active"))
+    if row is None:
+        row = Search(session_id=session_id, engine=engine or "indeed", query="",
+                     location="", kind="feed", surface=surf)
+        db.add(row)
+        db.flush()
+    return row
+
+
 def link_sightings(db: Session, search: Optional[Search], job_ids: Iterable[str],
                    *, page: Optional[int] = None, results_on_page: int = 0) -> int:
     """Attach one recorded page to its search: association rows + the rollup counters.
@@ -99,6 +123,13 @@ def summarize(db: Session, *, session_id: Optional[int] = None,
                          .where(Application.search_id == s.id)) or 0
         out.append({
             "id": s.id, "session_id": s.session_id, "engine": s.engine,
+            # `kind` travels with every row so the cockpit can label the SAME counters correctly:
+            # `pages_swept` is pages on a query and BATCHES on a feed, and a UI that had to infer
+            # which from an empty query string would guess wrong on the first odd row.
+            "kind": getattr(s, "kind", "query") or "query",
+            "surface": getattr(s, "surface", "") or "",
+            "label": (s.query or "").strip() or (f"{(getattr(s, 'surface', '') or 'feed').replace('_', ' ')}"
+                                                 if (getattr(s, "kind", "") == "feed") else ""),
             "query": s.query, "location": s.location, "radius_miles": s.radius_miles,
             "status": s.status, "pages_swept": s.pages_swept, "results_seen": s.results_seen,
             "jobs_found": int(jobs), "applications": int(apps),

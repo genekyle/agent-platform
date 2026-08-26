@@ -85,6 +85,11 @@ def migrate_schema() -> None:
         # job_decisions → the same Search join (v19): picks and passes tie to the query+date that
         # put the cards on the table, not just its display string.
         ("job_decisions", "search_id", "INTEGER"),
+        # searches: which PROCESS a row is (v20) — `query` (someone typed one) or `feed` (the
+        # engine's own front page). A feed run is a unit of work inside a living session, exactly
+        # what this table already modelled, so it got a discriminator rather than a twin table.
+        ("searches", "kind", "VARCHAR(20) NOT NULL DEFAULT 'query'"),
+        ("searches", "surface", "VARCHAR(60) NOT NULL DEFAULT ''"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:

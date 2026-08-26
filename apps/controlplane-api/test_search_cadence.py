@@ -201,3 +201,31 @@ def test_the_feed_ships_a_row_that_is_not_a_job():
     t = sc.home_feed_traversal()
     assert "cdef0123456789ab" in t["not_a_card"]
     assert "zero-height" in t["not_a_card"]
+
+
+def test_the_feed_shows_the_whole_batch_and_filters_nothing():
+    """The first draft of this mode rejected sub-floor cards from the card itself. Operator,
+    2026-08-26: *"i don't want to set a floor yet, i do want to consider all opportunities."* A feed
+    is a surface of things we did not ask for, which is what makes it worth working — pre-filtering
+    it is deciding for the operator."""
+    import search_cadence as sc
+
+    mode = sc.CADENCE_MODES["suggested_feed_apply"]
+    joined = " ".join(mode["does_not"]).lower()
+    assert "filter the batch before showing it" in joined
+    assert "apply to anything the operator did not pick" in joined
+    # EVERY card is recorded, not a surviving subset.
+    assert any("every card" in r.lower() for r in mode["records"])
+    # And the traversal opens what the operator picked, not what a filter left behind.
+    assert sc.home_feed_traversal()["click_into"] == "operator_picks"
+
+
+def test_the_feed_is_a_process_inside_the_session_not_a_new_one():
+    """Operator: it *"shouldn't require a new session since all actions are still being performed
+    on indeed — so instead it will be a new process or workflow within a domain."*"""
+    import search_cadence as sc
+
+    mode = sc.CADENCE_MODES["suggested_feed_apply"]
+    assert any("new session" in d for d in mode["does_not"])
+    assert any("ensure_active_feed" in s for s in mode["steps"]), \
+        "the mode must name the process it opens, or nothing attributes its sightings"

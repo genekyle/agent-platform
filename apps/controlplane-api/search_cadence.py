@@ -278,11 +278,12 @@ INDEED_HOME_FEED_TRAVERSAL = {
     #: filter already drops it; anything reading `[data-jk]` directly must drop it too, or the
     #: cadence will try to open a card that cannot be clicked.
     "not_a_card": "zero-height rows, and the placeholder jk `cdef0123456789ab`",
-    #: CONSIDER FROM THE CARD, OPEN ONLY THE CANDIDATES. Title, company, location, commute, salary
-    #: and the "Easily apply" badge are all ON the card, which is everything the floor-and-fit
-    #: triage needs. Opening all 15 panes per batch would spend a description read on jobs the pay
-    #: floor rejects outright — the resource-efficiency constraint, applied to traversal.
-    "click_into": "shortlist",
+    #: CONSIDER FROM THE CARD, OPEN WHAT THE OPERATOR PICKS. Title, company, location, commute,
+    #: pay and the "Easily apply" badge are all ON the card, which is enough to put the whole batch
+    #: in front of the operator. The shortlist here is THEIR pick list, not a filter we applied on
+    #: the way past — opening all 15 panes per batch would spend a description read on jobs nobody
+    #: chose, and opening none would ask them to choose from less than the card already shows.
+    "click_into": "operator_picks",
     "click_endpoint": "/open_job_card",
     "click_by": "trusted CDP click at the card's measured centre (a synthetic .click() does not "
                 "switch the React pane)",
@@ -450,59 +451,70 @@ CADENCE_MODES = {
                      "open job-detail URLs / churn tabs to browse", "gather below min_radius_miles",
                      "handpick or skip results — the sweep applies to everything it can reach"],
     },
-    # ---- TASK 4: the FRONT PAGE — a feed, not a search ----------------------
-    # Operator-directed 2026-08-25: *"apply to all of the possible jobs on our suggested page ...
-    # the jobs keep generating as you scroll down, so we select as we scroll down. each one is
-    # considered with each scroll we pass."* This is the one mode with NO QUERY: Indeed has already
-    # done the matching from previous searches, so there is nothing to type, no distance pill to
-    # set, and no page number to click. What replaces all three is the BATCH — see
-    # INDEED_HOME_FEED_TRAVERSAL, which is where the mechanics and their evidence live.
+    # ---- TASK 4: the FRONT PAGE — a feed, and the operator picks from it ----
+    # Operator-directed 2026-08-25/26: *"instead of searching we choose the jobs we want based off
+    # of the ones that appear and then scroll along if we don't like any, or are done applying with
+    # the ones we choose."* Two things follow, and they are the whole mode.
     #
-    # The pay floor does more work here than anywhere else. A search we ran is bounded by the query
-    # we chose; a feed is bounded by nothing, and it demonstrably surfaces part-time and $1/hr rows
-    # alongside real ones (measured on the first batch). Triage is therefore FROM THE CARD, which
-    # already carries pay, and the floor rejects before a description is ever read.
+    # FIRST, THERE IS NO QUERY — Indeed already did the matching from previous searches, so there is
+    # nothing to type, no distance pill to set and no page number to click. What replaces all three
+    # is the BATCH (see INDEED_HOME_FEED_TRAVERSAL for the mechanics and their evidence). The run is
+    # a `feed`-kind Search row: a process inside the living session, not a new session, because
+    # every action is still on the same signed-in Indeed.
+    #
+    # SECOND, AND CORRECTING THIS MODE'S FIRST DRAFT: WE DO NOT FILTER. The first cut had the
+    # cadence reject sub-floor cards from the card itself, which read as efficient and was wrong —
+    # *"i don't want to set a floor yet, i do want to consider all opportunities."* A feed is a
+    # surface of things we did not ask for, which is exactly what makes it worth working: the
+    # judgement of what is worth applying to is the operator's, per batch, and pre-filtering it away
+    # is deciding for them. So every card in a batch is recorded and SHOWN. The pay floor still
+    # governs what gets ANSWERED on an application; it does not govern what gets looked at.
     "suggested_feed_apply": {
-        "goal": "Walk the front-page suggestion feed batch by batch: consider every card as it "
-                "arrives, apply to the ones that clear the floor and fit, keep scrolling.",
+        "goal": "Walk the front-page feed batch by batch: show the operator everything a batch "
+                "surfaced, apply to what THEY choose, and scroll on when the batch is done.",
         "steps": [
             "STATE CHECK: signed in, on a fresh Indeed page. Not logged in / a challenge -> "
             "ESCALATE (never type a password, never auto-solve). Gates everything below.",
             "Reach the feed by CLICKING the Home nav from wherever the session already is. Never a "
             "URL jump — same rule as every other surface.",
-            "READ THE FEED'S OWN PREMISE FIRST: the heading states what it is matching on. A feed "
-            "matching the wrong preferences is not a feed to apply from, and that is the operator's "
-            "call to make before any applying, not ours to work around.",
-            "Per BATCH (one /scroll_job_list call = one batch of `new_ids`): consider EVERY new id "
-            "from its CARD — title, company, location/commute, pay, and the Easily-apply badge are "
-            "all on it. Record them all -> observed_jobs (deduped by indeed:<data-jk>).",
-            "Reject on the card where the card is enough: below the pay floor, part-time when "
-            "full-time is wanted, or plainly out of role. A rejection is RECORDED, not silent — the "
-            "rows the floor rejects are exactly the boundary a model would learn from.",
-            "For each survivor: /open_job_card by its data-jk, CONFIRM `switched` (the feed "
-            "auto-opens the first card, so an unconfirmed click reads the previous job), then read "
-            "the pane and decide.",
-            "Apply to the decided set through the ordinary apply cadence — quick-apply drive or the "
-            "cross-site recipe by classify_apply_platform. The final Submit stays a per-application "
-            "operator confirm; batch-approving the FEED authorizes entering an apply, never sending "
-            "one.",
-            "APPLY EPILOGUE per job: close the ONE finished apply tab and refocus the feed tab. "
-            "Returning to the feed must not lose the scroll position — the batch already reviewed "
-            "is above us and re-reviewing it is the repeat this cadence exists to avoid.",
-            "Only when the batch is fully handled: scroll for the NEXT batch. Stop on `exhausted`, "
-            "on the run's bound, or when the operator pauses.",
+            "OPEN THE FEED PROCESS: searches.ensure_active_feed(session, engine, surface) — a "
+            "`feed`-kind row keyed on the surface rather than a query. Sightings, picks and "
+            "applications attribute to it exactly as they would to a search, so 'what did the feed "
+            "yield' is the same join as 'what did that query yield'.",
+            "READ THE FEED'S OWN PREMISE: the heading states what it is matching on. A feed "
+            "matching preferences the operator does not hold is worth saying out loud before "
+            "working it — that is their call to make, not ours to work around.",
+            "Per BATCH (one /scroll_job_list call = one batch of `new_ids`): record EVERY new id -> "
+            "observed_jobs, linked to the feed process. No filtering: the card's title, company, "
+            "commute, pay and Easily-apply badge are what the operator reads to choose.",
+            "SHOW THE WHOLE BATCH and let the operator pick — none, some or all. Picking is the "
+            "approval to enter those applications (handpick = approval for THAT job); picking "
+            "nothing is a complete and ordinary answer, and the run scrolls on.",
+            "For each pick: /open_job_card by its data-jk, CONFIRM `switched` (the feed auto-opens "
+            "the first card, so an unconfirmed click reads the previous job), then apply through "
+            "the ordinary cadence — quick-apply drive or the cross-site recipe by "
+            "classify_apply_platform. The final Submit stays a per-application operator confirm.",
+            "APPLY EPILOGUE per pick: close the ONE finished apply tab and refocus the feed tab. "
+            "Returning must not lose the scroll position — the batch already worked is above us, "
+            "and re-reviewing it is the repeat this cadence exists to avoid.",
+            "Only when the batch's picks are all handled: scroll for the NEXT batch. Stop on "
+            "`exhausted`, on the run's bound, or when the operator is done.",
         ],
-        "records": ["observed_jobs (every card considered, deduped by indeed:<data-jk>)",
-                    "the floor/fit rejection and its reason (the boundary rows)",
+        "records": ["observed_jobs (EVERY card the feed surfaced, deduped by indeed:<data-jk>)",
+                    "the feed process (a `feed`-kind Search) and its per-batch sightings",
+                    "the operator's picks and passes per batch — the boundary rows a model learns "
+                    "the judgement from",
                     "application_status + provenance, with the feed as the source instead of a query"],
         "stops_when": "`exhausted`, the run's bound is hit, a live captcha/challenge, logout, the "
-                      "weekly budget cap, or the operator pauses",
+                      "weekly budget cap, or the operator is done",
         "does_not": ["type a query or set a distance filter — this surface has neither",
+                     "filter the batch before showing it — the operator considers ALL of it",
                      "treat a wheel that MOVED as a batch reviewed",
-                     "open a pane for a card the floor already rejected",
+                     "apply to anything the operator did not pick",
                      "dismiss (thumbs-down) a card — its effect on later batches is unmeasured",
                      "auto-submit without the per-application approval",
-                     "run unbounded because the feed is unbounded"],
+                     "run unbounded because the feed is unbounded",
+                     "open a new session — the feed is a process inside the one already signed in"],
     },
 }
 

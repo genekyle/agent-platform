@@ -482,6 +482,17 @@ class Search(Base):
     #: outlives its session row's lifecycle states.
     session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     engine: Mapped[str] = mapped_column(String(40), default="indeed", index=True)
+    #: WHICH PROCESS THIS IS — `query` (someone typed a search) or `feed` (the engine's own
+    #: front-page suggestions). Operator, 2026-08-26: working the suggestion feed *"shouldn't
+    #: require a new session since all actions are still being performed on indeed — so instead it
+    #: will be a new PROCESS or WORKFLOW within a domain."* This row was already that concept: a
+    #: unit of work inside a living session that sightings and applications hang off. It needed a
+    #: discriminator, not a twin table — a parallel FeedRun would have split provenance in half and
+    #: given `SearchSighting`, `Application.search_id` and the cockpit's list two things to mean.
+    kind: Mapped[str] = mapped_column(String(20), default="query", index=True)
+    #: For a feed, WHICH feed — engines have more than one suggestion surface, and "the front page"
+    #: is not a query we can key on. Empty for a query-kind row, whose identity is the query itself.
+    surface: Mapped[str] = mapped_column(String(60), default="")
     query: Mapped[str] = mapped_column(String(300), default="", index=True)
     location: Mapped[str] = mapped_column(String(300), default="")
     radius_miles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

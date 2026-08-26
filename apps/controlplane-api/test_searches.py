@@ -105,3 +105,30 @@ def test_closing_a_search_is_not_closing_anything_else(db):
     # and a re-declare of the closed query mints a FRESH row rather than reviving the old one
     s1b = searches_mod.ensure_active_search(db, session_id=25, engine="indeed", query="q one")
     assert s1b.id != s1.id
+
+
+def test_a_feed_run_is_a_process_keyed_on_its_surface_not_a_query(db):
+    """`ensure_active_search` refuses a blank query — a sweep of an undeclared search has no
+    identity to attribute sightings to. A feed run is not undeclared: its identity is the SURFACE.
+    Operator, 2026-08-26 — working the front page is a process inside the living session."""
+    searches = searches_mod
+    feed = searches.ensure_active_feed(db, session_id=32, engine="indeed")
+    assert feed is not None and feed.kind == "feed" and feed.surface == "home_feed"
+    # The query column stays EMPTY rather than being filled with a lie like "(feed)".
+    assert feed.query == ""
+
+    # Re-entering the feed in a living session reuses the row instead of minting a twin.
+    again = searches.ensure_active_feed(db, session_id=32, engine="indeed")
+    assert again.id == feed.id
+
+    # A different surface on the same engine is a different process.
+    other = searches.ensure_active_feed(db, session_id=32, engine="indeed", surface="saved_jobs")
+    assert other.id != feed.id
+
+    # And a query-kind search is still refused for a blank query — the feed path did not soften it.
+    assert searches.ensure_active_search(db, session_id=32, engine="indeed", query="  ") is None
+
+    # A feed row must not be handed back to the query lookup, or the two processes collide.
+    q = searches.ensure_active_search(db, session_id=32, engine="indeed", query="data analyst")
+    assert q.id != feed.id and q.kind == "query"
+    assert {r["kind"] for r in searches.summarize(db, session_id=32)} == {"feed", "query"}
