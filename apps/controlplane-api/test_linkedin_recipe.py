@@ -238,14 +238,22 @@ def test_every_card_is_opened_and_the_pane_switch_is_the_proof():
 
 
 def test_the_traversal_separates_what_was_driven_live_from_what_was_not():
-    """PRINCIPLES §13: say which it is. The scroll, the reader and the click were driven on the live
-    page 2026-07-30 and say so with the numbers; paging and the end-to-end sweep were NOT, and say
-    that too. A recipe that claimed both would be the same failure as claiming neither."""
+    """PRINCIPLES §13: say which it is. The scroll, the reader and the click were driven live
+    2026-07-30 and say so with the numbers; the sweep and page 2 were driven live 2026-08-26 and
+    now say so too. A recipe that claimed both without dating them would be the same failure as
+    claiming neither — and the claim this test used to pin ("paging has not been PRESSED", "the
+    sweep stops at /set_distance") was still being asserted here long after it stopped being true,
+    which is how a stale blocked_on survives a green suite."""
     t = lr.results_traversal()
     assert "scrollTop 0 -> 700" in t["verified_live"]
     assert "25/25 cards" in t["verified_live"]
-    assert "not been PRESSED" in t["still_unverified"]
-    assert "set_distance" in lr.spec()["blocked_on"]
+    # the second drive, and it has to carry its own date and its own numbers
+    assert "2026-08-26" in t["verified_live_2"] and "Page 2" in t["verified_live_2"]
+    # and what is open is now about the SURFACE and the result set, not about paging
+    assert "result set" in t["still_unverified"].lower()
+    assert "f_AL" in t["still_unverified"]
+    assert "set_distance" not in lr.spec()["blocked_on"]
+    assert "PREFERENCES_LANDING" in lr.spec()["blocked_on"]
 
 
 def test_the_card_is_addressed_by_componentkey_not_by_an_href_or_an_attribute():

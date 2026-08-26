@@ -472,11 +472,28 @@ RESULTS_TRAVERSAL: dict[str, Any] = {
                       "correct title, company, location, salary where present, and Easy Apply on "
                       "exactly the two cards showing it; humanized clicks opened cards and the "
                       "pane's own currentJobId confirmed which job had opened."),
-    "still_unverified": ("Paging to page 2 — the bar is now read by label instead of by the absent "
-                         "artdeco classes, and reports pages [1,2,3], but has not been PRESSED "
-                         "live. And the traversal has not been driven through /api/search/sweep "
-                         "end to end: that path first runs /set_distance, which is Indeed-shaped "
-                         "and would stop a LinkedIn sweep before it reached the list."),
+    #: ANSWERED 2026-08-26 (session 34, live): page 2 was PRESSED — /next_page wheeled to the end
+    #: of the column, pressed `Page 2`, the SPA signature changed, and page 2 extracted 25 distinct
+    #: cards. And the traversal HAS now been driven through /api/search/sweep end to end: the
+    #: /set_distance objection was already stale, because that gate has been behind
+    #: `command_center.has_distance_filter` and skipped cleanly (`distance_selected: null`).
+    #: `pages_swept: 2`, 50 found, 48 new.
+    "verified_live_2": ("2026-08-26, session 34: /api/search/sweep ran two pages on "
+                        "origin=PREFERENCES_LANDING — extract 25, open cards, press Page 2, "
+                        "extract 25 — and the distance gate was skipped rather than failed."),
+    #: AND THE VIRTUALISATION CLAIM ABOVE IS OUT OF DATE, which matters because everything in this
+    #: dict is justified by it. Measured the same day: the FIRST read, before any scroll, returned
+    #: 25 of 25 cards, two 700px batches rendered zero new ids, and a card ~3000px ABOVE the fold
+    #: was still found and opened first try. Nothing is evicted on this surface. The traversal
+    #: still works — it over-scrolls rather than under-reads — but not for the stated reason.
+    "still_unverified": ("Whether the ~7-of-25 virtualisation measured 2026-07-30 was the renderer "
+                         "of the day or the surface: this one renders all 25 at once. Whether page "
+                         "3+ behaves like page 2. And the one that bit: a sweep cannot currently "
+                         "see the RESULT SET change under it — /results_signature answers 'are "
+                         "these different cards', which a page turn and a filter flip both satisfy, "
+                         "so an Easy-Apply filter (f_AL=true) toggled mid-run and 23 rows landed "
+                         "under a Search row that says nothing about it. The URL's own filter "
+                         "params are the right witness for this and are not read anywhere."),
 }
 
 
@@ -529,8 +546,16 @@ def spec() -> dict[str, Any]:
                      "Enter is the commit, and it lands on /jobs/search-results/",
                      "the results list is virtualised and scrolls inside its own column",
                      "a class-named scroller/card reader was null/0 on the live results page"],
-        "blocked_on": ("paging to page 2 has not been pressed live, and the traversal has not been "
-                       "run through /api/search/sweep end to end — that path starts with "
-                       "/set_distance, which is Indeed-shaped and would stop a LinkedIn sweep "
-                       "before it reached the list"),
+        #: A `blocked_on` is a claim with a date on it. Both of the previous two were about the
+        #: sweep, and both are answered (2026-08-26, session 34 — see RESULTS_TRAVERSAL): page 2 is
+        #: pressed, the sweep runs end to end, and the /set_distance objection had outlived its bug
+        #: by some margin. What is genuinely open is a level up from the list.
+        "blocked_on": ("The PREFERENCES LANDING (origin=PREFERENCES_LANDING, 'Jobs based on your "
+                       "preferences') has no state of its own: it is unrequested like a feed and "
+                       "paginated like a search — 99+ results, visible_pages [1,2,3], a filter row "
+                       "cut down to Date posted / LinkedIn Apply, and an dismiss on every card — "
+                       "and it classifies as plain SEARCH_RESULTS, so nothing downstream can tell "
+                       "the two apart. Naming it is the same call BLENDED_SEARCH already earned, "
+                       "and it is the operator's to make. Also open: a result-set change mid-sweep "
+                       "is invisible (see still_unverified)."),
     }
