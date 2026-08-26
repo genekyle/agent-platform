@@ -370,3 +370,99 @@ NOT work and why — the next session pays for it again otherwise.
   correction, the same rule §10 applies to the teacher's reasoning.
 - **Falsifier:** if a recipe's comments cannot be traced to a drive that produced them, or a
   capability flag is True with no read-back behind it, this principle is not being followed.
+
+## §14 — A world-fact rots; a code-fact does not. They must not be stored the same way
+
+**The failure this exists to stop.** `linkedin_recipe.RESULTS_TRAVERSAL` held both of these in one
+dict: `"scroll_endpoint": "/scroll_job_list"` and `"virtualised": True`. The first is a **code-fact**
+— true until we change it, and if we change it the suite goes red. The second is a **world-fact** —
+measured live on 2026-07-30, and falsified by LinkedIn on 2026-08-26 without a line of this repo
+changing. Same file, same review, same tests, and **only one of them can become false while nobody
+is looking.** On the same day, `spec()["blocked_on"]` was still claiming a sweep "starts with
+`/set_distance`… and would stop a LinkedIn sweep before it reached the list" — twelve days after
+that gate moved behind `has_distance_filter`. A session read it, believed it, and planned around it.
+
+**And the suite was defending the rot.** `test_the_traversal_separates_what_was_driven_live_from_what
+_was_not` asserted `"not been PRESSED" in still_unverified` — the *prose of a perishable claim*. So
+the green suite's job had quietly become **keeping a false statement alive**. A test that pins the
+wording of a world-fact converts staleness from a risk into an invariant.
+
+**The rule.** Every recorded claim about the outside world carries, at minimum: **what was observed,
+when, on which drive, and how to re-check it.** A world-fact with no date is a rumour. Tests assert
+the **shape** of such a claim — that it is dated, attributed and separated from what was *not*
+driven — and **never its content**. `blocked_on`, `still_unverified` and `verified_live` are claims
+with expiry dates, not documentation.
+
+**The corollary that keeps biting.** A world-fact contradicted by a later drive is **retracted in
+place, with both sides kept** (§10, §13) — never silently overwritten, and never silently left. The
+2026-08-14 radius retraction in `linkedin_recipe` is the shape to copy: the wrong claim stays,
+labelled, because a stage that silently disappears is indistinguishable from one nobody got to.
+
+- **Enforced by:** dated `verified_live` / `verified_live_2` entries in `linkedin_recipe.py`;
+  `test_the_traversal_separates_what_was_driven_live_from_what_was_not`, which now pins the
+  separation (each drive carries its own date and numbers) instead of one drive's wording; the
+  `MEASURED` / `HYPOTHESIS` / `UNVERIFIED` classes of §13; `docs/LEARNINGS.md` for the reasoning.
+- **Falsifier:** a claim about an external surface that carries no date or drive; or a test that
+  asserts the prose of one. If a `blocked_on` can outlive its bug in a green suite, this principle
+  is not being followed.
+
+## §15 — One authority per identity question, and everybody asks it
+
+**The failure this exists to stop.** On 2026-08-25 four layers each had their own notion of what
+identifies a control, and every "the control is right there and the layer said no" moment came from
+a different one: `apply_prompt_select` keyed on a prompt's `field_name`, `check_group` on its own
+label derivation, `/execute` on nearest-label-by-proximity, and a value write on `.value`. Seven
+attempts, four notions of identity, one control. On 2026-08-26 the same shape in the corpus:
+`job_id` is `f"{platform}:{external_id}"`, and two of three write paths **asserted** the platform
+while the extractor had already **observed** it off the live tab's host — so a wrong guess would not
+mislabel a row, it would mint a different row that can never dedupe against the real one.
+
+**The rule.** For each kind of thing, exactly **one** authority answers *"which one is this?"*, and
+every other component asks it rather than deriving its own answer. New code cites which authority it
+used. When two answers disagree, the caller **refuses** — it does not pick, and it does not silently
+correct, because a silent correction hides the real fault (a call aimed at the wrong thing).
+
+| Question | The authority | Never |
+|---|---|---|
+| Which element is this? | CDP-AX: role + accessible name → `backend_node_id` (§6) | a `querySelector`, a class, a proximity guess |
+| Which job is the pane showing? | the pane's own id (`currentJobId` / `JobDetails_*_<id>`), via `pane_shows` | a text diff against the previous read |
+| Which result set is on screen? | the engine's own URL — query terms + filters (`result_set_identity`) | `/results_signature`, which answers "different cards?" |
+| Which search surfaced this job? | the `SearchSighting` join table | `ObservedJob.search_queries`, which is a display field |
+| Which platform is this row? | the extractor's observed host | the caller's `platform=` argument |
+| Did the widget accept it? | the widget's own commit signal (`describe_widget` / the hidden node) | that the write returned `ok` |
+
+- **Enforced by:** `observed_jobs.check_provenance` (refuses a platform the page disagrees with),
+  `pane_shows`, `search_cadence.result_set_identity`, the AX interaction layer (§6).
+- **Falsifier:** any new code that answers one of these questions itself instead of asking the
+  authority — or that resolves a disagreement by choosing, rather than by refusing.
+
+## §16 — Store the observation; derive the conclusion. A conclusion without its evidence cannot be corrected
+
+**The failure this exists to stop.** `ObservedJob.search_queries` (a JSON list of "queries that found
+this job") and `SearchSighting` (a row per search × job) are **the same fact stored twice** — once as
+a conclusion anybody could assert, once as an observation with a search behind it. On 2026-08-26 the
+corpus held 14 rows claiming they were found by searching *"data analyst"* when the only thing that
+ever surfaced them was Indeed's suggestion feed, and **20 more rows that can never be judged at all**:
+they carry a query, they were also surfaced by real searches, and the write that added the query
+created no link. The evidence needed to adjudicate them was never written, so no cleverness recovers
+it. **That pile only grows.** The 14 were repairable *because* the join table could adjudicate them;
+the 20 are permanent, and they are the whole argument for this principle.
+
+**The rule.** Where a fact can be **derived from recorded observations, derive it** — do not also
+store it as a claim. Where a derived value must be stored (for display or speed), it carries a
+pointer to the observation that justifies it, and a write that cannot produce that pointer is
+**refused at the door, not audited afterwards**. An audit run later can only sort damage into
+*provable* and *unknowable*; the unknowable pile never shrinks.
+
+**And name the three "no"s.** "I looked and there is none", "I did not look", and "I cannot tell" are
+different facts and must not encode alike. This was violated twice on 2026-08-26 within hours —
+`page_meta.has_next` carries a note about exactly this, and `Search.filters` was written to collapse
+`{}` and "never recorded" anyway. The consequence was concrete: a search whose result set
+demonstrably changed under it would have rendered as *confirmed unfiltered*.
+
+- **Enforced by:** `observed_jobs.check_provenance` at the single shared write door; the
+  `filters` / `filters_recorded` tri-state in `searches.summarize`; `GET
+  /api/career_search/provenance` (audit) and `POST /api/career_search/provenance/repair` (dry by
+  default), which repair only the class the join table can prove and **count** the rest.
+- **Falsifier:** a stored claim with no path back to an observation; a repair that guesses; or an
+  audit that reports a number without saying which part of it is unknowable.
