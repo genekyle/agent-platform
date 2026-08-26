@@ -89,13 +89,17 @@ def parse_scroll_value(value: Optional[str], default: float = 600.0) -> float:
     if value is None:
         return default
     s = str(value).strip().lower()
-    sign = -1.0 if s.startswith("up") else 1.0
+    up = s.startswith("up")
     s = s.replace("up", "").replace("down", "").strip()
     try:
-        n = abs(float(s)) if s else default
+        n = float(s) if s else default
     except ValueError:
         n = default
-    return sign * n
+    # A BARE NEGATIVE MEANS UP, WHICH IS WHAT "SIGNED CSS PX" ALREADY PROMISED. The sign used to
+    # come ONLY from an "up" prefix while the magnitude went through abs(), so "-900" scrolled 900px
+    # DOWN — the exact opposite of the request, reported as ok. Caught live 2026-08-25 trying to
+    # scroll Indeed's feed back to the top: three "-900" calls drove it further down instead.
+    return -abs(n) if (up or n < 0) else abs(n)
 
 
 class TrajectoryDriver(ABC):

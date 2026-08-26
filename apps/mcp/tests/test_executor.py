@@ -362,3 +362,16 @@ def test_keys_only_is_off_by_default_and_reaches_the_request():
     req = ActionRequest(action_id="type", target_bbox={}, value="08252026")
     assert req.keys_only is False, "the write stays the default safety net"
     assert ActionRequest(action_id="type", target_bbox={}, value="x", keys_only=True).keys_only
+
+
+def test_a_bare_negative_scroll_means_up():
+    """"Signed CSS px" was only ever signed by the "up" prefix: the magnitude went through abs(),
+    so "-900" scrolled 900px DOWN and reported ok. Caught live 2026-08-25 scrolling Indeed's feed."""
+    assert drv.parse_scroll_value("-900") == -900.0
+    assert drv.parse_scroll_value("900") == 900.0
+    assert drv.parse_scroll_value("up") < 0 and drv.parse_scroll_value("down") > 0
+    assert drv.parse_scroll_value("up 300") == -300.0
+    assert drv.parse_scroll_value("down 300") == 300.0
+    # "up" wins over a stray sign, and junk still falls back to the default rather than raising.
+    assert drv.parse_scroll_value("up -300") == -300.0
+    assert drv.parse_scroll_value("sideways", default=42.0) == 42.0
