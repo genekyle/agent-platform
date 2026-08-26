@@ -2632,21 +2632,32 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     # The search is the query, the session is the browser (2026-08-10): recording a page is the
     # moment a search becomes real, so the row is ensured here — same tuple reuses, a new query
     # in the same session mints a sibling — and every card on the page joins it.
+    import search_cadence
     import searches as searches_mod
+    # WHAT THE PAGE SAYS THIS SET IS, from the URL the extractor already returned. Same witness the
+    # sweep defends (LEARNINGS 2026-08-26): filters are part of a set's identity, and a row whose
+    # search cannot name the filters it was gathered under has lost that half of its provenance.
+    filters = search_cadence.result_set_identity(ex.get("url") or "", engine["platform"])
     if feed:
         # The feed's identity is its SURFACE — there is no query to key on, and filling one in
         # would be a lie the provenance then has to carry.
         search = searches_mod.ensure_active_feed(
             db, session_id=bb.session_id, engine=engine["platform"],
-            surface=(bb.world or {}).get("feed_surface") or "home_feed")
+            surface=(bb.world or {}).get("feed_surface") or "home_feed", filters=filters)
     else:
         search = searches_mod.ensure_active_search(
             db, session_id=bb.session_id, engine=engine["platform"],
             query=bb.search_state.query, location=bb.search_state.location,
-            radius_miles=(bb.world or {}).get("radius_miles"))
+            radius_miles=(bb.world or {}).get("radius_miles"), filters=filters)
+    # ...AND THE LIE THE LINE ABOVE WAS WRITTEN AGAINST WAS ON THE NEXT LINE. This passed
+    # `bb.search_state.query` unconditionally, so every card the FEED surfaced was recorded as
+    # having been found by whatever the session last typed — 14 such rows in the live corpus on
+    # 2026-08-26, all claiming "data analyst" for jobs nobody searched for. A feed has no query; the
+    # upsert now refuses one rather than trusting this call site to remember.
     new_count, dup_count = upsert_observed_jobs(db, cards, engine["platform"],
-                                                bb.search_state.query,
-                                                search=search, page=page)
+                                                None if feed else bb.search_state.query,
+                                                search=search, page=page,
+                                                observed_platform=ex.get("platform"))
     if search is not None:
         bb.world = dict(bb.world or {})
         bb.world["search_id"] = search.id
@@ -5656,9 +5667,15 @@ async def open_feed(session_id: int, body: OpenFeedBody,
             detail="This tab is not on the feed. Reach it by CLICKING the engine's Home nav from "
                    "wherever the session already is — never a URL jump — then open the process.")
 
-    feed = searches.ensure_active_feed(db, session_id=session.id,
-                                       engine=(session.domain_id or "indeed").split("_")[0],
-                                       surface=body.surface)
+    # The feed's own identity, off the tab we just proved is the feed. Empty for Indeed's front
+    # page today (it carries no filter params at all) — recorded anyway, because the day the
+    # operator filters a feed is the day a run's rows stop meaning what the row says they mean.
+    import search_cadence
+    feed = searches.ensure_active_feed(
+        db, session_id=session.id,
+        engine=(session.domain_id or "indeed").split("_")[0], surface=body.surface,
+        filters=search_cadence.result_set_identity(
+            str(tab.get("url") or ""), (session.domain_id or "indeed").split("_")[0]))
     db.commit()
 
     ledger.mark("feed_opened",

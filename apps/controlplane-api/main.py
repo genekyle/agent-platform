@@ -1290,13 +1290,27 @@ async def extract_jobs(body: JobExtractRequest, db: Session = Depends(get_db)):
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"extractor unreachable: {exc}")
 
+    # A QUERY NEEDS A SEARCH TO JUSTIFY IT. This endpoint recorded `search_query` on every row it
+    # wrote and passed no `search` at all, so the query landed on the job and nothing linked it to
+    # anything — 20 rows in the live corpus carry a query no sighting of theirs supports, and no
+    # evidence can now say whether those queries were real (2026-08-26). The row is minted here for
+    # the same reason the sweep mints its own: recording a page is the moment a search becomes real.
+    import search_cadence
+    import searches as searches_mod
+    observed = raw.get("platform") or ""
+    filters = search_cadence.result_set_identity(raw.get("url") or "", observed or body.platform)
+    search = searches_mod.ensure_active_search(
+        db, session_id=body.training_session_id, engine=observed or body.platform,
+        query=body.search_query or "", filters=filters)
     new_count, dup_count = upsert_observed_jobs(db, raw.get("jobs", []),
-                                                body.platform, body.search_query)
+                                                body.platform, body.search_query,
+                                                search=search, observed_platform=observed)
     db.commit()
     resolved = job_dedup.resolve_after_commit(db)
     return {"ok": True, "scraped": raw.get("count", 0), "new": new_count,
             "duplicates": dup_count, "search_query": body.search_query,
-            "canonical_resolved": resolved}
+            "search_id": search.id if search is not None else None,
+            "result_set": filters, "canonical_resolved": resolved}
 
 
 _SENIORITY = {"senior", "sr", "junior", "jr", "lead", "principal", "staff", "associate",

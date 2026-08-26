@@ -393,6 +393,34 @@ def reject_duplicate(match_id: int, db: Session = Depends(get_db)):
     return {"ok": True, "id": match_id, "status": "rejected"}
 
 
+@router.get("/api/career_search/provenance")
+def provenance_audit(db: Session = Depends(get_db)):
+    """What does the corpus claim that its own join table cannot support? Read-only.
+
+    `search_queries` on a job is a display field that accumulated whatever any caller asserted;
+    `SearchSighting` records which search actually surfaced which job. Where a row's history is
+    joined, the second adjudicates the first — and where it is not, this says so rather than
+    guessing (LEARNINGS 2026-08-26).
+    """
+    import observed_jobs
+    return {"ok": True, **observed_jobs.audit_query_provenance(db)}
+
+
+@router.post("/api/career_search/provenance/repair")
+def provenance_repair(apply: bool = Query(False), db: Session = Depends(get_db)):
+    """Strip the queries only the feed could have written. DRY BY DEFAULT — pass `apply=true`.
+
+    Repairs exactly one class: rows whose only sighting is a feed, which therefore cannot have been
+    surfaced by any query. Every other unbacked row is refused and counted, because no evidence can
+    adjudicate it and a repair that guesses is just a second caller asserting things.
+    """
+    import observed_jobs
+    out = observed_jobs.repair_query_provenance(db, apply=apply)
+    if apply:
+        db.commit()
+    return out
+
+
 @router.post("/api/career_search/reindex")
 def reindex(db: Session = Depends(get_db)):
     """Resolve any unresolved sightings, recount, and rescan for duplicates. Idempotent."""

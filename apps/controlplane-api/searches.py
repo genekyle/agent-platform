@@ -63,7 +63,8 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
 
 
 def ensure_active_feed(db: Session, *, session_id: Optional[int], engine: str,
-                      surface: str = "home_feed") -> Optional[Search]:
+                      surface: str = "home_feed",
+                      filters: Optional[dict[str, Any]] = None) -> Optional[Search]:
     """The active FEED process for this session, created on first use.
 
     The query-kind sibling above refuses a blank query, and rightly: a sweep of an undeclared
@@ -78,11 +79,14 @@ def ensure_active_feed(db: Session, *, session_id: Optional[int], engine: str,
     row = db.scalar(select(Search).where(
         Search.session_id == session_id, Search.engine == (engine or "indeed"),
         Search.kind == "feed", Search.surface == surf, Search.status == "active"))
+    encoded = json.dumps(filters, sort_keys=True) if filters else ""
     if row is None:
         row = Search(session_id=session_id, engine=engine or "indeed", query="",
-                     location="", kind="feed", surface=surf)
+                     location="", kind="feed", surface=surf, filters=encoded)
         db.add(row)
         db.flush()
+    elif encoded and not (row.filters or "").strip():
+        row.filters = encoded
     return row
 
 
