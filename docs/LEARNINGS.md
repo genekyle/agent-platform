@@ -11372,3 +11372,64 @@ clicks are card centres and the pagination control, and every failed open return
 Recorded as open rather than guessed at.
 
 *Suites: mcp 161 → 163, controlplane-api 1900 → 1901.*
+
+## 2026-08-26 (second) — the witness was in the URL, and we were reading the wrong one
+
+Operator-directed, straight out of the entry above: *fix the filter blindness*. The sweep's only
+guard between pages was `/results_signature`, and the honest way to state what it does is
+**"are these different cards than before"** — which is exactly right for *did the click land* and
+useless for *is this still the same search*, because a page turn satisfies it just as well as a
+filter flip. That is not a bug in the signature; it is the wrong witness for the question.
+
+**THE ENGINE HAD BEEN ANSWERING ALL ALONG, IN A FIELD WE ALREADY HAD.** `/extract_jobs` returns the
+tab's URL and `/results_signature` carries it too — and LinkedIn writes `f_AL=true` when Easy Apply
+is on, exactly as Indeed writes `radius` and `fromage`. So the identity of a result set is its query
+terms plus its filters, and the whole guard is a parser. No new browser plumbing, no new call on the
+non-SPA path.
+
+**THE PART THAT WOULD HAVE MATTERED MOST IS THE PREFIX RULE.** `f_AL` had never been written down
+anywhere in this repo when it flipped. An enumeration of known filters — the obvious implementation
+— would have missed it exactly as everything else did. `result_set_identity` matches LinkedIn's
+filters by the `f_` **prefix**, so the reader catches a filter it has never met, which is the only
+version of this that survives the engine shipping something new. The generalisable form: *when the
+failure was an unknown unknown, an enumeration is a list of the things that already did not bite.*
+
+**AND WHAT IS DELIBERATELY NOT IDENTITY IS THE OTHER HALF OF THE DESIGN.** `start`, `currentJobId`,
+`vjk`, `eBP`, `refId`, `trackingId` are POSITION and noise: counting them as drift would stop every
+healthy sweep on page 2, which is a worse failure than the one being fixed. `origin` is excluded on
+a judgement call, written down as such — it names the ROUTE (`PREFERENCES_LANDING`,
+`JOBS_HOME_SEARCH`, `GLOBAL_SEARCH_HEADER`), it is rewritten as you interact, and we have exactly
+one measurement of it surviving a page turn.
+
+**THREE SEAMS, AND THE MIDDLE ONE IS THE ONE THAT FAILED.** The sweep learns the set from its first
+extract, then defends it (1) at every extract — free, the URL is already in the response; (2) **before
+spending a single detail click** — one read-only signature, and this is precisely where 08-26 broke,
+because the identity was still right when the cards were READ and wrong by the time they were
+CLICKED; (3) after a page turn, from the signature `await_results` already returns. Drift stops the
+run and names the param rather than saying "the result set changed". Rows already read still count —
+stopping is not discarding.
+
+Seam 2 is **SPA-only**, and the suite is what insisted: `test_indeed_does_not_pay_for_the_spa_check`
+failed the moment the check went in for every engine. It was right. A page that NAVIGATES cannot
+change its set without a load, and nothing between the extract and the detail pass navigates — so on
+Indeed that round trip buys an answer the next extract's URL gives for free. **An existing test
+priced a new guard**, which is the cheapest design review available.
+
+**PROVENANCE NOW TRAVELS WITH THE ROWS.** `Search.filters` holds what the engine said the set was,
+written once at creation and **backfilled onto a row that has none, never overwritten** — a row
+whose filters have changed is not that set any more, and quietly relabelling it would erase the
+exact provenance the column exists to keep. Consequently the sweep mints its Search row *after* the
+first extract rather than before: a row that cannot say which filters produced it is the hole. It is
+surfaced through `summarize()`, so "gathered with f_AL=true" is visible without curling anything.
+
+*Measured, live, at the end:* run against the real tab and the real URL the sweep started from,
+`result_set_drift` returns `the result set changed identity: f_AL: '' -> 'true'`. The migration
+applied to the live DB on reload, and **Search 13 reads `filters: {}`** — correctly empty, because
+it was gathered before the column existed and inventing a value for it would be the same lie the
+column exists to prevent.
+
+*Still open, unchanged:* what flipped `f_AL` is unknown; the guard catches the drift, it does not
+explain the cause. And Search 13's 23 page-2 rows remain of uncertain filter provenance — the guard
+is a fence built after the horse, and that row is the horse.
+
+*Suite: controlplane-api 1906 → 1914.*
