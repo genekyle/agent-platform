@@ -11288,3 +11288,87 @@ parent question is answered, so a census taken on arrival cannot know it exists,
 not require it. **The Review screen is therefore a real observation surface, not a formality: it is
 the only place the whole application is visible at once**, and it is where an unanswered conditional
 gets caught. Surfaced to the operator before Submit, who chose to send as-is.
+
+## 2026-08-26 — the LinkedIn sweep's first end-to-end drive, and a diagnosis I got wrong twice
+
+Session 34, live, on the account's own LinkedIn. `linkedin_recipe.spec()["blocked_on"]` named two
+things; both are now answered, and **one of them was already stale**. It claimed a LinkedIn sweep
+"starts with `/set_distance`, which is Indeed-shaped and would stop a LinkedIn sweep before it
+reached the list" — but `main.py` has gated that on `command_center.has_distance_filter` for some
+time, and the run skipped it cleanly (`distance_selected: null`). **A `blocked_on` is a claim with a
+date on it, and this one outlived its bug.** The other was real: **page 2 had never been pressed
+live, and it has now been** — `/next_page` wheeled to the end of the column, pressed `Page 2`, the
+SPA signature changed, and page 2 extracted 25 distinct cards. `pages_swept: 2`, 50 found, 48 new.
+
+**THE PREFERENCES LANDING IS A FOURTH SURFACE, AND IT IS NOT THE ONE THE RECIPE DESCRIBES.** The tab
+was on `/jobs/search-results/?…&origin=PREFERENCES_LANDING` — *"Jobs based on your preferences"*,
+99+ results, a filter row reduced to `Date posted` / `LinkedIn Apply`, and an **✕ dismiss on every
+card**. It is a FEED by provenance (nobody typed a query; it comes from stored job preferences) and
+a SEARCH by shape (`visible_pages: [1,2,3]`, `has_next`, `?start=` paging). Neither
+`INDEED_HOME_FEED_TRAVERSAL` (appending, no pagination) nor LinkedIn's `RESULTS_TRAVERSAL`
+(virtualised, query spent) is it. Worth knowing before the next feed port: **paginated and
+unrequested are independent axes**, and this surface is the corner nothing had occupied. It also
+means a sweep can be driven here **without spending the session's consuming query**.
+
+**AND THE VIRTUALISATION CLAIM IS OUT OF DATE.** `RESULTS_TRAVERSAL` says the list is virtualised
+and one read returns ~7 of 25 (measured 2026-07-30). Today the first read — before any scroll —
+returned **25 of 25**, and two 700px batches rendered zero new ids. Then the decisive one: a card
+sitting **~3000px above the fold was still found and opened first try**, by the measured-`delta_y`
+path. On this surface nothing is evicted. The traversal still works because it over-scrolls rather
+than under-reads, but the reason written in it is no longer the reason it works.
+
+### The half-failed sweep, and why nothing said so
+
+`descriptions_captured: 6` — with `max_details_per_page: 6` and two pages, that is **6 of 12**. All
+six that landed were page 2's; **every one of page 1's six opens failed and the run did not say so**.
+The summary has a cap number (`details_skipped_by_cap`) but had no failure number, so a half-failed
+traversal is arithmetically indistinguishable from a cap doing its job. Worse: **`/open_job_card` is
+not a `@journaled` endpoint**, so the swallow in the sweep loop was not the first record lost, it
+was the *only* record there would ever have been. Fixed: the sweep now counts `details_failed` and
+carries up to six `detail_failures` with the engine's own reason, and the blackboard log line says
+it too.
+
+### Two wrong diagnoses, in order, and what was actually true
+
+**Wrong #1: "the blind hunt walks the wrong way."** `_bring_card_into_view` walks DOWN 700px a batch
+whenever the row is not rendered, so I reasoned a card ABOVE the pointer could never be reached, and
+I reproduced a "not found" at a scrolled-down position to prove it. **Wrong #2: "page 1 differed
+because its list was scrolled further."** Both stories fit the numbers. Neither was true.
+
+**What was true: the RESULT SET changed underneath the sweep.** A screenshot — taken only because
+the third failed attempt tripped the two-tries-then-look rule — showed the **"LinkedIn Apply" pill
+filled green**, and the URL confirmed **`f_AL=true`**. The card I had been hunting was not evicted,
+not below, not above: **it was not in the list at all**. That also explains page 1 exactly — its
+extract read the unfiltered list, the filter flipped, and the detail pass then looked for 25 cards
+that were no longer there, while page 2 extracted and opened the same (filtered) list and worked.
+
+**THE RECOGNIZER, AND IT IS THE CHEAP ONE.** *A card reader that says "not rendered yet" is guessing
+about a fact it can measure.* `no node for this id (not rendered yet?)` was returned for a row that
+was **absent**, and that single ambiguous string is what bought two hours of scroll-direction
+archaeology. The bbox reader now counts what IS rendered and says which case it is: 25 cards
+rendered and yours not among them is **a changed result set — a filter, a re-query, a page turn** —
+not a row to scroll toward. Same shape as the untrusted-click recognizer from 08-25: the expensive
+diagnosis was downstream of a question nobody asked first.
+
+*Kept, and labelled:* the both-ways hunt shipped anyway, because a function whose contract says "we
+do not know where it is" should not look only one way. Its docstring and test say plainly that the
+case has **never been observed live** and that the failure it was written for had a different cause.
+
+### Two more things the drive surfaced, both unfixed
+
+* **`/results_signature` cannot see a filter change.** It answers "are these different cards than
+  before", which is exactly what a page turn *and* a filter flip both look like. The sweep's guard
+  passed while the result set changed identity, and 23 rows landed under a `Search` row whose
+  provenance says nothing about `f_AL`. Whether page 2's rows are Easy-Apply-filtered rows recorded
+  as unfiltered is **unresolved** — the honest answer is that the signature is the wrong witness for
+  this, and the URL's own filter params are the right one.
+* **The sweep pages one further than it extracts.** The loop is extract → details → `/next_page`, so
+  the last iteration presses forward and stops, leaving the browser on a page nobody read (`start=50`
+  after a 2-page run). Harmless to the data, but it is a click on a real account for nothing, and it
+  is why the tab ended on a posting that appears in none of the 48 rows.
+
+**And what flipped `f_AL` is still unknown.** No call in the drive names that pill; the sweep's only
+clicks are card centres and the pagination control, and every failed open returned before clicking.
+Recorded as open rather than guessed at.
+
+*Suites: mcp 161 → 163, controlplane-api 1900 → 1901.*
