@@ -49,6 +49,7 @@ from urllib.parse import urlparse
 import apply_landing as al
 import apply_steps as aps
 import google_recipe
+import orientation_context as _oc
 import job_dedup
 import session_windows
 from controller import window as _win
@@ -6152,6 +6153,24 @@ _NO_ACCOUNT_PLATFORMS = aps.NO_ACCOUNT_PLATFORMS
 _NOT_THE_PANE = ("view full details", "filter", "encouraged to apply")
 
 
+def _orientation_for(db, *, url: str, rung: str, step, bb) -> dict[str, Any]:
+    """The composed read of what we already know, for one rung. Never raises, never caches.
+
+    SESSION 17's whole mechanism in one helper: the authorities each answer for themselves at
+    call time (§15 — a copy is tomorrow's stale snapshot, which is what `account_handoff` taught
+    us twice), and a failure here degrades to `{}` because a hint must never take the cockpit or
+    a drive down (the 2026-08-20 `logger.exception`-with-no-logger incident, from the other end).
+    """
+    try:
+        return _oc.orientation_context(
+            db, url=url, rung=rung,
+            company=getattr(step, "company", "") or "",
+            job_id=getattr(step, "job_id", "") or "",
+            tab_claims=(bb.world or {}).get("tab_claims") or {})
+    except Exception:
+        return {}
+
+
 def _find_apply_control(candidates: list[dict], *, apply_type: str = "",
                         job_title: str = "") -> Optional[dict]:
     """The open pane's apply button, or None.
@@ -6609,6 +6628,18 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # Same lesson `_JOB_DESC_JS` already carries in the capture server ("NOT the first match in
         # document order"), unlearned in a second place.
         apply_type = ((bb.world or {}).get("open_pane") or {}).get("apply_type") or ""
+        # WHAT THIS PLATFORM'S NOTE SAYS ABOUT ITS OWN APPLY CONTROL, surfaced INSIDE the
+        # resolution attempt rather than in a side panel (SESSION 17). Cornerstone's note has
+        # carried "rendered twice — masthead and footer — so drive the VISIBLE one" since
+        # 2026-08-11; on 08-24 that cost two failed cranks and a screenshot to rediscover, in an
+        # entry the classifier had already loaded. Paylocity's has predicted its upload MODAL
+        # since 08-14. The cue is ADVISORY — nothing below branches on it, so a miss costs a line
+        # of noise and never a wrong click — but it lands in the trail beside the control we drove,
+        # which is where the next reader will be looking.
+        _ctx = _orientation_for(db, url=_apply_tab_url(bb, obs), rung="enter_apply",
+                                step=step, bb=bb)
+        _cite = _oc.cite(_ctx) if _ctx else ""
+        _rung_extra["orientation"] = _ctx or None
         ctrl = _find_apply_control(scan.get("candidates") or [], apply_type=apply_type,
                                    job_title=step.title or "")
         if ctrl is None:
@@ -6628,8 +6659,10 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             _acted.update({"intent": "click", "params": {"control": ctrl.get("name")},
                            "rationale": f"the apply matcher chose {ctrl.get('name')!r} as this "
                                         f"pane's entering control"
-                                        + (f" (apply_type={apply_type})" if apply_type else ""),
-                           "evidence": ("open_pane.apply_type", "ax_identities")})
+                                        + (f" (apply_type={apply_type})" if apply_type else "")
+                                        + (f"; {_cite}" if _cite else ""),
+                           "evidence": ("open_pane.apply_type", "ax_identities")
+                                       + (("registry_note",) if _cite else ())})
             res = await _capture_post("/execute", {
                 "browser_url": browser_url, "tab_id": tab_id, "action_id": "click",
                 "target_bbox": {},
@@ -6713,10 +6746,30 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # is still reported — in the detail, and by the step staying needs_operator — it just is
         # not allowed to masquerade as "we do not know where we are".
         named = disc.kind not in ("", "unknown", "unreadable")
+        # ASK WHAT WE ALREADY KNOW, AT THE ONE MOMENT IT CHANGES THE APPROACH (SESSION 17).
+        # Classify is where the platform gets its name, and until now that was ALL it took from
+        # the registry: `classify_ats` loaded the entry and dropped its note on the floor. The
+        # 2026-08-19 PeopleAdmin drive spent a full approach on a wall `blockers` would have
+        # predicted from the posting page, and the Paylocity modal was on file and unread at the
+        # moment it mattered. The context is composed at call time from authorities that already
+        # exist — no cache, no copy (§15) — and it is best-effort by construction: an orientation
+        # that can take a drive down is worse than one that is quiet.
+        _ctx = _orientation_for(db, url=url, rung="classify", step=step, bb=bb)
+        _cite = _oc.cite(_ctx) if _ctx else ""
+        _rung_extra["orientation"] = _ctx or None
         step.record("classify", aps.OK if named else disc.outcome,
-                    f"{disc.state or 'unclassified'} · {url[:90]} -> {disc.detail}",
+                    f"{disc.state or 'unclassified'} · {url[:90]} -> {disc.detail}"
+                    + (f" | {_cite}" if _cite else ""),
                     initiator=body.initiator)
-        detail = disc.detail
+        # classify has never filled `_acted`, so its reasoning never reached the decision journal
+        # (the shadow reads `_acted["rationale"]`). An observe turn claims no control — `params`
+        # stays empty, which is the TRUE record for a look (2026-08-23) — but the rationale can
+        # now say what was consulted.
+        if _cite:
+            _acted.update({"intent": "observe", "params": {},
+                           "rationale": f"classified {disc.state or 'unclassified'}; {_cite}",
+                           "evidence": ("ats_brief", "registry_note")})
+        detail = disc.detail + (f" — {_cite}" if _cite else "")
 
     elif rung.id == "account":  # the wall most ATS put in front of an application
         import ats_accounts
@@ -6785,10 +6838,36 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                             initiator=body.initiator)
                 step.platform = platform = seen.platform
 
+            # IS ONE ALREADY ON FILE? ASKED BEFORE THE ROW IS MINTED, WHICH IS THE WHOLE POINT
+            # (SESSION 17). `ensure_account` WRITES — it registers a pending row keyed on the
+            # company string it was handed — so by the time `next_account_action` reads back, a
+            # second row for the same employer already exists and reads as "no account yet". That
+            # is exactly 2026-08-24: `ats_odyssey_consulting_icims` held credentials while the
+            # flow opened `ats_odyssey_systems_consulting_group_ltd_icims`, split by legal-suffix
+            # noise alone. Operator: *"we had the creds on file, should've checked there first."*
+            # This SURFACES, it does not act — a canonical match is a candidate for the operator
+            # to confirm, never a credential to use, because proposing the wrong employer's login
+            # reads as a bad password weeks later.
+            _held = None
+            try:
+                _held = ats_accounts.find_existing(db, company=company, ats_id=platform)
+            except Exception:
+                _held = None
+            _rung_extra["account_on_file"] = _held
             # ensure_account REGISTERS the company-ATS pair (idempotent); next_account_action
             # reads back which leg is due from its lifecycle state.
             ats_accounts.ensure_account(company, platform, login_url=_apply_tab_url(bb, obs))
             action = ats_accounts.next_account_action(company, platform)
+            if _held and _held.get("match") == "canonical" and _held.get("has_creds"):
+                # A row under a DIFFERENT spelling of this employer already holds a credential.
+                # Recorded on the ladder so the operator sees it beside the handoff instead of
+                # creating a second login for a site they can already sign in to.
+                step.record("account", aps.OK,
+                            f"an account for this employer may already exist: "
+                            f"{_held.get('account_id')} ({_held.get('company')!r}, "
+                            f"{_held.get('account_status') or _held.get('status') or 'unknown'})"
+                            f" — confirm before creating a second one",
+                            initiator=body.initiator)
             bb.world = dict(bb.world or {})
             # The handoff record the panel already renders, now ALSO a rung on the step, so the
             # one part of an application that involves a credential stops being the one part that

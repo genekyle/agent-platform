@@ -119,6 +119,8 @@ export function NowContext({ panel, cockpit, selection, onOpenLens, onOpenTrace,
         </section>
       )}
 
+      <WhatWeKnew orientation={panel.last_step?.orientation} held={panel.last_step?.account_on_file} />
+
       <section className="now-context__card now-context__card--trace">
         <div className="now-context__head">
           <span><AppIcon name="activity" size={13} /> Control record</span>
@@ -132,6 +134,50 @@ export function NowContext({ panel, cockpit, selection, onOpenLens, onOpenTrace,
 
       <Learning learning={panel.learning} />
     </aside>
+  );
+}
+
+/**
+ * WHAT WE ALREADY KNEW, at the step that just ran. The producers — the registry's own note, the
+ * account store, the world-fact staleness report — all existed while eight separate incidents
+ * paid full price to rediscover what they held (LEARNINGS: "a note nothing reads at classify time
+ * is not memory, it is an archive"). The crank consults them now; this is where the operator sees
+ * the same sentences it cited, so a wrong cue is arguable rather than invisible.
+ *
+ * Renders nothing when nothing was learned — a card that says "consulted, nothing known" on every
+ * crank teaches the reader to skip it, and the line is the whole point.
+ */
+function WhatWeKnew({ orientation, held }) {
+  const cues = orientation?.cues || [];
+  const stale = orientation?.stale_claims || [];
+  const account = held || orientation?.account;
+  if (!cues.length && !stale.length && !account) return null;
+  return (
+    <section className="now-context__card">
+      <div className="now-context__head">
+        <span><AppIcon name="listTree" size={13} /> What we already knew</span>
+        {orientation?.ats_id ? <small>{orientation.ats_id}</small> : null}
+      </div>
+      {cues.map((cue) => (
+        <p key={cue.text}><strong>·</strong> {cue.text}</p>
+      ))}
+      {account ? (
+        <p>
+          <strong>·</strong> an account for this employer is already on file —{" "}
+          <code>{account.account_id}</code>
+          {account.match === "canonical" ? " (matched across a different spelling — confirm it is the same employer)" : ""}
+        </p>
+      ) : null}
+      {stale.map((claim) => (
+        <p key={claim.id}>
+          <strong>·</strong> <code>{claim.id}</code> is {claim.outdriven_by_days}d outdriven —
+          treat it as unverified. {claim.recheck}
+        </p>
+      ))}
+      {orientation?.silent?.length ? (
+        <small>silent: {orientation.silent.join(", ")} — nothing on file, not nothing to know</small>
+      ) : null}
+    </section>
   );
 }
 

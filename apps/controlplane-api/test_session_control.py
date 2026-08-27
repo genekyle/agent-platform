@@ -1897,6 +1897,69 @@ def test_classify_records_an_unknown_ats_without_guessing(monkeypatch):
     assert "guessed at" in r["last_step"]["detail"]
 
 
+# --- SESSION 17: consultation is an INPUT, and the trail proves it ------------------------------
+# `_orientation_for` swallows every exception by design — a hint must never take a drive down — so
+# by construction it will never raise to tell you it stopped working. These observe its OUTPUT
+# through the crank, which is the only thing that can (the 2026-08-23 swallow-by-design standard:
+# a stray `cp` erased a wire, 2000+ tests stayed green, and only an output test caught it).
+
+def test_classify_cites_what_it_consulted_in_the_trail(monkeypatch):
+    """The eight-instance class, closed at the one moment it changes the approach. Cornerstone's
+    note has said "drive the VISIBLE one" since 2026-08-11 in an entry `classify_ats` already
+    loads — this asserts the crank now SAYS so where the next reader looks."""
+    bb = _with_queue(("indeed:a1", "Data Analyst", "MACOM"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    ats_url = "https://macomtech.csod.com/ux/ats/careersite/4/home/requisition/3553"
+    bb.world["apply_tab"] = {"tab_id": "t9", "url": ats_url}
+    # The tab must be LIVE, not merely recorded: `_apply_tab` refuses a hint the window no longer
+    # backs, which is the 2026-08-24 rule and is why the first cut of this fixture classified "".
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, ats_url),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    classify = [m for m in step.minis if m.rung == "classify"][-1]
+    assert "consulted:" in classify.detail, "the crank consulted nothing, or did not say so"
+    ctx = r["last_step"].get("orientation") or {}
+    assert ctx.get("ats_id") == "cornerstone", "the structured context did not reach the panel"
+    # No ATS tables exist in this harness, so the brief is correctly silent — and the note, which
+    # needs only the URL, must speak anyway. That split is the point of the decoupling.
+    assert "registry_note" in (ctx.get("consulted") or [])
+    assert "ats_brief" in (ctx.get("silent") or [])
+
+
+def test_an_orientation_that_cannot_answer_never_stops_the_crank(monkeypatch):
+    """The guard, not the happy path. A platform nothing is known about must classify exactly as
+    it did before this wiring — silence is reported, never fatal, and never a fabricated line."""
+    bb = _with_queue(("indeed:a1", "Financial Analyst", "Globex"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["apply_tab"] = {"tab_id": "t9", "url": "https://careers.globex.io/apply/1"}
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.UNKNOWN        # unchanged by the wiring
+    assert "guessed at" in r["last_step"]["detail"]
+    ctx = (r["last_step"].get("orientation") or {})
+    assert "registry_note" in (ctx.get("silent") or []), \
+        "an authority with nothing to say must name itself, not vanish"
+
+
 def test_a_challenge_halts_the_apply_step(monkeypatch):
     harness, saved = _install(
         monkeypatch,
