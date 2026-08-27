@@ -11716,3 +11716,72 @@ routes), UI lint clean on touched files, build green, panel driven live in the p
 the real corpus. *Owed to the drive, on purpose:* the operator names the top entries (preferences
 landing first), the newly-named state classifies live and banks under its own name, and the
 location door's healthy-sweep falsifier (a guard that stops a good run is worse than the bug).
+
+## 2026-08-27 (second) — SESSION 16 built: facts with an expiry, and a guard that was a cliff
+
+**THE GUARD I SHIPPED THIS MORNING WAS A CLIFF, AND A REVIEW PASS FOUND IT BEFORE A DRIVE DID.**
+S15's location door raised `ValueError` on a location the engine's params did not back. Asked to
+account for what the new work might break, I traced the call sites instead of assuming:
+**neither `/api/jobs/extract` nor the ladder's `review_page` crank wraps that call**, so the
+refusal would have surfaced as a **500** — and it would have fired first on the LinkedIn
+preferences landing, *the very surface that motivated the rule*. The suite was green because
+`SEARCH_URL` in the fixtures carries `l=Nashua%2C+NH`; the shape only shows on the surface the
+rule was written for.
+
+The fix is not a try/except at three call sites (three callers each remembering a rule is how a
+rule gets forgotten — this log's oldest refrain). It is **one authority, and the page is it**
+(§15): the URL's stated place wins outright, a caller's claim the page contradicts is logged and
+overridden rather than refused (*"Greater Boston"* vs *"Boston, MA"* is one place spelled twice,
+and crying wolf on that is a guard's first sin), an unbacked claim is **dropped and logged** —
+`""` is the honest record of a set that states no place — and when nobody looked, nothing is
+judged. **Nothing raises, so nothing needs an exit.** `interaction.refusal` already fixes the
+standard: a refusal names its exit, and a crash names nothing. `check_provenance` still raises on
+a PLATFORM mismatch and should — a wrong platform mints a row that can never dedupe, while a
+wrong location mislabels one field of one row. *The general shape: before adding a raise to a
+shared writer, read who calls it — a guard on an unwrapped hot path is not a guard, it is a
+cliff, and it will fire first on the case that motivated it.*
+
+**WORLD-FACTS HAVE A SHAPE NOW, AND THE CONSTRUCTOR IS THE ENFORCEMENT POINT.** `world_facts.py`:
+`{id, claim, evidence_class, observed_at, drive, evidence, surface, recheck, history}`, and
+`fact()` refuses to mint an undated claim, a MEASURED one carrying no evidence, one anchored to
+no host (staleness is a JOIN — an unanchored fact can never be flagged), or a live one with no
+`recheck` (*a claim without a recheck can only rot silently*). RETRACTED facts are exempt: they
+are history, not work. The §13 evidence classes stop being a heading convention and become a
+field.
+
+**THE PILOT MIGRATED `linkedin_recipe`, AND ITS PROSE HELD ONE MORE STALE CLAIM.** Eight facts,
+one retraction kept whole (the `/set_distance` blocked_on that outlived its bug by twelve days).
+The `still_unverified` sentence called the mid-sweep result-set change *"invisible"* — on the
+same day `result_set_identity` closed exactly that. **The previous `blocked_on` was stale again,
+in the same field, by the same mechanism**, which is the argument for the store rather than for
+prose beside operational keys. `RESULTS_TRAVERSAL` now CITES fact ids; `virtualised: True` stays
+as the operational flag (over-scrolling is safe, under-reading is not) while the CLAIM behind it
+is HYPOTHESIS.
+
+**AND THE TEST THAT DEFENDED THE ROT NOW ASSERTS THE SHAPE.**
+`test_the_traversal_separates_what_was_driven_live_from_what_was_not` pinned the *wording*
+(`"scrollTop 0 -> 700"`, `"f_AL"`), so green tests were keeping perishable sentences alive. Its
+replacement asserts that the traversal carries no prose claims at all, that every cited id is
+registered, that the downgrade and the retraction both kept their history, and that
+`spec()["blocked_on"]` cites a fact instead of restating one.
+
+**THE REPORT'S FIRST LIVE RUN CHOSE THE NEXT DRIVE BY ITSELF.** `GET /api/world_facts/staleness`
+against the real corpus: **`linkedin.results.virtualised`, +22 days outdriven** (observed
+07-30, surface last driven 08-21), with its own recheck attached — *count rendered cards on a
+KEYWORD results page before any scroll: ~7 keeps the claim per-surface, 25/25 retires it as a
+renderer change*. Second, `no_distance_control` at +7d. That is the mechanism working: the claim
+that cost a session on 08-26 is the one the report puts at the top, weeks before the next drive
+would have tripped over it. Rank, never expire — and `fresh_by_silence` is a separate list,
+because "the world has not been touched" and "the claim was outdriven" must not render alike.
+*Stated limit, in the payload:* the join reads the TRANSITION corpus, so a pure sweep (which
+banks no transition rows) is invisible to it — fresh-by-silence can be fresher than it looks,
+never staler.
+
+*Suites:* controlplane-api **1944** green (route inventory regenerated for the two world_facts
+routes), UI lint clean on touched files, vite build green, both new panels driven live in the
+preview against the real corpus. *Deliberately still pending:* the `search_queries` DROP is armed
+in `migrations.py` and has now been **rehearsed** against a scratch SQLite DB by restarting the
+preview API — the live Postgres still carries the column and will drop it on the next restart of
+this code, which is the coordinated moment (any process still running OLD code breaks the instant
+it goes, and there are five worktrees). *Owed to the drive:* re-verify the virtualisation claim
+live — the report has already written the instructions.
