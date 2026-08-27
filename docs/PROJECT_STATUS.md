@@ -193,8 +193,13 @@ live (first errand fire and its measured boundary, first real inbox sweeps, phas
    page-kind with additive platform sharpening, `wizard_position` reading the "step 1 of 6" the
    regex had always parsed and discarded, a real dialog reader on the census, the 08-21
    truncation flags carried end to end after being dropped twice, and `could_not_see` on every
-   report) → S19 (one resolver) → S20 (act carries evidence). Each kills a counted failure class
-   from the ten-session retrospective; none is speculative.
+   report) → S19 (one resolver — **partly built 2026-08-27**: an untrusted click now names itself
+   in `mode`, the VISIBLE twin wins a same-destination tie, `addressed_by` reaches the caller, and
+   one contradiction is left standing with the experiment that settles it. **The four addressers
+   are still four** — collapsing them is a per-endpoint migration behind a live ATS each, and the
+   next step is to count the doors on real drives now that `addressed_by` is observable) → S20
+   (act carries evidence). Each kills a counted failure class from the ten-session retrospective;
+   none is speculative.
 
    **Two carried items, both deliberate.** (a) The `observed_jobs.search_queries` DROP is armed in
    `migrations.py` and rehearsed on a scratch DB; it fires on the next restart of this code

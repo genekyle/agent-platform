@@ -11933,3 +11933,67 @@ enter_apply rungs, but **no rung feeds a full census payload yet** — the form/
 where `scan_required` actually runs, and pointing the profile at it is the next wiring. Until
 then the truncation and dialog gaps are proven by test and by shape, not by a live page.
 
+## 2026-08-27 (fifth) — SESSION 19: an untrusted click now says so, the visible twin wins, and one contradiction left standing on purpose
+
+**THE AUDIT FOUND FIVE NOTIONS OF CONTROL IDENTITY, NOT FOUR, AND SIX CLICK DISPATCHERS.** The
+fifth is `_resolve_node_by_selector`, whose correctness is entirely `__questionOf`'s
+label-PROXIMITY walk — which is why the 2026-08-25 table's selector path resolved to a
+NEIGHBOUR's question *stably, not flakily*: proximity is a heuristic over DOM geometry and the
+accessible name is not consulted anywhere on that path.
+
+**AN UNTRUSTED CLICK NOW SAYS IT WAS UNTRUSTED.** `HumanizedDriver._element_click` degrades to
+the native JS `.click()` in two deliberate, documented cases (no measurable centre; a point
+outside the viewport — a frame taller than the window can leave its target off-screen). Both are
+right. **Both were silent**: `_element_act` returned the bare string `"element"` either way, so at
+every surface above the driver a trusted press and an ignored `.click()` were the same word. That
+is the difference that cost ELEVEN attempts on one Workday date on 2026-08-25 — eleven ways of
+writing a VALUE into a widget whose problem was that it had never received a GESTURE. The click
+now returns `trusted` / `native:no_centre` / `native:off_viewport` and `mode` carries it. The
+precedent is three lines from the change: *"A DOWNGRADED DRIVE IS RECORDED, NEVER SILENT
+(2026-08-21) — a bot-safety posture that can vanish silently is not a posture."* Same rule, one
+layer down. Additive by construction: the only structured consumer of `mode` matches on the
+`upload:` prefixes.
+
+**THE VISIBLE TWIN WINS.** `_resolve_ax_node` **never touched `bbox`** — the geometric filter is
+upstream in the proposer, which drops only zero-area/`display:none` nodes, so an off-screen twin
+has no penalty at any stage. When `_same_destination` confirms *one action drawn more than once*,
+the caller took `found[0]` — **AX document order, which says nothing about the screen**. That is
+exactly Cornerstone on 2026-08-24: "Apply Now" at y=411 and y=2269, two enter attempts reporting
+"the screen has not moved", and a screenshot rediscovering what the registry note had said since
+08-11. `_visible_twin` now asks the page (the same discipline `_same_destination` already uses):
+in-viewport first, then nearest the top of the document, `None` on any doubt — so it can improve a
+pick and never break one.
+
+**`addressed_by` REACHED THE CORPUS AND NOT THE CALLER.** It is in `_JOURNAL_KEYS`, so the
+`@journaled` decorator stripped it from the passthrough after recording it — every journaled
+endpoint has been writing which door it used into the journal and hiding it from the caller
+deciding what to do next, and from the operator watching a stall. Returned now. `/execute` names
+it in its own return literal and the decorator ate it, which is why nobody noticed.
+
+**AND ONE CONTRADICTION LEFT STANDING, DELIBERATELY.** `/select_prompt`'s module header says
+Workday prompt options *"render in a portal and only register TRUSTED CDP mouse events (JS
+.click() … are ignored)"*. Its option-commit calls `get_driver("direct")` — that ignored JS
+click — while its sibling `/select_prompt_path` trusted-clicks its leaf. **Both claims cite real
+drives.** They are probably both partly right: the virtualized-list failure ("picked American
+Samoa for New Hampshire") is about TARGETING, the portal claim is about EVENT KIND, and the
+humanized driver satisfies both by pressing trusted at the RESOLVED node's centre. That is a
+plausible synthesis, and a plausible synthesis is not a measurement (§13) — changing a live ATS
+path to satisfy a comment is the wrong trade. **The experiment that settles it is written at the
+site**: on the next Workday drive with a prompt, swap that one call to the default driver, select
+from a LONG list, and read the field back. Right row + committed → the header wins. Wrong row or
+uncommitted → the native click is load-bearing and the header is stale.
+
+*One comment corrected outright, because it was checkable and false:* the open-the-prompt call
+described itself as *"the same path /execute uses"*. `/execute` calls `get_driver(body.driver)`,
+which defaults to **humanized/trusted**; this is `direct`/untrusted. They were described as one
+path for as long as the line existed — which is how "we already click the way /execute clicks"
+stayed believable while this endpoint was the one place that did not.
+
+*Suites:* mcp 168 → **175** green (7 new addressing pins, each driving the real driver seam
+against a recording fake), controlplane-api **1971** green. *Not done, and named:* the four
+addressers still hold four identities — this session made the DIFFERENCE VISIBLE and fixed the
+twin-picking, rather than collapsing them into one door, because collapsing them is a
+per-endpoint migration with a live ATS behind each one. The exemption list S19 called for is the
+natural next step now that `addressed_by` is observable end to end: count the doors on real
+drives first, then close the ones nothing needs.
+
