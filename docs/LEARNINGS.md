@@ -11652,3 +11652,67 @@ by the concurrent sweep session the same evening — the queue's head is already
 independently confirmed two of the plan's bets (the untrusted-click recognizer generalized to a
 new widget on its first meeting, and the `@journaled` contract caught five broken endpoints a
 green suite had passed). The plan survives first contact; the counters start now.
+
+## 2026-08-27 — SESSION 15 built: the unknowns counted, and the report found the borrowed names on its first run
+
+**WHAT "UNNAMED" TURNED OUT TO MEAN, MEASURED FIRST.** Over the live corpus's 1136 belief halves:
+**zero** carry a null or literal-"unknown" state — the witnesses always emit their nearest label —
+while **660 (58%)** are ambiguous (state uncertainty ≥ 0.5, a split, or novelty at the ceiling).
+So the brief's "classifies as unknown" filter would have caught nothing: **a missing name presents
+as a confidently wrong one, never as a blank**, which is the retrospective's name-borrowing class
+in corpus form. The report (`naming_debt.py`, `GET /api/transitions/naming_debt`, cockpit
+Learning → Naming) therefore ranks on ambiguity, dispute (one screen, two names), and
+one-name-many-shapes — not on nulls.
+
+**THE SITUATION KEY IS STRUCTURAL, AND ITS STATED FALSIFIER FIRED ON THE FIRST LIVE RUN.** A
+situation is `route_template` + the CHROME subset of the AX summary (interactive roles only,
+names capped at 40 chars) — the full fingerprint keys on content and mints a fresh key per visit
+to any list page. First run: 300 of 302 situations queued (everything trips an ambiguity signal
+on undertrained witnesses — true, and useless as a WORK queue), `indeed_search_results` was
+credited **50 situations** (content churn minting one-off keys), and `about:blank` ranked #1.
+Tightened exactly per the falsifier: a recurrence gate (≥3 encounters; one-offs counted, never
+shown), blank tabs excluded-and-counted, and `split_names` reads recurrent shapes only. Result:
+**149 recurrent screens queued**, and the top of the queue is real work — smartapply questions
+(26 meetings, disputed, 2 unnamed), `workday_my_information` (20, 100% ambiguous),
+resume-selection vs tailor-prompt disputed under one key (17), and **`workday_sign_in` ×15 on
+`career5.successfactors.eu`** with `workday_error_retry` ×14 on `jobs.bostonchildrens.org` — the
+borrowed-name class, surfaced by counting rather than by a drive tripping over it.
+
+**NAMING IS WITHHELD, DELIBERATELY.** The panel exhibits (exemplar screenshot per row, the
+resolved corpus root and row count so an empty answer can never read clean — 53 screenshots
+rendered, 0 broken, verified in preview) and offers "Name this screen," which posts through the
+SAME correction seam as the Queue (parity: what the teacher curls, the operator clicks; a name
+written there trains witnesses and refits programs like any teacher label). No name was minted:
+the brief reserves that for the operator, with the LinkedIn preferences landing as the known
+first candidate. **The modelling ruling is written down instead** (models.Search.kind): `kind`
+stays a two-value provenance axis — the preferences landing is `kind=feed, surface=
+preferences_landing`, and paginated-vs-appending lives in the traversal, because collapsing two
+independent axes into one enum is how "paginated and unrequested are independent" gets
+re-forgotten.
+
+**THE QUARANTINE RAN LIVE BEFORE THE DROP — IN THAT ORDER BECAUSE THE CLAIMS LEAVE WITH THE
+COLUMN.** Flag column added to the live DB, dry-run showed 20, **20 flagged** (the 08-26
+unadjudicable class: query history known-incomplete; they never vote in query→job learning),
+idempotent re-run 0, `audit.quarantined` carries the count durably. THEN `search_queries` left
+the model, and the DROP is staged in `migrations.py` — **deliberately not executed against the
+live DB this session**: a server was listening on :8081, and dropping a column under a running
+ORM turns every job list into a 500 until restart. The drop fires on the next startup of new
+code, which is the safe moment by construction. Post-drop, audit/repair answer with structural
+zeros and the history (`unexpressible, not unexamined`) instead of a 404 for whoever wonders
+where the column went.
+
+**AND THE LOCATION COLUMN STOPPED TELLING THE QUERY COLUMN'S LIE** (S14's handoff: Search 14
+recorded the target's "Nashua, NH" over a page with no location filter). `search_cadence` gained
+`declared_location` / `location_backed` (the engine's own params; `names` say the place, `proof`
+params like geoId prove a filter exists without naming it), and `ensure_active_search` holds
+location to the same door as the query: a claim the recorded params do not back is REFUSED
+loudly (silent correction would hide a caller aiming wrong), a blank location fills from what
+the URL itself states, nobody-looked judges nothing (tri-state), and an opaque geoId BACKS a
+caller's human-readable claim — a guard's first job is to not cry wolf. The sweep mint now
+derives its location from the baseline instead of passing the target's.
+
+*Suites:* controlplane-api 1929 → **1939** green (route inventory regenerated for the two new
+routes), UI lint clean on touched files, build green, panel driven live in the preview against
+the real corpus. *Owed to the drive, on purpose:* the operator names the top entries (preferences
+landing first), the newly-named state classifies live and banks under its own name, and the
+location door's healthy-sweep falsifier (a guard that stops a good run is worse than the bug).

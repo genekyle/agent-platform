@@ -180,10 +180,12 @@ live (first errand fire and its measured boundary, first real inbox sweeps, phas
 `PLAN_generalization_v1.md`:
 
 1. **Run the briefs in order, each ending on a live drive.** S14 (one fact one place — **done
-   2026-08-26**, live-proven) → S15 (count the unknowns; + the location-column lie S14's drive
-   named) → S16 (facts with expiry) → S17 (consultation as input) → S18 (observation profiles)
-   → S19 (one resolver) → S20 (act carries evidence). Each kills a counted failure class from
-   the ten-session retrospective; none is speculative.
+   2026-08-26**, live-proven) → S15 (count the unknowns — **built 2026-08-27**: naming report +
+   panel live against the corpus, 20 rows quarantined live, column drop staged for next restart,
+   location door landed; the NAMING half is the operator's at the next drive) → S16 (facts with
+   expiry) → S17 (consultation as input) → S18 (observation profiles) → S19 (one resolver) →
+   S20 (act carries evidence). Each kills a counted failure class from the ten-session
+   retrospective; none is speculative.
 2. **Keep driving live between briefs.** Applications are the product, and the drives are where
    the three zeros get measured. Rows, labels, sweeps, and scorecard movement ride along free.
 3. **Label the tail as the rows arrive** (unchanged, byproduct — every label still refits
