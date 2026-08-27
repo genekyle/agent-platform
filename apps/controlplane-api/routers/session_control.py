@@ -146,6 +146,44 @@ def _apply_task_name(bb: Any, step: Any) -> str:
     return f"{platform}_apply"
 
 
+def _search_engine_of_url(url: str) -> str:
+    """Which SEARCH engine's result-set vocabulary applies to this URL, read off the host.
+
+    The tab is a fact and the label is a label — the same precedence `engine_of_state` uses, and the
+    reason `upsert_observed_jobs` refuses a caller's platform guess. An unknown host returns "",
+    which `result_set_identity` turns into an empty identity: it claims nothing rather than
+    inventing drift out of params it does not understand.
+    """
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(url or "").hostname or "").lower()
+    for engine in ("linkedin", "indeed"):
+        if host == engine + ".com" or host.endswith("." + engine + ".com"):
+            return engine
+    return ""
+
+
+def _click_changed_the_set(res: dict[str, Any]) -> dict[str, Any]:
+    """Did `/open_job_card`'s own click alter the result set it was searching?
+
+    `/open_job_card` reports the URL before and after; the comparison lives HERE because
+    `search_cadence` owns the result-set vocabulary and duplicating it in the capture server would
+    be the same fact in two places. A response without the URLs (an older capture server, or a
+    transport failure) yields `changed: False` — unmeasured, never asserted.
+    """
+    import search_cadence
+
+    before_url, after_url = res.get("url_before") or "", res.get("url_after") or ""
+    if not before_url or not after_url:
+        return {"changed": False, "changes": {}, "detail": "the endpoint reported no URLs to compare"}
+    engine = _search_engine_of_url(before_url) or _search_engine_of_url(after_url)
+    if not engine:
+        return {"changed": False, "changes": {}, "detail": f"no search vocabulary for {before_url[:60]}"}
+    return search_cadence.result_set_drift(
+        search_cadence.result_set_identity(before_url, engine),
+        search_cadence.result_set_identity(after_url, engine))
+
+
 def _engine_of_landed(url: str) -> Optional[dict[str, Any]]:
     """The engine we are STILL ON, if this url is one of its own non-apply pages — else None.
 
@@ -6489,9 +6527,23 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                    "tab_url": None if cards_tab.get("tab_id")
                                    else _search_focus_url(bb, obs)})
         if not res.get("ok"):
+            # DID THE CLICK MISS, OR DID IT HIT SOMETHING ELSE? Those look identical from the
+            # outcome alone and they are not the same failure. Live 2026-08-27: a click meant for
+            # an approved card landed on a FILTER — `origin` became JOB_SEARCH_PAGE_JOB_FILTER,
+            # `f_SAL` appeared, `start=50` was dropped — and the card was reported `not_found`
+            # after eight honest wheel batches over a list that no longer contained it. The
+            # endpoint said "the click did not take"; the truth was "the click took, elsewhere,
+            # and the set you were given no longer exists". Only the second invalidates the pick
+            # list, and only the second has a recovery an operator can act on.
+            drift = _click_changed_the_set(res)
             step.record("open_pane", aps.FAILED, res.get("detail") or "card did not open",
                         initiator=body.initiator)
             detail = f"Could not open {step.title or step.job_id}: {res.get('detail') or 'no pane'}."
+            if drift.get("changed"):
+                _rung_extra["result_set_drift"] = drift
+                detail += (f" THE CLICK CHANGED THE RESULT SET — {drift['detail']}. This pick came "
+                           f"from the set before that change, so the card is not missing, it is "
+                           f"somewhere else. Re-establish the set before re-trying the card.")
         else:
             # /open_job_card already CONFIRMS the pane switched, which is the expensive half of
             # the near-miss guard — Indeed auto-opens the first result, so an unconfirmed click

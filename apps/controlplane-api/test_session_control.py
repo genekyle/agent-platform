@@ -6992,3 +6992,73 @@ def test_an_unclaimed_ats_tab_still_wins_over_a_bare_landing_page():
                     {"tab_id": "tab-careers", "url": "https://careers.example.com/overview"},
                     {"tab_id": "tab-ats", "url": "https://boards.greenhouse.io/acme/jobs/42"}]}
     assert sc._apply_tab(_BB(), obs)["tab_id"] == "tab-ats"
+
+
+# --------------------------------------------------------------------------------------------
+# A click that hit something else — the 2026-08-27 live drive
+# --------------------------------------------------------------------------------------------
+
+#: The two URLs as MEASURED live on 2026-08-27, before and after an `/open_job_card` click that was
+#: aimed at an operator-approved card and landed on a filter instead.
+_BEFORE = ("https://www.linkedin.com/jobs/search-results/?currentJobId=4444261057"
+           "&keywords=reporting%20analyst&origin=BLENDED_SEARCH_RESULT_NAVIGATION_SEE_ALL&start=50")
+_AFTER = ("https://www.linkedin.com/jobs/search-results/?currentJobId=4438376209"
+          "&keywords=reporting%20analyst&origin=JOB_SEARCH_PAGE_JOB_FILTER"
+          "&f_SAL=f_SA_id_225001%3A272001")
+
+
+def test_a_click_that_applied_a_filter_is_not_a_card_that_went_missing():
+    """The endpoint said `not_found` after eight honest wheel batches. It was right that the card
+    was not there and wrong about why: the click had replaced the result set underneath it.
+
+    `f_SAL` is the tell, and the drift names it in the engine's own vocabulary — because "the
+    result set changed" is not actionable and "f_SAL: '' -> 'f_SA_id_225001:272001'" is.
+    """
+    from routers.session_control import _click_changed_the_set
+
+    d = _click_changed_the_set({"url_before": _BEFORE, "url_after": _AFTER})
+    assert d["changed"] is True
+    assert "f_SAL" in d["changes"]
+    assert d["changes"]["f_SAL"]["before"] == "" and "f_SA_id" in d["changes"]["f_SAL"]["after"]
+    assert "f_SAL" in d["detail"]
+
+
+def test_paging_is_not_drift():
+    """`start` is POSITION, not identity. A page turn must not read as a changed set, or the guard
+    fires on every healthy sweep — a guard that stops good runs is worse than the bug it prevents.
+    """
+    from routers.session_control import _click_changed_the_set
+
+    page4 = _BEFORE.replace("start=50", "start=75")
+    assert _click_changed_the_set({"url_before": _BEFORE, "url_after": page4})["changed"] is False
+
+
+def test_the_selected_job_changing_is_not_drift():
+    """`currentJobId` moves every time a pane opens — which is what this endpoint is FOR."""
+    from routers.session_control import _click_changed_the_set
+
+    other = _BEFORE.replace("4444261057", "4450742502")
+    assert _click_changed_the_set({"url_before": _BEFORE, "url_after": other})["changed"] is False
+
+
+def test_missing_urls_are_unmeasured_not_unchanged():
+    """An older capture server does not report the URLs. That must read as "we could not check",
+    which is what the empty `changes` plus the stated reason say — not as a clean bill of health.
+    """
+    from routers.session_control import _click_changed_the_set
+
+    d = _click_changed_the_set({})
+    assert d["changed"] is False and "no URLs to compare" in d["detail"]
+
+
+def test_an_unknown_engine_claims_nothing():
+    """`result_set_identity` has a vocabulary for linkedin and indeed. A Workday URL gets no
+    verdict rather than a borrowed one — the same strict consequence the auth probe uses."""
+    from routers.session_control import _click_changed_the_set, _search_engine_of_url
+
+    assert _search_engine_of_url("https://acme.wd1.myworkdayjobs.com/x") == ""
+    assert _search_engine_of_url("https://www.linkedin.com/jobs/x") == "linkedin"
+    assert _search_engine_of_url("https://uk.indeed.com/jobs?q=a") == "indeed"
+    d = _click_changed_the_set({"url_before": "https://acme.wd1.myworkdayjobs.com/a",
+                                "url_after": "https://acme.wd1.myworkdayjobs.com/b"})
+    assert d["changed"] is False and "no search vocabulary" in d["detail"]

@@ -4391,6 +4391,15 @@ async def open_job_card(body: OpenJobCardRequest):
     try:
         target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
         platform = _platform_of(target.get("url", ""))
+        # THE URL BEFORE WE TOUCH ANYTHING. A click meant for a card can land on a FILTER, which
+        # silently replaces the result set the caller was working from — measured live 2026-08-27,
+        # where `origin` went to JOB_SEARCH_PAGE_JOB_FILTER, `f_SAL` appeared and `start=50` was
+        # dropped, and the approved card was simply not in the new set. Reporting both URLs lets
+        # the caller tell "the click missed" from "the click hit something else", which are
+        # different failures with different remedies. The identity comparison itself belongs to
+        # `search_cadence.result_set_identity` and is NOT duplicated here: this layer observes,
+        # the control plane interprets (§ one fact, one place).
+        url_before = str(target.get("url", "") or "")
         bbox_js = _CARD_BBOX_JS_BY_PLATFORM[platform]
         desc_js = _JOB_DESC_JS_BY_PLATFORM[platform]
         driver = get_driver()
@@ -4426,8 +4435,18 @@ async def open_job_card(body: OpenJobCardRequest):
             if pane_shows(pre, body.external_id) and pre.get("description"):
                 pre.update({"ok": True, "outcome": Outcome.OK, "switched": True,
                             "already_open": True, "external_id": body.external_id,
-                            "platform": platform})
+                            "platform": platform,
+                            "url_before": url_before, "url_after": url_before})
                 return pre
+
+            async def _url_now() -> str:
+                """The live URL. One cheap eval; a failure yields "" (unknown), never a guess."""
+                try:
+                    r = await cdp.send("Runtime.evaluate",
+                                       {"expression": "location.href", "returnByValue": True})
+                    return str((r.get("result") or {}).get("value") or "")
+                except Exception:  # noqa: BLE001
+                    return ""
 
             box = await _measure()
             scrolled: list[dict] = []
@@ -4436,6 +4455,7 @@ async def open_job_card(body: OpenJobCardRequest):
             if not box.get("found"):
                 return {"ok": False, "outcome": Outcome.NOT_FOUND,
                         "platform": platform, "scrolled": scrolled,
+                        "url_before": url_before, "url_after": await _url_now(),
                         "detail": f"card {body.external_id} not found"
                                   + (f" ({box['reason']})" if box.get("reason") else "")
                                   + (f" after {len(scrolled)} wheel batches over the list"
@@ -4446,6 +4466,7 @@ async def open_job_card(body: OpenJobCardRequest):
                 # there. Say which half failed.
                 return {"ok": False, "outcome": Outcome.NOT_FOUND,
                         "platform": platform, "scrolled": scrolled,
+                        "url_before": url_before, "url_after": await _url_now(),
                         "detail": f"card {body.external_id} is rendered but still off-screen "
                                   f"(y={box.get('y')}, needs {box.get('delta_y')}px) after "
                                   f"{len(scrolled)} wheel batches — the list would not scroll to it"}
@@ -4520,6 +4541,8 @@ async def open_job_card(body: OpenJobCardRequest):
                                  else Outcome.NOT_STAGED))
         data["external_id"] = body.external_id
         data["platform"] = platform
+        data["url_before"] = url_before
+        data["url_after"] = await _url_now()
         if scrolled:
             data["scrolled"] = scrolled
         return data
