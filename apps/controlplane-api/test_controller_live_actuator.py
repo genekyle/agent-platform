@@ -8,6 +8,7 @@ which endpoint each Decision hits and with what payload.
 
 from __future__ import annotations
 
+import time
 import pytest
 
 from controller.live_actuator import LiveActuator
@@ -542,10 +543,51 @@ def test_a_fresh_drive_is_operable_and_says_what_it_could_not_measure():
     bundle = _actuator(fake).observe()
 
     assert bundle.staleness["verdict"] == "continue"
-    # Nothing has acted yet and no cookie read exists, so those are UNMEASURED — named, not
-    # silently scored as fresh.
+    # Nothing has acted yet, and this probe returned no cookie list, so those are UNMEASURED —
+    # named, not silently scored as fresh. (`/auth_state` CAN return cookies since 2026-08-27;
+    # a probe that did not is still an honest `unmeasured`, which is the point of the tri-state.)
     assert "idle_s" in bundle.staleness["unmeasured"]
     assert "cookie_ttl_s" in bundle.staleness["unmeasured"]
+
+
+def test_the_cookie_signal_measures_the_auth_cookie_and_not_the_jars_minimum():
+    """SESSION 21. `cookie_ttl_s` was declared 2026-07-26 and read `None` for a month because
+    nothing in the repo read a cookie. It reads a number now — and this pins WHICH number.
+
+    The jar handed in below is the shape measured live on 2026-08-27: an ad cookie 23 seconds from
+    expiry sitting beside the auth cookies. A minimum over the jar scores RED (threshold: 2 min)
+    on a session that is demonstrably signed in. The signal must see ~79 days, not 23 seconds.
+    """
+    now = time.time()
+    fake = FakeTransport(url=_INDEED, responses={"/auth_state": {
+        "ok": True, "logged_in": True, "url": _INDEED, "platform": "indeed",
+        "cookies": [
+            {"name": "FPLC", "domain": ".indeed.com", "expires": now + 23},
+            {"name": "__cf_bm", "domain": ".indeed.com", "expires": now + 360},
+            {"name": "rememberMe", "domain": "secure.indeed.com", "expires": now + 1896 * 3600},
+            {"name": "PPID", "domain": ".indeed.com", "expires": now + 8759 * 3600},
+        ]}})
+    bundle = _actuator(fake).observe()
+
+    assert "cookie_ttl_s" not in bundle.staleness["unmeasured"], "the signal is live now"
+    sig = next(s for s in bundle.staleness["signals"] if s["name"] == "cookie_ttl_s")
+    assert sig["value"] > 1800 * 3600, "measured the AUTH cookie, ~79 days"
+    assert sig["level"] == "fresh"
+    assert bundle.staleness["verdict"] == "continue", "a healthy session is not renewed"
+
+
+def test_an_unknown_platforms_cookies_stay_unmeasured_rather_than_borrowing_a_verdict():
+    """The `unprobed()` rule. We have an auth vocabulary for indeed and linkedin only — the same
+    reach as `_AUTH_JS_BY_PLATFORM`. A Workday jar full of cookies we cannot name must not be
+    scored, in either direction."""
+    now = time.time()
+    fake = FakeTransport(url=_INDEED, responses={"/auth_state": {
+        "ok": True, "logged_in": True, "url": _INDEED, "platform": "workday",
+        "cookies": [{"name": "PLAY_SESSION", "domain": ".myworkdayjobs.com", "expires": now + 60}]}})
+    bundle = _actuator(fake).observe()
+
+    assert "cookie_ttl_s" in bundle.staleness["unmeasured"]
+    assert bundle.staleness["verdict"] == "continue", "60s on an unnamed cookie must not force RENEW"
 
 
 def test_a_blind_observation_asks_for_a_human_not_a_refresh():

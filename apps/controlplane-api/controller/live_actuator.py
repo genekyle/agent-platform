@@ -200,6 +200,22 @@ class LiveActuator:
         # Continue click navigates the page.
         return {"browser_url": self._browser_url, "tab_id": self._tab_id}
 
+    @staticmethod
+    def _auth_cookie_expiry(auth: dict) -> Optional[float]:
+        """Absolute expiry of the soonest AUTH cookie, or None when we cannot measure it.
+
+        None on every uncertain path — an `/auth_state` that failed, a platform whose auth
+        vocabulary we do not have, a jar with no auth cookie in it. `staleness` renders that as
+        `unmeasured`, which is true; a borrowed number would be a guess dressed as a reading, and
+        this signal's whole history is a warning about that.
+        """
+        from session_snapshot import auth_ttl_s
+        cookies = auth.get("cookies")
+        if not cookies:
+            return None
+        ttl, _found = auth_ttl_s(cookies, auth.get("platform"))
+        return None if ttl is None else time.time() + ttl
+
     def _post(self, path: str, payload: dict) -> dict:
         try:
             return self._post_fn(path, payload)
@@ -304,6 +320,12 @@ class LiveActuator:
             # fetched, not another round trip.
             responsive=bool(auth.get("ok") is not False and candidates),
             holds_unsaved_work=self._unsaved_work,
+            # The signal `PLAN_staleness.md` §4 recorded as inert since 2026-07-26. `/auth_state`
+            # now returns cookie names + expiries off the session it already had open, and
+            # `session_snapshot` scopes them to the AUTH cookies — not the jar's minimum, which
+            # measured 23 SECONDS on a healthy Indeed session (a Google ad cookie) against a RED
+            # threshold of two minutes. An unknown platform still yields None: unmeasured.
+            cookie_expires_at=self._auth_cookie_expiry(auth),
         ))
 
         # The capture's durable names ride the Bundle so the journal can keep them. An empty

@@ -5700,7 +5700,18 @@ _AUTH_JS_BY_PLATFORM = {"indeed": _INDEED_AUTH_JS, "linkedin": _LINKEDIN_AUTH_JS
 @app.post("/auth_state")
 async def auth_state(body: ScreenshotRequest):
     """Deterministic login-state probe (logged_in + raw signals) for the tab's platform. Feeds the
-    state manager's login gate: search/automation stays blocked until logged_in. Best-effort."""
+    state manager's login gate: search/automation stays blocked until logged_in. Best-effort.
+
+    Also returns `cookies` — **names and expiries for this tab's own domain, never values** — which
+    is what finally lights `staleness.cookie_ttl_s` (inert since 2026-07-26 because nothing in the
+    repo read a cookie). It rides HERE rather than in its own endpoint for two reasons: this
+    probe already holds an open CDP session, so the signal costs no extra round trip and cannot be
+    skipped on the turns it matters; and cookie freshness is a login fact, which is this
+    endpoint's subject. The SCOPING — which of these names is an auth cookie — is deliberately
+    NOT done here: `session_snapshot.AUTH_COOKIES` owns that vocabulary, because a naive minimum
+    over the returned list reads 23 seconds on a healthy Indeed session (measured 2026-08-27).
+    Names are not secrets; values are, and they never leave the browser.
+    """
     import websockets
     from app.observer.ax_proposer import _CDPSession, _discover_target
     try:
@@ -5710,13 +5721,30 @@ async def auth_state(body: ScreenshotRequest):
             cdp = _CDPSession(ws)
             res = await cdp.send("Runtime.evaluate",
                                  {"expression": _AUTH_JS_BY_PLATFORM[platform], "returnByValue": True})
+            cookies = await _cookie_expiries(cdp)
         data = (res.get("result") or {}).get("value") or {}
         data["ok"] = True
         data["platform"] = platform
+        data["cookies"] = cookies
         return data
     except Exception as exc:  # noqa: BLE001
         logger.warning("auth_state failed: %s", exc)
         return {"ok": False, "detail": str(exc)}
+
+
+async def _cookie_expiries(cdp) -> list[dict]:
+    """`{name, domain, expires}` for the attached page's cookies. Best-effort and value-free.
+
+    A failure here must never fail the login probe — an absent list is `cookie_ttl_s` staying
+    unmeasured, which is exactly what it has read for a month and is an honest answer. Returning a
+    partial list that LOOKS complete is the failure mode worth avoiding.
+    """
+    try:
+        res = await cdp.send("Network.getCookies")
+        return [{"name": c.get("name"), "domain": c.get("domain"), "expires": c.get("expires", -1)}
+                for c in (res.get("cookies") or [])]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 _GMAIL_INBOX_JS = r"""
