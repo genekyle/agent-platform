@@ -1019,13 +1019,18 @@ def _too_unsure_to_continue(world: dict[str, Any], current_url: str) -> Optional
         return None
     # THE STOP SUMMONS EYES, AND THE NEXT PRESS IS THE EYES. Without this, an unsure belief
     # deadlocks the loop: stop -> the operator presses Run -> the SAME cached belief -> the same
-    # stop, forever, with the remedy text promising a way through that does not exist. So each
-    # unsure belief stops the loop exactly once — the stop records which reading was surfaced,
-    # and a Run press against that same reading is the operator saying "I looked; drive." A NEW
-    # belief (the next crank's, a new page's) re-arms the gate. The operator's eyes outrank the
-    # witness — that is the whole supervision contract, applied to the gate's own escape hatch.
+    # stop, forever, with the remedy text promising a way through that does not exist.
+    #
+    # THE ACK IS KEYED TO (STATE, AXIS), NOT TO THE READING'S TIMESTAMP — learned on the gate's
+    # first live hour. A ts-keyed ack made the loop press-per-crank: every crank caches a NEW
+    # belief, the same page-family kept reading novelty-blocked, and run() degenerated into the
+    # fifteen-presses problem it was built to kill. What the operator confirms with a press is
+    # not one snapshot; it is "this PAGE-STATE is fine, drive it" — so the ack holds for the
+    # (claimed state, blocked axis) pair and re-arms the moment either changes: a different page
+    # kind, or a different kind of doubt. The operator's eyes outrank the witness — that is the
+    # supervision contract, applied to the gate's own escape hatch.
     ack = (world or {}).get("unsure_ack") or {}
-    marker = f"{lb.get('ts', '')}|{lb.get('url', '')}|{axis}"
+    marker = f"{bs.state or '?'}|{axis}"
     if ack.get("marker") == marker:
         return None
     return {"axis": axis, "uncertainty": round(bs.unsure_about(axis), 4),
@@ -8418,11 +8423,15 @@ async def run(session_id: int, body: RunBody,
         if unsure:
             stop = STOP_UNSURE
             conf = 1.0 - unsure["uncertainty"]
-            stop_detail = (f"perception is {conf:.0%} sure on the '{unsure['axis']}' axis for "
-                           f"this page (floor: 75%) — read as "
-                           f"{unsure['state'] or 'no state at all'}. Not driving blind: look at "
-                           f"the Lens, correct or confirm what it sees, then press Run again — "
-                           f"that press counts as your confirmation for this reading.")
+            what = (f"this page reads as somewhere the witnesses have never been "
+                    f"(novelty {unsure['uncertainty']:.0%}), best state guess "
+                    f"{unsure['state'] or 'none'}"
+                    if unsure["axis"] == "novelty" else
+                    f"perception is {conf:.0%} sure on the '{unsure['axis']}' axis, read as "
+                    f"{unsure['state'] or 'no state at all'}")
+            stop_detail = (f"{what} — below the 75% floor. Not driving blind: look at the Lens, "
+                           f"correct or confirm what it sees, then press Run again — that press "
+                           f"confirms this page-state and the loop will drive it.")
             # Record WHICH reading was surfaced, so the next press drives instead of re-stopping.
             bb.world = dict(bb.world or {})
             bb.world["unsure_ack"] = {"marker": unsure["marker"]}

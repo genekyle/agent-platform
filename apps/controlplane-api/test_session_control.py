@@ -7199,6 +7199,14 @@ def test_the_unsure_stop_fires_once_per_reading_and_the_next_press_is_the_eyes()
     assert _too_unsure_to_continue(world, "https://x") is None, \
         "the operator looked and pressed — their eyes outrank the witness"
 
-    world["last_belief"]["ts"] = "t2"  # a NEW reading (next crank, next page) re-arms the gate
+    # A NEW READING OF THE SAME PAGE-STATE stays acked. The first (ts-keyed) draft re-stopped on
+    # every crank's fresh belief and run() degenerated to press-per-crank — measured on the
+    # gate's first live hour, one crank per press across an 11-job queue.
+    world["last_belief"]["ts"] = "t2"
+    assert _too_unsure_to_continue(world, "https://x") is None
+
+    # A different page kind, or a different kind of doubt, re-arms.
+    world["last_belief"]["belief"] = {"state": "workday_my_information",
+                                      "uncertainty": {"state": 0.4}, "assessed": ["state"]}
     again = _too_unsure_to_continue(world, "https://x")
     assert again and again["marker"] != first["marker"]
