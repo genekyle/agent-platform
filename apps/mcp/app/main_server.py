@@ -278,7 +278,12 @@ async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Opt
                 # the refusal. Deliberately NOT "same size means same control": iCIMS renders two
                 # genuinely different Submit buttons on one packet form.
                 if await _same_destination(browser_url, tab_id, tab_url, found):
-                    return found[0].get("backend_node_id")
+                    # ONE ACTION, DRAWN TWICE — so the question is no longer WHICH control but
+                    # WHICH COPY, and document order answers a different question than the screen
+                    # does (Cornerstone, 2026-08-24). Ask the page; fall back to document order,
+                    # which is what this line did before.
+                    visible = await _visible_twin(browser_url, tab_id, tab_url, found)
+                    return visible if visible is not None else found[0].get("backend_node_id")
                 # And when the page cannot settle it, the caller's own role may — see `_by_dom_tag`.
                 picked = await _by_dom_tag(browser_url, tab_id, tab_url, found, want_role)
                 if picked is not None:
@@ -395,6 +400,67 @@ async def _same_destination(browser_url: str, tab_id: Optional[str], tab_url: Op
     except Exception:  # noqa: BLE001 — a failed read is not evidence of sameness
         logger.debug("could not compare destinations for %s", node_ids, exc_info=True)
         return False
+
+
+async def _visible_twin(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
+                        candidates: list[dict]) -> Optional[int]:
+    """Of several candidates the page has already told us are ONE action drawn more than once,
+    the one a human would actually press: the one on screen.
+
+    THE CASE THIS IS FOR, measured live 2026-08-24 on Cornerstone (MACOM): a posting renders
+    "Apply Now" TWICE — masthead at y=411 and footer at y=2269 — `_same_destination` correctly
+    reports one action, and the caller then took `found[0]`, which is **AX document order and
+    says nothing about the screen**. Two enter attempts reported "the screen has not moved" with
+    no other tell, and a screenshot rediscovered what `ats_registry`'s own cornerstone note had
+    said since 2026-08-11: *"rendered twice — masthead and footer — so drive the VISIBLE one."*
+
+    ASK THE PAGE, the same discipline as `_same_destination`: a node reports its own rect and
+    whether it is in the viewport. Preference order — in-viewport first, then nearest the top of
+    the document. Returns None on any doubt, and the caller keeps document order, which is
+    exactly today's behaviour: this can improve a pick, never break one.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession, _discover_target
+    node_ids = [c.get("backend_node_id") for c in candidates]
+    if not all(isinstance(n, int) for n in node_ids):
+        return None
+    try:
+        target = await _discover_target(browser_url, tab_id=tab_id, tab_url=tab_url)
+        async with websockets.connect(target["webSocketDebuggerUrl"],
+                                      max_size=8 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("DOM.enable")
+            await cdp.send("Runtime.enable")
+            seen: list[tuple[int, bool, float]] = []
+            for node_id in node_ids:
+                resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": node_id})
+                obj = (resolved.get("object") or {}).get("objectId")
+                if not obj:
+                    return None
+                r = await cdp.send("Runtime.callFunctionOn", {
+                    "objectId": obj, "returnByValue": True,
+                    "functionDeclaration": """function(){
+                      const r = this.getBoundingClientRect();
+                      const st = getComputedStyle(this);
+                      const painted = r.width > 1 && r.height > 1 &&
+                        st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+                      const inView = painted && r.bottom > 0 && r.right > 0 &&
+                        r.top < (innerHeight || 0) && r.left < (innerWidth || 0);
+                      return {painted: painted, inView: inView,
+                              top: r.top + (window.scrollY || 0)};
+                    }"""})
+                val = (r.get("result") or {}).get("value") or {}
+                if not val.get("painted"):
+                    continue          # an unpainted twin is not a candidate for a human's click
+                seen.append((node_id, bool(val.get("inView")), float(val.get("top") or 0.0)))
+            if not seen:
+                return None
+            in_view = [s for s in seen if s[1]]
+            pool = in_view or seen
+            return min(pool, key=lambda s: s[2])[0]
+    except Exception:  # noqa: BLE001 — a failed read is not evidence about the screen
+        logger.debug("could not compare visibility for %s", node_ids, exc_info=True)
+        return None
 
 
 async def _resolve_node_by_selector(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
@@ -882,8 +948,15 @@ async def select_prompt(body: SelectPromptRequest):
                 "detail": f"prompt field not found: {common['target']!r}"
                           + (f" — {resolve_why}" if resolve_why else "")}
 
-    # 1. OPEN the prompt via the proven driver node-click (same path /execute uses) — a
-    # trusted-mouse-at-box-center did NOT reliably open Workday prompt popups.
+    # 1. OPEN the prompt via the DirectDriver's native node-click — a trusted-mouse-at-box-centre
+    # did NOT reliably open Workday prompt popups (measured; kept).
+    #
+    # CORRECTION 2026-08-27: this comment used to add "(same path /execute uses)". It is not.
+    # `/execute` calls `get_driver(body.driver)`, which defaults to **humanized** — a TRUSTED CDP
+    # press at the node's measured centre. `get_driver("direct")` here is the untrusted JS
+    # `.click()`. The two paths were described as one for as long as the line existed, which is
+    # how "we already click the way /execute clicks" stayed believable while this endpoint was
+    # the one place that did not.
     await get_driver("direct").move_and_act(
         browser_url=body.browser_url,
         request=ActionRequest(action_id="click", target_bbox={}, backend_node_id=node_id),
@@ -917,6 +990,22 @@ async def select_prompt(body: SelectPromptRequest):
     # 3. resolve the option by ACCESSIBLE NAME and NATIVE-click it. Coordinate clicks mis-fire on
     # long/virtualized lists (picked "American Samoa" for "New Hampshire"); native node-click is the
     # reliable primitive. No option found here usually means a stale session (refresh first).
+    #
+    # ⚠ TWO DATED MEASUREMENTS CONTRADICT EACH OTHER HERE, AND THIS SESSION DID NOT GUESS BETWEEN
+    # THEM (2026-08-27, §13/§14). This module's own header says Workday prompt options *"render in
+    # a portal and only register TRUSTED CDP mouse events (JS .click() … are ignored)"* — while the
+    # line below commits the option with `get_driver("direct")`, which is exactly that ignored JS
+    # `.click()`. Its sibling `/select_prompt_path` trusted-clicks its leaf (`_trusted_click`), so
+    # the two endpoints disagree about the same widget family. Both claims cite real drives, and
+    # both can be partly right: the virtualized-list failure is about TARGETING (which row), the
+    # portal claim is about EVENT KIND (which listener fires) — and the humanized driver satisfies
+    # both by pressing trusted AT THE RESOLVED NODE'S centre.
+    #
+    # THE EXPERIMENT THAT SETTLES IT, on the next Workday drive with a prompt: swap this one call
+    # to the default driver, select a value from a LONG list (Country/State), and read the field
+    # back. Right row + committed → the header wins and this line is legacy. Wrong row or
+    # uncommitted → the native click is load-bearing and the header is stale. Changing it blind
+    # would risk a working path on a live ATS to satisfy a comment, which is the wrong trade.
     opt_node = None
     for _ in range(6):
         opt_node = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url, None, body.value)

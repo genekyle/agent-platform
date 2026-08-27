@@ -225,6 +225,14 @@ def journaled(intent: Intent | Callable[[Any], Intent], *,
                 **({"widget_type": rec.widget_type} if rec.widget_type else {}),
                 **({"target": rec.target} if rec.target else {}),
                 **({"driver": rec.driver} if rec.driver else {}),
+                # WHICH DOOR THIS ACT WENT THROUGH, returned to the caller and not only to the
+                # corpus (SESSION 19). `addressed_by` is in `_JOURNAL_KEYS`, so it was stripped
+                # from `passthrough` and recorded where only a later reader could find it — while
+                # the caller deciding what to do NEXT, and the operator watching a stall, could
+                # not see whether a control had been reached by accessible name, by selector, by
+                # node id, or by a bare box. That is the one fact that separates the four notions
+                # of control identity this system holds (2026-08-25), and it was journal-only.
+                **({"addressed_by": rec.addressed_by} if getattr(rec, "addressed_by", "") else {}),
                 **passthrough,
             }
 

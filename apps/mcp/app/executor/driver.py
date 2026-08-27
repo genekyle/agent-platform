@@ -384,7 +384,14 @@ class TrajectoryDriver(ABC):
                     ev = {"type": "char", "text": "\r", "key": "Enter"}
                 await cdp.send("Input.dispatchKeyEvent", ev)
         else:  # click / default
-            await self._element_click(cdp, object_id, pt)
+            # HOW the click was delivered rides in the mode, for the same reason the driver
+            # downgrade does (`/execute`, 2026-08-21): *a posture that can vanish silently is not
+            # a posture.* `HumanizedDriver` degrades to the native click in two deliberate,
+            # documented cases — no measurable centre, and a point outside the viewport — and
+            # until now `mode` read a bare "element" either way, so an untrusted click was
+            # indistinguishable from a trusted one at every surface above this.
+            how = await self._element_click(cdp, object_id, pt)
+            return f"element:{how}" if how else "element"
         return "element"
 
     async def _node_centre(self, cdp, backend_node_id: Optional[int]) -> dict[str, float]:
@@ -410,15 +417,23 @@ class TrajectoryDriver(ABC):
         return {"x": (float(quad[0]) + float(quad[4])) / 2.0,
                 "y": (float(quad[1]) + float(quad[5])) / 2.0}
 
-    async def _element_click(self, cdp, object_id: str, pt: dict) -> None:
+    async def _element_click(self, cdp, object_id: str, pt: dict) -> str:
         """The click portion of a node-based action. Base = the native synthetic `this.click()` —
         the robotic baseline (isTrusted=false, and it doesn't move/focus like a hand). HumanizedDriver
         overrides this to a TRUSTED CDP mouse press/release at the node's freshly-measured centre
         (`pt`), so the robust `backend_node_id` path clicks like a human instead of scripting a click.
-        Trusted clicks are the system-wide standard (operator-directed 2026-07-18); this is the seam."""
+        Trusted clicks are the system-wide standard (operator-directed 2026-07-18); this is the seam.
+
+        RETURNS WHICH KIND OF CLICK IT ACTUALLY WAS, because the difference is the whole diagnosis:
+        a widget that commits on `mousedown` or gates on `isTrusted` never hears a native click, and
+        on 2026-08-25 that cost ELEVEN attempts on one Workday date field — every one of them a
+        different way of writing a VALUE into a widget whose problem was that it had never received
+        a GESTURE. The caller cannot ask afterwards, so the answer travels with the act.
+        """
         await cdp.send("Runtime.callFunctionOn",
                        {"objectId": object_id, "functionDeclaration": "function(){ this.click(); }",
                         "awaitPromise": False})
+        return "native"
 
     def _scroll_plan(self, total: float) -> list[tuple[float, float]]:
         """Break a vertical scroll of `total` CSS px into (deltaY, pause_seconds) steps. Base = one

@@ -84,14 +84,15 @@ class HumanizedDriver(DirectDriver):
         await asyncio.sleep(self._rng.uniform(0.03, 0.09))  # press dwell
         await self._dispatch_mouse(cdp, {"type": "mouseReleased", "x": jx, "y": jy, "button": "left", "clickCount": 1})
 
-    async def _element_click(self, cdp, object_id: str, pt: dict) -> None:
+    async def _element_click(self, cdp, object_id: str, pt: dict) -> str:
         """Trusted click on the robust node path: a real CDP mouse press/release (isTrusted=true) at
         the node's freshly-measured centre, with a few px of jitter and a short press dwell — a human
         hand, not a synthetic `.click()`. The `_element_act` approach has already wiggled the cursor
         here; this presses. Falls back to the native click only if we somehow have no centre."""
         x, y = pt.get("x"), pt.get("y")
         if x is None or y is None:
-            return await super()._element_click(cdp, object_id, pt)
+            await super()._element_click(cdp, object_id, pt)
+            return "native:no_centre"
         # A POINT OUTSIDE THE VIEWPORT CANNOT BE PRESSED. `_element_act` translates frame-local
         # coordinates into page space and scrolls each ancestor frame into view, but a frame taller
         # than the window (iCIMS's is 1654px) can still leave its target off-screen — and a trusted
@@ -102,13 +103,15 @@ class HumanizedDriver(DirectDriver):
                                                  "expression": "({w: innerWidth, h: innerHeight})"})
         v = (vp.get("result") or {}).get("value") or {}
         if not (0 <= float(x) <= float(v.get("w") or 0) and 0 <= float(y) <= float(v.get("h") or 0)):
-            return await super()._element_click(cdp, object_id, pt)
+            await super()._element_click(cdp, object_id, pt)
+            return "native:off_viewport"
         jx, jy = float(x) + self._rng.uniform(-2.0, 2.0), float(y) + self._rng.uniform(-2.0, 2.0)
         await self._dispatch_mouse(cdp, {"type": "mouseMoved", "x": jx, "y": jy})
         await asyncio.sleep(self._rng.uniform(0.04, 0.12))   # settle before pressing
         await self._dispatch_mouse(cdp, {"type": "mousePressed", "x": jx, "y": jy, "button": "left", "clickCount": 1})
         await asyncio.sleep(self._rng.uniform(0.03, 0.09))   # press dwell
         await self._dispatch_mouse(cdp, {"type": "mouseReleased", "x": jx, "y": jy, "button": "left", "clickCount": 1})
+        return "trusted"
 
     def _scroll_plan(self, total: float) -> list[tuple[float, float]]:
         """Human wheel scroll: several notches under an ease-in/out envelope with per-notch jitter and
