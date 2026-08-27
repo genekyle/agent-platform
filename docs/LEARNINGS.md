@@ -11997,3 +11997,55 @@ per-endpoint migration with a live ATS behind each one. The exemption list S19 c
 natural next step now that `addressed_by` is observable end to end: count the doors on real
 drives first, then close the ones nothing needs.
 
+## 2026-08-27 (sixth) — SESSION 20: the guard that was on the wrong endpoint, and one word that meant two things
+
+**THE READ-BACK WAS ALREADY THERE; THE MISSING EVIDENCE WAS *WHICH CONTROL*.** `CHECK_GROUP_JS`
+has confirmed its own work since it was written — *"CONFIRM by re-reading the DOM, not by trusting
+the clicks"* — and it returns the group's checked state. So the 2026-08-23 radio misfires (three
+of ~10, EVERY one reporting ok) were never a missing read-back. Each answered question removed a
+validation message and shifted the layout ~40px, the next call's selector resolved into the
+**neighbouring** group, and the re-read then faithfully confirmed the wrong one. **Verifying the
+control you touched says nothing about whether it was the control you meant.**
+
+**AND THE GUARD FOR EXACTLY THAT ALREADY EXISTED — ON THE OTHER ENDPOINT.** `/execute` gained
+`expect_question` on 2026-08-19 (*"TARGET MISMATCH: … resolves to a control for 'Email Address
+(required)' … but the caller means 'infoEmail'. Refusing to answer the wrong question"*), and it
+has since refused four confident writes. `/check_group` — **the endpoint that drives the groups
+where the disqualifying answers live**: sponsorship, work authorization, clearance, self-ID —
+never got it. `__questionOf` was already injected into that very blob, riding in the shared tells
+beside `__findAll`; nobody asked it. It asks now: the group reports the question it answers
+(`target_question` + `question_source`, returned whether or not the caller asserts one), and an
+asserted `expect_question` that does not match is a refusal rather than a confident write. This is
+the 2026-08-21 sponsorship radio — left on **Yes** against the operator's stored **No**, caught
+only by a screenshot — closed at the seam instead of by remembering to screenshot.
+
+*The refusal reports `not_found`, not a new outcome word.* `Outcome` is a closed vocabulary and
+`/execute` carries the same distinction in its DETAIL; inventing a member for one endpoint would
+be the hole `contract.Intent`'s own rule warns about, from the outcome side.
+
+**`expected_next` HAD NO BRANCH, SO THE STRONGEST EVIDENCE AVAILABLE WAS FILED AS "WE COULD NOT
+JUDGE".** `live_actuator` emits it — the states a decision named **in advance** — and `verify()`
+fell through to `UNOBSERVED` for that kind (flagged 2026-08-22, built now). Those rows took their
+verdict from the supervisor path and never touched `verify()`, which is exactly why the hole
+stayed invisible. Matching is on the landed state with containment both ways, because a recipe
+names FAMILIES, not renders: a declared `workday_my_information` is satisfied by a landed
+`workday_my_information_edit`. An unnamed landing still leaves the claim standing — a verifier
+that cannot see must not block.
+
+**ONE WORD, TWO FACTS, NOW SEPARABLE.** `verify()` returns MISMATCH for *the world did not move*;
+the actuator's recorder returns MISMATCH for *the supervisor judged the turn non-nominal*.
+Different evidence, different fix, one word — and the teacher's queue ranked `mismatch` first as a
+**single class**, so its head looked like one problem and was two. `mismatch_kind` rides BESIDE
+the verdict (every existing `verdict == "mismatch"` reader is untouched), defaults to the
+verifier's meaning because that is this function's oldest caller, is written only on a mismatch,
+and is absent on historical rows — honest, since nobody recorded it then. The queue now ranks
+`mismatch:world` ahead of the generic and the judged, because a world-mismatch is the row where an
+act claimed ok and the page disagreed: it corrects the witnesses AND explains a failed act.
+
+*Suites:* controlplane-api 1971 → **1977** green, mcp **175** green, both modified JS blobs
+`node --check`ed. *Not built, and named:* the recognizer chain (captcha-first → trusted-click
+retry → overlay tell) is still prose rather than dispatch at the act seam — S19 made the
+untrusted-click half of it observable in `mode`, which is the input that chain needs, and wiring
+the chain itself is the remaining piece of this brief. *Owed to the drive, as with S15–S19:* none
+of this has met a live page yet.
+

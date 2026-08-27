@@ -198,8 +198,20 @@ live (first errand fire and its measured boundary, first real inbox sweeps, phas
    one contradiction is left standing with the experiment that settles it. **The four addressers
    are still four** — collapsing them is a per-endpoint migration behind a live ATS each, and the
    next step is to count the doors on real drives now that `addressed_by` is observable) → S20
-   (act carries evidence). Each kills a counted failure class from the ten-session retrospective;
-   none is speculative.
+   (act carries evidence — **partly built 2026-08-27**: `check_group` gained the
+   `expect_question` guard `/execute` has had since 08-19 and reports the question it answered,
+   `verify()` gained its missing `expected_next` branch, and `mismatch_kind` splits the one word
+   that meant two facts. **The recognizer chain is still prose, not dispatch** — that is the
+   remaining piece). Each kills a counted failure class from the ten-session retrospective; none
+   is speculative.
+
+   **The whole queue owes one thing: a live drive.** S15–S20 are verified by suite, by shape, and
+   in three cases against live read-only reads — but no rung of this work has driven a real
+   application yet. The next attended session pays all of it at once: the operator names the
+   preferences landing (S15), the virtualisation claim is re-verified (S16), the consultation
+   citations appear in a real trail (S17), the census/dialog gaps meet a real form (S18), a
+   duplicate-control page exercises the visible-twin tiebreak (S19), and a screener exercises the
+   question guard (S20).
 
    **Two carried items, both deliberate.** (a) The `observed_jobs.search_queries` DROP is armed in
    `migrations.py` and rehearsed on a scratch DB; it fires on the next restart of this code
