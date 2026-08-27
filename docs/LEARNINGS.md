@@ -12049,3 +12049,71 @@ untrusted-click half of it observable in `mode`, which is the input that chain n
 the chain itself is the remaining piece of this brief. *Owed to the drive, as with S15–S19:* none
 of this has met a live page yet.
 
+
+## 2026-08-27 (seventh) — SESSION 21: the login has a copy, and the auth gate believed an empty jar
+
+**THE SIGNED-IN SESSIONS NOW EXIST SOMEWHERE OTHER THAN `/tmp`.** Both profiles captured warm over
+CDP, encrypted, verified and pinned: indeed 773 cookies / 343 KB, linkedin 79 / 37 KB. **380 KB for
+two logins that cost a human to re-create**, against 433 MB of profile on disk. The risk was
+recorded on 2026-08-18 and never acted on; it is closed.
+
+### The experiment, run end to end on LinkedIn
+
+Snapshot → `Storage.clearCookies` (jar to **0**) → restore (**79**, an identical `(name, domain)`
+set, all four auth cookies) → **reload** → signed in. Screenshot-confirmed rather than label-confirmed
+(§ the AX/URL rule): avatar, 6 notifications, the `In my network` filter, and the *same* prior
+state — `reporting analyst`, 99+ results, Greater Boston, the same Claims Analyst pane. A stale
+session is a fixture now, not an incident.
+
+**AND THE THING THAT FELL OUT OF THE BREAK STEP IS THE MOST IMPORTANT FINDING HERE.** With the jar
+at **zero cookies**, `/auth_state` still answered **`logged_in: true`**. It reads the RENDERED page —
+avatar present, no sign-in link — so it cannot distinguish a live session from a dead one that has
+not navigated yet. The login gate that blocks all automation until `logged_in` will therefore pass
+on a session that is already gone, right up until the next navigation turns it into a wall
+mid-drive. This is the AX/URL-both-lie class one layer down, and **it is the argument for
+`cookie_ttl_s` existing at all**: the cookie read is the only signal that saw the empty jar.
+
+*Not fixed here, deliberately — naming it is this entry's job.* The remedy is not "make
+`/auth_state` read cookies and refuse": a jar can be healthy while the SERVER has expired the
+session, so cookies are a necessary and not sufficient witness, exactly as the rendered DOM is.
+Two witnesses, one gate, and which one wins is a design call, not a patch.
+
+### Four numbers in the brief were wrong, and each changed the build
+
+1. **`cookie_ttl_s` was never "a one-line change at the call site"** (`PLAN_staleness.md` §4,
+   written 2026-07-26 and unread since). On a session `/auth_state` calls `logged_in`, the minimum
+   TTL **over Indeed's jar is 23 SECONDS** — `FPLC`, a Google ad cookie — against a RED threshold of
+   two minutes. First-party-only is no better: **6 minutes** (`__cf_bm`, Cloudflare). Scoped to
+   *named auth cookies* it reads **1895.8 h** live. The naive version would have shipped a signal
+   that is red forever, which is strictly worse than the inert `None` it replaced — inert at least
+   says *unmeasured* out loud. `session_snapshot.AUTH_COOKIES` owns the vocabulary and the trap is
+   pinned as a test.
+2. **The identity tier is not ~2.3 MB.** That figure is LinkedIn (2.5 MB of 119 MB). Indeed is
+   **39.6 MB of 324 MB**, because `Service Worker/CacheStorage` alone is **38.3 MB** — cache, not
+   identity. Excluded, the real figures are 1.2 MB and 2.5 MB. **The exclusion IS the tier**; with
+   it in, the cheap tier that justified having tiers stops being cheap.
+3. **The two tiers are NOT ordered.** Indeed carries **16 first-party session cookies** — four
+   `JSESSIONID`s, one of them on `smartapply.indeed.com`, the apply flow's own — which the warm CDP
+   read returns and a cold file copy may not. Never describe cold-full as a superset of warm until
+   somebody measures that; the brief did, and it is the wrong way round for exactly the state a
+   mid-apply recovery needs.
+4. **The payload must not go INSIDE `secrets_vault.json`.** `_save` re-serializes the whole document
+   and rewrites it under `O_TRUNC`, so a 2 MB blob would truncate-rewrite the file holding the
+   account passwords on every snapshot — and lose them on a crash mid-write. Same key provider,
+   separate file, `os.replace`.
+
+### What the warm tier does not capture — measured, not assumed
+
+Named in `_WARM_NOT_CAPTURED` and reported on every snapshot: storage for origins with no open tab,
+IndexedDB (LinkedIn holds 2.1 MB of it), Login Data, service-worker registrations. **And the
+LinkedIn restore worked without any of them** — cookies alone were sufficient, MEASURED, on that
+platform. **UNVERIFIED for Indeed**, whose jar is fifteen times larger and carries the smartapply
+session; do not generalize this one across platforms, which is precisely the mistake the 2.3 MB
+figure already made.
+
+*Also:* `/auth_state` now returns cookie names + expiries — never values — off the CDP session it
+already had open, so the signal costs no extra round trip and cannot be skipped on the turns it
+matters. A probe that returns none still reads `unmeasured`, which is what the two live
+verifications did against the older running server: the tri-state working on its first run.
+
+*Suites: controlplane-api 1977 → 2003, mcp 175. Live: 3 snapshots, 2 pinned, 1 full recovery.*
