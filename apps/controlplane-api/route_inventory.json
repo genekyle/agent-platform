@@ -70,6 +70,7 @@
   "GET /api/observations/screenshots/{filename}",
   "GET /api/observations/{filename}",
   "GET /api/observations/{filename}/candidate_suggestion",
+  "GET /api/orientation",
   "GET /api/providers",
   "GET /api/runs",
   "GET /api/runtime/apply_recipe",

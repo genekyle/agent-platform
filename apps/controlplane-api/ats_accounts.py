@@ -78,7 +78,11 @@ def derive_password(company: str) -> Optional[str]:
 
 
 def ats_account_id(company: str, ats_id: str) -> str:
-    """Stable id for a company↔ATS login, e.g. ats__u_s_bank_national_association__phenom."""
+    """Stable id for a company↔ATS login, e.g. ats_u_s_bank_national_association_phenom.
+
+    (The example above said `ats__…__phenom` until 2026-08-27 — `_slugify` collapses runs, so the
+    doubled separators never existed. A stale example in a docstring is a claim like any other:
+    it sent a test fixture to the wrong shape the first time somebody trusted it.)"""
     return accounts_mod._slugify(f"ats__{company}__{ats_id}")
 
 
@@ -281,6 +285,69 @@ def reset_account(company: str, ats_id: str) -> dict[str, Any]:
     cleared = accounts_mod.clear_credentials(aid)
     rec = accounts_mod.put_account(aid, {"status": "pending"})
     return {"ok": True, "account": rec, "credential_cleared": cleared}
+
+
+#: Words that describe what a company IS, not which company it is. A canonical match may never
+#: rest on these alone — "Health Group" and "Health Systems Group" are not the same employer.
+_GENERIC_COMPANY_TOKENS = frozenset({
+    "the", "inc", "incorporated", "llc", "llp", "lp", "ltd", "limited", "corp", "corporation",
+    "co", "company", "group", "holdings", "consulting", "consultants", "systems", "services",
+    "solutions", "technologies", "technology", "partners", "associates", "international",
+    "global", "national", "america", "american", "usa", "us",
+})
+
+
+def _company_tokens(name: str) -> frozenset[str]:
+    return frozenset(t for t in re.findall(r"[a-z0-9]+", (name or "").lower()) if t)
+
+
+def find_existing(db=None, *, company: str, ats_id: str) -> Optional[dict[str, Any]]:
+    """Is there ALREADY an account for this employer on this ATS? Read-only; never creates.
+
+    THE BUG THIS ANSWERS (2026-08-24, live): `ats_odyssey_consulting_icims` sat in the store WITH
+    credentials while the flow opened `ats_odyssey_systems_consulting_group_ltd_icims` — pending,
+    no creds — for the same employer, split by nothing but legal-suffix noise in the company
+    string. Operator: *"we had the creds on file, should've checked there first."*
+
+    Matching is two-tier and says which it used. `exact` is the derived account id. `canonical`
+    holds when one company's distinctive tokens are a SUBSET of the other's — which is exactly
+    the Odyssey shape — after generic words are set aside, so a match can never rest on
+    "Group"/"Health"/"Systems" alone. Anything weaker is not a match: proposing the wrong
+    employer's credential is worse than proposing none, because it looks like a bad password
+    weeks later (the vault-overwrite lesson, from the other direction).
+
+    Returns the account record plus `match`, or None. **It surfaces, it does not act** — the
+    2026-08-24 lesson is "check first", not "log in automatically".
+    """
+    if not company or not ats_id:
+        return None
+    try:
+        accounts = [a for a in accounts_mod.list_accounts()
+                    if a.get("kind") == "ats" and a.get("ats_id") == ats_id]
+    except Exception:
+        return None
+
+    want_id = ats_account_id(company, ats_id)
+    for acct in accounts:
+        if acct.get("account_id") == want_id:
+            return {**acct, "match": "exact"}
+
+    want = _company_tokens(company)
+    want_distinct = want - _GENERIC_COMPANY_TOKENS
+    if not want_distinct:
+        return None
+    for acct in accounts:
+        have = _company_tokens(acct.get("company") or "")
+        have_distinct = have - _GENERIC_COMPANY_TOKENS
+        if not have_distinct:
+            continue
+        if want_distinct <= have_distinct or have_distinct <= want_distinct:
+            return {**acct, "match": "canonical",
+                    "matched_on": sorted(want_distinct & have_distinct),
+                    "caveat": (f"matched {company!r} to {acct.get('company')!r} on shared "
+                               f"distinctive tokens — confirm it is the same employer before "
+                               f"using the credential")}
+    return None
 
 
 def list_by_company() -> dict[str, Any]:
