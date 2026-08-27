@@ -1,6 +1,10 @@
 # PLAN — Reasoner v2: the planner that grades itself against reality
 
-**Status: design adopted 2026-07-17 (operator-approved). Queued behind Controller v1** — v2's
+**Status: design adopted 2026-07-17 (operator-approved). PARKED 2026-08-26 — S06–S09 entirely
+unstarted (LEARNINGS:1924), and planner priority re-scoped by `PLAN_generalization_v1.md` §2 P4:
+the live ladder/cadence gets reliable first (consultation as input, SESSION_17), and a taught
+Plan contract waits until single-step + escalation measurably stalls. Originally queued behind
+Controller v1** — v2's
 offline pieces (contracts, assembler, grader) may be built in parallel any time, but its live
 pieces gate on v1's journal flowing (Session 02) and reuse v1's teaching gate (Session 04) and
 replay harness (Session 05) at a higher altitude. Session briefs: `docs/sessions/SESSION_06`–`09`.

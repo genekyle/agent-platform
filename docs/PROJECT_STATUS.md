@@ -1,6 +1,16 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-08-23 — the reflection audit and the four-lane tandem (see that section
+_Last updated: 2026-08-26 — **the ten-session retrospective and the generalization refocus
+(operator-directed): the build priority is now `PLAN_generalization_v1.md`** — the reliable core
+(planner · observer · validator · interaction-profile selection · bucketed execution) and
+generalization by page-KIND, consulted knowledge, and step-SET recipes. **The full flywheel is
+demoted from goal to instrument** (train-on-label, the shadow, and the enforced two-bar gate all
+keep running as byproducts; nobody builds FOR the gate — this adopts PLAN_reliability_v1's
+2026-08-14 standing recommendation). A session is measured by **drives that finish clean**:
+submissions plus three zeros — no silent false success, no rediscovered fact, no unnamed screen.
+Briefs queue 14 → 20; S06–S09 (Reasoner v2) are PARKED._
+
+_Previous (2026-08-23): the reflection audit and the four-lane tandem (see that section
 below); priorities re-ordered: **drive, live** — the code is ahead of the world's evidence.
 Previous framing (2026-08-09, **the refocus**, operator-directed after the burnout audit; LEARNINGS
 2026-08-09) stands beneath it: The full flywheel revolution is re-sequenced, not abandoned: **the controller is the
@@ -135,16 +145,15 @@ maturity registry's existing cached refresh, off the same rows, so it cannot dri
 regressed: `derive()` grades **0 transitions CERTIFIED** today, so nothing reached that branch
 before the change.
 
-**In flight as of 2026-08-23** (assigned to sessions; re-chip if they die): the crank
-journals the control it clicked (shrinks `exact_unscoreable`); the vault-overwrite fix on the
-sign_in leg's manual exit; the swallow-by-design seam audit (output-observing tests). **Open,
-un-owned:** split the two meanings of MISMATCH (`mismatch_kind`, + `verify()`'s missing
-`expected_next` branch); stop witnesses borrowing other ATS's state names on out-of-vocabulary
-platforms (the labeling pass measured five borrowings, incl. a wrong `workday_already_applied`
-that skips jobs); audit computations folded into hot shared paths — moving work inside a shared
-cached refresh widens its blast radius from "this number is wrong" to "every consumer is down"
-(measured: one malformed journal row crashed the whole authority seam via
-`MaturityRegistry.refresh()` before the 2026-08-23 hardening; LEARNINGS has the write-up).
+**The 2026-08-23 in-flight items all landed same-day** (the crank journals its control; the
+vault-overwrite fix; the swallow-by-design audit — LEARNINGS 08-23). **Open, now owned:** the
+MISMATCH split (`mismatch_kind` + `verify()`'s missing `expected_next` branch) → SESSION_20;
+witnesses borrowing other ATS's state names on out-of-vocabulary platforms → kind-first
+classification (`PLAN_generalization_v1.md` §3.1). **Open, un-owned:** audit computations folded
+into hot shared paths — moving work inside a shared cached refresh widens its blast radius from
+"this number is wrong" to "every consumer is down" (measured: one malformed journal row crashed
+the whole authority seam via `MaturityRegistry.refresh()` before the 2026-08-23 hardening;
+LEARNINGS has the write-up).
 
 ## The per-step loop — status
 
@@ -163,22 +172,28 @@ cached refresh widens its blast radius from "this number is wrong" to "every con
 Guardrails unchanged and live: $5/week cap, never auto-solve captcha/2FA, Submit held for the
 operator, credential flows collect nothing, secrets never captured.
 
-## Priorities (re-ordered 2026-08-23 — everything else queues behind these)
+## Priorities (re-ordered 2026-08-26 — everything else queues behind these)
 
-1. **Drive, live.** Everything built on 08-22/23 is verified in code and blind to the world:
-   the Workday verify addressing is HYPOTHESIS, no live errand read has happened (needs the
-   operator's signed-in Gmail tab in the capture browser), zero shadow rows carry phase, and
-   the inbox sweep has never seen a real mailbox. One attended apply session pays five ways
-   now: an application, phase-carrying rows for the gate, a verify-wall scan that corrects the
-   HYPOTHESIS labels, the first real inbox sweep, and the scorecard moving off its baseline.
-2. **Label the tail as the rows arrive** (queue 306, `witness_split` head now). Every label
-   still refits table + witnesses + programs on write.
-3. **Watch the two-bar gate per scenario** on the scorecard, and promote only through the
-   (soon-enforced) authority seam when a family clears BOTH bars on fresh rows — the 0.985/1.000
-   backtests are HYPOTHESIS with named leakage; only post-wire rows count.
-4. **Parked, explicitly** (unchanged): element-level bbox faucet, L4 intent model (volume-gated:
-   ≥500 journaled intents), Interaction API Phase 2, `main.py` split, movement/diffusion input
-   model, OmniParser removal, Account Manager build-out, FB Marketplace expansion, cloud move,
+The 2026-08-23 list is in git history. Much of its "blind to the world" debt has since been paid
+live (first errand fire and its measured boundary, first real inbox sweeps, phase-carrying rows,
+8 submissions across 6 platforms — LEARNINGS 08-23/24/25). The new list, per
+`PLAN_generalization_v1.md`:
+
+1. **Run the briefs in order, each ending on a live drive.** S14 (one fact one place) → S15
+   (count the unknowns) → S16 (facts with expiry) → S17 (consultation as input) → S18
+   (observation profiles) → S19 (one resolver) → S20 (act carries evidence). Each kills a
+   counted failure class from the ten-session retrospective; none is speculative.
+2. **Keep driving live between briefs.** Applications are the product, and the drives are where
+   the three zeros get measured. Rows, labels, sweeps, and scorecard movement ride along free.
+3. **Label the tail as the rows arrive** (unchanged, byproduct — every label still refits
+   table + witnesses + programs on write).
+4. **Watch the two-bar gate; never feed it.** Promotion happens through the authority seam if a
+   family clears both bars in passing — the gate is armed, not a target.
+5. **Parked, explicitly**: Reasoner v2 / S06–S09 (planner re-scoped — the live ladder gets
+   reliable first), element-level bbox faucet, L4 intent model (volume-gated: ≥500 journaled
+   intents), Interaction API Phase 2, `main.py` split, movement/diffusion input model,
+   OmniParser removal (the 1.3 GB dependency — still the biggest cleanup win, scheduled
+   deliberately), Account Manager build-out, FB Marketplace expansion, cloud move,
    Gmail-as-domain (reader ≠ domain; actions stay out of scope).
 
 ## Endgame (unchanged from 2026-07-22, sharpened 2026-08-09)

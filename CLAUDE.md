@@ -13,10 +13,14 @@ every correction becomes training data for local models that take work off the e
 2. **`docs/PRINCIPLES.md`** — the durable invariants (each ideally backed by an enforcement point).
 3. **`docs/PROJECT_STATUS.md`** — current state of the loop and the open gaps.
 4. **`docs/interaction-layers.md`** — the AX/node driver vs. bespoke DOM case study (the FB-login saga).
-5. **`docs/PLAN_controller_v1.md`** — **the current build priority (adopted 2026-07-17): controller
-   v1, the teachable `decide()`**. Per-session execution briefs live in `docs/sessions/` — a working
-   session should pick up the lowest-numbered unfinished `SESSION_*` brief and run it. Career Search
-   domain only until a scenario family graduates.
+5. **`docs/PLAN_generalization_v1.md`** — **the current build priority (adopted 2026-08-26): the
+   reliable core** — planner · observer · validator · interaction-profile selection · bucketed
+   execution — and generalization by page-kind, consulted knowledge, and step-set recipes. The
+   flywheel is demoted from goal to instrument (it keeps turning as a byproduct of drives).
+   Superseded as priority: `PLAN_controller_v1.md` (built; stays the controller's reference).
+   Per-session execution briefs live in `docs/sessions/` — a working session picks up the
+   lowest-numbered unfinished `SESSION_*` brief (currently 14 → 20; **06–09 are PARKED, skip
+   them**). Career Search domain only until a scenario family graduates.
 
 ## The few rules most likely to bite you (details in PRINCIPLES.md)
 

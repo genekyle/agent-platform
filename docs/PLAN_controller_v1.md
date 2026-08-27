@@ -1,10 +1,10 @@
 # PLAN — Controller v1: the `decide()` that can be taught
 
-**Status: adopted 2026-07-17 (operator-directed). This is PRIORITY #1 — the most important work in
-the repo, and it starts now.** Everything else queues behind it (PROJECT_STATUS.md carries the
-reordered list). Prove it on **Career Search only**; expansion to any other domain waits until a
-scenario family graduates. Per-session execution briefs live in `docs/sessions/` — a fresh working
-session should read this doc, then pick up the lowest-numbered unfinished brief.
+**Status: adopted 2026-07-17 (operator-directed); BUILT — M1–M5 landed and live (cascade,
+teaching gate, shadow metric, enforced two-bar promotion gate; see PROJECT_STATUS.md). Superseded
+as build priority 2026-08-26 by `PLAN_generalization_v1.md`** — the flywheel is demoted from goal
+to instrument; this doc remains the controller's design reference. Career Search only, unchanged.
+Per-session execution briefs live in `docs/sessions/`.
 
 **What this is.** The most efficient route to a working v1 of the reasoner/controller — the missing
 `decide()` in `observe() → decide() → act()` (contract.py:88). Every technique below is

@@ -11588,3 +11588,67 @@ location column is a caller's default, not a page fact. **The same class of lie 
 just stopped telling**, one column over, and SESSION 15 should take it.
 
 *Suites: controlplane-api 1929, mcp 168.*
+
+## 2026-08-26 (fifth) — the ten-session retrospective, and the refocus from flywheel to reliable generalization
+
+**AN OPERATOR-DIRECTED STEP-BACK OVER THE LAST TEN SESSIONS (2026-08-18 → 08-26), READ FROM THIS
+LOG, THE BRIEFS, THE ORIGINAL PLANS AND THE GIT TRACE — THEN THE PLANS REWRITTEN.** The
+deliverables: `docs/PLAN_generalization_v1.md` (now the build priority), briefs
+`SESSION_17`–`SESSION_20`, and the pointer updates (CLAUDE.md §5; PROJECT_STATUS header, in-flight
+ledger and priorities; supersession/demotion status lines on PLAN_controller_v1,
+PLAN_flywheel_first_revolution and PLAN_reasoner_v2; PARKED banners on S06–S09).
+
+**WHAT THE WINDOW PRODUCED, COUNTED.** 8 applications submitted across 6 ATS platforms —
+first-ever end-to-end drives on Paylocity, iCIMS and TAM (**TAM with no recipe, no registry entry,
+no prior sighting: posting→submitted in one pass**), Cornerstone driven to mid-form, PeopleAdmin
+farmed to its wall, the Gmail errand and inbox sweep fired live for the first time, $0 metered API
+since 08-03. The generic cadence + the AX layer + the answer store already generalize — that is
+the new plan's existence proof, and the reason its title is not aspirational.
+
+**WHAT IT COST — SEVEN CLASSES, EACH ALREADY NAMED PIECEMEAL IN THIS LOG, NOW COUNTED TOGETHER:**
+(1) *the fact existed and nothing asked* — counted to EIGHT explicit instances, ending with the
+registry's own double-Apply-Now note rediscovered by screenshot; (2) *silent false success* —
+untrusted `.click()` (eleven mechanisms before one trusted gesture), 3/10 radio misfires all
+reporting ok, `files=0` uploads, a consent checkbox "filled" as text; (3) *the observer describing
+a page it cannot see* — the census-vs-modal failures, 35 invented requirements against the 4 real;
+(4) *four resolvers, four notions of control identity* — with AX-direct correct every time it was
+used; (5) *borrowed and unnamed states* — five measured borrowings incl. a false
+`workday_already_applied`, and new surfaces still discovered only by collision; (6) *world-facts
+rot* — a twelve-day-stale `blocked_on` planning a session, tests asserting the stale prose;
+(7) *expensive diagnosis downstream of an unasked cheap question* — two wrong scroll diagnoses
+(~2h) and the eleven typing attempts, each ended by a one-call recognizer that existed as prose.
+
+**AND THE ORIGINAL-PLANNING LEDGER, HONESTLY.** Flywheel revolutions by
+`PLAN_flywheel_first_revolution`'s own six-item DoD: **0**. Trained checkpoints doing real work:
+**0**. Promotion-eligible scenarios: **none**. Reasoner v2's S06–S09: **entirely unstarted** (this
+log, line 1924). Meanwhile the shadow's largest disagreement axis — 106 of 119 pairs — fell to a
+missing Bundle FEATURE (phase), not a model gap: the reliability fix was the flywheel fix,
+cheaper. `PLAN_reliability_v1` wrote the recommendation on 08-14 (*"freeze the student stack, keep
+collecting rows"* — filed then as on the table, not adopted). **The operator adopted it today.**
+
+**THE STANCE.** The flywheel is demoted from goal to instrument — train-on-label, the shadow, and
+the enforced two-bar gate all keep running as byproducts; nobody builds FOR the gate. A session is
+measured by **drives that finish clean: submissions plus three zeros** — no silent false success,
+no rediscovered fact, no unnamed screen. Five pillars, each with its measured gap and enforcement
+point (plan §2); generalization named concretely (plan §3): page-KIND as the primary axis (**a
+known kind on an unknown platform must drive** — the TAM precedent; witnesses with no platform
+vocabulary fall back to the kind, never to another platform's names), classification off the
+LANDED page with registry + requirements consulted AT classify, and recipe families as step-SETS
+whose order is observed — the site's own stepper is data (the 08-25 draft-resume lesson).
+
+**THE BUILD ORDER IS BRIEFS, EACH KILLING A COUNTED CLASS AND ENDING ON A LIVE DRIVE.** S14–S16
+stand as written (yesterday's data-honesty trio); then S17 consultation-as-input (class 1), S18
+observation profiles (class 3), S19 one resolver + trusted gestures (class 4), S20
+act-carries-evidence + the recognizer chain as dispatch (classes 2 and 7). Falsifiers are stated
+in the plan per §13 — the notable one: if a drive after S17 still hits a fact-existed instance,
+per-seam wiring has failed and the answer is one choke-point payload every rung must receive.
+
+*Process note, for whoever reads this cold:* the retrospective was cheap because the evidence was
+already banked — this log's own counted patterns, the briefs' DoDs, the plans' status lines. The
+expensive part was paid at write time, which is the whole argument for the discipline.
+
+*And the entry above landed while this one was being written:* SESSION 14 was executed and merged
+by the concurrent sweep session the same evening — the queue's head is already S15, and its drive
+independently confirmed two of the plan's bets (the untrusted-click recognizer generalized to a
+new widget on its first meeting, and the `@journaled` contract caught five broken endpoints a
+green suite had passed). The plan survives first contact; the counters start now.

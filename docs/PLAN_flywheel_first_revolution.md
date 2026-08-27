@@ -1,6 +1,9 @@
 # Plan — the first full flywheel revolution
 
-**Status: plan, 2026-07-16.** The gameplan for what a successful flywheel looks like now that the
+**Status: plan, 2026-07-16; DEMOTED from goal to instrument 2026-08-26 (operator-directed — see
+`PLAN_generalization_v1.md`).** The six-item DoD below stands as the definition of a revolution
+(**0 completed to date**), and the wheel keeps turning as a byproduct of drives — but no session
+is measured by it and no work queues behind it. The gameplan for what a successful flywheel looks like now that the
 Interaction API exists, and for hitting the ground running the moment full drives work.
 `FLYWHEEL_RUNBOOK.md` stays as the operational how-to for the label/train cranks; this doc is the
 campaign: definition of done, phases, gates, and the numbers on the wall.
