@@ -170,8 +170,11 @@ not an invention:
 
 ## 4. Build order
 
-`SESSION_14 → 15 → 16` stand as written (2026-08-26) — they are this plan's data-honesty
-foundation (one fact one place; count the unknowns; facts with expiry). Then:
+`SESSION_14 → 15 → 16` are this plan's data-honesty foundation (one fact one place; count the
+unknowns; facts with expiry). **S14 was executed 2026-08-26, the same evening this plan was
+written** (LEARNINGS has the entry; its live sweep also confirmed the untrusted-click recognizer
+on a new widget and the `@journaled` contract catching five broken endpoints) — **the queue's
+head is S15**, which also inherits the location-column lie S14's drive named. Then:
 
 | # | Brief | Kills (from §0) | Pillar |
 |---|---|---|---|
