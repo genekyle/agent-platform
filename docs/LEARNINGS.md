@@ -12148,3 +12148,63 @@ the one the trap was found on.*
 Main fast-forwarded 25 commits (S15→S21), the API restarted against the real Postgres, and the
 armed `search_queries` drop fired cleanly: **718 rows intact, 20 still `provenance_quarantined`,
 387 sightings holding the fact the column used to duplicate.** Both browsers came back signed in.
+
+## 2026-08-27 (eighth) — the live drive S17–S20 were owed, and `not_staged` hid a click that DID land
+
+First live drive since S15. It got four rungs up the ladder cleanly and then failed on the fifth —
+**which is the result worth having**, because the failure is a class the recognizers name in prose
+and the code could not yet distinguish.
+
+**The clean part.** `provisioned` → `authenticated` ("Signed in.") → `radius_set` → `review_page`.
+The radius rung is the one to keep: *"LinkedIn has no distance filter, so there is nothing to set.
+Recorded as not-applicable rather than as a radius we applied."* A rung that says **not applicable**
+instead of claiming success is the tri-state discipline reaching the ladder. `choose` queued one
+operator-approved application and reported *"it stays open until each one reaches a terminal flag —
+nothing is skipped."*
+
+**The captcha-first check paid for itself in one call.** The session view carried
+`block: {provider: recaptcha_checkbox, strength: passive}`. `/challenge_visibility` answered
+`blocking: false, challenge_visible: false, anchor_count: 1` — LinkedIn's invisible enterprise
+anchor frame, on every page. Classified, not solved, and it cost one request instead of a detour.
+
+### The finding: `not_staged` means "the pane did not switch", NOT "the click did not land"
+
+`open_job_card` returned **`not_staged`**, then **`not_found`** after eight wheel batches. The
+journal has exactly those two rows and nothing else — no `set_text`, no `submit` — so the drive
+typed nothing, which is what made the page's state change so confusing to read.
+
+What the page said, before and after, in the URL:
+
+    before  origin=BLENDED_SEARCH_RESULT_NAVIGATION_SEE_ALL  &start=50   (page 3, unfiltered)
+    after   origin=JOB_SEARCH_PAGE_JOB_FILTER  &f_SAL=f_SA_id_225001:272001   (no start)
+
+`keywords` is **unchanged** — the search box rendering *"reporting analyst remote"* was a typeahead
+echo, and believing it would have sent the next session hunting a query nobody ran. `origin` says
+in as many words that **a job filter was applied on the search page**, `f_SAL` names it, and
+dropping `start` is what a filter does: it resets to page 1. The approved card was on page 3 of the
+old set and is not in the new one. Hence `not_found`, honestly, after a real search for it.
+
+**So the first click landed — on a filter control — and reported `not_staged`.** That outcome was
+minted on 2026-08-26 for *"a pane that never switched"*, and it is true as far as it goes; the pane
+did not switch. But it is read as *the click did not take*, and here the click took and changed the
+result set underneath the application. **A click that misses its target is not the same as a click
+that hits a different target, and only the second can invalidate the set you are working from.**
+
+*This is the 2026-08-26 scroll-direction lesson repeating on a new endpoint* — two hours of wrong
+diagnosis then, until a screenshot showed a filter pill. Same pill, same class, and this time the
+screenshot was taken third rather than last.
+
+**What DID work, and it is S20's whole point:** the verifier refused to bless it. `verdict:
+mismatch`, `claimed: failed`, evidence *"expected currentJobId=4450742502 somewhere in the window
+and found it nowhere"*, with the expectation stated as a structured `url_param` rather than prose.
+No silent ok. The act carried its evidence and the evidence said no.
+
+*Named, not fixed:* `open_job_card` needs to tell those two apart, and the tell is cheap — it
+already reads the URL to verify, so **comparing `result_set_identity` before and after its own
+click** would turn today's `not_staged` into *"the click landed on a filter; the set you were given
+no longer exists"*. That is the recovery an operator can act on. `result_set_drift` (S14) already
+computes exactly this and nothing calls it here.
+
+*Also standing:* the session-control view's `staleness` reads `cookie_ttl_s: unmeasured` — the
+signal landed on `live_actuator`'s Bundle, which this path does not go through. A second call site,
+now visible because the first one works.
