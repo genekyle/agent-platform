@@ -89,7 +89,11 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
         // query back under the operator's cursor.
         if (d.query && !formSyncedRef.current) {
           formSyncedRef.current = true;
-          setForm((f) => ({ ...f, query: d.query, location: d.location || "",
+          setForm((f) => ({ ...f, query: d.query,
+            // The form is the operator's INTENT, so it seeds from the declared field — the
+            // header's `location` is now the page-backed fact and is honestly empty until an
+            // extract records one (the Nashua-over-Greater-Boston header, 2026-08-27).
+            location: d.location_declared || d.location || "",
             radius_miles: d.radius_miles || 50 }));
         }
         setError("");
@@ -239,6 +243,17 @@ export function SessionCockpit({ sessionId, parks, onOpenLens, onOpenTrace }) {
         {p.staleness && p.staleness.level !== "fresh" && (
           <span className={`badge badge--${p.staleness.level === "red" ? "danger" : "warn"}`}
                 title={p.staleness.why}>{p.staleness.level} · stale</span>
+        )}
+        {/* How sure local perception is about the page — the SAME belief and floor the run
+            loop stops on (STOP_UNSURE), so "why did it stop" and "how sure is it" is one fact.
+            No chip when nothing was measured: absence must never render as confidence. */}
+        {p.seeing && p.seeing.confidence != null && (
+          <span className={`badge badge--${p.seeing.ok ? "ok" : "danger"}`}
+                title={p.seeing.ok
+                  ? `perception reads ${p.seeing.state || "this page"} at ${Math.round(p.seeing.confidence * 100)}% (floor ${Math.round(p.seeing.floor * 100)}%)`
+                  : `below the ${Math.round(p.seeing.floor * 100)}% floor on '${p.seeing.blocked_axis}' — the run loop will hand back rather than drive blind`}>
+            seeing {Math.round(p.seeing.confidence * 100)}%
+          </span>
         )}
         <button type="button" className="cockpit-live" data-busy={busy} disabled={busy}
                 onClick={() => { settleUntilRef.current = 0; load(); }}>

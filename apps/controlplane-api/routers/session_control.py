@@ -934,6 +934,93 @@ def _unit_index(bb, page: int) -> int:
             return 1
     return page
 
+def _page_backed_location(bb: Any) -> tuple[str, str]:
+    """(location, source) for the search being operated — from the SEARCH ROW, never the intent.
+
+    The view used to render `ss.location`, which is the operator's declared target — an intent
+    that the drive may never have applied to the page. Search 15 (2026-08-27) recorded
+    `location=''` honestly (the page's params back no location) while the header said
+    "Nashua, NH" and the live page said "Greater Boston": the DB had the fact right and the
+    cockpit rendered the wrong field. One authority per identity (§15) applies to VIEWS too —
+    a view field serves its authority or says why it cannot.
+
+    The copy in `world["search_row"]` is stamped at the row's own write seam (the extract that
+    mints/refreshes the row), so it cannot drift from the row between extracts. It is trusted
+    only while it describes the CURRENT search — a re-query changes `ss.query` and orphans it.
+
+    Sources: "page" (the engine's params named a place), "not_recorded" (the row exists and
+    honestly carries none), "no_search_row" (nothing extracted yet this search).
+    """
+    row = (bb.world or {}).get("search_row") or {}
+    ss = bb.search_state
+    if not row or (row.get("query") or "") != (ss.query or ""):
+        return "", "no_search_row"
+    loc = str(row.get("location") or "")
+    return (loc, "page") if loc else ("", "not_recorded")
+
+
+def _seeing(snapshot: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """How sure local perception is about WHAT IT IS LOOKING AT — the cockpit's confidence read.
+
+    Operator-directed 2026-08-27: the cockpit should carry the same number the loop gates on, so
+    "why did it stop" and "how sure is it now" are one fact in one place. Reads the belief the
+    last ladder/StepRunner turn cached; `None` when no belief was taken (a controller-journal
+    snapshot carries none) — rendered as "not measured", never as a score. The floor is the
+    SAME constant the loop enforces (`UNCERTAINTY_CEILING`, 0.25 == 75% confidence), imported
+    rather than restated: two copies of a threshold is two thresholds.
+    """
+    belief_d = (snapshot or {}).get("belief")
+    if not isinstance(belief_d, dict):
+        return None
+    from interaction.belief import AXES, UNCERTAINTY_CEILING, BeliefState
+    bs = BeliefState.from_dict(belief_d)
+    axis = bs.blocks()
+    conf = None if "state" not in bs.uncertainty else round(1.0 - bs.unsure_about("state"), 4)
+    return {
+        "confidence": conf,
+        "floor": round(1.0 - UNCERTAINTY_CEILING, 2),
+        "ok": axis is None,
+        "blocked_axis": axis,
+        "assessed": [a for a in AXES if a in bs.uncertainty],
+        "state": bs.state,
+        "url": (snapshot or {}).get("url", ""),
+        "ts": (snapshot or {}).get("ts", ""),
+    }
+
+
+def _too_unsure_to_continue(world: dict[str, Any], current_url: str) -> Optional[dict[str, Any]]:
+    """The perceptual stop the run loop was missing — belief.blocks() applied to the NEXT crank.
+
+    The loop's stops were all behavioral (gate, refusal, no-progress): it noticed when an act
+    failed, and kept driving when perception could not say what page it was on. The 75% floor
+    already existed (`UNCERTAINTY_CEILING` = 0.25, same number as `DECISION_CONFIDENCE_THRESHOLD`)
+    and the ladder already caches a belief per crank (`_cache_belief`) — this is the wire between
+    them, not a new policy. `BeliefState.from_dict` is used so the loop runs the SAME `blocks()`
+    as the controller: two implementations of a ceiling is two ceilings.
+
+    Deliberate limits:
+      * A belief keyed to a page we have LEFT does not stop the loop — it describes the previous
+        page; the reconcile + re-observe on this iteration replaces it. Stopping on it would be
+        acting on stale provenance, the exact class `state-is-context-bound` names.
+      * An axis nobody assessed does not stop the loop (`blocks()` already draws that line):
+        silence is not confidence, but it is not evidence of blindness either — the observe rungs
+        are what earn the assessment.
+    """
+    lb = (world or {}).get("last_belief") or {}
+    belief_d = lb.get("belief")
+    if not isinstance(belief_d, dict):
+        return None
+    if current_url and lb.get("url") and lb.get("url") != current_url:
+        return None
+    from interaction.belief import BeliefState
+    bs = BeliefState.from_dict(belief_d)
+    axis = bs.blocks()
+    if axis is None:
+        return None
+    return {"axis": axis, "uncertainty": round(bs.unsure_about(axis), 4),
+            "state": bs.state, "url": lb.get("url", "")}
+
+
 def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, Any], *,
           page: int, results: Optional[list[dict]] = None,
           awaiting: Optional[str] = None, last: Optional[dict] = None,
@@ -961,12 +1048,19 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     # "recover the query" (measured 2026-08-26).
     process = _process_of(bb)
     unit = _unit_index(bb, page)
+    # LOCATION IS SERVED FROM ITS AUTHORITY — the search row's page-backed fact, or honestly
+    # nothing. `ss.location` is the operator's declared INTENT and still travels, labeled, for
+    # the form to seed from; rendering it as the operating context is how the header said
+    # "Nashua, NH" over a Greater-Boston set the row had correctly recorded as location-less.
+    page_location, location_source = _page_backed_location(bb)
     return {
         "process": process,
         "session_id": session.id,
         "goal": bb.goal,
         "query": ss.query,
-        "location": ss.location,
+        "location": page_location,
+        "location_declared": ss.location,
+        "location_source": location_source,
         "radius_miles": (bb.world or {}).get("radius_miles"),
         "page": page,
         "engine": engine_label,
@@ -986,6 +1080,10 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
         # collected step snapshot rather than a screenshot on every poll: it keeps the heartbeat
         # cheap and preserves the credential-flow rule (those turns collect no screenshots).
         "perception_snapshot": cached_perception,
+        # HOW SURE PERCEPTION IS, as a number the operator can read — the same belief the run
+        # loop gates on (STOP_UNSURE), served from the same snapshot, against the same floor.
+        # None means "not measured", which the panel must render as exactly that.
+        "seeing": _seeing(cached_perception),
         # THE ONE NEXT ACTION, arbitrated between the two above — the world's plan and the recipe's
         # rung. Without it the panel showed both as primary buttons and the operator did the
         # resolving; with it there is one thing to press and the loser is beside it, demoted and
@@ -2700,6 +2798,18 @@ async def _review_page(*, bb: Any, browser_url: str, page: int, db: Session,
     if search is not None:
         bb.world = dict(bb.world or {})
         bb.world["search_id"] = search.id
+        # THE VIEW'S COPY OF THE ROW'S FACTS, stamped at the row's own write seam so it cannot
+        # drift from the row between extracts. The view renders location from HERE (the page-backed
+        # fact, tri-state honest) and never from `ss.location` (the caller's intent) — the header
+        # said "Nashua, NH" over a set the row had correctly recorded as location-less, because the
+        # view was reading the wrong field of two that share a name (§15, applied to views).
+        bb.world["search_row"] = {
+            "id": search.id,
+            "kind": getattr(search, "kind", "query") or "query",
+            "query": search.query or "",
+            "location": search.location or "",
+            "location_recorded": bool(search.location),
+        }
     db.commit()
 
     # Give every card just written a canonical job. The other two scrape endpoints in `main.py`
@@ -8224,6 +8334,7 @@ STOP_DONE = "done"                  # the step reached a terminal flag
 STOP_NO_PROGRESS = "no_progress"    # two cranks, same rung, nothing moved
 STOP_BUDGET = "budget"              # max_steps reached with work still to do
 STOP_NO_STEP = "no_step"            # nothing in the queue to drive
+STOP_UNSURE = "unsure"              # perception is below the 75% floor on this page — not driving blind
 
 
 @router.post("/api/session_control/{session_id}/run")
@@ -8285,6 +8396,25 @@ async def run(session_id: int, body: RunBody,
                          awaiting="apply")
             break
 
+        # THE PERCEPTUAL STOP (operator-directed 2026-08-27). Every stop above notices an act
+        # that FAILED; none noticed the loop not knowing what page it was on. If the belief the
+        # last crank cached for THIS page blocks — state/element/answer uncertainty past the 75%
+        # floor, or novelty past its own — the loop hands back instead of cranking blind. Same
+        # `blocks()` and same ceilings as the controller's authority(); a belief for a page we
+        # have since left never fires (it describes the previous page — see the helper).
+        apply_url = (_apply_tab(bb, obs_now) or {}).get("url") or ""
+        unsure = _too_unsure_to_continue(bb.world or {}, apply_url)
+        if unsure:
+            stop = STOP_UNSURE
+            conf = 1.0 - unsure["uncertainty"]
+            stop_detail = (f"perception is {conf:.0%} sure on the '{unsure['axis']}' axis for "
+                           f"this page (floor: 75%) — read as "
+                           f"{unsure['state'] or 'no state at all'}. Not driving blind: look at "
+                           f"the Lens, correct or confirm what it sees, then press Run again.")
+            view = _view(session, bb, ledger, obs_now, page=_current_page(obs_now, bb),
+                         awaiting="apply")
+            break
+
         # THE RECORD MUST CATCH UP BEFORE THE NEXT CRANK, or the loop acts on a stale rung.
         #
         # Measured on the loop's first real drive (2026-08-14): Save & Continue took Boston
@@ -8298,8 +8428,8 @@ async def run(session_id: int, body: RunBody,
         # is memory, so when they disagree memory yields". The loop's job is to COMPOSE it, not to
         # re-derive it: when the application tab has moved since the last crank, catch the record
         # up first. A single press never hit this because a human looks at the screen between
-        # presses; the loop is exactly what makes it reachable.
-        apply_url = (_apply_tab(bb, obs_now) or {}).get("url") or ""
+        # presses; the loop is exactly what makes it reachable. (`apply_url` was read above,
+        # from this same obs, for the perceptual stop.)
         if last_url is not None and apply_url and apply_url != last_url:
             try:
                 await reconcile_step(session_id, ReconcileStepBody(initiator=body.initiator), db)
@@ -8379,7 +8509,7 @@ async def run(session_id: int, body: RunBody,
     bb.log("run", f"{len(steps_run)} rung(s) driven, stopped: {stop}",
            why=stop_detail,
            next_up=("The operator's press — nothing here may make it."
-                    if stop in (STOP_GATE, STOP_NEEDS_OPERATOR, STOP_REFUSED)
+                    if stop in (STOP_GATE, STOP_NEEDS_OPERATOR, STOP_REFUSED, STOP_UNSURE)
                     else "The queue moves on." if stop == STOP_DONE
                     else "Press again to continue driving."))
     _persist(bb, ledger)

@@ -93,3 +93,64 @@ def test_a_broken_errand_reader_is_named_not_a_plausible_zero(monkeypatch):
     assert "unreachable" in tile["primary"]["label"]
     assert any(c.get("warn") and "unreachable" in c["label"] for c in tile["chips"])
     assert tile["needs_attention"] == 0
+
+
+# --------------------------------------------------------------------------------------------
+# The landing page counts sessions waiting on the operator (2026-08-27)
+# --------------------------------------------------------------------------------------------
+
+def _reviewed_ledger(page=1, picks_made=False):
+    import session_checkpoints as cps
+    ledger = cps.Ledger()
+    ledger.mark(cps.page_rung(page).id, evidence="reviewed")
+    if picks_made:
+        ledger.mark(cps.select_rung(page).id, evidence="picked by operator")
+    return ledger.as_dict()
+
+
+def test_a_reviewed_page_with_no_picks_is_a_session_waiting_on_you():
+    """Session 34 held 25 extracted results at `awaiting: choose` while the Overview said
+    'Nothing needs your judgment right now' — every counter was true and none counted this."""
+    import command_center as cc
+
+    wait = cc.awaiting_of({}, _reviewed_ledger(page=1, picks_made=False))
+    assert wait and wait["awaiting"] == "choose" and wait["needs"] == "answer"
+    assert "Page 1" in wait["detail"]
+
+
+def test_picks_made_clears_the_wait():
+    import command_center as cc
+
+    assert cc.awaiting_of({}, _reviewed_ledger(page=1, picks_made=True)) is None
+
+
+def test_an_application_mid_flight_outranks_the_page_wait():
+    """A queue step is the nearer wait, and its kind says WHAT it waits for: a NEEDS_OPERATOR
+    flag means a judgment; anything else means a Run press."""
+    import apply_steps as aps
+    import command_center as cc
+
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "linkedin:1", "title": "Cost Analyst"}])
+    world = {"apply_queue": q.as_dict()}
+    wait = cc.awaiting_of(world, _reviewed_ledger(page=1, picks_made=False))
+    assert wait["awaiting"] == "apply" and wait["needs"] == "run"
+    assert wait["detail"] == "Cost Analyst"
+
+
+def test_a_blocked_step_needs_an_answer_not_a_press():
+    import apply_steps as aps
+    import command_center as cc
+
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": "linkedin:1", "title": "Cost Analyst"}])
+    q.current().record("account", aps.BLOCKED, "account wall", initiator="system")
+    wait = cc.awaiting_of({"apply_queue": q.as_dict()}, None)
+    assert wait["awaiting"] == "apply" and wait["needs"] == "answer"
+
+
+def test_a_quiet_session_reports_nothing():
+    import command_center as cc
+
+    assert cc.awaiting_of({}, None) is None
+    assert cc.awaiting_of(None, None) is None

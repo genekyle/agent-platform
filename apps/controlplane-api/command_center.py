@@ -254,6 +254,68 @@ def _latest_grounding_accuracy() -> Optional[float]:
     return None
 
 
+def awaiting_of(world: Optional[dict[str, Any]],
+                checkpoints: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """What a session's persisted record says it is waiting for — or None when nothing is.
+
+    Pure over the blackboard's two dicts so the landing page's count and a test read the same
+    derivation. Two waits exist, in priority order:
+
+      * an application mid-flight (`apply`) — the queue's current step. `needs: "answer"` when
+        its last flag is in NEEDS_OPERATOR (blocked / human_required / unknown: only a human
+        moves it); `needs: "run"` otherwise (a Run press continues it — still waiting, on a
+        press rather than a judgment).
+      * a reviewed page whose picks were never made (`choose`) — the review rung is held for a
+        unit whose `select:` rung is not. This is the wait the Overview failed to count on
+        2026-08-27 while a session held 25 extracted results for the operator.
+
+    Reads the RECORD, not the browser: a summary that probes CDP per session is a heartbeat
+    that costs a page load, and the record is what the waits are recorded in anyway.
+    """
+    import apply_steps as aps
+    import session_checkpoints as cps
+
+    world = world or {}
+    queue = aps.Queue.from_dict(world.get("apply_queue"))
+    step = queue.current()
+    if step is not None:
+        return {"awaiting": "apply",
+                "needs": "answer" if step.needs_operator() else "run",
+                "detail": step.title or step.job_id}
+    ledger = cps.Ledger.from_dict(checkpoints)
+    process = world.get("process") or cps.QUERY_PROCESS
+    units = ledger.units_reviewed(process)
+    if not units:
+        return None
+    latest = max(units)
+    if ledger.holds(cps.select_rung(latest, process).id):
+        return None
+    unit_word = "Batch" if process == cps.FEED_PROCESS else "Page"
+    return {"awaiting": "choose", "needs": "answer",
+            "detail": f"{unit_word} {latest} reviewed — waiting for your picks"}
+
+
+def _sessions_awaiting(db: Session) -> list[dict[str, Any]]:
+    """`awaiting_of` over every active session. Best-effort per session, like every other source
+    here: one unreadable blackboard degrades one row, never the landing page."""
+    out: list[dict[str, Any]] = []
+    try:
+        rows = db.execute(select(TrainingSession)
+                          .where(TrainingSession.status == "active")).scalars().all()
+    except Exception:
+        return out
+    for s in rows:
+        try:
+            import apply_state_store as store
+            bb = store.load_or_create(s.id)
+            wait = awaiting_of(bb.world, bb.checkpoints)
+        except Exception:
+            continue
+        if wait:
+            out.append({"session_id": s.id, "domain_id": s.domain_id, **wait})
+    return out
+
+
 def build_summary(db: Session) -> dict[str, Any]:
     """The whole landing in one payload: per-domain health tiles, the open-attention count,
     and a cross-domain activity feed."""
@@ -329,9 +391,18 @@ def build_summary(db: Session) -> dict[str, Any]:
     except Exception:
         parks_open = None
 
+    sessions_awaiting = _sessions_awaiting(db)
+
     return {
         "domains": tiles,
         "attention_open_count": len(open_handoffs),
+        # LIVE SESSIONS WAITING ON THE OPERATOR — the count the landing page was missing.
+        # Session 34 sat at `awaiting: choose` with 25 extracted results while this page said
+        # "Nothing needs your judgment right now" (2026-08-27): every counter here was true and
+        # none of them counted the most common thing that actually needs a human — a ladder
+        # holding still for a pick or an apply answer. Derived from the persisted record (see
+        # `awaiting_of`), so the glance stays cheap and never touches a browser.
+        "sessions_awaiting": sessions_awaiting,
         "activity": _recent_activity(all_handoffs),
         # Cross-domain flywheel rollup for the landing's headline KPIs.
         "flywheel": {

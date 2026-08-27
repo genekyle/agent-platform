@@ -25,21 +25,30 @@ function OverviewHero({ summary, health, onOpenLabeler, onOpenQueue }) {
   // Parked drives are the loudest: a drive is literally waiting on an answer.
   const teacherQueue = summary?.teacher?.transition_queue;
   const parksOpen = summary?.teacher?.parks_open;
+  // Live sessions whose ladder is holding still for the operator — a pick, an answer, or a Run
+  // press. This was the count the hero missed on 2026-08-27: session 34 sat at awaiting:choose
+  // with 25 extracted results while this line read "Nothing needs your judgment right now".
+  const waiting = summary?.sessions_awaiting || [];
+  const needsAnswer = waiting.filter((w) => w.needs === "answer");
 
   const message = parksOpen
     ? `${parksOpen} drive${parksOpen === 1 ? " is" : "s are"} parked waiting on your answer — that comes first.`
-    : attention
-      ? `${attention} handoff${attention === 1 ? "" : "s"} need your judgment. Everything else can keep moving.`
-      : active
-        ? "Your agents are moving. Nothing needs your judgment right now."
-        : "Your workspace is quiet. Start with a domain when you are ready.";
+    : needsAnswer.length
+      ? `${needsAnswer.length} session${needsAnswer.length === 1 ? " is" : "s are"} waiting on you — ${needsAnswer[0].detail}.`
+      : waiting.length
+        ? `${waiting.length} session${waiting.length === 1 ? " is" : "s are"} idling mid-work — a Run press continues ${waiting.length === 1 ? "it" : "them"}.`
+        : attention
+          ? `${attention} handoff${attention === 1 ? "" : "s"} need your judgment. Everything else can keep moving.`
+          : active
+            ? "Your agents are moving. Nothing needs your judgment right now."
+            : "Your workspace is quiet. Start with a domain when you are ready.";
 
   return (
     <>
       <section className="overview-hero">
         <div className="overview-hero__copy">
           <span className="ops-eyebrow">Today</span>
-          <h2>{attention ? "A few things need you" : "Your day is in good hands"}</h2>
+          <h2>{attention || needsAnswer.length ? "A few things need you" : "Your day is in good hands"}</h2>
           <p>{message}</p>
           <div className="overview-hero__actions">
             {attention ? <a className="primary-btn" href="#attention">Review handoffs</a> : null}
@@ -67,7 +76,14 @@ function OverviewHero({ summary, health, onOpenLabeler, onOpenQueue }) {
       </section>
 
       <section className="overview-metrics" aria-label="Workspace summary">
-        <Metric label="Needs you" value={attention} detail={attention ? "open handoffs" : "all clear"} tone={attention ? "warning" : "success"} />
+        <Metric label="Needs you" value={attention + needsAnswer.length}
+          detail={needsAnswer.length ? needsAnswer[0].detail
+                  : attention ? "open handoffs" : "all clear"}
+          tone={attention + needsAnswer.length ? "warning" : "success"} />
+        <Metric label="Sessions waiting" value={waiting.length}
+          detail={waiting.length ? (needsAnswer.length ? "a pick or answer is due" : "resumable — press Run")
+                                 : "none holding still"}
+          tone={needsAnswer.length ? "warning" : waiting.length ? "neutral" : "success"} />
         {/* A null here is "the read failed", not "all clear" — the API sends None for a
             broken read on purpose; painting it success-green would be the tile lying. */}
         <Metric label="Parked drives" value={parksOpen ?? "—"}

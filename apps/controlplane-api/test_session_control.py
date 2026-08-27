@@ -300,7 +300,14 @@ def test_initialize_declares_the_query_and_seeds_the_ladder(monkeypatch):
         _teardown()
     assert r.status_code == 200
     body = r.json()
-    assert body["query"] == "reporting analyst" and body["location"] == "Nashua, NH"
+    assert body["query"] == "reporting analyst"
+    # DECLARING A LOCATION IS AN INTENT, NOT A FACT ABOUT THE SET. The old assertion here —
+    # `location == "Nashua, NH"` — pinned the exact lie the header told on 2026-08-27: the
+    # declared target rendered as the operating context over a set the search row had honestly
+    # recorded as location-less. The intent survives, labeled; `location` stays empty until an
+    # extract records what the page's own params back.
+    assert body["location"] == "" and body["location_source"] == "no_search_row"
+    assert body["location_declared"] == "Nashua, NH"
     assert body["progress"]["phase"] == "climbing"
     assert body["next"]["checkpoint_id"] == "provisioned"
     # declaring is NOT driving — nothing was typed
@@ -7062,3 +7069,112 @@ def test_an_unknown_engine_claims_nothing():
     d = _click_changed_the_set({"url_before": "https://acme.wd1.myworkdayjobs.com/a",
                                 "url_after": "https://acme.wd1.myworkdayjobs.com/b"})
     assert d["changed"] is False and "no search vocabulary" in d["detail"]
+
+
+# --------------------------------------------------------------------------------------------
+# The view serves each fact from its authority — and the run loop stops when it cannot see
+# (operator-directed 2026-08-27)
+# --------------------------------------------------------------------------------------------
+
+def _bb(world=None, query="reporting analyst", location_declared="Nashua, NH"):
+    from types import SimpleNamespace
+    return SimpleNamespace(world=world or {},
+                           search_state=SimpleNamespace(query=query, location=location_declared))
+
+
+def test_the_header_location_is_the_rows_fact_not_the_callers_intent():
+    """Search 15 recorded location='' honestly; the header said 'Nashua, NH' anyway, because the
+    view rendered the INTENT field. The row's copy — stamped at the row's own write seam — is
+    what renders now, tri-state honest."""
+    from routers.session_control import _page_backed_location
+
+    # The row named a place: that is the location.
+    loc, src = _page_backed_location(_bb({"search_row": {
+        "query": "reporting analyst", "location": "Greater Boston", "location_recorded": True}}))
+    assert (loc, src) == ("Greater Boston", "page")
+
+    # The row exists and honestly carries none: nothing renders, and the source says why.
+    loc, src = _page_backed_location(_bb({"search_row": {
+        "query": "reporting analyst", "location": "", "location_recorded": False}}))
+    assert (loc, src) == ("", "not_recorded")
+
+
+def test_a_requery_orphans_the_cached_row_rather_than_lending_it():
+    """A cached copy describing the PREVIOUS search must not decorate the next one — that would
+    be the provenance-travels-with-data rule broken inside the view."""
+    from routers.session_control import _page_backed_location
+
+    loc, src = _page_backed_location(_bb(
+        {"search_row": {"query": "data analyst", "location": "Greater Boston"}},
+        query="reporting analyst"))
+    assert (loc, src) == ("", "no_search_row")
+
+
+def test_seeing_serves_the_same_floor_the_loop_gates_on():
+    from interaction.belief import UNCERTAINTY_CEILING
+    from routers.session_control import _seeing
+
+    s = _seeing({"url": "https://x", "ts": "t", "belief": {
+        "state": "linkedin_job_search",
+        "uncertainty": {"state": 0.1, "element": 1.0, "answer": 1.0, "effect": 1.0, "novelty": 1.0},
+        "assessed": ["state"]}})
+    assert s["confidence"] == 0.9 and s["ok"] is True and s["blocked_axis"] is None
+    assert s["floor"] == round(1.0 - UNCERTAINTY_CEILING, 2) == 0.75, \
+        "one floor, imported — two copies of a threshold is two thresholds"
+
+
+def test_seeing_is_none_when_no_belief_was_taken():
+    """A controller-journal snapshot carries no belief. 'Not measured' must never render as a
+    score — the tri-state rule, applied to the confidence chip."""
+    from routers.session_control import _seeing
+
+    assert _seeing(None) is None
+    assert _seeing({"url": "x", "ts": "t", "belief": None}) is None
+
+
+def test_the_run_loop_refuses_to_crank_blind_on_this_page():
+    """The loop's stops were all behavioral; a belief past the ceiling on the CURRENT page now
+    hands back instead of driving. 62%-sure-of-state is the case that motivated it."""
+    from routers.session_control import _too_unsure_to_continue
+
+    world = {"last_belief": {"url": "https://ats.example/apply", "belief": {
+        "state": "unknown",
+        "uncertainty": {"state": 0.38, "element": 1.0, "answer": 1.0, "effect": 1.0, "novelty": 1.0},
+        "assessed": ["state"]}}}
+    unsure = _too_unsure_to_continue(world, "https://ats.example/apply")
+    assert unsure and unsure["axis"] == "state" and unsure["uncertainty"] == 0.38
+
+
+def test_a_belief_for_a_page_we_left_does_not_stop_the_loop():
+    """State is context-bound: a belief keyed to the previous page describes the previous page.
+    The reconcile + re-observe replaces it; stopping on it would be acting on stale provenance."""
+    from routers.session_control import _too_unsure_to_continue
+
+    world = {"last_belief": {"url": "https://ats.example/step1", "belief": {
+        "state": "unknown",
+        "uncertainty": {"state": 0.9, "element": 1.0, "answer": 1.0, "effect": 1.0, "novelty": 1.0},
+        "assessed": ["state"]}}}
+    assert _too_unsure_to_continue(world, "https://ats.example/step2") is None
+
+
+def test_silence_is_not_blindness():
+    """An axis nobody assessed does not block (blocks() already draws that line), and no cached
+    belief at all gates nothing — the observe rungs are what earn the assessment."""
+    from routers.session_control import _too_unsure_to_continue
+
+    assert _too_unsure_to_continue({}, "https://x") is None
+    world = {"last_belief": {"url": "https://x", "belief": {
+        "state": "workday_my_information",
+        "uncertainty": {"state": 1.0, "element": 1.0, "answer": 1.0, "effect": 1.0, "novelty": 1.0},
+        "assessed": []}}}
+    assert _too_unsure_to_continue(world, "https://x") is None
+
+
+def test_a_confident_belief_lets_the_loop_keep_going():
+    from routers.session_control import _too_unsure_to_continue
+
+    world = {"last_belief": {"url": "https://x", "belief": {
+        "state": "workday_my_information",
+        "uncertainty": {"state": 0.12, "element": 1.0, "answer": 1.0, "effect": 1.0, "novelty": 1.0},
+        "assessed": ["state"]}}}
+    assert _too_unsure_to_continue(world, "https://x") is None
