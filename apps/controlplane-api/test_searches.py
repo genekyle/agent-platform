@@ -332,3 +332,16 @@ def test_deriving_a_whole_page_costs_ONE_statement(db):
         event.remove(db.get_bind(), "before_cursor_execute", _count)
     assert len(out) == 40 and out["indeed:p7"] == ["analyst"]
     assert len(seen) == 1, f"derivation ran {len(seen)} SELECTs for one page of rows"
+
+
+def test_filters_are_not_backfilled_onto_a_search_that_already_gathered_rows(db):
+    """Search 13 is the live case: 25 rows banked unfiltered, then LinkedIn's Easy-Apply filter
+    appeared. Backfilling the new filters onto that row would label 25 already-collected rows as
+    having been gathered under a filter that did not exist when they were read — a claim about the
+    past, which is exactly what this column exists to prevent."""
+    s = searches_mod.ensure_active_search(db, session_id=7, engine="linkedin", query="analyst")
+    upsert_observed_jobs(db, _cards("a1"), "linkedin", "analyst", search=s)
+    db.flush()
+    searches_mod.ensure_active_search(db, session_id=7, engine="linkedin", query="analyst",
+                                      filters={"f_AL": "true"})
+    assert s.filters == "", "stamped a filter onto rows gathered before anyone looked"

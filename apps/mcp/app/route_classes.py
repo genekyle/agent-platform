@@ -14,12 +14,27 @@ an `ACTION` route lost its decorator.
 POST DOES NOT MEAN MUTATION HERE. Nearly every route is POST because it takes a request body naming
 the tab; most of them only read. So the split is by what the route DOES to the page, not by verb.
 
-THREE CLASSES, and the third one is the finding:
+FOUR CLASSES, and the last two are the findings:
 
 * `ACTION`      — dispatches input, navigates, or otherwise changes the page. MUST be `@journaled`.
 * `READ_ONLY`   — evaluates JS, reads the AX tree, screenshots, or inspects tabs. Nothing to journal.
 * `NO_VERB`     — really an action, and the closed `Intent` vocabulary has no word for it. Listed
                   with its reason, deliberately NOT quietly filed under READ_ONLY.
+* `UNAUDITED`   — an action that SHOULD journal and cannot yet, because its return paths have not
+                  been audited. A visible backlog, not an exemption.
+
+WHY `UNAUDITED` EXISTS, AND IT IS A MISTAKE MADE IN THIS FILE'S OWN FIRST COMMIT. `@journaled` is a
+CONTRACT, not a label: the decorator derives `ok` from the outcome the endpoint declares, and an
+endpoint that declares none journals ERROR and returns `ok: False` **over work that succeeded**. On
+2026-08-26 five endpoints were decorated in one line each; the suite stayed green because it fakes
+the capture server, and the next live sweep reported six failed detail reads with
+`"endpoint declared no outcome"` on a route that had been working. `/open_job_card` was then audited
+properly — every return path names an outcome — and the other four were reverted to UNAUDITED,
+because shipping a decorator over un-audited returns ships four broken endpoints. `set_distance`
+alone has eight return paths.
+
+The presence test below is therefore NECESSARY AND NOT SUFFICIENT: it proves the decorator is there,
+not that the endpoint satisfies it. Only exercising each return path proves that.
 
 ON `NO_VERB`, because it is a decision and not an oversight. `interaction.contract.Intent` is closed
 on purpose — "every verb added here is a verb L4 must distinguish" — and its own docstring says a
@@ -34,6 +49,7 @@ from __future__ import annotations
 ACTION = "action"
 READ_ONLY = "read_only"
 NO_VERB = "no_verb"
+UNAUDITED = "unaudited"
 
 #: Every route on the capture server, and what it does to the page. Keyed by path.
 ROUTE_CLASSES: dict[str, tuple[str, str]] = {
@@ -50,10 +66,10 @@ ROUTE_CLASSES: dict[str, tuple[str, str]] = {
     "/describe_widget": (ACTION, "focuses and interrogates a widget; may open it"),
     "/probe": (ACTION, "raw JS — DISCOVERY ONLY, and journaled precisely because it is the hole"),
     "/open_job_card": (ACTION, "trusted CDP click at a card's centre — THE 2026-08-26 case"),
-    "/next_page": (ACTION, "wheels to the end of the list and clicks the pagination control"),
-    "/set_distance": (ACTION, "clicks the distance filter pill and picks a radius"),
-    "/dismiss_dialog": (ACTION, "clicks a dialog's dismiss control"),
-    "/dismiss_native_dialog": (ACTION, "accepts/dismisses a native browser dialog"),
+    "/next_page": (UNAUDITED, "clicks the pagination control. 4 return paths, none declaring an outcome."),
+    "/set_distance": (UNAUDITED, "clicks the distance pill. EIGHT return paths (already / widget / widget_failed / url_fallback / none / two error paths), none declaring one."),
+    "/dismiss_dialog": (UNAUDITED, "clicks a dialog's dismiss control; returns an accumulated `out` dict from several places, so the paths cannot be audited by reading returns alone."),
+    "/dismiss_native_dialog": (UNAUDITED, "same accumulated-`out` shape, plus a macOS-only guard path."),
 
     # --- NO_VERB: actions the closed vocabulary cannot name ---------------------------------
     "/navigate": (NO_VERB, "drives the browser to a URL. There is no NAVIGATE intent, and that is "

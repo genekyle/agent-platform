@@ -16,7 +16,7 @@ Run from apps/mcp:  ../../.venv/bin/python -m pytest tests/test_route_classes.py
 
 import ast
 
-from app.route_classes import ACTION, NO_VERB, READ_ONLY, ROUTE_CLASSES
+from app.route_classes import ACTION, NO_VERB, READ_ONLY, ROUTE_CLASSES, UNAUDITED
 
 _SOURCE = "app/main_server.py"
 
@@ -69,6 +69,26 @@ def test_read_only_routes_do_not_pretend_to_act():
     liars = [p for p, (cls, _why) in ROUTE_CLASSES.items()
              if cls == READ_ONLY and live.get(p, False)]
     assert not liars, f"READ_ONLY routes carrying @journaled: {liars}"
+
+
+def test_an_unaudited_action_is_NOT_decorated_until_its_returns_declare_an_outcome():
+    """The mistake this file was born from. `@journaled` derives `ok` from the outcome the endpoint
+    declares; an endpoint that declares none journals ERROR and returns ok:False over work that
+    SUCCEEDED. Five routes were decorated in one line each on 2026-08-26, the suite stayed green
+    because it fakes the capture server, and the next live sweep reported six failed detail reads
+    on a route that had been working fine.
+
+    So a route in UNAUDITED must NOT carry the decorator: a missing journal is a gap, and a
+    decorator over un-audited returns is a broken endpoint. This list should shrink; every entry
+    leaving it means somebody walked its return paths."""
+    live = _routes()
+    premature = [p for p, (cls, _why) in ROUTE_CLASSES.items()
+                 if cls == UNAUDITED and live.get(p, False)]
+    assert not premature, (
+        f"UNAUDITED routes carrying @journaled: {premature}. Audit every return path first — "
+        f"the decorator will return ok:False over work that succeeded until each declares one.")
+    assert {p for p, (cls, _w) in ROUTE_CLASSES.items() if cls == UNAUDITED} == {
+        "/next_page", "/set_distance", "/dismiss_dialog", "/dismiss_native_dialog"}
 
 
 def test_the_no_verb_hole_is_named_and_does_not_grow_silently():

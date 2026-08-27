@@ -58,7 +58,15 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
         db.add(row)
         db.flush()
     elif encoded and not (row.filters or "").strip():
-        row.filters = encoded
+        # BACKFILL ONLY ONTO A ROW THAT HAS GATHERED NOTHING YET. Stamping today's filters onto a
+        # row whose sightings were banked BEFORE we started reading filters is a claim about data
+        # collected while nobody was looking — the precise shape of lie this column exists to stop.
+        # Search 13 (the 2026-08-26 LinkedIn sweep) is the live example: 25 rows gathered
+        # unfiltered, then f_AL=true appeared, and a re-sweep would have labelled all of them as
+        # Easy-Apply-filtered. An empty row has no such history, so backfilling it is free.
+        if not db.scalar(select(func.count()).select_from(SearchSighting)
+                         .where(SearchSighting.search_id == row.id)):
+            row.filters = encoded
     return row
 
 

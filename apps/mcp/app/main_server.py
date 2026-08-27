@@ -3885,7 +3885,6 @@ async def _popup_select(cdp, cfg: dict) -> dict:
 
 
 @app.post("/set_distance")
-@journaled(Intent.CLICK)
 async def set_distance(body: SetDistanceRequest):
     """Set the search radius to the smallest offered option >= min_miles, BY OPERATING THE PILL —
     open it, select the option, confirm it staged, click Update, then confirm from the URL.
@@ -4308,8 +4307,9 @@ async def open_job_card(body: OpenJobCardRequest):
             pre = (await cdp.send("Runtime.evaluate", {
                 "expression": desc_js, "returnByValue": True})).get("result", {}).get("value") or {}
             if pane_shows(pre, body.external_id) and pre.get("description"):
-                pre.update({"ok": True, "switched": True, "already_open": True,
-                            "external_id": body.external_id, "platform": platform})
+                pre.update({"ok": True, "outcome": Outcome.OK, "switched": True,
+                            "already_open": True, "external_id": body.external_id,
+                            "platform": platform})
                 return pre
 
             box = await _measure()
@@ -4317,7 +4317,8 @@ async def open_job_card(body: OpenJobCardRequest):
             if platform == "linkedin" and not (box.get("found") and box.get("in_view", True)):
                 box, scrolled = await _bring_card_into_view(cdp, driver, _measure, box)
             if not box.get("found"):
-                return {"ok": False, "platform": platform, "scrolled": scrolled,
+                return {"ok": False, "outcome": Outcome.NOT_FOUND,
+                        "platform": platform, "scrolled": scrolled,
                         "detail": f"card {body.external_id} not found"
                                   + (f" ({box['reason']})" if box.get("reason") else "")
                                   + (f" after {len(scrolled)} wheel batches over the list"
@@ -4326,7 +4327,8 @@ async def open_job_card(body: OpenJobCardRequest):
                 # Refusing to press is the honest outcome: a press outside the viewport hits nothing
                 # and the pane-switch poll would then blame the click for a scroll that never got
                 # there. Say which half failed.
-                return {"ok": False, "platform": platform, "scrolled": scrolled,
+                return {"ok": False, "outcome": Outcome.NOT_FOUND,
+                        "platform": platform, "scrolled": scrolled,
                         "detail": f"card {body.external_id} is rendered but still off-screen "
                                   f"(y={box.get('y')}, needs {box.get('delta_y')}px) after "
                                   f"{len(scrolled)} wheel batches — the list would not scroll to it"}
@@ -4391,6 +4393,14 @@ async def open_job_card(body: OpenJobCardRequest):
         # read look identical to a click that never landed.
         data["switched"] = _switched(data)
         data["ok"] = bool(data.get("description")) and data["switched"]
+        # DECLARE THE OUTCOME. `@journaled` derives `ok` from it and refuses to guess — an endpoint
+        # that stays silent journals ERROR and returns ok:False over work that succeeded, which is
+        # exactly what broke six live detail reads on 2026-08-26 the moment this route was
+        # decorated. A pane that never switched is NOT_STAGED (the click did not take); a pane that
+        # switched but read empty is COMMITTED_UNCONFIRMED (it moved, we cannot see the result).
+        data["outcome"] = (Outcome.OK if data["ok"]
+                           else (Outcome.COMMITTED_UNCONFIRMED if data["switched"]
+                                 else Outcome.NOT_STAGED))
         data["external_id"] = body.external_id
         data["platform"] = platform
         if scrolled:
@@ -4469,7 +4479,6 @@ _NEXT_PAGE_JS_BY_PLATFORM = {"indeed": _NEXT_PAGE_JS, "linkedin": _LINKEDIN_NEXT
 
 
 @app.post("/next_page")
-@journaled(Intent.CLICK)
 async def next_page(body: NextPageRequest):
     """Page the results forward by CLICKING the pagination control (never a ?start= URL-jump):
     scroll to the bottom, then click the next page number (or the Next link). Returns whether a
@@ -5011,7 +5020,6 @@ class NativeDismissRequest(BaseModel):
 
 
 @app.post("/dismiss_native_dialog")
-@journaled(Intent.CLICK)
 async def dismiss_native_dialog(body: NativeDismissRequest):
     """Clear a browser-owned dialog via macOS Accessibility, and PROVE the tab came back.
 
@@ -5132,7 +5140,6 @@ class DismissDialogRequest(BaseModel):
 
 
 @app.post("/dismiss_dialog")
-@journaled(Intent.CLICK)
 async def dismiss_dialog(body: DismissDialogRequest):
     """Dismiss an OPEN JavaScript dialog, and verify the renderer answers afterwards.
 
