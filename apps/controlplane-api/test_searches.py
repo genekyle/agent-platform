@@ -262,15 +262,26 @@ def test_a_row_with_no_sighting_links_does_not_count_as_joined(db):
     assert audit["quarantined"] == 0
 
 
-# --- the location door (SESSION 15): a caller default is not a page fact -----------------------
-def test_a_location_the_engines_params_do_not_back_is_refused(db):
-    """Search 14's lie, now unexpressible at the door: the engine named its set (keywords only)
-    and named no location in it, so a caller's 'Nashua, NH' is a wish, not a fact — refused
-    loudly, like check_provenance, never silently corrected."""
-    with pytest.raises(ValueError, match="name no location filter"):
-        searches_mod.ensure_active_search(db, session_id=1, engine="linkedin",
+# --- the location door (SESSION 15/16): the PAGE is the authority ------------------------------
+def test_a_location_the_engines_params_do_not_back_is_dropped_not_stored(db):
+    """Search 14's lie, now unstorable: the engine named its set (keywords only) and named no
+    location in it, so a caller's 'Nashua, NH' is a wish, not a fact. "" is the honest record."""
+    s = searches_mod.ensure_active_search(db, session_id=1, engine="linkedin",
                                           query="reporting analyst", location="Nashua, NH",
                                           filters={"keywords": "reporting analyst"})
+    assert s.location == "", "the caller's default was stored as a page fact"
+
+
+def test_the_page_outranks_the_caller_and_the_door_never_raises(db):
+    """A guard on a hot path must not be a cliff. Neither /api/jobs/extract nor the ladder's
+    review_page crank wraps this call, so a raise would surface as a 500 — and would have fired
+    first on the preferences landing, the surface that motivated the rule. Preferring the page
+    needs no exit, because nothing is blocked and nothing false is stored. Two spellings of one
+    place are not a contradiction worth crying wolf over; the page still wins."""
+    s = searches_mod.ensure_active_search(
+        db, session_id=1, engine="linkedin", query="analyst", location="Boston, MA",
+        filters={"keywords": "analyst", "location": "Greater Boston"})
+    assert s.location == "Greater Boston"
 
 
 def test_a_blank_location_is_filled_from_what_the_url_itself_states(db):

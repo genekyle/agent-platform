@@ -13,6 +13,7 @@ pagination and re-reads never mint twins; a NEW query in the same session simply
 row beside the first, which is the whole point.
 """
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -20,6 +21,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from models import Application, ObservedJob, Search, SearchSighting
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -44,13 +47,26 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
     (2026-08-26 — 23 rows gathered under an Easy-Apply filter, recorded under a row that said
     nothing about one). Detecting that drift is the sweep's job; this only refuses to lie about it.
 
-    LOCATION IS HELD TO THE SAME DOOR (SESSION 15). Search 14 recorded `location="Nashua, NH"` —
-    the active target's default — over a page that carried no location filter at all: a caller's
-    wish stored as a page fact, the query column's lie one column over. So when the engine's own
-    params are in hand: a location claim they do not back is REFUSED (loudly, like
-    `check_provenance` — silent correction would hide the caller aiming wrong), and a blank
-    location is filled from what the URL itself states. When filters were never read, nothing is
-    judged — "nobody looked" must not fail honest callers.
+    LOCATION HAS ONE AUTHORITY, AND IT IS THE PAGE (SESSION 15/16, §15). Search 14 recorded
+    `location="Nashua, NH"` — the active target's default — over a page carrying no location
+    filter at all: a caller's wish stored as a page fact, the query column's lie one column over.
+    So when the engine's own params are in hand, the URL decides and the caller's argument is a
+    FALLBACK for when the page says nothing:
+
+      * the page states a place  -> that is the location, whatever the caller passed;
+      * the page names a set and no location in it -> the caller's claim is DROPPED (logged), not
+        stored: "" is the honest record of a set that states no place;
+      * nobody looked (`filters=None`), or an engine whose params we cannot read -> the caller's
+        claim stands unjudged, because absence of evidence is not evidence (the tri-state rule).
+
+    *This deliberately does NOT raise, and the first cut did.* A raise here would have been a
+    cliff, not a guard: neither `/api/jobs/extract` nor the ladder's `review_page` crank wraps
+    this call, so a ValueError would surface as a 500 — and it would have fired first on the
+    LinkedIn preferences landing, the very surface that motivated the rule. `interaction.refusal`
+    already states the standard: a refusal names its exit, and a crash names nothing. Preferring
+    the page needs no exit, because nothing is blocked and nothing false is stored.
+    (`check_provenance` still raises on a PLATFORM mismatch, and should: a wrong platform mints a
+    row that can never dedupe. A wrong location only mislabels one field of one row.)
     """
     q = _norm(query)
     if not q:
@@ -58,15 +74,21 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
     loc = _norm(location)
     if filters is not None:
         import search_cadence
+        stated = _norm(search_cadence.declared_location(filters, engine or "indeed"))
         backed = search_cadence.location_backed(filters, engine or "indeed")
-        if loc and backed is False:
-            raise ValueError(
-                f"provenance: the search would record location {loc!r}, but the engine's own "
-                f"result-set params {sorted(filters)} name no location filter at all. That "
-                f"location is the caller's default, not a page fact — derive it from the URL "
-                f"(search_cadence.declared_location) or pass none.")
-        if not loc:
-            loc = _norm(search_cadence.declared_location(filters, engine or "indeed"))
+        if stated:
+            if loc and stated.casefold() != loc.casefold():
+                # Not an error: "Greater Boston" vs "Boston, MA" is the same place written two
+                # ways, and refusing on that would cry wolf on honest data. The page still wins.
+                logger.info("search location: recording the page's %r over the caller's %r",
+                            stated, loc)
+            loc = stated
+        elif loc and backed is False:
+            logger.warning(
+                "search location: dropping %r — the engine named its set (%s) and no location "
+                "filter is in it, so that location is the caller's default, not a page fact",
+                loc, ", ".join(sorted(filters)) or "no params")
+            loc = ""
     row = db.scalar(select(Search).where(
         Search.session_id == session_id, Search.engine == (engine or "indeed"),
         Search.query == q, Search.location == loc,
