@@ -205,13 +205,32 @@ live (first errand fire and its measured boundary, first real inbox sweeps, phas
    remaining piece). Each kills a counted failure class from the ten-session retrospective; none
    is speculative.
 
-   **The whole queue owes one thing: a live drive.** S15–S20 are verified by suite, by shape, and
-   in three cases against live read-only reads — but no rung of this work has driven a real
-   application yet. The next attended session pays all of it at once: the operator names the
-   preferences landing (S15), the virtualisation claim is re-verified (S16), the consultation
-   citations appear in a real trail (S17), the census/dialog gaps meet a real form (S18), a
-   duplicate-control page exercises the visible-twin tiebreak (S19), and a screener exercises the
-   question guard (S20).
+   **S21 (session restore) is DONE and live-proven 2026-08-27** — both signed-in profiles
+   captured warm over CDP, encrypted beside the vault, and the recovery loop run end to end on
+   LinkedIn (jar cleared to 0, restored 79, reloaded, still signed in, screenshot-confirmed).
+   `cookie_ttl_s` reads a real number after a month inert; the naive minimum it replaced measured
+   **23 s on a healthy Indeed session**. The merge+restart it was written to survive was survived:
+   main fast-forwarded S15→S21 and the armed `search_queries` drop fired on 718 live rows.
+
+   **The queue's live-drive debt is PART-PAID, and the first drive found a real bug.** Attempted
+   2026-08-27 on an operator-approved Staples posting. Four rungs ran clean (`provisioned` →
+   `authenticated` → `radius_set`, the last recorded honestly as *not applicable* → `review_page`,
+   one application queued). Then `open_job_card`'s click **landed on a filter** — `origin` became
+   `JOB_SEARCH_PAGE_JOB_FILTER`, `f_SAL` appeared, `start=50` dropped — and the approved card was
+   reported `not_found` after eight honest wheel batches over a set that no longer contained it.
+   **S20 held**: the verifier returned `mismatch` with a structured `url_param` expectation and
+   refused to bless it. The fix shipped the same session (`0b92f82`): `/open_job_card` reports the
+   URL either side of its own click and the open_pane rung names the drift in the engine's
+   vocabulary. The application is `parked:operator` and resumable via `apply_reopen`.
+
+   **Still owed, and now more specific:** the operator names the preferences landing (S15), the
+   virtualisation claim is re-verified (S16), the consultation citations appear in a real trail
+   (S17), the census/dialog gaps meet a real form (S18), a duplicate-control page exercises the
+   visible-twin tiebreak (S19), and a screener exercises the question guard (S20). **None of those
+   were reached** — the drive stalled before entering an ATS, so every rung past `open_pane` is
+   still unexercised. The next drive should start from a small, freshly-queried result set rather
+   than page 3 of a long one, because eight wheel batches over a virtualised list is where the
+   stray click came from.
 
    **Two carried items, both deliberate.** (a) The `observed_jobs.search_queries` DROP is armed in
    `migrations.py` and rehearsed on a scratch DB; it fires on the next restart of this code
