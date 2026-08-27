@@ -150,6 +150,44 @@ _METERS = (
 _STEPPER = re.compile(r"\bstep\s+(\d+)\s+of\s+(\d+)")
 
 
+def wizard_position(text: str) -> Optional[dict[str, int]]:
+    """The page's OWN statement of where it is in its flow — `{"step": 1, "of": 6}` — or None.
+
+    The regex has been here since the confirmation guard was written, and until 2026-08-27 its
+    reading was thrown away: `_reports_unfinished` asks it a yes/no question and discards the
+    numbers. That is why the shared ATS cadence's "at most 1 screen from Submit" stayed
+    optimistic through a SIX-step Paylocity wizard (2026-08-19) and a six-step Cornerstone one
+    (08-24) — the page said so both times, in as many words, and nothing read it.
+
+    Percent meters answer the same question in another dialect and are reported the same way, so
+    a caller gets a position from whichever the page happens to use.
+    """
+    # LOWERCASED HERE, because this one is called with RAW page text. `_STEPPER`/`_METERS` are
+    # lowercase patterns and `_reports_unfinished` relies on its callers having folded case
+    # already — a convention that holds inside this module and would silently return None for
+    # every real page ("Step 1 of 6") if a public entry point inherited it by accident.
+    body = (text or "").lower()
+    best: Optional[dict[str, int]] = None
+    for m in _STEPPER.finditer(body):
+        try:
+            step, of = int(m.group(1)), int(m.group(2))
+        except (TypeError, ValueError):
+            continue
+        if of > 0 and step > 0 and (best is None or of > best["of"]):
+            best = {"step": step, "of": of}
+    if best:
+        return best
+    for rx in _METERS:
+        for m in rx.finditer(body):
+            try:
+                pct = int(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= pct <= 100:
+                return {"percent": pct}
+    return None
+
+
 def _reports_unfinished(body: str) -> bool:
     """Does this page's own progress readout say it is NOT done? Only that answer blocks a
     confirmation — "100%" and "step 6 of 6" are a page agreeing it has finished."""

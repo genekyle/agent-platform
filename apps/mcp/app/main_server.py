@@ -3409,6 +3409,21 @@ async def scan_required(body: ScanRequiredRequest):
             # `unanswered` and nothing else, exactly as before.
             "optional": out.get("optional") or [],
             "page_errors": page_errors,
+            # WHERE THIS READING STOPPED (SESSION 18). The JS has computed these three since
+            # 2026-08-21 — the commit that applied the file's own `options_truncated` rule to
+            # itself — and this handler dropped all three on the floor, so no consumer has ever
+            # been able to tell a complete census from a capped one. A cap that nothing reports
+            # is a silent truncation, which is the failure the flags were added to end.
+            "optional_truncated": bool(out.get("optional_truncated")),
+            "page_errors_truncated": bool(out.get("page_errors_truncated")),
+            "field_errors_truncated": bool(out.get("field_errors_truncated")),
+            # WHAT IS ON TOP OF THE FORM. A modal invalidates every field fact beneath it, and
+            # until now no reading a drive takes before acting looked for one.
+            "dialogs": out.get("dialogs") or [],
+            # And the per-field complaints themselves, which were computed and dropped the same
+            # way — `_form_census` carries a `field_errors` key that has been inert in production
+            # because nothing ever put anything in it.
+            "field_errors": out.get("field_errors") or [],
             "detail": detail,
             "steps": [{"step": "scan", "unanswered": len(unanswered),
                        "answered": len(answered), "page_errors": len(page_errors),

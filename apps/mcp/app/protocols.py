@@ -1167,12 +1167,42 @@ SCAN_REQUIRED_JS = r"""
     if (line) pushErr(f, line);
   }
 
+  // WHAT IS SITTING ON TOP OF THE FORM (SESSION 18). A census that enumerates fields will
+  // describe a page whose dominant feature is a modal and be silent about the modal — Paylocity,
+  // 2026-08-19: "7 required fields unanswered" while the operator, who could see the window,
+  // said "there is a giant module asking to upload a resume". A dialog is the one finding that
+  // invalidates every other one on the page, because nothing underneath it can be clicked.
+  //
+  // Same selector the acquisition blob already uses (apps/mcp/app/main.py) plus role=alertdialog,
+  // which `step_runner._page_says` and `_page_is_refusing` both treat as the refusing-page tell.
+  // Reported from HERE because this is the reading a drive actually takes before it acts; the
+  // acquisition blob runs on a different endpoint and a different cadence.
+  const dialogs = [...document.querySelectorAll(
+        'dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]')]
+    .slice(0, 6)
+    .map((el) => {
+      const r = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return {
+        role: el.getAttribute('role') || el.tagName.toLowerCase(),
+        text: (el.innerText || '').trim().slice(0, 180),
+        // VISIBLE is the load-bearing field: a hidden dialog node is furniture every SPA carries,
+        // and treating one as present would cry wolf on every page. `open` is reported separately
+        // because a <dialog> states its own.
+        visible: !!(r.width > 1 && r.height > 1 && style.visibility !== 'hidden' &&
+                    style.display !== 'none' && style.opacity !== '0'),
+        modal: el.getAttribute('aria-modal') === 'true' || el.hasAttribute('open'),
+        area: Math.round(r.width * r.height)
+      };
+    });
+
   return {unanswered: out, answered: done, optional,
           optional_truncated: optionalSkipped > 0,
           page_errors: pageErrors.slice(0, 6),
           page_errors_truncated: pageErrors.length > 6,
           field_errors: fieldErrors.slice(0, 8),
           field_errors_truncated: fieldErrors.length > 8,
+          dialogs: dialogs,
           url: (location.href || '').slice(0, 140)};
 }
 """
