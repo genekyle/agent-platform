@@ -120,6 +120,7 @@ export function NowContext({ panel, cockpit, selection, onOpenLens, onOpenTrace,
       )}
 
       <WhatWeKnew orientation={panel.last_step?.orientation} held={panel.last_step?.account_on_file} />
+      <WhatWeCouldNotSee observation={panel.last_step?.orientation?.observation} />
 
       <section className="now-context__card now-context__card--trace">
         <div className="now-context__head">
@@ -177,6 +178,40 @@ function WhatWeKnew({ orientation, held }) {
       {orientation?.silent?.length ? (
         <small>silent: {orientation.silent.join(", ")} — nothing on file, not nothing to know</small>
       ) : null}
+    </section>
+  );
+}
+
+/**
+ * WHAT THIS READING IS BLIND TO (SESSION 18). The operator's own 2026-08-19 note, given a screen:
+ * the census enumerates form fields, so a page whose dominant features are a dialog, a consent
+ * banner and an upload module gets described by its address inputs — and silence reads as absence.
+ * This says what was looked at, in what order, what the page said about its own position, and
+ * what nobody could see. Renders nothing when there is no reading to describe.
+ */
+function WhatWeCouldNotSee({ observation }) {
+  if (!observation) return null;
+  const gaps = observation.could_not_see || [];
+  const wiz = observation.wizard;
+  if (!gaps.length && !wiz) return null;
+  return (
+    <section className="now-context__card">
+      <div className="now-context__head">
+        <span><AppIcon name="search" size={13} /> What this reading can and cannot see</span>
+        {observation.profile_source ? <small>{observation.profile_source} profile</small> : null}
+      </div>
+      {wiz?.of ? (
+        <p><strong>The page says step {wiz.step} of {wiz.of}.</strong> Plan for {wiz.of - wiz.step} more screen(s), not one.</p>
+      ) : null}
+      {wiz?.percent != null ? <p><strong>The page's own meter reads {wiz.percent}%.</strong></p> : null}
+      {observation.looked_at?.length ? (
+        <small>reading order: {observation.looked_at.join(" → ")}</small>
+      ) : null}
+      {gaps.map((gap) => (
+        <p key={`${gap.reader}:${gap.what}`}>
+          <strong>blind to {gap.what}</strong> — {gap.detail}
+        </p>
+      ))}
     </section>
   );
 }

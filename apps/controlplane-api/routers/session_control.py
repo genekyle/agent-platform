@@ -6153,7 +6153,8 @@ _NO_ACCOUNT_PLATFORMS = aps.NO_ACCOUNT_PLATFORMS
 _NOT_THE_PANE = ("view full details", "filter", "encouraged to apply")
 
 
-def _orientation_for(db, *, url: str, rung: str, step, bb) -> dict[str, Any]:
+def _orientation_for(db, *, url: str, rung: str, step, bb,
+                     page: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """The composed read of what we already know, for one rung. Never raises, never caches.
 
     SESSION 17's whole mechanism in one helper: the authorities each answer for themselves at
@@ -6166,7 +6167,8 @@ def _orientation_for(db, *, url: str, rung: str, step, bb) -> dict[str, Any]:
             db, url=url, rung=rung,
             company=getattr(step, "company", "") or "",
             job_id=getattr(step, "job_id", "") or "",
-            tab_claims=(bb.world or {}).get("tab_claims") or {})
+            tab_claims=(bb.world or {}).get("tab_claims") or {},
+            page=page)
     except Exception:
         return {}
 
@@ -6636,8 +6638,14 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # since 08-14. The cue is ADVISORY — nothing below branches on it, so a miss costs a line
         # of noise and never a wrong click — but it lands in the trail beside the control we drove,
         # which is where the next reader will be looking.
+        # The scan is already in hand, so the observation half rides along free — and this is the
+        # rung where the empty-accessible-name gap actually bites (six sightings in one week), so
+        # naming it here is naming it where a reader can act on it.
         _ctx = _orientation_for(db, url=_apply_tab_url(bb, obs), rung="enter_apply",
-                                step=step, bb=bb)
+                                step=step, bb=bb,
+                                page={"kind": step.landing_state and al.JOB_POSTING or "",
+                                      "platform": step.platform or "",
+                                      "candidates": scan.get("candidates") or []})
         _cite = _oc.cite(_ctx) if _ctx else ""
         _rung_extra["orientation"] = _ctx or None
         ctrl = _find_apply_control(scan.get("candidates") or [], apply_type=apply_type,
@@ -6754,7 +6762,18 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # moment it mattered. The context is composed at call time from authorities that already
         # exist — no cache, no copy (§15) — and it is best-effort by construction: an orientation
         # that can take a drive down is worse than one that is quiet.
-        _ctx = _orientation_for(db, url=url, rung="classify", step=step, bb=bb)
+        # …AND WHAT THIS PAGE ITSELF IS SHOWING (SESSION 18). classify already holds the text and
+        # the frames it just classified, so the observation profile costs nothing extra here: the
+        # reading ORDER for this kind, the page's own wizard position (parsed since the
+        # confirmation guard was written and discarded every time until now), and the list of
+        # things this reading is structurally blind to. Silence reads as absence — that is how a
+        # résumé-upload module, a consent dialog and a six-step counter went missing from one
+        # page's description at once (2026-08-19).
+        _ctx = _orientation_for(db, url=url, rung="classify", step=step, bb=bb,
+                                page={"kind": disc.kind, "platform": disc.platform,
+                                      "text": content.get("text") or "",
+                                      "frames": content.get("frames") or [],
+                                      "content_source": getattr(disc, "source", "") or ""})
         _cite = _oc.cite(_ctx) if _ctx else ""
         _rung_extra["orientation"] = _ctx or None
         step.record("classify", aps.OK if named else disc.outcome,
@@ -7588,6 +7607,14 @@ async def _form_census(browser_url: str, tab_id: str) -> Optional[dict[str, Any]
             "optional": _rows("optional"),
             "field_errors": list(scan.get("field_errors") or []),
             "page_errors": list(scan.get("page_errors") or []),
+            # THE SAME ALLOW-LIST HOLE, ONE MORE TIME (SESSION 18). These three flags were added
+            # to the scanner on 2026-08-21 and never carried by anything — dropped once at the
+            # mcp handler and again here — so "the census read everything" and "the census hit
+            # its cap" have been indistinguishable at every surface for six days.
+            "optional_truncated": bool(scan.get("optional_truncated")),
+            "page_errors_truncated": bool(scan.get("page_errors_truncated")),
+            "field_errors_truncated": bool(scan.get("field_errors_truncated")),
+            "dialogs": list(scan.get("dialogs") or []),
             "url": scan.get("url") or (scan.get("steps") or [{}])[0].get("url") or ""}
 
 

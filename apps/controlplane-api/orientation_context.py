@@ -113,7 +113,8 @@ def _shouts(clause: str) -> bool:
 
 def orientation_context(db, *, url: str, rung: Optional[str] = None,
                         company: Optional[str] = None, job_id: Optional[str] = None,
-                        tab_claims: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                        tab_claims: Optional[dict[str, Any]] = None,
+                        page: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Everything already on file that bears on this step, composed at call time.
 
     Every section degrades to `None` and names itself in `silent` — never to a fabricated empty.
@@ -225,6 +226,24 @@ def orientation_context(db, *, url: str, rung: Optional[str] = None,
         "gap": ("apply_requirements observations are produced per page and never stored, so the "
                 "requirements axis cannot answer here yet — this is the auth promise only"),
     }
+    # --- WHAT TO LOOK AT ON THIS PAGE, AND WHAT WE COULD NOT SEE (SESSION 18) ------------------
+    # The half of orientation that comes from the page in front of us rather than from memory.
+    # Only when the caller HAS readings — an observation report assembled from nothing would be
+    # the confident silence this is built to end.
+    observation = None
+    if page:
+        try:
+            import observation_profiles as _op
+            observation = _op.describe(
+                kind=page.get("kind") or "", platform=page.get("platform") or "",
+                page_text=page.get("text") or "", census=page.get("census"),
+                candidates=page.get("candidates"), frames=page.get("frames"),
+                content_source=page.get("content_source") or "")
+        except Exception:
+            observation = None
+    out["observation"] = observation
+    consulted.append("observation_profile") if observation else silent.append("observation_profile")
+
     out["consulted"] = consulted
     out["silent"] = silent
     return out
@@ -252,6 +271,19 @@ def cite(ctx: dict[str, Any]) -> str:
     for claim in ctx.get("stale_claims") or []:
         parts.append(f"claim '{claim['id']}' is {claim['outdriven_by_days']}d outdriven — "
                      f"treat it as unverified")
+    obs = ctx.get("observation") or {}
+    wiz = obs.get("wizard")
+    if wiz and wiz.get("of"):
+        # The page's OWN statement of how far this goes. Worth a line of its own because the
+        # shared cadence's "at most 1 screen from Submit" was optimistic by five screens twice.
+        parts.append(f"the page says step {wiz['step']} of {wiz['of']}")
+    elif wiz and wiz.get("percent") is not None:
+        parts.append(f"the page's own meter reads {wiz['percent']}%")
+    gaps = obs.get("could_not_see") or []
+    if gaps:
+        # The COUNT here, not the text: the gaps are for reading on the card, and a rationale that
+        # recites five caveats is one nobody finishes.
+        parts.append(f"{len(gaps)} thing(s) this reading is blind to (see the card)")
     if not parts:
         return ""
     return "consulted: " + "; ".join(parts)

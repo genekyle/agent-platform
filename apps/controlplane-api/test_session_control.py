@@ -1935,6 +1935,42 @@ def test_classify_cites_what_it_consulted_in_the_trail(monkeypatch):
     assert "ats_brief" in (ctx.get("silent") or [])
 
 
+def test_classify_reports_what_this_page_reading_could_not_see(monkeypatch):
+    """SESSION 18. The census enumerates FORM FIELDS, so a page whose dominant feature is a modal
+    gets described by its address inputs — silence reading as absence (2026-08-19, Paylocity).
+    The crank now carries the reading ORDER for this kind and the list of things the reading is
+    structurally blind to, and the dialog is always first."""
+    import observation_profiles as op
+
+    bb = _with_queue(("indeed:a1", "Data Analyst", "Gardner Museum"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    for r_id in ("open_pane", "verify_identity", "enter_apply"):
+        q.steps[0].record(r_id, aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    ats_url = "https://recruiting.paylocity.com/recruiting/jobs/Apply/123/x"
+    bb.world["apply_tab"] = {"tab_id": "t9", "url": ats_url}
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, ats_url),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         # The page states its own position, and until 2026-08-27 the numbers
+                         # were parsed and thrown away on every read.
+                         "/page_content": {"ok": True, "frames": [], "apply_hrefs": [],
+                                           "text": "Step 1 of 6 Information * indicates a "
+                                                   "required field Please complete your "
+                                                   "application"}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    obs = ((r["last_step"].get("orientation") or {}).get("observation")) or {}
+    assert obs.get("wizard") == {"step": 1, "of": 6}, \
+        "the page said how far this goes and the report did not carry it"
+    assert obs["looked_at"][0] == op.DIALOGS, "the form was read before anything checked for a modal"
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert "step 1 of 6" in [m for m in step.minis if m.rung == "classify"][-1].detail
+
+
 def test_an_orientation_that_cannot_answer_never_stops_the_crank(monkeypatch):
     """The guard, not the happy path. A platform nothing is known about must classify exactly as
     it did before this wiring — silence is reported, never fatal, and never a fabricated line."""
