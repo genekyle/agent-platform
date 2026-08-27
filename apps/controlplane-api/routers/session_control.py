@@ -5388,6 +5388,7 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
     "more automatic" pass: it does the easy, confident fills at once and stops honestly at anything
     it cannot speak to — an address we do not have is a flagged blank, never an invented street.
     """
+    import escalation_rules
     import form_fill
     _check_initiator(body.initiator)
     session, bb, ledger = _load(session_id, db)
@@ -5399,9 +5400,16 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
 
     obs = await _observe(browser_url, bb, session_id=session.id)
     block = obs.get("block")
-    if block and block.get("strength") == "active":
+    # TYPING AND SENDING ARE DIFFERENT PERMISSIONS. A reCAPTCHA checkbox in the form's footer
+    # gates the SUBMIT; the fields above it are ordinary fields, and refusing to fill them just
+    # made the operator race the checkbox's own ~2-minute expiry (live 2026-08-27: the form came
+    # back reading "Verification expired. Check the checkbox again."). A VISIBLE challenge
+    # interstitial still stops everything. Submit is unaffected — the ladder's own guard below
+    # still refuses to advance on any active block, so nothing is sent under a pending check.
+    if escalation_rules.blocks_typing(block):
         return await _save_queue_and_view(session, bb, ledger, queue, obs, ok=False,
-                                    detail="A challenge is up — clear it yourself before filling.")
+                                    detail="A challenge is up on this page — clear it yourself "
+                                           "before filling. We never auto-solve.")
     tab_id = _apply_tab(bb, obs).get("tab_id", "")
     candidates = await _scan_ax(browser_url, tab_id)
     fields = _form_fields_from(candidates)

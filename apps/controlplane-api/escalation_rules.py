@@ -78,7 +78,13 @@ def downgrade_block_if_hidden(block: Optional[dict[str, Any]],
     # to not-blocking the instant the human solves it). Keep ACTIVE only while genuinely blocking.
     if "blocking" in visibility:
         if visibility.get("blocking"):
-            return block
+            # STAYS ACTIVE — but carry the probe, because "active" is not one thing: `blocks_typing`
+            # reads it to tell a form-footer checkbox (gates submit) from a visible interstitial
+            # (gates the page). Without this the reading is thrown away at the one moment it
+            # distinguishes them, and every active block looks maximally blocking.
+            out = dict(block)
+            out["visibility"] = visibility
+            return out
         out = dict(block)
         out["strength"] = "passive"
         out["reason"] = (f"{block.get('provider')} present but not blocking "
@@ -87,13 +93,49 @@ def downgrade_block_if_hidden(block: Optional[dict[str, Any]],
         return out
     # Back-compat: an older probe without `blocking` — fall back to raw visibility.
     if visibility.get("challenge_visible") or visibility.get("checkbox_visible"):
-        return block
+        out = dict(block)
+        out["visibility"] = visibility
+        return out
     out = dict(block)
     out["strength"] = "passive"
     out["reason"] = (f"{block.get('provider')} preloaded but not shown "
                      f"(no visible challenge/checkbox) — advisory, not blocking.")
     out["visibility"] = visibility
     return out
+
+
+def blocks_typing(block: Optional[dict[str, Any]]) -> bool:
+    """Should this block stop us TYPING INTO THE PAGE, as opposed to stopping us submitting?
+
+    Two different things wear the word "challenge", and treating them alike cost a live drive
+    (2026-08-27, BambooHR): a reCAPTCHA CHECKBOX sitting in the form's footer gates the SUBMIT
+    button — the fields above it are ordinary fields, and filling them is what a human does
+    before ticking it. A visible CHALLENGE interstitial (the image grid) is the other thing: it
+    overlays the page and demands the human's attention right now.
+
+    The old rule refused to fill on either, which produced a race the operator had to win: the
+    guard says "clear it yourself before filling", the human ticks the box, and reCAPTCHA expires
+    that tick in ~2 minutes — which is exactly how the live form arrived at *"Verification
+    expired. Check the checkbox again."* Filling first and ticking last is both safer and the
+    order a human actually uses.
+
+    Conservative on every uncertain path, because this is the rail that keeps us off a challenged
+    page: no visibility data (an un-introspectable provider — a Facebook checkpoint, a probe that
+    failed) stays blocking. Only a probe that positively reports "a checkbox is shown and no
+    challenge is" opens typing.
+
+    THIS DOES NOT RELAX SUBMIT. The apply ladder's own guard still refuses to advance on any
+    active block, so a form filled under a pending checkbox still cannot be sent until a human
+    ticks it. Typing is reversible; sending is not.
+    """
+    if not block or block.get("strength") != "active":
+        return False
+    vis = block.get("visibility") or {}
+    if not vis.get("ok"):
+        return True                       # nothing measured -> keep the conservative stop
+    if vis.get("challenge_visible"):
+        return True                       # an interstitial is up; the page is not ours to touch
+    return not vis.get("checkbox_visible")
 
 
 # Built-in seed rules. `signals` is OR-matched: any matching signal escalates.

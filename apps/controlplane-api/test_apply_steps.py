@@ -624,3 +624,62 @@ def test_the_submit_gate_cannot_be_reached_by_omission():
     assert ApplyStepBody(confirm_submit=True).confirm_submit is True
     # And it is not something a stray string can satisfy by truthiness at the boundary.
     assert ApplyStepBody(confirm_submit=False).confirm_submit is False
+
+
+# --------------------------------------------------------------------------------------------
+# Typing and sending are different permissions (live 2026-08-27, BambooHR)
+# --------------------------------------------------------------------------------------------
+
+def _block(strength="active", **vis):
+    b = {"provider": "recaptcha_checkbox", "strength": strength}
+    if vis:
+        b["visibility"] = {"ok": True, **vis}
+    return b
+
+
+def test_a_footer_checkbox_gates_submit_not_the_form():
+    """The live case: a reCAPTCHA checkbox sits below the fields, unsolved. Refusing to FILL
+    there made the operator race the checkbox's ~2-minute expiry — the form came back reading
+    "Verification expired. Check the checkbox again." Filling first, ticking last, is the order
+    a human uses and the one that wins the race."""
+    import escalation_rules as er
+
+    assert er.blocks_typing(_block(blocking=True, challenge_visible=False,
+                                   checkbox_visible=True, checkbox_unsolved=True)) is False
+
+
+def test_a_visible_challenge_still_stops_everything():
+    """The image-grid interstitial overlays the page and demands the human right now."""
+    import escalation_rules as er
+
+    assert er.blocks_typing(_block(blocking=True, challenge_visible=True,
+                                   checkbox_visible=True)) is True
+
+
+def test_an_unmeasurable_block_stays_conservative():
+    """A Facebook checkpoint, or a probe that failed: nothing was measured, so nothing is
+    relaxed. This is the rail that keeps us off a challenged page."""
+    import escalation_rules as er
+
+    assert er.blocks_typing(_block()) is True                      # no visibility at all
+    assert er.blocks_typing({"provider": "x", "strength": "active",
+                             "visibility": {"ok": False}}) is True  # probe unreachable
+
+
+def test_a_passive_block_blocks_nothing():
+    import escalation_rules as er
+
+    assert er.blocks_typing(_block(strength="passive")) is False
+    assert er.blocks_typing(None) is False
+
+
+def test_an_active_block_carries_its_probe_so_the_distinction_is_readable():
+    """`downgrade_block_if_hidden` used to discard the visibility reading whenever it kept a
+    block ACTIVE — throwing it away at the one moment it distinguishes a checkbox from an
+    interstitial, so every active block looked maximally blocking."""
+    import escalation_rules as er
+
+    vis = {"ok": True, "blocking": True, "challenge_visible": False, "checkbox_visible": True}
+    out = er.downgrade_block_if_hidden({"provider": "recaptcha", "strength": "active"}, vis)
+    assert out["strength"] == "active" and out["visibility"] == vis
+    assert er.blocks_typing(out) is False
