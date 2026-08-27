@@ -189,9 +189,12 @@ live (first errand fire and its measured boundary, first real inbox sweeps, phas
    `orientation_context` composed over brief + registry NOTE + account store + tab claims + stale
    claims, wired at classify/enter_apply/account with output-observing tests, `find_existing`
    ahead of the account mint, cockpit card; four of the eight counted instances now cite
-   themselves live) → S18 (observation profiles) → S19 (one resolver) → S20 (act carries
-   evidence). Each kills a counted failure class from the ten-session retrospective; none is
-   speculative.
+   themselves live) → S18 (observation profiles — **built 2026-08-27**: reading order per
+   page-kind with additive platform sharpening, `wizard_position` reading the "step 1 of 6" the
+   regex had always parsed and discarded, a real dialog reader on the census, the 08-21
+   truncation flags carried end to end after being dropped twice, and `could_not_see` on every
+   report) → S19 (one resolver) → S20 (act carries evidence). Each kills a counted failure class
+   from the ten-session retrospective; none is speculative.
 
    **Two carried items, both deliberate.** (a) The `observed_jobs.search_queries` DROP is armed in
    `migrations.py` and rehearsed on a scratch DB; it fires on the next restart of this code

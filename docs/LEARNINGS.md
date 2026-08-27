@@ -11860,3 +11860,67 @@ something was learned — verified reachable through the live import chain (App 
 SessionCockpit → NowContext), but **not yet seen rendered**: the fixture-driven preview harness
 does not include NowContext, and the scratch DB has no session with a queue. *That is the honest
 gap this owes the next live drive*, alongside the S15 naming and the S16 re-verify.
+
+## 2026-08-27 (fourth) — SESSION 18 built: what to look at here, and four defects an audit caught before a drive did
+
+**THE OPERATOR'S 2026-08-19 DESIGN NOTE, BUILT.** `observation_profiles.py` gives each page-KIND
+a reading ORDER (dialogs → uploads/wizard → the site's own validation → the census → the target
+control), platform entries may SHARPEN it and never replace it (additive, the `ATS_HINTS`
+precedent — an unknown ATS keeps the full generic sweep, which is the TAM precedent), and
+`read_gaps` says what the reading is **structurally blind to**. It rides on the same payload S17
+already delivers, so the cockpit shows one card of what we knew from memory and one of what this
+page can and cannot show.
+
+**THE PAGE HAS BEEN STATING ITS OWN POSITION ALL ALONG AND WE THREW THE NUMBERS AWAY.**
+`apply_landing._STEPPER` has parsed "step N of M" since the confirmation guard was written — and
+its only consumer asked it a yes/no question (`_reports_unfinished`) and discarded N and M. That
+is why the shared cadence's *"at most 1 screen from Submit"* survived a **six**-step Paylocity
+wizard (08-19) and a six-step Cornerstone one (08-24): the page said so both times, in as many
+words. `wizard_position()` now returns `{step, of}` (or a percent meter), and the crank's own
+citation reads *"the page says step 1 of 6"*. **It lowercases its own input**, which the
+module-internal helpers do not — a convention that holds inside the file and would have made a
+public entry point return None for every real page ("Step 1 of 6").
+
+**AND THE 08-21 TRUNCATION FLAGS WERE COMPUTED AND DROPPED TWICE.** `SCAN_REQUIRED_JS` has
+returned `optional_truncated` / `page_errors_truncated` / `field_errors_truncated` since the
+commit that applied the file's own `options_truncated` rule to itself — and the mcp handler's
+return dict never carried them, then `_form_census`'s allow-list projection dropped them again.
+**For six days no consumer could tell a complete census from a capped one**, which is exactly what
+those flags were added to prevent. Same for `field_errors`: computed, dropped at the handler, and
+the advance-blocking gate that reads it (`_unanswered_required`) has therefore been inert in
+production while its test passed on a fabricated census. Both carried end to end now. *The shape
+to remember: an allow-list projection drops what it was not told about, silently — and this file's
+own comment says so, three lines above the place it happened again.*
+
+**THE DIALOG NOW HAS A READER, BECAUSE IT LED EVERY ORDER AND NOTHING STOOD BEHIND IT.** The audit
+found the honest hole: `/scan_required` and `/ax_scan` both look straight THROUGH an overlay, and
+the only DOM-level dialog reader in the repo (`frame_state.dialog_present`, `dom_context.dialogs`)
+lives on the capture blob — a different endpoint on a different cadence from the reading a drive
+actually takes before it acts. So the census JS now reports `dialogs[]` with the same selector
+acquisition uses plus `role=alertdialog`, each with `visible`, `modal` and `area`. **`visible` is
+the load-bearing field**: a hidden dialog node is furniture every SPA carries, and reporting one
+would cry wolf on every page. And the tri-state is kept where it matters — a modal FOUND is the
+headline, a page checked and clear is quiet, and a page **nobody checked** says so out loud.
+
+**FOUR DEFECTS IN MY OWN DRAFT, EACH OF WHICH WOULD HAVE SILENTLY NO-OPPED**, found by auditing
+the real field names against the code rather than by trusting the draft:
+1. `read_gaps` iterated `census["fields"]` — a key the census never emits. The rows live under
+   `unanswered` / `answered` / `optional`, and a 250-entry Country select is just as likely to sit
+   in `answered`.
+2. It read `row["label"]`; the row's name key is `field`. Every gap would have read *"a field:
+   24 of 250 options read"*.
+3. It looked for `fields_truncated` / `errors_truncated` — flags that do not exist under those
+   names (see above for the ones that do).
+4. The unread-frame gap matched `fr["url"]` and `fr["text_len"]`; `pick_content` identifies a
+   frame by `id`/`name` and reads `text`. **It could never have fired once.**
+
+Every one of those is the same species as the bug the session is about: a reader that returns
+nothing, confidently. The tests now use the real shapes and each names the drive that earned it.
+
+*Suites:* controlplane-api **1971** green, mcp **168** green, the modified census blob
+syntax-checked with `node --check` (a JS blob is a string to Python — a syntax error in it
+surfaces only in a browser). *Owed to the drive:* the census half is wired at the classify and
+enter_apply rungs, but **no rung feeds a full census payload yet** — the form/advance path is
+where `scan_required` actually runs, and pointing the profile at it is the next wiring. Until
+then the truncation and dialog gaps are proven by test and by shape, not by a live page.
+
