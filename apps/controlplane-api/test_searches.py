@@ -221,57 +221,94 @@ def test_nobody_looked_and_there_were_none_do_not_encode_alike(db):
     assert rows["welder"]["filters"] == {} and rows["welder"]["filters_recorded"] is True
 
 
-# --- adjudicating what got in before the door had a lock ---------------------------------------
-def test_the_audit_repairs_the_feed_lie_and_refuses_what_it_cannot_prove(db):
-    """Two rows, two different reasons for an unbacked query, and only one of them is knowable.
-
-    A row the feed alone ever surfaced cannot have been found by a query — repairable. A row that
-    was ALSO surfaced by a real search might have picked up its extra query from a path that
-    recorded one and created no link (the /api/jobs/extract shape), and nothing in the data can now
-    say whether it was real — so it stands, counted, untouched."""
+# --- after the drop: claims are unexpressible, and the quarantine is the durable record --------
+# (The pre-drop audit/repair behavior — the 14 feed-only rows repaired, the 20 refused — is
+# pinned in git history at 2026-08-26; both sides of the story are in LEARNINGS. These pin what
+# the endpoints answer NOW, so the numbers stay visible instead of re-derived.)
+def test_the_audit_reports_structural_zeros_and_the_durable_quarantine_count(db):
+    """A claim has nowhere to live any more, so repairable/unadjudicable are TRUE zeros —
+    unexpressible, not unexamined — and the flag written before the drop is what survives."""
     import observed_jobs
+    from models import ObservedJob
 
-    feed = searches_mod.ensure_active_feed(db, session_id=1, engine="indeed")
     real = searches_mod.ensure_active_search(db, session_id=1, engine="indeed",
                                              query="report analyst")
-    upsert_observed_jobs(db, _cards("f1"), "indeed", None, search=feed)
     upsert_observed_jobs(db, _cards("q1"), "indeed", "report analyst", search=real)
-    # the lie, as the old call site wrote it: a query on rows only the feed ever showed
-    from models import ObservedJob
-    db.get(ObservedJob, "indeed:f1").search_queries = ["data analyst"]
-    db.get(ObservedJob, "indeed:q1").search_queries = ["report analyst", "data analyst"]
+    db.get(ObservedJob, "indeed:q1").provenance_quarantined = True
     db.flush()
 
     audit = observed_jobs.audit_query_provenance(db)
-    assert audit["repairable"] == 1 and audit["unadjudicable"] == 1
-    assert audit["rows"]["feed_only"][0]["job_id"] == "indeed:f1"
-    assert audit["rows"]["feed_only"][0]["surfaced_by"] == ["feed:home_feed"]
-    assert audit["rows"]["unadjudicable"][0]["job_id"] == "indeed:q1"
+    assert audit["repairable"] == 0 and audit["unadjudicable"] == 0
+    assert audit["quarantined"] == 1
+    assert audit["joined_rows"] == 1
+    assert "dropped" in audit["column"]
 
-    dry = observed_jobs.repair_query_provenance(db)
-    assert dry["applied"] is False and dry["repaired"] == 1
-    assert db.get(ObservedJob, "indeed:f1").search_queries == ["data analyst"], "a dry run wrote"
+    q = observed_jobs.quarantine_unadjudicable(db, apply=True)
+    assert q["newly_flagged"] == 0 and q["already_flagged"] == 1
 
     done = observed_jobs.repair_query_provenance(db, apply=True)
-    assert done["applied"] is True and done["changes"][0]["removed"] == ["data analyst"]
-    assert db.get(ObservedJob, "indeed:f1").search_queries == []
-    # the one it could not prove is exactly as it was
-    assert db.get(ObservedJob, "indeed:q1").search_queries == ["report analyst", "data analyst"]
-    assert done["refused"]["unadjudicable"] == 1
+    assert done["repaired"] == 0 and done["changes"] == []
 
 
-def test_a_row_with_no_sighting_links_is_never_called_a_liar(db):
-    """Rows predating the join table have queries and no links. Absence of a link is not evidence
-    of a lie, and an audit that counted them would report the whole corpus as contaminated."""
+def test_a_row_with_no_sighting_links_does_not_count_as_joined(db):
+    """`joined_rows` answers "how much of the corpus has sighting-backed history" — a row nothing
+    ever linked contributes nothing, and is never called a liar for it."""
     import observed_jobs
-    from models import ObservedJob
 
     upsert_observed_jobs(db, _cards("old"), "indeed", None)
-    db.get(ObservedJob, "indeed:old").search_queries = ["some ancient query"]
     db.flush()
     audit = observed_jobs.audit_query_provenance(db)
     assert audit["joined_rows"] == 0
-    assert audit["repairable"] == 0 and audit["unadjudicable"] == 0
+    assert audit["quarantined"] == 0
+
+
+# --- the location door (SESSION 15): a caller default is not a page fact -----------------------
+def test_a_location_the_engines_params_do_not_back_is_refused(db):
+    """Search 14's lie, now unexpressible at the door: the engine named its set (keywords only)
+    and named no location in it, so a caller's 'Nashua, NH' is a wish, not a fact — refused
+    loudly, like check_provenance, never silently corrected."""
+    with pytest.raises(ValueError, match="name no location filter"):
+        searches_mod.ensure_active_search(db, session_id=1, engine="linkedin",
+                                          query="reporting analyst", location="Nashua, NH",
+                                          filters={"keywords": "reporting analyst"})
+
+
+def test_a_blank_location_is_filled_from_what_the_url_itself_states(db):
+    s = searches_mod.ensure_active_search(
+        db, session_id=1, engine="linkedin", query="reporting analyst",
+        filters={"keywords": "reporting analyst", "location": "Greater Boston"})
+    assert s.location == "Greater Boston"
+    i = searches_mod.ensure_active_search(
+        db, session_id=1, engine="indeed", query="data analyst",
+        filters={"q": "data analyst", "l": "Nashua, NH"})
+    assert i.location == "Nashua, NH"
+
+
+def test_an_opaque_location_filter_backs_a_callers_claim(db):
+    """LinkedIn can encode the place as a geoId only — a location filter demonstrably exists, so
+    the caller's human-readable string is plausible and kept. Refusing here would cry wolf on
+    honest data, which is a guard's first sin."""
+    s = searches_mod.ensure_active_search(
+        db, session_id=1, engine="linkedin", query="analyst", location="Greater Boston",
+        filters={"keywords": "analyst", "geoId": "90000007"})
+    assert s.location == "Greater Boston"
+
+
+def test_the_location_door_never_judges_what_nobody_looked_at(db):
+    """filters=None means nobody read the URL — the claim cannot be checked, so it stands (the
+    tri-state rule: 'we did not look' must not fail honest callers). An empty identity on a KNOWN
+    engine (a URL read mid-navigation) and an UNKNOWN engine's designed-empty identity are the
+    same case: no evidence, no refusal."""
+    a = searches_mod.ensure_active_search(db, session_id=1, engine="indeed",
+                                          query="analyst", location="Boston, MA")
+    assert a.location == "Boston, MA"
+    b = searches_mod.ensure_active_search(db, session_id=2, engine="indeed",
+                                          query="analyst", location="Boston, MA", filters={})
+    assert b.location == "Boston, MA"
+    c = searches_mod.ensure_active_search(db, session_id=3, engine="glassdoor",
+                                          query="analyst", location="Boston, MA",
+                                          filters={"q": "analyst"})
+    assert c.location == "Boston, MA"
 
 
 # --- one fact, one place (§16) -----------------------------------------------------------------
@@ -285,7 +322,7 @@ def test_the_queries_that_surfaced_a_job_are_derived_not_stored(db):
     s = searches_mod.ensure_active_search(db, session_id=1, engine="indeed",
                                           query="reporting analyst")
     upsert_observed_jobs(db, _cards("a1"), "indeed", "reporting analyst", search=s)
-    assert db.get(ObservedJob, "indeed:a1").search_queries == [], "the column was written"
+    assert not hasattr(db.get(ObservedJob, "indeed:a1"), "search_queries"), "the column returned"
     assert observed_jobs.queries_for(db, ["indeed:a1"]) == {"indeed:a1": ["reporting analyst"]}
 
 

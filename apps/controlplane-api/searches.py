@@ -43,18 +43,38 @@ def ensure_active_search(db: Session, *, session_id: Optional[int], engine: str,
     more, and quietly relabelling it would erase exactly the provenance the column exists to keep
     (2026-08-26 — 23 rows gathered under an Easy-Apply filter, recorded under a row that said
     nothing about one). Detecting that drift is the sweep's job; this only refuses to lie about it.
+
+    LOCATION IS HELD TO THE SAME DOOR (SESSION 15). Search 14 recorded `location="Nashua, NH"` —
+    the active target's default — over a page that carried no location filter at all: a caller's
+    wish stored as a page fact, the query column's lie one column over. So when the engine's own
+    params are in hand: a location claim they do not back is REFUSED (loudly, like
+    `check_provenance` — silent correction would hide the caller aiming wrong), and a blank
+    location is filled from what the URL itself states. When filters were never read, nothing is
+    judged — "nobody looked" must not fail honest callers.
     """
     q = _norm(query)
     if not q:
         return None
+    loc = _norm(location)
+    if filters is not None:
+        import search_cadence
+        backed = search_cadence.location_backed(filters, engine or "indeed")
+        if loc and backed is False:
+            raise ValueError(
+                f"provenance: the search would record location {loc!r}, but the engine's own "
+                f"result-set params {sorted(filters)} name no location filter at all. That "
+                f"location is the caller's default, not a page fact — derive it from the URL "
+                f"(search_cadence.declared_location) or pass none.")
+        if not loc:
+            loc = _norm(search_cadence.declared_location(filters, engine or "indeed"))
     row = db.scalar(select(Search).where(
         Search.session_id == session_id, Search.engine == (engine or "indeed"),
-        Search.query == q, Search.location == _norm(location),
+        Search.query == q, Search.location == loc,
         Search.status == "active"))
     encoded = json.dumps(filters, sort_keys=True) if filters is not None else ""
     if row is None:
         row = Search(session_id=session_id, engine=engine or "indeed", query=q,
-                     location=_norm(location), radius_miles=radius_miles, filters=encoded)
+                     location=loc, radius_miles=radius_miles, filters=encoded)
         db.add(row)
         db.flush()
     elif encoded and not (row.filters or "").strip():

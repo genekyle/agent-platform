@@ -599,6 +599,51 @@ def result_set_drift(before: dict[str, str], after: dict[str, str]) -> dict[str,
                                   for k, v in changes.items())}
 
 
+#: Location-shaped params per engine. `names` carry the human-readable place the engine itself
+#: states; `proof` params show the set is location-filtered AT ALL even when the place is opaque
+#: (LinkedIn's geoId names a real filter without naming the town). The split matters: a caller's
+#: location claim is BACKED by any proof param, but only a `names` param can supply the string.
+_LOCATION_PARAMS: dict[str, dict[str, tuple[str, ...]]] = {
+    "indeed": {"names": ("l",), "proof": ("l", "radius")},
+    "linkedin": {"names": ("location",), "proof": ("location", "geoId", "distance")},
+}
+
+
+def declared_location(identity: dict[str, str], platform: str = DEFAULT_SEARCH_PLATFORM) -> str:
+    """The location the ENGINE's own URL states for this result set, or "".
+
+    This is the honest source for `Search.location` (SESSION 15, handed over by SESSION 14: the
+    sweep's location fell back to the active target's "Nashua, NH" while the page carried no
+    location filter at all — a caller's default recorded as a page fact, the same class of lie the
+    query column stopped telling one column over). "" means the set states no place — which is a
+    fact about the set, not a gap.
+    """
+    spec = _LOCATION_PARAMS.get((platform or "").strip().lower())
+    if not spec:
+        return ""
+    for name in spec["names"]:
+        value = " ".join((identity or {}).get(name, "").split())
+        if value:
+            return value
+    return ""
+
+
+def location_backed(identity: dict[str, str], platform: str = DEFAULT_SEARCH_PLATFORM):
+    """Does this result set carry ANY location-shaped param? True / False / None(cannot judge).
+
+    None in two honest cases: an engine whose params we do not know (an empty identity is its
+    designed answer, and refusing a location because OUR parser is blind would cry wolf on real
+    data), and an identity with no params at all (a URL read mid-navigation says nothing either
+    way). False is the actionable verdict: the engine named its set and named no location in it —
+    so a non-empty location beside it is a caller's wish, not a page fact.
+    """
+    plat = (platform or "").strip().lower()
+    spec = _LOCATION_PARAMS.get(plat)
+    if not spec or not identity:
+        return None
+    return any((identity.get(p) or "").strip() for p in spec["proof"])
+
+
 def classify_apply_platform(url: str) -> str:
     """Map an apply destination URL to its ATS platform id (see ats_registry.classify_ats).
     Unknown external host = 'company_site'; empty = 'unknown'. Drives which per-platform apply
