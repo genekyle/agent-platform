@@ -7235,3 +7235,62 @@ def test_an_ack_survives_walking_away_and_coming_back():
     assert _too_unsure_to_continue(world, "https://x") is None
     world["last_belief"]["belief"] = belief("search_results")
     assert _too_unsure_to_continue(world, "https://x") is None
+
+
+# --------------------------------------------------------------------------------------------
+# A parked step's tab is not the current step's tab (live 2026-08-27)
+# --------------------------------------------------------------------------------------------
+
+def _tabs_two_applies():
+    return {"tabs": [
+        {"tab_id": "SEARCH", "url": "https://www.linkedin.com/jobs/search-results/?keywords=x"},
+        {"tab_id": "ICIMS", "url": "https://careers-publicisgroupe.icims.com/jobs/163840/login"},
+        {"tab_id": "GH", "url": "https://job-boards.greenhouse.io/bottomlinetech/jobs/8605886002"},
+    ], "search_tab": {"tab_id": "SEARCH"}}
+
+
+def _bb_two_applies(current="linkedin:JOB3"):
+    from types import SimpleNamespace
+    import apply_steps as aps
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": current, "title": "Financial Systems Analyst"}])
+    return SimpleNamespace(world={
+        # Written while JOB2 was worked and NOT cleared when it parked — the whole bug.
+        "apply_tab": {"tab_id": "ICIMS", "url": "https://careers-publicisgroupe.icims.com/x"},
+        "tab_claims": {"ICIMS": {"job_id": "linkedin:JOB2"}, "GH": {"job_id": current}},
+        "apply_queue": q.as_dict(),
+    })
+
+
+def test_a_parked_steps_tab_never_answers_for_the_current_step():
+    """Job 2 (iCIMS) parked at a consent wall with its tab open; job 3 (Greenhouse) became
+    current; and `apply_fill` for job 3 typed into JOB 2's form — an email into the wrong
+    employer's page and an attempt at a legal consent checkbox nobody approved.
+
+    `apply_tab` is written while a step is worked and is not cleared when it parks, and a parked
+    ATS tab still classifies as ROLE_APPLY — so the recorded-tab shortcut returned it and the
+    careful tab_claims logic below was unreachable."""
+    from routers.session_control import _apply_tab
+
+    got = _apply_tab(_bb_two_applies(), _tabs_two_applies())
+    assert got["tab_id"] == "GH", "the current step's own claimed tab, not the parked one"
+
+
+def test_the_recorded_tab_still_wins_when_it_is_this_steps_own():
+    """The shortcut exists for a reason — a flow that navigates in place (Workday's create-account
+    tab becoming the app tab) must keep resolving. Only a claim by ANOTHER job disqualifies it."""
+    from routers.session_control import _apply_tab
+
+    bb = _bb_two_applies(current="linkedin:JOB2")
+    got = _apply_tab(bb, _tabs_two_applies())
+    assert got["tab_id"] == "ICIMS"
+
+
+def test_an_unclaimed_recorded_tab_is_still_honoured():
+    """Blackboards written before tab_claims existed carry no claim; absence of a claim is not
+    evidence the tab belongs to someone else."""
+    from routers.session_control import _apply_tab
+
+    bb = _bb_two_applies()
+    bb.world["tab_claims"] = {}
+    assert _apply_tab(bb, _tabs_two_applies())["tab_id"] == "ICIMS"

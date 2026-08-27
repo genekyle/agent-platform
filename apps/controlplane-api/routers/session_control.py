@@ -7540,7 +7540,33 @@ def _apply_tab(bb: Any, obs: dict[str, Any], job_id: str = "") -> dict[str, Any]
     from controller import window as window_mod
 
     tabs = obs.get("tabs") or []
+    claims = (bb.world or {}).get("tab_claims") or {}
+    # WHOSE STEP IS THIS? Resolved BEFORE the recorded-tab shortcut, because that shortcut has to
+    # respect the claim too — see below. (The fallback derived this itself and the shortcut never
+    # asked, which is precisely how a parked step's tab kept winning.)
+    if not job_id:
+        try:
+            _cur = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
+            job_id = getattr(_cur, "job_id", "") or ""
+        except Exception:  # noqa: BLE001 — a resolver that raised would take the rung with it
+            job_id = ""
+
+    def _claimed_by(tab_id: str) -> str:
+        _c = claims.get(tab_id)
+        return (_c.get("job_id") if isinstance(_c, dict) else _c) or ""
+
     recorded_id = ((bb.world or {}).get("apply_tab") or {}).get("tab_id")
+    # A RECORDED TAB CLAIMED BY ANOTHER JOB IS NOT THIS STEP'S TAB. `apply_tab` is written while a
+    # step is worked and is NOT cleared when that step parks, so it keeps pointing at the parked
+    # application — and because a parked ATS tab still classifies as ROLE_APPLY, the hop-detection
+    # below never fired either. Measured live 2026-08-27: job 2 (iCIMS/Publicis) parked at a
+    # consent wall with its tab open, job 3 (Greenhouse/Bottomline) became current, and a
+    # `apply_fill` for job 3 typed into JOB 2's form — an email into the wrong employer's page and
+    # an attempt at a legal consent checkbox nobody had approved. Filling the wrong application is
+    # the worst reachable outcome of a mis-resolved tab, so the claim is checked FIRST and the
+    # careful `tab_claims` logic below is no longer unreachable whenever a recorded id is live.
+    if recorded_id and job_id and _claimed_by(recorded_id) not in ("", job_id):
+        recorded_id = None
     if recorded_id:
         live = next((t for t in tabs if t.get("tab_id") == recorded_id), None)
         if live:
@@ -7573,16 +7599,7 @@ def _apply_tab(bb: Any, obs: dict[str, Any], job_id: str = "") -> dict[str, Any]
     # `tab_claims` is the durable record of whose tab is whose and already exists; consult it
     # rather than inventing an ordering rule. A tab claimed by ANOTHER job is never this step's,
     # and that refusal is the half that matters.
-    claims = (bb.world or {}).get("tab_claims") or {}
-    if not job_id:
-        # Callers that do not name a step still deserve the right tab: the queue's CURRENT step is
-        # the step being worked, by definition. Derived here rather than threaded through twenty
-        # call sites, and defensively — a resolver that raised would take the rung with it.
-        try:
-            _cur = aps.Queue.from_dict((bb.world or {}).get("apply_queue")).current()
-            job_id = getattr(_cur, "job_id", "") or ""
-        except Exception:  # noqa: BLE001
-            job_id = ""
+    # `claims` and `job_id` were resolved at the top, so the shortcut above could consult them.
     search = (obs.get("search_tab") or {}).get("tab_id")
     candidates = []
     for t in tabs:
@@ -7595,8 +7612,7 @@ def _apply_tab(bb: Any, obs: dict[str, Any], job_id: str = "") -> dict[str, Any]
         # a plain string in case an older blackboard wrote one — comparing the whole record to an
         # id silently skips every claimed tab, which is "no application tab open" on a session
         # whose tab is plainly there (caught live the first time this ran, 2026-08-24).
-        _claim = claims.get(t.get("tab_id"))
-        claimed = (_claim.get("job_id") if isinstance(_claim, dict) else _claim) or ""
+        claimed = _claimed_by(t.get("tab_id"))
         if job_id and claimed and claimed != job_id:
             continue                      # someone else's tab — a parked step's, most likely
         candidates.append((t, claimed))
