@@ -11785,3 +11785,78 @@ preview API — the live Postgres still carries the column and will drop it on t
 this code, which is the coordinated moment (any process still running OLD code breaks the instant
 it goes, and there are five worktrees). *Owed to the drive:* re-verify the virtualisation claim
 live — the report has already written the instructions.
+
+## 2026-08-27 (third) — SESSION 17 built: the archive becomes memory, and three of my own bugs on the way
+
+**THE EIGHT-INSTANCE CLASS HAS A MECHANISM NOW.** `orientation_context(db, url=, rung=, company=,
+job_id=, tab_claims=)` composes what is already on file — the ATS brief, **the registry's own
+note**, the account store, a tab-claim conflict, S16's stale claims — at the moment a rung is
+about to act, and `cite()` renders the one sentence it writes into the trail. Wired at classify,
+enter_apply and the account rung, each with an output-observing test (the seam swallows by design,
+so nothing else could catch a severed wire). Live, against the real DB, four platforms:
+
+| rung | what the crank now says before it acts |
+|---|---|
+| cornerstone · enter_apply | **"so drive the VISIBLE one"** |
+| paylocity · enter_apply | **"it opens behind an 'Apply with resume' MODAL offering to autofill from an upload"** |
+| icims · account | **"an account for this employer is already on file (ats_odyssey_systems_consulting_group_ltd_icims, active)"** |
+| workday · advance | **"Once a draft is saved the posting's own control is renamed 'Continue Application'"** |
+
+Those are, in order, the 2026-08-24 rediscovery that cost two cranks and a screenshot, the
+2026-08-19 prediction that was on file and unread, the 2026-08-24 duplicate account row the
+operator caught by memory, and the 2026-08-25 renamed control. **Four of the eight, surfaced by
+the rung that needed them, in one composed read.**
+
+**THE NOTE WAS NEVER IN THE BRIEF, AND THAT IS WHY NOTHING ASKED.** `ats_brief` returns the
+headline, the flows, the auth promise and the characteristics — and drops `entry["notes"]`, the
+one field where every hard-won control quirk lives. `classify_ats` loads that same entry to name
+the platform and hands the prose back to the shelf. So "nothing asked" was not negligence at the
+call site: **there was no accessor to ask with.** `note_cues()` is it.
+
+**MY OWN THREE, EACH FOUND BY A TEST OR A LIVE READ RATHER THAN BY REASONING.**
+
+*(1) The cue extractor dropped the only clause that mattered, and my test passed anyway.* The
+first cut split notes into SENTENCES and skipped any over 260 characters — which threw away
+Cornerstone's, because the real note packs the whole finding into one 300-character sentence
+("…its apply control is a plain button named 'Apply Now' (rendered twice — masthead and footer —
+so drive the VISIBLE one), and the masthead carries…"). The unit had to become the CLAUSE around
+the match. **The test did not catch it because I had written the fixture as a paraphrase of the
+note — short, tidy, and nothing like the thing it stood for.** The tests now read the REAL
+registry entry, with a guard that fails loudly if the note is ever rewritten. *A fixture written
+to match the implementation tests the implementation against itself.*
+
+*(2) I gated the cheapest authority behind the most fragile one.* `ats_id` came from
+`ats_brief`, which needs a database — so on any db trouble the registry note went silent too,
+even though naming a platform from its host is pure and free. Caught by the wiring test driving
+the real crank against a harness with no ATS tables: the note vanished exactly when the brief
+did. The platform is now classified from the URL first, independently, and the brief's id is a
+cross-check rather than the source.
+
+*(3) `ensure_account` WRITES, so the vault check had to go before it.* The account rung called
+`ensure_account` (which mints a pending row keyed on whatever company string it was handed) and
+only then read back which leg was due — so by the time anything could look, a second row already
+existed and read as "no account here". That is mechanically the 08-24 Odyssey split. The new
+`ats_accounts.find_existing` runs BEFORE the mint, matches `exact` then `canonical` (one
+employer's distinctive tokens a subset of the other's, after generic words like Group/Systems/
+Consulting are set aside, so a match can never rest on those alone), and **surfaces without
+acting** — proposing the wrong employer's credential reads as a bad password weeks later.
+
+*Also, a small one with a long tail:* `ats_account_id`'s docstring gave `ats__…__phenom` as its
+example while `_slugify` collapses runs and has always produced `ats_…_phenom`. A stale example
+in a docstring is a claim like any other, and it sent a test fixture to the wrong shape the first
+time somebody trusted it. Corrected in place, with the correction noted.
+
+**WHAT IT DELIBERATELY DOES NOT ANSWER.** `apply_requirements.blockers()` is the natural home for
+"will this stop on a human", and **nothing persists an `Observation`** — `observe()` builds them
+per page and they die with the request (verified today; the 2026-08-20 audit said the same). So
+the context reports the auth promise and names the gap rather than returning `[]`, because an
+empty list there says *"nothing will stop you"*, which is the one thing it must never say. A
+store for that ledger is real work and belongs to whoever needs the requirements axis to decide,
+not to this session.
+
+*Suites:* controlplane-api **1959** green (session_control 281 → 283), UI lint clean, build green.
+The cockpit gains a **"What we already knew"** card in the Now panel, rendering only when
+something was learned — verified reachable through the live import chain (App → CockpitPage →
+SessionCockpit → NowContext), but **not yet seen rendered**: the fixture-driven preview harness
+does not include NowContext, and the scratch DB has no session with a queue. *That is the honest
+gap this owes the next live drive*, alongside the S15 naming and the S16 re-verify.
