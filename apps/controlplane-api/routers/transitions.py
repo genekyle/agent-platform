@@ -298,6 +298,21 @@ def build_label_queue() -> list[dict[str, Any]]:
     return queue
 
 
+# Registered BEFORE /api/transitions/{key} for the same reason label_queue is (below).
+@router.get("/api/transitions/naming_debt")
+def naming_debt_report(limit: int = 25) -> dict[str, Any]:
+    """The ranked unnamed/ambiguous-screen report (SESSION 15 — count the unknowns).
+
+    A work queue, not a metric: situations (structural screen keys) we keep encountering whose
+    name the witnesses dispute, lack, or spread across several shapes — ordered by encounters,
+    each with an exemplar screenshot, because naming is the operator's call and they name SCREENS.
+    The payload carries the resolved corpus root and row count so an empty answer can never read
+    as a clean one.
+    """
+    import naming_debt as nd
+    return nd.naming_report(limit=limit)
+
+
 # Registered BEFORE /api/transitions/{key}: FastAPI matches in registration order, and
 # the {key} route would otherwise capture "label_queue" as a corpus key (caught by the
 # endpoint's own test on first run, 2026-08-20).

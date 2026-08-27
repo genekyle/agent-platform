@@ -21,6 +21,7 @@ import { CoverageSection } from "./components/controlplane/CoverageSection";
 import { ScorecardSection } from "./components/controlplane/ScorecardSection";
 import { SessionScorecardSection } from "./components/controlplane/SessionScorecardSection";
 import { TransitionQueueSection } from "./components/controlplane/TransitionQueueSection";
+import { NamingDebtSection } from "./components/controlplane/NamingDebtSection";
 import { TransitionsSection } from "./components/controlplane/TransitionsSection";
 import { TrainingSpaceSection } from "./components/controlplane/TrainingSpaceSection";
 import { StateGraphSection } from "./components/controlplane/StateGraphSection";
@@ -1001,6 +1002,8 @@ export default function App() {
     sectionContent = <TransitionsSection />;
   } else if (activePrimaryView === "learning" && activeSectionId === "queue") {
     sectionContent = <TransitionQueueSection />;
+  } else if (activePrimaryView === "learning" && activeSectionId === "naming") {
+    sectionContent = <NamingDebtSection />;
   } else if (activePrimaryView === "learning" && activeSectionId === "session-scorecard") {
     sectionContent = <SessionScorecardSection />;
   } else if (activePrimaryView === "learning" && activeSectionId === "scorecard") {
