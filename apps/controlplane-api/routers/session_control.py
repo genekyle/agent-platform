@@ -1017,8 +1017,19 @@ def _too_unsure_to_continue(world: dict[str, Any], current_url: str) -> Optional
     axis = bs.blocks()
     if axis is None:
         return None
+    # THE STOP SUMMONS EYES, AND THE NEXT PRESS IS THE EYES. Without this, an unsure belief
+    # deadlocks the loop: stop -> the operator presses Run -> the SAME cached belief -> the same
+    # stop, forever, with the remedy text promising a way through that does not exist. So each
+    # unsure belief stops the loop exactly once — the stop records which reading was surfaced,
+    # and a Run press against that same reading is the operator saying "I looked; drive." A NEW
+    # belief (the next crank's, a new page's) re-arms the gate. The operator's eyes outrank the
+    # witness — that is the whole supervision contract, applied to the gate's own escape hatch.
+    ack = (world or {}).get("unsure_ack") or {}
+    marker = f"{lb.get('ts', '')}|{lb.get('url', '')}|{axis}"
+    if ack.get("marker") == marker:
+        return None
     return {"axis": axis, "uncertainty": round(bs.unsure_about(axis), 4),
-            "state": bs.state, "url": lb.get("url", "")}
+            "state": bs.state, "url": lb.get("url", ""), "marker": marker}
 
 
 def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, Any], *,
@@ -8410,7 +8421,12 @@ async def run(session_id: int, body: RunBody,
             stop_detail = (f"perception is {conf:.0%} sure on the '{unsure['axis']}' axis for "
                            f"this page (floor: 75%) — read as "
                            f"{unsure['state'] or 'no state at all'}. Not driving blind: look at "
-                           f"the Lens, correct or confirm what it sees, then press Run again.")
+                           f"the Lens, correct or confirm what it sees, then press Run again — "
+                           f"that press counts as your confirmation for this reading.")
+            # Record WHICH reading was surfaced, so the next press drives instead of re-stopping.
+            bb.world = dict(bb.world or {})
+            bb.world["unsure_ack"] = {"marker": unsure["marker"]}
+            _persist(bb, ledger)
             view = _view(session, bb, ledger, obs_now, page=_current_page(obs_now, bb),
                          awaiting="apply")
             break

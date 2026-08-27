@@ -7178,3 +7178,27 @@ def test_a_confident_belief_lets_the_loop_keep_going():
         "uncertainty": {"state": 0.12, "element": 1.0, "answer": 1.0, "effect": 1.0, "novelty": 1.0},
         "assessed": ["state"]}}}
     assert _too_unsure_to_continue(world, "https://x") is None
+
+
+def test_the_unsure_stop_fires_once_per_reading_and_the_next_press_is_the_eyes():
+    """Without the ack, an unsure belief deadlocks the loop: stop -> Run -> same cached belief ->
+    same stop, with the remedy text promising a way through that does not exist. Each reading
+    stops exactly once; a press against the acked reading drives; a NEW reading re-arms."""
+    from routers.session_control import _too_unsure_to_continue
+
+    belief = {"state": "unknown",
+              "uncertainty": {"state": 0.4, "element": 1.0, "answer": 1.0,
+                              "effect": 1.0, "novelty": 1.0},
+              "assessed": ["state"]}
+    world = {"last_belief": {"url": "https://x", "ts": "t1", "belief": belief}}
+
+    first = _too_unsure_to_continue(world, "https://x")
+    assert first and first["marker"], "the first look stops, and names its reading"
+
+    world["unsure_ack"] = {"marker": first["marker"]}
+    assert _too_unsure_to_continue(world, "https://x") is None, \
+        "the operator looked and pressed — their eyes outrank the witness"
+
+    world["last_belief"]["ts"] = "t2"  # a NEW reading (next crank, next page) re-arms the gate
+    again = _too_unsure_to_continue(world, "https://x")
+    assert again and again["marker"] != first["marker"]
