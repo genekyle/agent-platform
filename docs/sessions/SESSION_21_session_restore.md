@@ -7,11 +7,17 @@ and §4 first — this session gives that detector the remedy it has never had._
 
 **The signed-in sessions live in `/tmp`.** Measured 2026-08-27: the two running browsers use
 `user-data-dir=/tmp/agent-platform-training-chrome/persistent/{indeed,linkedin}` — the default in
-`settings.training_chrome_profiles_dir`, never overridden. `/tmp` is `/private/tmp` on macOS and
-is cleared on reboot. So the Indeed and LinkedIn logins — the things that cost a **human** to
-re-create, 2FA and checkpoints included — are sitting in a directory the operating system deletes,
-with no copy anywhere. That is the whole justification for this session, and it was found by
-looking rather than by losing them.
+`settings.training_chrome_profiles_dir` (settings.py:19), never overridden. `/tmp` is
+`/private/tmp` on macOS and is cleared on reboot. So the Indeed and LinkedIn logins — the things
+that cost a **human** to re-create, 2FA and checkpoints included — are sitting in a directory the
+operating system deletes, with no copy anywhere.
+
+**And the repo already knew.** `docs/LEARNINGS.md:8614`, written 2026-08-18: *"Persistent profiles
+live at `/tmp/agent-platform-training-chrome/persistent/<name>` (NOT reboot-durable — move out of
+/tmp is a follow-up)."* Recorded, correct, never acted on — **the eighth-instance class this whole
+plan is about, sitting on our own single point of failure.** Worth saying plainly because it is
+the argument for the feature *and* the argument for finishing it rather than filing it again: a
+follow-up nothing schedules is a fact nothing asks.
 
 And there is no snapshot/restore of any kind: nothing reads or writes cookies anywhere in the
 repo (`PLAN_staleness.md` §4 says so in as many words — *"Cookie TTL is not read anywhere …
@@ -71,11 +77,29 @@ So: restore → probe `/auth_state` → report `restored_and_authenticated` vs
 `restored_but_logged_out`, honestly and distinctly. A restore that silently lands on a login wall
 is exactly the false success this repo keeps paying for.
 
+*Know the verifier's reach before you lean on it:* `_AUTH_JS_BY_PLATFORM` (`main_server.py:5697`)
+covers **indeed and linkedin only**, and any other host falls into the `except` and answers
+`ok: false`. That is fine for the two profiles this session is about, and it means a restore on a
+third profile must report `unverified` rather than borrowing a verdict it never got — the
+`ActuationReach.unprobed()` rule: a check that was not performed has a defined, strict
+consequence, and it is never "assume fine".
+
+**3a. Snapshot at `close_out`, which is already the right moment.** It is the one press at the end
+of a sitting, it already KEEPS the profile deliberately (`session_control.py:9050` — *"the sign-in
+is the session's whole savings account, and cleanup must never log us out"*), and it already
+collects `tabs_at_close` and **throws it away**. That list is the cheapest half of a restore and it
+is currently reported to the operator and discarded.
+
 **4. THE SECRET BOUNDARY, AND IT IS THE STRICTEST CONSTRAINT HERE.** A cookie jar is a **bearer
 credential, strictly more powerful than the vault password it bypasses** — it carries 2FA and
 checkpoint state with it. PRINCIPLES §4 says capture per state, never secrets. So a snapshot:
-- lives **outside the repo**, the way `.env` does, referenced by an id — the `secret_ref` pattern
-  `accounts.py` already uses (`env:INDEED_PRIMARY`), never the value itself;
+- **goes in the vault that already exists** — `secrets_vault.py`, AES-256-GCM at
+  `<artifacts>/cache/secrets_vault.json` with the key at `~/.agent-platform/vault.key`. Do not
+  invent a second store for a stronger secret than the one the vault already holds; the DB keeps a
+  reference, the way `accounts.py` keeps `secret_ref: env:INDEED_PRIMARY` and never a value.
+  (Check the size assumption first — the vault was built for passwords, and an identity snapshot
+  is ~2.3 MB. If it does not want blobs, keep the payload beside it under the same key and
+  discipline, and say why in the code.)
 - **never** enters the transition corpus, a capture artifact, a screenshot path, an intent journal
   row, a log line, or LEARNINGS;
 - is journaled as *a snapshot was taken/restored*, with its id and verification verdict and
@@ -83,6 +107,24 @@ checkpoint state with it. PRINCIPLES §4 says capture per state, never secrets. 
   never the code.
 Get this wrong and the corpus becomes a credential store. Write the test that proves a snapshot id
 can appear in a journal row and its contents cannot.
+
+**4a. Scope it per PROFILE, not per session.** `_profile_dir_for` (main.py:154) resolves
+`persistent_profile` → `<root>/persistent/<slugify(name)>`, and that directory is **shared by every
+session on that account** — the profile name comes from the account registry (`indeed`,
+`linkedin`, `google` for the whole Gmail/Docs provider). A snapshot names a profile and a moment,
+never a session id, or two sessions on one account will each think they own the restore.
+
+**4b. Use the lock discipline that already exists.** `browser_provisioning.profile_conflict(...)`
+(:175) answers *"is a live Chrome holding this dir"* and `stop_browser(...)` (:112) verifies the
+dir is actually released rather than trusting the port. Those two are precisely the "is it safe to
+copy" primitive a cold snapshot needs — do not re-derive them, and do not copy a profile dir whose
+`SingletonLock` is still held.
+
+**4c. Do not fight `clean_start`.** `plan_fresh_start` (`controller/window.py:363`) exists because
+Chrome's OWN session restore drags back half-finished apply forms — Chrome's restore is treated as
+a hazard on purpose. A deliberate restore is a different thing from Chrome's automatic one, and
+the code should say which is which, or the next reader will read this feature as a reversal of
+that decision.
 
 **5. Retention, stated rather than discovered.** Snapshots of a live login do not expire on their
 own and 433 MB of profiles is already on disk. Decide a policy (keep N per profile, plus any
@@ -123,3 +165,8 @@ restart (which also fires the armed `search_queries` column drop), and restore. 
   the verdict while the thresholds are guesses, and restoring an old cookie jar unbidden is
   bot-safety-relevant besides. Offer the remedy; the operator presses.
 * **Do not claim byte-fidelity for the warm tier.** Name what it captured.
+* **Do not build a new secret store.** `secrets_vault.py` exists, is encrypted, and already holds
+  the weaker credential. A second store for the stronger one is how a boundary gets two answers.
+* **Do not reuse `apply_state_store.save`'s convention for the payload without reading it**: it is
+  a plain `write_text` and **not atomic** (`apply_state_store.py:721`). Fine for a blackboard that
+  can be rebuilt; not fine for the only copy of a login.
