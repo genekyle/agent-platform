@@ -124,3 +124,53 @@ def test_applicantmanager_confirms_from_its_applied_route_when_the_text_is_gone(
     # a listing of applications, which is a place you visit, not a thing you just did.
     assert sv.verify(url="https://theapplicantmanager.com/applied",
                      title="", text="", platform="applicantmanager").submitted is False
+
+
+# --------------------------------------------------------------------------------------------
+# The gate must read the PAGE, not just its address (live 2026-08-27, BambooHR)
+# --------------------------------------------------------------------------------------------
+
+#: BambooHR's confirmation, as MEASURED: the text changes and the url/title do not.
+_BAMBOO_URL = "https://arcadiafinancialgroup.bamboohr.com/careers/56?source=linkedin_premium"
+_BAMBOO_TITLE = "BambooHR"
+_BAMBOO_TEXT = ("Privacy Policy\nJob Openings\nBusiness Intelligence Specialist\n"
+                "Operations - Manchester, New Hampshire\nThank You\n\n"
+                "Your application was submitted successfully\n\nSee All Job Openings\n")
+
+
+def test_a_confirmation_that_only_changes_the_TEXT_is_still_a_confirmation():
+    """The submitted gate refused a genuine submission because it passed url+title and no text.
+    BambooHR keeps both across the submit, so the strongest signal — the site saying so in its
+    own words — was the only evidence there was, and the caller never handed it over."""
+    import submission_verifier as sv
+
+    v = sv.verify(_BAMBOO_URL, _BAMBOO_TITLE, _BAMBOO_TEXT)
+    assert v.submitted is True and v.score >= 1.0
+
+    # ...and without the text, the same page is unverifiable. This is what the gate was doing.
+    blind = sv.verify(_BAMBOO_URL, _BAMBOO_TITLE, "")
+    assert blind.submitted is False, "url+title alone cannot see this confirmation"
+
+
+def test_verify_tabs_picks_the_confirmation_out_of_a_window():
+    """Three tabs open at submit time — the ATS confirmation, the operator's own LinkedIn
+    profile, and the search results. The confirmation must win on its text alone."""
+    import submission_verifier as sv
+
+    tabs = [
+        {"url": "https://www.linkedin.com/jobs/search-results/?keywords=reporting%20analyst",
+         "title": "Business Intelligence Specialist | Arcadia Financial | LinkedIn", "text": ""},
+        {"url": "https://www.linkedin.com/in/gene-kyle-magsipoc-041a31132/",
+         "title": "Gene Kyle Magsipoc | LinkedIn", "text": ""},
+        {"url": _BAMBOO_URL, "title": _BAMBOO_TITLE, "text": _BAMBOO_TEXT},
+    ]
+    assert sv.verify_tabs(tabs).submitted is True
+
+
+def test_a_tab_with_no_text_still_verifies_on_a_url_that_says_so():
+    """The fallback must keep working: an ATS whose confirmation changes the URL passed this
+    gate all along, which is precisely why the missing-text bug stayed hidden."""
+    import submission_verifier as sv
+
+    v = sv.verify("https://acme.paylocity.com/Jobs/Success/4382310", "Paylocity", "")
+    assert v.submitted is True

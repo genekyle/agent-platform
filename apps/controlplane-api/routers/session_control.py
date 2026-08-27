@@ -8663,6 +8663,29 @@ async def apply_flag(session_id: int, body: ApplyFlagBody,
         _live = live_tab
         if _live.get("url"):
             _tabs.append({"url": _live.get("url", ""), "title": _live.get("title", "")})
+        # READ THE PAGE, NOT JUST ITS ADDRESS. `verify()`'s strongest signal is `page_text` —
+        # "the site says so in its own words" — and this gate, the only one that decides whether
+        # a real application counts as sent, passed url+title and NO TEXT. Every tab dict in
+        # `obs` carries those two and nothing else, so the strongest evidence was structurally
+        # unreachable and the check silently degraded to matching URLs.
+        #
+        # It refused a genuine submission on 2026-08-27: BambooHR's confirmation renders "Thank
+        # You — Your application was submitted successfully" while keeping the SAME url
+        # (`/careers/56?source=…`) and the SAME title ("BambooHR"), so nothing was left to match.
+        # An ATS whose confirmation changes the URL (Paylocity's `Jobs/Success/…`) passed anyway,
+        # which is exactly why this hid: the gate worked on the platforms that made it easy.
+        #
+        # One read of the apply tab, best-effort — an unreachable page leaves the text empty and
+        # the verdict falls back to url+title, which is the behaviour that has always been here.
+        _txt = await _capture_post("/page_content",
+                                   {"browser_url": _session_browser_url(session),
+                                    "tab_id": _live.get("tab_id") or None,
+                                    "tab_url": None if _live.get("tab_id") else _live.get("url")},
+                                   timeout=15.0)
+        _page_text = str((_txt or {}).get("text") or (_txt or {}).get("page_text") or "")
+        if _page_text and _live.get("url"):
+            _tabs.append({"url": _live.get("url", ""), "title": _live.get("title", ""),
+                          "text": _page_text})
         _verdict = _sv.verify_tabs(_tabs, platform=(step.platform or ""))
         if _verdict.submitted:
             detail = f"{detail} [verified: {_verdict.evidence_line()}]".strip()
