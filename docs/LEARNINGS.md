@@ -11902,6 +11902,15 @@ the load-bearing field**: a hidden dialog node is furniture every SPA carries, a
 would cry wolf on every page. And the tri-state is kept where it matters — a modal FOUND is the
 headline, a page checked and clear is quiet, and a page **nobody checked** says so out loud.
 
+**AND THE `visible` GUARD EARNED ITSELF ON THE FIRST LIVE PAGE, MEASURED.** The modified blob was
+evaluated read-only over CDP against two already-open production tabs (free — a local socket —
+and classed READ_ONLY, so nothing was driven). LinkedIn's results page: `dialogs: []`. **Indeed's
+home page: one `role="dialog"` with `aria-modal="true"` — its nav panel — sitting in the DOM at
+all times, `visible: false, area: 0`.** Without the visibility test every Indeed page in the
+system would have reported *"a dialog is on top of this page"*, which is the cry-wolf failure a
+guard commits once before nobody reads it again. Both new keys arrived on both pages
+(`dialogs`, and the three cap flags reading `false` honestly rather than being absent).
+
 **FOUR DEFECTS IN MY OWN DRAFT, EACH OF WHICH WOULD HAVE SILENTLY NO-OPPED**, found by auditing
 the real field names against the code rather than by trusting the draft:
 1. `read_gaps` iterated `census["fields"]` — a key the census never emits. The rows live under
