@@ -154,3 +154,30 @@ def test_a_quiet_session_reports_nothing():
 
     assert cc.awaiting_of({}, None) is None
     assert cc.awaiting_of(None, None) is None
+
+
+def test_stepping_back_to_an_undecided_page_still_counts_as_waiting():
+    """Found on the derivation's first live read: page 3's picks were made, the operator stepped
+    BACK to page 1 — and max(units) reported "3, decided, nothing waiting" while page 1 sat
+    reviewed and undecided. Any reviewed unit without its select rung is a decision never made."""
+    import command_center as cc
+    import session_checkpoints as cps
+
+    ledger = cps.Ledger()
+    ledger.mark(cps.page_rung(3).id, evidence="reviewed")
+    ledger.mark(cps.select_rung(3).id, evidence="1 of 25 picked by operator")
+    ledger.mark(cps.page_rung(1).id, evidence="reviewed")   # stepped back, never decided
+    wait = cc.awaiting_of({}, ledger.as_dict())
+    assert wait and wait["awaiting"] == "choose" and "Page 1" in wait["detail"]
+
+
+def test_take_none_is_a_decision_and_clears_the_wait():
+    """/choose marks the select rung whatever the pick count — "0 of 25 picked" is a decision,
+    and a page the operator deliberately took nothing from must not nag forever."""
+    import command_center as cc
+    import session_checkpoints as cps
+
+    ledger = cps.Ledger()
+    ledger.mark(cps.page_rung(1).id, evidence="reviewed")
+    ledger.mark(cps.select_rung(1).id, evidence="0 of 25 picked by operator")
+    assert cc.awaiting_of({}, ledger.as_dict()) is None

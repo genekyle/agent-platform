@@ -284,15 +284,19 @@ def awaiting_of(world: Optional[dict[str, Any]],
                 "detail": step.title or step.job_id}
     ledger = cps.Ledger.from_dict(checkpoints)
     process = world.get("process") or cps.QUERY_PROCESS
-    units = ledger.units_reviewed(process)
-    if not units:
+    # EVERY reviewed unit without its decision, not just the highest-numbered one. The first
+    # live read missed session 34 exactly here: page 3's picks were made, the operator stepped
+    # BACK and re-reviewed page 1, and max(units) said "3, decided, nothing waiting" while
+    # page 1 sat undecided. "Take none · stay" records the select rung, so a page the operator
+    # deliberately took nothing from does not linger here — only a decision never made does.
+    undecided = [u for u in ledger.units_reviewed(process)
+                 if not ledger.holds(cps.select_rung(u, process).id)]
+    if not undecided:
         return None
-    latest = max(units)
-    if ledger.holds(cps.select_rung(latest, process).id):
-        return None
+    unit = max(undecided)  # the most recently reached context is the one to name
     unit_word = "Batch" if process == cps.FEED_PROCESS else "Page"
     return {"awaiting": "choose", "needs": "answer",
-            "detail": f"{unit_word} {latest} reviewed — waiting for your picks"}
+            "detail": f"{unit_word} {unit} reviewed — waiting for your picks"}
 
 
 def _sessions_awaiting(db: Session) -> list[dict[str, Any]]:
