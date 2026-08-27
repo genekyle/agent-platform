@@ -99,29 +99,42 @@ def test_a_broken_errand_reader_is_named_not_a_plausible_zero(monkeypatch):
 # The landing page counts sessions waiting on the operator (2026-08-27)
 # --------------------------------------------------------------------------------------------
 
-def _reviewed_ledger(page=1, picks_made=False):
+def _select_held(page):
     import session_checkpoints as cps
     ledger = cps.Ledger()
-    ledger.mark(cps.page_rung(page).id, evidence="reviewed")
-    if picks_made:
-        ledger.mark(cps.select_rung(page).id, evidence="picked by operator")
+    ledger.mark(cps.select_rung(page).id, evidence="picked by operator")
     return ledger.as_dict()
 
 
-def test_a_reviewed_page_with_no_picks_is_a_session_waiting_on_you():
+RESULTS = {"page_results": [{"job_id": f"linkedin:{i}"} for i in range(25)]}
+
+
+def test_extracted_results_with_no_decision_is_a_session_waiting_on_you():
     """Session 34 held 25 extracted results at `awaiting: choose` while the Overview said
-    'Nothing needs your judgment right now' — every counter was true and none counted this."""
+    'Nothing needs your judgment right now' — every counter was true and none counted this.
+    The wait is an ABSENCE: results on the record, no select rung for the current page."""
     import command_center as cc
 
-    wait = cc.awaiting_of({}, _reviewed_ledger(page=1, picks_made=False))
+    wait = cc.awaiting_of(dict(RESULTS), None, page=1)
     assert wait and wait["awaiting"] == "choose" and wait["needs"] == "answer"
-    assert "Page 1" in wait["detail"]
+    assert "Page 1" in wait["detail"] and "25 results" in wait["detail"]
 
 
-def test_picks_made_clears_the_wait():
+def test_a_decision_clears_the_wait_even_a_take_none():
+    """/choose marks the select rung whatever the pick count — "0 of 25 picked" is a decision,
+    and a page the operator deliberately took nothing from must not nag forever."""
     import command_center as cc
 
-    assert cc.awaiting_of({}, _reviewed_ledger(page=1, picks_made=True)) is None
+    assert cc.awaiting_of(dict(RESULTS), _select_held(1), page=1) is None
+
+
+def test_stepping_back_to_an_undecided_page_still_counts_as_waiting():
+    """Page 3 was decided (select:3 held), the operator stepped BACK to page 1 and re-extracted.
+    The current page's decision is the one that matters — select:3 must not vouch for page 1."""
+    import command_center as cc
+
+    wait = cc.awaiting_of(dict(RESULTS), _select_held(3), page=1)
+    assert wait and wait["awaiting"] == "choose" and "Page 1" in wait["detail"]
 
 
 def test_an_application_mid_flight_outranks_the_page_wait():
@@ -132,8 +145,8 @@ def test_an_application_mid_flight_outranks_the_page_wait():
 
     q = aps.Queue(page=1)
     q.enqueue([{"job_id": "linkedin:1", "title": "Cost Analyst"}])
-    world = {"apply_queue": q.as_dict()}
-    wait = cc.awaiting_of(world, _reviewed_ledger(page=1, picks_made=False))
+    world = dict(RESULTS); world["apply_queue"] = q.as_dict()
+    wait = cc.awaiting_of(world, None, page=1)
     assert wait["awaiting"] == "apply" and wait["needs"] == "run"
     assert wait["detail"] == "Cost Analyst"
 
@@ -145,39 +158,14 @@ def test_a_blocked_step_needs_an_answer_not_a_press():
     q = aps.Queue(page=1)
     q.enqueue([{"job_id": "linkedin:1", "title": "Cost Analyst"}])
     q.current().record("account", aps.BLOCKED, "account wall", initiator="system")
-    wait = cc.awaiting_of({"apply_queue": q.as_dict()}, None)
+    wait = cc.awaiting_of({"apply_queue": q.as_dict()}, None, page=1)
     assert wait["awaiting"] == "apply" and wait["needs"] == "answer"
 
 
 def test_a_quiet_session_reports_nothing():
+    """No results extracted -> nothing to decide on -> no wait. The preamble's own next rung is
+    run-resumable, and counting it would page the operator for work the machine can do."""
     import command_center as cc
 
-    assert cc.awaiting_of({}, None) is None
+    assert cc.awaiting_of({}, None, page=1) is None
     assert cc.awaiting_of(None, None) is None
-
-
-def test_stepping_back_to_an_undecided_page_still_counts_as_waiting():
-    """Found on the derivation's first live read: page 3's picks were made, the operator stepped
-    BACK to page 1 — and max(units) reported "3, decided, nothing waiting" while page 1 sat
-    reviewed and undecided. Any reviewed unit without its select rung is a decision never made."""
-    import command_center as cc
-    import session_checkpoints as cps
-
-    ledger = cps.Ledger()
-    ledger.mark(cps.page_rung(3).id, evidence="reviewed")
-    ledger.mark(cps.select_rung(3).id, evidence="1 of 25 picked by operator")
-    ledger.mark(cps.page_rung(1).id, evidence="reviewed")   # stepped back, never decided
-    wait = cc.awaiting_of({}, ledger.as_dict())
-    assert wait and wait["awaiting"] == "choose" and "Page 1" in wait["detail"]
-
-
-def test_take_none_is_a_decision_and_clears_the_wait():
-    """/choose marks the select rung whatever the pick count — "0 of 25 picked" is a decision,
-    and a page the operator deliberately took nothing from must not nag forever."""
-    import command_center as cc
-    import session_checkpoints as cps
-
-    ledger = cps.Ledger()
-    ledger.mark(cps.page_rung(1).id, evidence="reviewed")
-    ledger.mark(cps.select_rung(1).id, evidence="0 of 25 picked by operator")
-    assert cc.awaiting_of({}, ledger.as_dict()) is None

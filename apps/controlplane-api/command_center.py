@@ -255,19 +255,27 @@ def _latest_grounding_accuracy() -> Optional[float]:
 
 
 def awaiting_of(world: Optional[dict[str, Any]],
-                checkpoints: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+                checkpoints: Optional[dict[str, Any]],
+                page: Optional[int] = None) -> Optional[dict[str, Any]]:
     """What a session's persisted record says it is waiting for — or None when nothing is.
 
-    Pure over the blackboard's two dicts so the landing page's count and a test read the same
-    derivation. Two waits exist, in priority order:
+    Pure over the blackboard's dicts (plus its `search_state.page`) so the landing page's count
+    and a test read the same derivation. Two waits, in priority order:
 
       * an application mid-flight (`apply`) — the queue's current step. `needs: "answer"` when
         its last flag is in NEEDS_OPERATOR (blocked / human_required / unknown: only a human
         moves it); `needs: "run"` otherwise (a Run press continues it — still waiting, on a
         press rather than a judgment).
-      * a reviewed page whose picks were never made (`choose`) — the review rung is held for a
-        unit whose `select:` rung is not. This is the wait the Overview failed to count on
-        2026-08-27 while a session held 25 extracted results for the operator.
+      * extracted results whose decision was never made (`choose`) — `page_results` are on the
+        record and the CURRENT unit's `select:` rung is not.
+
+    THE CHOOSE WAIT IS AN ABSENCE, NOT A RUNG — learned from this function's own first draft,
+    which looked for review rungs without select rungs and found nothing: `/choose` marks the
+    review rung only when a page CLOSES (its early-return keeps a page with queued work open and
+    unmarked), so `units_reviewed` means "closed pages", never "waiting ones". A page waiting
+    for picks has exactly two traces: its extracted results in `world["page_results"]`, and the
+    absence of its select rung. Session 34 — 25 results at awaiting:choose while the Overview
+    said all clear — is the case, and it is the wait the first draft still missed.
 
     Reads the RECORD, not the browser: a summary that probes CDP per session is a heartbeat
     that costs a page load, and the record is what the waits are recorded in anyway.
@@ -282,21 +290,20 @@ def awaiting_of(world: Optional[dict[str, Any]],
         return {"awaiting": "apply",
                 "needs": "answer" if step.needs_operator() else "run",
                 "detail": step.title or step.job_id}
+    if not (world.get("page_results") or []):
+        return None
     ledger = cps.Ledger.from_dict(checkpoints)
     process = world.get("process") or cps.QUERY_PROCESS
-    # EVERY reviewed unit without its decision, not just the highest-numbered one. The first
-    # live read missed session 34 exactly here: page 3's picks were made, the operator stepped
-    # BACK and re-reviewed page 1, and max(units) said "3, decided, nothing waiting" while
-    # page 1 sat undecided. "Take none · stay" records the select rung, so a page the operator
-    # deliberately took nothing from does not linger here — only a decision never made does.
-    undecided = [u for u in ledger.units_reviewed(process)
-                 if not ledger.holds(cps.select_rung(u, process).id)]
-    if not undecided:
-        return None
-    unit = max(undecided)  # the most recently reached context is the one to name
+    if process == cps.FEED_PROCESS:
+        unit = int(world.get("batch") or 1)
+    else:
+        unit = int(page or 1)
+    if ledger.holds(cps.select_rung(unit, process).id):
+        return None  # "0 of 25 picked" is a decision too — Take-none must not nag forever
     unit_word = "Batch" if process == cps.FEED_PROCESS else "Page"
     return {"awaiting": "choose", "needs": "answer",
-            "detail": f"{unit_word} {unit} reviewed — waiting for your picks"}
+            "detail": f"{unit_word} {unit}: {len(world.get('page_results') or [])} results "
+                      f"extracted — waiting for your picks"}
 
 
 def _sessions_awaiting(db: Session) -> list[dict[str, Any]]:
@@ -312,7 +319,7 @@ def _sessions_awaiting(db: Session) -> list[dict[str, Any]]:
         try:
             import apply_state_store as store
             bb = store.load_or_create(s.id)
-            wait = awaiting_of(bb.world, bb.checkpoints)
+            wait = awaiting_of(bb.world, bb.checkpoints, page=bb.search_state.page)
         except Exception:
             continue
         if wait:
