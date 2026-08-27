@@ -1,5 +1,8 @@
 # Session 08 — the model planner rung + plan-level propose-approve (Reasoner v2)
 
+_PARKED 2026-08-26 — Reasoner v2 unstarted and re-scoped (`PLAN_generalization_v1.md` §2 P4).
+Not the "lowest unfinished brief": skip to SESSION_14+._
+
 **Gates: Session 07 complete; controller Session 04 (propose-approve gate) exists.**
 **Read first:** `CLAUDE.md`, `docs/PLAN_reasoner_v2.md` (§3 loop 3, §4, §5),
 Session 07's baseline metrics + citation ledger in the log/LEARNINGS,

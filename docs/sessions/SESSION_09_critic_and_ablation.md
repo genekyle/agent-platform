@@ -1,5 +1,8 @@
 # Session 09 — critic v0 (shadowing the teacher) + the context ablation harness (Reasoner v2)
 
+_PARKED 2026-08-26 — Reasoner v2 unstarted and re-scoped (`PLAN_generalization_v1.md` §2 P4).
+Not the "lowest unfinished brief": skip to SESSION_14+._
+
 **Gates: Session 08 complete; controller Session 05 (replay harness) exists; ≥ ~30 graded plans
 in `plan_journal.jsonl`** (count them first — if short, run more Session-08-style drives instead
 of building on thin data; say so in the log rather than proceeding).

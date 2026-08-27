@@ -1,5 +1,8 @@
 # Session 07 — teacher-demonstrated plans, graded live (Reasoner v2)
 
+_PARKED 2026-08-26 — Reasoner v2 unstarted and re-scoped (`PLAN_generalization_v1.md` §2 P4).
+Not the "lowest unfinished brief": skip to SESSION_14+._
+
 **Gate: controller Session 02 complete** (journal flowing, Indeed programs exist, loop harness
 live). **Read first:** `CLAUDE.md`, `docs/PLAN_reasoner_v2.md` (§2, §3 loops 1–2, §5),
 `docs/sessions/SESSION_06` output + its LEARNINGS seam list, `controller/loop.py` as it now

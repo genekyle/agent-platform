@@ -1,5 +1,8 @@
 # Session 06 — Plan contract, ContextPack assembler, divergence grader (Reasoner v2, offline)
 
+_PARKED 2026-08-26 — Reasoner v2 unstarted and re-scoped (`PLAN_generalization_v1.md` §2 P4).
+Not the "lowest unfinished brief": skip to SESSION_14+._
+
 **Read first, in order:** `CLAUDE.md`, `docs/PLAN_reasoner_v2.md` (§1–§4 are this session's
 spec), `packages/interaction/interaction/decision.py` (the contract style being copied),
 `apps/controlplane-api/state_transition.py` (`predict` — the grounding substrate),
