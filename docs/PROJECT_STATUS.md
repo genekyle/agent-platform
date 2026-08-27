@@ -223,6 +223,15 @@ live (first errand fire and its measured boundary, first real inbox sweeps, phas
    URL either side of its own click and the open_pane rung names the drift in the engine's
    vocabulary. The application is `parked:operator` and resumable via `apply_reopen`.
 
+   **The cockpit's step-through-iness is settled (operator-directed 2026-08-27): `/run` is the
+   default press, `step` is the inspection tool, and the pick boundary stays consent.** What made
+   that safe to say: STOP_UNSURE wires `BeliefState.blocks()` into the run loop against the floor
+   that already existed (0.75), the cockpit carries the same number as a "seeing N%" chip, the
+   Overview counts sessions holding still for the operator (derived from the record, no CDP), and
+   the header's location is served from the search row's page-backed fact instead of the declared
+   intent. The view rule that fell out: **a view field serves its authority or says why it
+   cannot** — three UI lies in one day were all true values read from the wrong field.
+
    **Still owed, and now more specific:** the operator names the preferences landing (S15), the
    virtualisation claim is re-verified (S16), the consultation citations appear in a real trail
    (S17), the census/dialog gaps meet a real form (S18), a duplicate-control page exercises the
