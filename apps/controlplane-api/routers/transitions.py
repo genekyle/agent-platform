@@ -262,7 +262,11 @@ def build_label_queue() -> list[dict[str, Any]]:
     """The full ranked worklist behind `/api/transitions/label_queue`, importable so the
     session scorecard and the landing page count the SAME queue the teacher answers —
     two counters over one derivation, never a second derivation that can drift."""
-    order = {"mismatch": 0, "no_belief": 1, "witness_split": 2}
+    # A world-mismatch outranks a judged one: it is the row where an act CLAIMED ok and the page
+    # disagreed, which both corrects the witnesses and explains a failed act (the reason mismatch
+    # led this ranking in the first place). A supervisor's non-nominal call is a softer signal.
+    order = {"mismatch:world": 0, "mismatch": 1, "mismatch:judged": 2,
+             "no_belief": 3, "witness_split": 4}
     queue: list[dict[str, Any]] = []
     for c in sr.list_corpora():
         for row in sr.read_transitions(c["key"], limit=1000):
@@ -279,7 +283,14 @@ def build_label_queue() -> list[dict[str, Any]]:
             if verdict == "confirmed" and b_state and a_state and confident:
                 continue                          # self-supervision owns this row
             if verdict == "mismatch":
-                why = "mismatch"
+                # THE SPLIT (2026-08-27): "the world did not move" and "the supervisor judged this
+                # non-nominal" are different problems with different fixes, and ranking them as
+                # one class is why the queue's head read as a single pile. Rows written before
+                # the kind existed carry none and keep the generic name — honest, since nobody
+                # recorded which they were.
+                kind = row.get("mismatch_kind")
+                why = ("mismatch:world" if kind == sr.MISMATCH_WORLD else
+                       "mismatch:judged" if kind == sr.MISMATCH_JUDGED else "mismatch")
             elif not b_state or not a_state:
                 why = "no_belief"
             else:

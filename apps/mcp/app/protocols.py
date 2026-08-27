@@ -466,6 +466,40 @@ CHECK_GROUP_JS = r"""
   // the popup protocols. `__findAll` is the one definition (app/js_common.py).
   const anchor = __findAll(cfg.selector)[0] || null;
   if (!anchor) return {ok: false, code: 'not_found', detail: 'no node matching ' + cfg.selector};
+
+  // WHICH QUESTION DOES THIS GROUP ANSWER? `__questionOf` has been injected into this blob all
+  // along (it rides in the shared tells beside `__findAll`) and this endpoint never asked it —
+  // while `/execute` gained exactly this guard on 2026-08-19 and it has since refused four
+  // confident writes to the wrong control.
+  //
+  // THE FAILURE IT IS FOR IS THE WORST ONE IN THE LOG. A checkbox/radio group is where the
+  // disqualifying answers live, and on 2026-08-21 `select_option` left **Yes** selected on
+  // "Will you now or in the future require sponsorship" while the operator's stored answer is No
+  // — caught only by screenshotting the section. On 2026-08-23 three of ~10 check_group teaches
+  // landed on the wrong radio, EVERY one reporting ok, because each answered question removed a
+  // validation message and shifted the layout ~40px, so the next call's addressing was stale.
+  // The re-read below then faithfully confirmed the WRONG group: verifying the thing you touched
+  // says nothing about whether it was the thing you meant.
+  const q = (typeof __questionOf === 'function') ? __questionOf(anchor)
+                                                 : {question: '', source: 'unavailable'};
+  if (cfg.expect_question) {
+    const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const got = norm(q.question), want = norm(cfg.expect_question);
+    // Containment either way: a caller's phrasing is often a fragment of the page's, and the
+    // page's is often the caller's plus a required marker.
+    // `not_found` is the outcome, matching `/execute`'s own target-mismatch refusal, which
+    // carries the distinction in its DETAIL rather than inventing a member: `Outcome` is a
+    // closed vocabulary, and a verb the system emits that the vocabulary cannot express is a
+    // hole in the corpus, not a purity win (contract.Intent's own rule, applied to outcomes).
+    if (got && want && !(got.includes(want) || want.includes(got)))
+      return {ok: false, code: 'not_found',
+              detail: 'TARGET MISMATCH: this group answers ' + JSON.stringify(q.question) +
+                      ' (by ' + q.source + ') but the caller means ' +
+                      JSON.stringify(cfg.expect_question) +
+                      ' — refusing to answer the wrong question',
+              question: q.question, question_source: q.source, log: log};
+  }
+
   const wrap = anchor.closest('fieldset, [role=group], [class*=field], li, div') || anchor.parentElement;
   const boxes = [...wrap.querySelectorAll('input[type=checkbox]')].filter(vis);
   if (!boxes.length) return {ok: false, code: 'not_found', detail: 'no visible checkboxes in the group'};
@@ -511,9 +545,10 @@ CHECK_GROUP_JS = r"""
   log.push({step: 'commit', kind: 'on_select', value_read_at: 'checked', observed: now});
   if (!okSet)
     return {ok: false, code: 'not_staged', detail: 'wanted ' + JSON.stringify(cfg.values) +
-            ' but the group now reads ' + JSON.stringify(now), log: log};
+            ' but the group now reads ' + JSON.stringify(now), log: log,
+            question: q.question, question_source: q.source};
   return {ok: true, code: 'ok', detail: 'checked ' + JSON.stringify(now) + ' (verified)',
-          log: log, checked: now};
+          log: log, checked: now, question: q.question, question_source: q.source};
 }
 """
 

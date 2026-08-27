@@ -60,6 +60,17 @@ MISMATCH = "mismatch"            # the rung claimed ok; the world disagrees
 UNOBSERVED = "unobserved"        # could not see; the claim stands unchallenged
 READ_ONLY = "read_only"          # the rung predicts no change; pair kept for the corpus
 
+#: TWO DIFFERENT FACTS HAVE BEEN CALLED `mismatch` SINCE BOTH WERE WRITTEN (flagged 2026-08-22,
+#: split now). `verify()` returns MISMATCH for *the world did not move / the expected URL never
+#: appeared*; `live_actuator`'s recorder returns MISMATCH for *the supervisor judged the turn
+#: non-nominal*. Different evidence, different meaning, one word — and the teacher's label queue
+#: ranks `mismatch` first as a single class, so a queue head that looks like one problem is two.
+#: The kind rides BESIDE the verdict rather than replacing it: every existing reader of
+#: `verdict == "mismatch"` is unchanged, and a reader that wants the distinction can now have it.
+MISMATCH_WORLD = "world_did_not_move"     # verify(): the postcondition did not hold
+MISMATCH_JUDGED = "supervisor_judged"     # the supervisor called the turn non-nominal
+MISMATCH_KINDS = (MISMATCH_WORLD, MISMATCH_JUDGED)
+
 
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -488,6 +499,29 @@ def verify(expect: Expectation, d: Optional[dict[str, Any]],
             return MISMATCH, ("something moved, but only on the engine's own pages: "
                               + "; ".join((m.get("url") or m.get("to") or "")[:60] for m in moved[:3]))
         return MISMATCH, "no tab opened and none navigated — the click left the window unchanged"
+    if expect.kind == "expected_next":
+        # THE KIND THAT FELL THROUGH TO "unknown" (flagged 2026-08-22, built now). `live_actuator`
+        # emits `expected_next` — the states a decision said it should land on — and `verify` had
+        # no branch for it, so a row that reached here was filed UNOBSERVED, i.e. "we could not
+        # judge", when in fact the strongest possible judgement was available: the decision named
+        # the acceptable destinations in advance. Those rows got their verdict from the supervisor
+        # path instead and never touched this function, which is why the hole stayed invisible.
+        #
+        # Matching is on the LANDED state, and containment is deliberate: a declared
+        # `workday_my_information` should be satisfied by a landed
+        # `workday_my_information_edit` — the recipe names families, not renders.
+        landed = str((d.get("landed_state") if d else "") or "")
+        wanted = [str(v) for v in (expect.value or ()) if v] if isinstance(
+            expect.value, (list, tuple)) else ([str(expect.value)] if expect.value else [])
+        if not wanted:
+            return UNOBSERVED, "expected_next declared no states — the claim stands unchallenged"
+        if not landed:
+            return UNOBSERVED, (f"expected one of {wanted} and the landing was never named "
+                                f"— nothing to compare, so the claim stands")
+        if any(landed == w or landed.startswith(w) or w.startswith(landed) for w in wanted):
+            return CONFIRMED, f"landed {landed!r}, which the decision named in advance"
+        return MISMATCH, (f"expected one of {wanted} and landed {landed!r} — the decision named "
+                          f"its destinations and the world chose another")
     return UNOBSERVED, f"unknown expectation kind {expect.kind!r}"
 
 
@@ -510,7 +544,7 @@ def _transitions_dir() -> Path:
 def record_transition(*, session_id: Any, rung_id: str, action: dict[str, Any],
                       expect: Expectation, before: Observation, after: Observation,
                       changes: Optional[dict[str, Any]], verdict: str, evidence: str,
-                      claimed: str) -> Optional[Path]:
+                      claimed: str, mismatch_kind: Optional[str] = None) -> Optional[Path]:
     """Append one training row. This row — not the screenshot alone, and not a reasoning
     transcript — is what the state classifier, the action-result verifier and the recovery
     selector will train on. `teacher_correction` is null until a teacher (or the operator)
@@ -521,6 +555,11 @@ def record_transition(*, session_id: Any, rung_id: str, action: dict[str, Any],
         "before": before.as_row(), "after": after.as_row(),
         "changes": changes, "verdict": verdict, "evidence": evidence,
         "claimed": claimed,               # what the rung said about itself
+        # WHICH KIND of mismatch, when there is one. Written only on a MISMATCH verdict and
+        # defaulting to the verifier's own meaning, because that is the caller this function has
+        # always had; the actuator passes MISMATCH_JUDGED for the other. Absent on historical
+        # rows, which is honest — nobody recorded it then.
+        **({"mismatch_kind": mismatch_kind or MISMATCH_WORLD} if verdict == MISMATCH else {}),
         "teacher_correction": None,
     }
     try:

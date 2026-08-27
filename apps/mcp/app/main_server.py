@@ -3390,6 +3390,12 @@ class CheckGroupRequest(BaseModel):
     values: list[str]
     ats: Optional[str] = None
     field: Optional[str] = None
+    #: THE QUESTION THE CALLER MEANS TO ANSWER — the same guard `/execute` has carried since
+    #: 2026-08-19, arriving at the endpoint that drives the groups where the DISQUALIFYING
+    #: answers live (sponsorship, work authorization, clearance, self-ID). Optional so every
+    #: existing caller is unchanged; supplied, it refuses a group that answers something else
+    #: rather than confirming a correct write to the wrong control.
+    expect_question: Optional[str] = None
 
 
 @app.post("/check_group")
@@ -3412,7 +3418,8 @@ async def check_group(body: CheckGroupRequest):
     async with websockets.connect(target["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
         cdp = _CDPSession(ws)
         r = await cdp.send("Runtime.evaluate", {
-            "expression": f"({CHECK_GROUP_JS})({json.dumps({'selector': body.selector, 'values': body.values})})",
+            "expression": f"({CHECK_GROUP_JS})("
+                          f"{json.dumps({'selector': body.selector, 'values': body.values, 'expect_question': body.expect_question})})",
             "returnByValue": True})
     out = (r.get("result") or {}).get("value") or {}
     return {**common,
@@ -3420,7 +3427,13 @@ async def check_group(body: CheckGroupRequest):
             "steps": out.get("log") or [], "detail": out.get("detail", ""),
             "actions": ["click"] * len(body.values),
             **({"options": out["options"]} if "options" in out else {}),
-            **({"checked": out["checked"]} if "checked" in out else {})}
+            **({"checked": out["checked"]} if "checked" in out else {}),
+            # WHICH QUESTION THIS GROUP ACTUALLY ANSWERED, returned whether or not the caller
+            # asserted one. Verifying the control you touched says nothing about whether it was
+            # the control you meant, and this is the field that lets a caller tell the two apart
+            # after the fact — the evidence travelling WITH the act (SESSION 20).
+            **({"target_question": out["question"]} if out.get("question") else {}),
+            **({"question_source": out["question_source"]} if out.get("question_source") else {})}
 
 
 class ScanRequiredRequest(BaseModel):

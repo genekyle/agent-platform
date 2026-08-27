@@ -985,7 +985,12 @@ def transition_recorder(session_key: str):
                 changes=({"landed_state": result.landed_state,
                           "unanswered_after": result.unanswered_after}
                          if result is not None else None),
-                verdict=verdict_name, evidence=evidence, claimed=claimed)
+                verdict=verdict_name, evidence=evidence, claimed=claimed,
+                # THIS recorder's mismatch means "the supervisor judged the turn non-nominal",
+                # which is a different fact from `verify()`'s "the world did not move" — one word
+                # for both is what let the label queue rank two problems as one class
+                # (2026-08-22). Named at the site that knows which it is.
+                mismatch_kind=sr.MISMATCH_JUDGED)
         except Exception:  # noqa: BLE001 — the corpus must never sink the drive it observes
             logger.debug("transition_recorder: failed to record a turn", exc_info=True)
 

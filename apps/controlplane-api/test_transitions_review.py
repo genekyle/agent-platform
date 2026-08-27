@@ -320,7 +320,12 @@ def test_the_label_queue_serves_only_what_selfsupervision_cannot_claim(corpus):
 
     out = client.get("/api/transitions/label_queue").json()
     assert out["remaining"] == 2
-    assert [q["why_queued"] for q in out["queue"]] == ["mismatch", "no_belief"]
+    # `mismatch:world` — the SPLIT (2026-08-27). Two facts were called `mismatch`: the world did
+    # not move (this row, from `verify()`) and the supervisor judged the turn non-nominal (the
+    # actuator's). Same word, different evidence, different fix — and the queue ranked them as
+    # one class. A world-mismatch still leads: it is the row where an act claimed ok and the page
+    # disagreed, which corrects the witnesses AND explains a failed act.
+    assert [q["why_queued"] for q in out["queue"]] == ["mismatch:world", "no_belief"]
     assert "correct" in out["answer_with"]
 
     # Answering one drains the queue — the label write is the crank, as everywhere. The queue
