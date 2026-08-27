@@ -5738,6 +5738,17 @@ async def _cookie_expiries(cdp) -> list[dict]:
     A failure here must never fail the login probe — an absent list is `cookie_ttl_s` staying
     unmeasured, which is exactly what it has read for a month and is an honest answer. Returning a
     partial list that LOOKS complete is the failure mode worth avoiding.
+
+    **KNOWN BOUND, measured live 2026-08-27.** `Network.getCookies` is scoped to the attached
+    PAGE's URL chain, not the whole jar: on `www.indeed.com` it returned 44 cookies where the
+    browser-wide read returns 773, and it therefore missed `rememberMe` — which lives on
+    `secure.indeed.com` and is the SHORTEST-lived of Indeed's four auth cookies (1895 h vs 8739 h).
+    So the TTL derived from this list is an **upper bound** on the true auth TTL: optimistic, never
+    pessimistic. That direction is deliberate and stated rather than discovered — a freshness
+    signal that reads too fresh degrades to the inert behaviour it replaced, while one that reads
+    too stale would send an operator to renew a healthy session. Both readings scored `fresh` on
+    the live check, so no verdict differs today; a session's own snapshot (`Storage.getCookies`,
+    browser-wide) is the exact figure when one is needed.
     """
     try:
         res = await cdp.send("Network.getCookies")

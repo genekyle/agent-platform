@@ -12117,3 +12117,34 @@ matters. A probe that returns none still reads `unmeasured`, which is what the t
 verifications did against the older running server: the tri-state working on its first run.
 
 *Suites: controlplane-api 1977 → 2003, mcp 175. Live: 3 snapshots, 2 pinned, 1 full recovery.*
+
+### The same day, after the merge — three things the live presses corrected
+
+**`/live` answered the LOCK question, which is 24 rows for 2 browsers.** `find_chromes` returns
+every process holding the `user-data-dir` because that is the right answer to *"is anything holding
+this dir"* — a launch guard's question. An operator needs a PORT to press. One row per profile now,
+the ported process leading, helper count kept as evidence, and `capturable: false` when a zombie
+holds the dir on no port. **Found by calling the endpoint, not by reading it** — the unit tests were
+green the whole time.
+
+**And the server was running `main`'s copy while those tests passed against the worktree's.** The
+wrong-module trap, hit exactly as the note describes: a fix verified in a worktree is not a fix
+until the process serving it is the one that reloaded. The capture server saved this one by running
+under `--reload`.
+
+**THE PAGE-SCOPED COOKIE READ IS AN UPPER BOUND, AND THE BOUND IS 4.6x.** `Network.getCookies` is
+scoped to the attached page's URL chain, not the jar: 44 cookies on `www.indeed.com` against 773
+browser-wide, and it therefore misses `rememberMe` — on `secure.indeed.com`, and the SHORTEST of
+Indeed's four auth cookies (**1895 h** where the page-scoped read sees **8739 h**). The signal is
+optimistic, never pessimistic, and that direction is the safe one: too-fresh degrades to the inert
+behaviour it replaced, while too-stale would send an operator to renew a healthy session. Stated in
+the code rather than left to be re-measured. A snapshot's own browser-wide read is the exact figure.
+
+*Also confirmed live on both platforms: the naive minimum would have been **8644 s** on Indeed and
+**316 s** on LinkedIn — the latter is ORANGE on the current thresholds. Both platforms, not just
+the one the trap was found on.*
+
+**The merge and restart, which was SESSION 21's own designated first experiment, was survived.**
+Main fast-forwarded 25 commits (S15→S21), the API restarted against the real Postgres, and the
+armed `search_queries` drop fired cleanly: **718 rows intact, 20 still `provenance_quarantined`,
+387 sightings holding the fact the column used to duplicate.** Both browsers came back signed in.
