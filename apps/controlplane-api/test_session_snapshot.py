@@ -360,3 +360,48 @@ def test_the_cold_tier_excludes_service_worker_cachestorage():
     assert "CacheStorage" not in joined
     assert "Service Worker/Database" in joined, "the SW registration DB is identity; its cache is not"
     assert "Default/Cookies" in joined and "Default/Login Data" in joined
+
+
+# ---------------------------------------------------------------------------------------------
+# The /live shape — found on the first real call, which is why the drive is not optional
+# ---------------------------------------------------------------------------------------------
+
+def test_live_reports_one_row_per_profile_not_one_per_chrome_helper(monkeypatch):
+    """`find_chromes` answers the LOCK question — "is any process holding this dir" — so it
+    returns renderers and GPU helpers too. Called live it returned **24 rows for 2 profiles**,
+    which is the right answer to a different question and useless to an operator who needs a port
+    to press. Chrome backs one user-data-dir with one browser; the row is that browser.
+    """
+    import browser_provisioning as bp
+    from routers import session_snapshot as r
+
+    def fake_find(*, user_data_dir, **_kw):
+        if user_data_dir.endswith("/indeed"):
+            return [bp.ChromeProcess(pid=1, debug_port=None, user_data_dir=user_data_dir),
+                    bp.ChromeProcess(pid=2, debug_port=9322, user_data_dir=user_data_dir),
+                    bp.ChromeProcess(pid=3, debug_port=None, user_data_dir=user_data_dir)]
+        return []
+
+    monkeypatch.setattr(bp, "find_chromes", fake_find)
+    out = r.live_profiles()
+
+    assert len(out["live"]) == 1, "one browser, one row"
+    row = out["live"][0]
+    assert row["profile"] == "indeed" and row["port"] == 9322, "the PORTED process leads"
+    assert row["capturable"] is True and row["processes_holding_dir"] == 3
+    # The finding that motivated the whole session, surfaced as data rather than filed as prose.
+    assert out["durable"] is False and "/tmp" in out["warning"]
+
+
+def test_a_profile_whose_browser_answers_on_no_port_is_not_capturable(monkeypatch):
+    """A zombie Chrome still owns the directory but cannot be read over CDP. Saying `capturable:
+    false` here beats letting the capture fail with a connection error the operator has to
+    interpret."""
+    import browser_provisioning as bp
+    from routers import session_snapshot as r
+
+    monkeypatch.setattr(bp, "find_chromes", lambda *, user_data_dir, **_k: (
+        [bp.ChromeProcess(pid=9, debug_port=None, user_data_dir=user_data_dir)]
+        if user_data_dir.endswith("/linkedin") else []))
+    row = r.live_profiles()["live"][0]
+    assert row["profile"] == "linkedin" and row["capturable"] is False and row["port"] is None

@@ -61,6 +61,13 @@ def live_profiles() -> dict[str, Any]:
     process table. That is the same primitive the launch guard uses, and it is right for the same
     reason: a DB row does not hold a directory lock, and the recorded port is precisely what has
     been unreliable.
+
+    **ONE ROW PER PROFILE, not one per process.** `find_chromes` returns everything holding the
+    directory — renderers, GPU and utility helpers, a dozen or more per browser — because the
+    lock question it answers is *"is ANY process holding this dir"*. That is the right answer for
+    a launch guard and the wrong shape for an operator who needs a port to press. Chrome backs one
+    `--user-data-dir` with exactly one browser, so the row is that browser: the process carrying
+    the debug port, with the helper count kept as evidence rather than dropped.
     """
     import browser_provisioning as bp
     from settings import settings
@@ -68,9 +75,16 @@ def live_profiles() -> dict[str, Any]:
     out = []
     for name in sorted(snap.AUTH_COOKIES):
         procs = bp.find_chromes(user_data_dir=f"{root}/{name}")
-        for p in procs:
-            out.append({"profile": name, "pid": p.pid, "port": p.debug_port,
-                        "user_data_dir": f"{root}/{name}"})
+        if not procs:
+            continue
+        ported = [p for p in procs if p.debug_port]
+        lead = ported[0] if ported else procs[0]
+        out.append({"profile": name, "pid": lead.pid, "port": lead.debug_port,
+                    "user_data_dir": f"{root}/{name}",
+                    # A profile whose browser answers on no port cannot be snapshotted warm; say
+                    # so here rather than letting the capture fail with a connection error.
+                    "capturable": bool(lead.debug_port),
+                    "processes_holding_dir": len(procs)})
     return {"ok": True, "live": out, "profiles_root": root,
             # The finding that motivated the feature, surfaced rather than filed: /tmp is cleared
             # on reboot, and these logins cost a HUMAN to re-create.
