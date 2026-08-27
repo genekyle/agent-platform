@@ -7195,7 +7195,7 @@ def test_the_unsure_stop_fires_once_per_reading_and_the_next_press_is_the_eyes()
     first = _too_unsure_to_continue(world, "https://x")
     assert first and first["marker"], "the first look stops, and names its reading"
 
-    world["unsure_ack"] = {"marker": first["marker"]}
+    world["unsure_acked"] = [first["marker"]]
     assert _too_unsure_to_continue(world, "https://x") is None, \
         "the operator looked and pressed — their eyes outrank the witness"
 
@@ -7210,3 +7210,28 @@ def test_the_unsure_stop_fires_once_per_reading_and_the_next_press_is_the_eyes()
                                       "uncertainty": {"state": 0.4}, "assessed": ["state"]}
     again = _too_unsure_to_continue(world, "https://x")
     assert again and again["marker"] != first["marker"]
+
+
+def test_an_ack_survives_walking_away_and_coming_back():
+    """A drive cycles search -> apply -> back to search once per job. Holding ONE ack marker made
+    the second job re-stop on a reading the operator confirmed during the first. A confirmation
+    is about a page-KIND and does not expire because we went somewhere else."""
+    from routers.session_control import _too_unsure_to_continue
+
+    def belief(state):
+        return {"state": state, "uncertainty": {"novelty": 0.9, "state": 0.9},
+                "assessed": ["state", "novelty"]}
+
+    world = {"last_belief": {"url": "https://x", "ts": "t1", "belief": belief("search_results")},
+             "unsure_acked": ["search_results|novelty"]}
+    assert _too_unsure_to_continue(world, "https://x") is None
+
+    # ...a genuinely new page-state still stops.
+    world["last_belief"]["belief"] = belief("bamboohr_form")
+    assert _too_unsure_to_continue(world, "https://x") is not None
+
+    # ...and once that one is acked too, both stay quiet.
+    world["unsure_acked"] = ["search_results|novelty", "bamboohr_form|novelty"]
+    assert _too_unsure_to_continue(world, "https://x") is None
+    world["last_belief"]["belief"] = belief("search_results")
+    assert _too_unsure_to_continue(world, "https://x") is None

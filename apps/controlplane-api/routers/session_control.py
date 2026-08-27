@@ -1029,9 +1029,17 @@ def _too_unsure_to_continue(world: dict[str, Any], current_url: str) -> Optional
     # (claimed state, blocked axis) pair and re-arms the moment either changes: a different page
     # kind, or a different kind of doubt. The operator's eyes outrank the witness — that is the
     # supervision contract, applied to the gate's own escape hatch.
-    ack = (world or {}).get("unsure_ack") or {}
+    # THE ACK ACCUMULATES. Holding one marker meant returning to an already-confirmed page-state
+    # re-armed the gate: a drive cycles search -> apply -> back to search on every job in the
+    # queue, so the second job re-stopped on a reading the operator had already confirmed on the
+    # first. A confirmation is about a page-KIND, and it does not expire because we walked
+    # somewhere else and came back.
+    acked = set((world or {}).get("unsure_acked") or ())
+    legacy = ((world or {}).get("unsure_ack") or {}).get("marker")
+    if legacy:
+        acked.add(legacy)
     marker = f"{bs.state or '?'}|{axis}"
-    if ack.get("marker") == marker:
+    if marker in acked:
         return None
     return {"axis": axis, "uncertainty": round(bs.unsure_about(axis), 4),
             "state": bs.state, "url": lb.get("url", ""), "marker": marker}
@@ -8442,7 +8450,8 @@ async def run(session_id: int, body: RunBody,
                            f"confirms this page-state and the loop will drive it.")
             # Record WHICH reading was surfaced, so the next press drives instead of re-stopping.
             bb.world = dict(bb.world or {})
-            bb.world["unsure_ack"] = {"marker": unsure["marker"]}
+            bb.world["unsure_acked"] = sorted(
+                set(bb.world.get("unsure_acked") or ()) | {unsure["marker"]})
             _persist(bb, ledger)
             view = _view(session, bb, ledger, obs_now, page=_current_page(obs_now, bb),
                          awaiting="apply")
