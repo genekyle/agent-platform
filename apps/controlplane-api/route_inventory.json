@@ -114,6 +114,8 @@
   "GET /api/transitions/{key}",
   "GET /api/usage/anthropic",
   "GET /api/workers/{worker_id}/next-step",
+  "GET /api/world_facts",
+  "GET /api/world_facts/staleness",
   "GET /docs",
   "GET /docs/oauth2-redirect",
   "GET /health",

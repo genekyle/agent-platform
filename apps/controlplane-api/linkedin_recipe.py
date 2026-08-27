@@ -128,6 +128,8 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+import world_facts as wf
+
 HOST = "linkedin.com"
 
 # --- states -----------------------------------------------------------------------------------
@@ -466,40 +468,155 @@ RESULTS_TRAVERSAL: dict[str, Any] = {
     "why_every_card": ("Operator-directed: on LinkedIn the traversal IS the search — scroll, open "
                        "each card, record it. Recording only a keyword-matched shortlist throws "
                        "away exactly the rows a model would learn the boundary from."),
-    "verified_live": ("2026-07-30, session 22: the wheel moved the lazy-column (scrollTop 0 -> 700, "
-                      "read off the element itself rather than from our own report); the walk "
-                      "reaches at_end in 3 batches / 2607px; the reader returns 25/25 cards with "
-                      "correct title, company, location, salary where present, and Easy Apply on "
-                      "exactly the two cards showing it; humanized clicks opened cards and the "
-                      "pane's own currentJobId confirmed which job had opened."),
-    #: ANSWERED 2026-08-26 (session 34, live): page 2 was PRESSED — /next_page wheeled to the end
-    #: of the column, pressed `Page 2`, the SPA signature changed, and page 2 extracted 25 distinct
-    #: cards. And the traversal HAS now been driven through /api/search/sweep end to end: the
-    #: /set_distance objection was already stale, because that gate has been behind
-    #: `command_center.has_distance_filter` and skipped cleanly (`distance_selected: null`).
-    #: `pages_swept: 2`, 50 found, 48 new.
-    "verified_live_2": ("2026-08-26, session 34: /api/search/sweep ran two pages on "
-                        "origin=PREFERENCES_LANDING — extract 25, open cards, press Page 2, "
-                        "extract 25 — and the distance gate was skipped rather than failed."),
-    #: AND THE VIRTUALISATION CLAIM ABOVE IS OUT OF DATE, which matters because everything in this
-    #: dict is justified by it. Measured the same day: the FIRST read, before any scroll, returned
-    #: 25 of 25 cards, two 700px batches rendered zero new ids, and a card ~3000px ABOVE the fold
-    #: was still found and opened first try. Nothing is evicted on this surface. The traversal
-    #: still works — it over-scrolls rather than under-reads — but not for the stated reason.
-    "still_unverified": ("Whether the ~7-of-25 virtualisation measured 2026-07-30 was the renderer "
-                         "of the day or the surface: this one renders all 25 at once. Whether page "
-                         "3+ behaves like page 2. And the one that bit: a sweep cannot currently "
-                         "see the RESULT SET change under it — /results_signature answers 'are "
-                         "these different cards', which a page turn and a filter flip both satisfy, "
-                         "so an Easy-Apply filter (f_AL=true) toggled mid-run and 23 rows landed "
-                         "under a Search row that says nothing about it. The URL's own filter "
-                         "params are the right witness for this and are not read anywhere."),
+    #: DATED CLAIMS ABOUT THIS SURFACE LIVE IN `WORLD_FACTS` BELOW (§14, SESSION 16) — cited, not
+    #: restated, because prose beside operational keys is how a claim rots unwatched: the
+    #: `verified_live`/`still_unverified` sentences that used to sit here held a virtualisation
+    #: claim falsified with no line of this repo changing, and a result-set-blindness complaint
+    #: that had already been FIXED the day it was written. Note `virtualised: True` above is kept
+    #: as the OPERATIONAL flag (over-scrolling is safe; under-reading is not) while the claim
+    #: itself is HYPOTHESIS — see `linkedin.results.virtualised`.
+    "facts": ("linkedin.results.virtualised", "linkedin.results.page2_pressable",
+              "linkedin.sweep.end_to_end", "linkedin.results.origin_survives_page_turn",
+              "linkedin.results.result_set_identity_guard"),
 }
 
 
 def results_traversal() -> dict[str, Any]:
     """How LinkedIn's results list must be walked. Read by the shared search cadence."""
     return dict(RESULTS_TRAVERSAL)
+
+
+# --- WORLD-FACTS: dated, evidenced claims about LinkedIn (§14, SESSION 16 pilot) ----------------
+# The queryable twin of the prose this module used to embed. Every entry carries its date, its
+# drive, its evidence class, and HOW a drive re-verifies it; retractions keep both sides. The
+# staleness report (`GET /api/world_facts/staleness`) ranks these against the last drive on the
+# surface — which is how the virtualisation claim below would have surfaced weeks before it cost
+# a session.
+WORLD_FACTS: list[dict[str, Any]] = [
+    wf.fact(
+        id="linkedin.results.virtualised",
+        claim="the results list is virtualised — one read returns ~7 of 25 until wheeled",
+        evidence_class="HYPOTHESIS",
+        observed_at="2026-07-30",
+        drive={"session": 22, "date": "2026-07-30"},
+        evidence=("2026-07-30: wheel moved the lazy-column (scrollTop 0 -> 700, read off the "
+                  "element itself); at_end in 3 batches / 2607px. CONTRADICTED 2026-08-26 on "
+                  "origin=PREFERENCES_LANDING: 25/25 cards on the FIRST read before any scroll, "
+                  "two 700px batches rendered zero new ids, and a card ~3000px above the fold "
+                  "opened first try."),
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"],
+                 "state": SEARCH_RESULTS},
+        recheck=("on a KEYWORD results page (not the preferences landing), count rendered cards "
+                 "on the FIRST read before any scroll: ~7 keeps the claim per-surface; 25/25 "
+                 "retires it as a renderer change"),
+        history=[
+            {"date": "2026-07-30", "note": "MEASURED on session 22's keyword results page"},
+            {"date": "2026-08-26",
+             "note": "downgraded MEASURED -> HYPOTHESIS: falsified on the preferences landing; "
+                     "unknown whether renderer change or per-surface difference"},
+        ],
+    ),
+    wf.fact(
+        id="linkedin.results.no_distance_control",
+        claim="LinkedIn has no distance/radius control anywhere — the location IS the area",
+        evidence_class="MEASURED",
+        observed_at="2026-08-14",
+        drive={"session": 29, "date": "2026-08-14"},
+        evidence=("filter row read (topical pills only); DOM swept for distance/radius/mile/"
+                  "within over every button, link, input, select, label -> ZERO; the location "
+                  "popup opened: a heading and a text field holding 'Greater Boston'"),
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"],
+                 "state": SEARCH_RESULTS},
+        recheck="open the location popup on a results page and sweep the filter row for any "
+                "distance-shaped pill",
+        history=[
+            {"date": "2026-08-14",
+             "note": "RETRACTED predecessor: 'Radius is a slider on the results page' "
+                     "(control: distance) — never measured; Indeed's shape written into "
+                     "LinkedIn's recipe. Kept in SEARCH_CADENCE as the explicit retraction."},
+        ],
+    ),
+    wf.fact(
+        id="linkedin.sweep.blocked_on_set_distance",
+        claim="a LinkedIn sweep dies at /set_distance before reaching the list",
+        evidence_class="RETRACTED",
+        observed_at="2026-08-14",
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"]},
+        history=[
+            {"date": "2026-08-26",
+             "note": "retracted: the gate had been behind command_center.has_distance_filter "
+                     "for some time and skipped cleanly (distance_selected: null). The claim "
+                     "outlived its bug by twelve days and a session planned around it — the "
+                     "case this store exists for."},
+        ],
+    ),
+    wf.fact(
+        id="linkedin.results.page2_pressable",
+        claim="pagination is real: wheel to the end of the column, press the page number, the "
+              "SPA signature changes and the next page extracts distinct cards",
+        evidence_class="MEASURED",
+        observed_at="2026-08-26",
+        drive={"session": 34, "date": "2026-08-26"},
+        evidence="/next_page pressed 'Page 2' live; 25 distinct cards extracted; "
+                 "pages_swept: 2, 50 found, 48 new",
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"],
+                 "state": SEARCH_RESULTS},
+        recheck="press into page 3+ and diff card ids against pages 1-2",
+    ),
+    wf.fact(
+        id="linkedin.sweep.end_to_end",
+        claim="/api/search/sweep runs land-to-record on LinkedIn end to end",
+        evidence_class="MEASURED",
+        observed_at="2026-08-26",
+        drive={"session": 34, "date": "2026-08-26"},
+        evidence="two pages on origin=PREFERENCES_LANDING: extract 25, open cards, press Page 2, "
+                 "extract 25; the distance gate was skipped rather than failed",
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"]},
+        recheck="run a sweep on a fresh KEYWORD search (not the preferences landing) and read "
+                "stopped_reason + details_failed",
+    ),
+    wf.fact(
+        id="linkedin.results.origin_survives_page_turn",
+        claim="the `origin` URL param survives a page turn (the basis for excluding origin from "
+              "result_set_identity)",
+        evidence_class="HYPOTHESIS",
+        observed_at="2026-08-26",
+        drive={"session": 34, "date": "2026-08-26"},
+        evidence="exactly ONE observation — S16 names this as a claim resting on a single look",
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"],
+                 "state": SEARCH_RESULTS},
+        recheck="turn a page twice and read `origin` from the URL before and after each turn",
+    ),
+    wf.fact(
+        id="linkedin.preferences_landing.exists",
+        claim="a fourth surface exists: origin=PREFERENCES_LANDING ('Jobs based on your "
+              "preferences') — unrequested like a feed, paginated like a search (99+ results, "
+              "visible_pages, ?start=), filter row cut to Date posted / LinkedIn Apply, a "
+              "dismiss on every card; it classifies as plain linkedin_job_search and has no "
+              "name of its own",
+        evidence_class="MEASURED",
+        observed_at="2026-08-26",
+        drive={"session": 34, "date": "2026-08-26"},
+        evidence="URL, filter row, and pagination read live; the sweep ran two pages on it",
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"],
+                 "state": SEARCH_RESULTS},
+        recheck="the operator names it from the S15 naming queue; the classifier then emits the "
+                "new name on a live visit and the corpus banks it under that name",
+    ),
+    wf.fact(
+        id="linkedin.results.result_set_identity_guard",
+        claim="a mid-sweep filter flip is caught by URL-param identity (the f_ prefix rule), "
+              "which /results_signature cannot see",
+        evidence_class="MEASURED",
+        observed_at="2026-08-26",
+        drive={"session": 34, "date": "2026-08-26"},
+        evidence="result_set_drift returned \"f_AL: '' -> 'true'\" against the live tab; the "
+                 "guard stayed QUIET on the healthy 2026-08-26 evening sweep (S14's falsifier)",
+        surface={"platform": "linkedin", "hosts": ["www.linkedin.com", "linkedin.com"],
+                 "state": SEARCH_RESULTS},
+        recheck="flip a filter mid-sweep on purpose in a scratch run and read result_set_drift",
+    ),
+]
 
 
 def stage_for_state(state: str, done: tuple[str, ...] = ()) -> Optional[dict[str, Any]]:
@@ -544,18 +661,18 @@ def spec() -> dict[str, Any]:
                      "the placeholder changes on focus; the AX name does not",
                      "'Skip to search' matches a generic submit hint and must be excluded",
                      "Enter is the commit, and it lands on /jobs/search-results/",
-                     "the results list is virtualised and scrolls inside its own column",
+                     "the results list scrolls inside its own column (the VIRTUALISATION claim "
+                     "is HYPOTHESIS — see world_facts linkedin.results.virtualised)",
                      "a class-named scroller/card reader was null/0 on the live results page"],
-        #: A `blocked_on` is a claim with a date on it. Both of the previous two were about the
-        #: sweep, and both are answered (2026-08-26, session 34 — see RESULTS_TRAVERSAL): page 2 is
-        #: pressed, the sweep runs end to end, and the /set_distance objection had outlived its bug
-        #: by some margin. What is genuinely open is a level up from the list.
-        "blocked_on": ("The PREFERENCES LANDING (origin=PREFERENCES_LANDING, 'Jobs based on your "
-                       "preferences') has no state of its own: it is unrequested like a feed and "
-                       "paginated like a search — 99+ results, visible_pages [1,2,3], a filter row "
-                       "cut down to Date posted / LinkedIn Apply, and an dismiss on every card — "
-                       "and it classifies as plain SEARCH_RESULTS, so nothing downstream can tell "
-                       "the two apart. Naming it is the same call BLENDED_SEARCH already earned, "
-                       "and it is the operator's to make. Also open: a result-set change mid-sweep "
-                       "is invisible (see still_unverified)."),
+        #: The dated claims themselves live in WORLD_FACTS; ids here so a caller can look one up
+        #: without importing this module's internals.
+        "world_facts": [f["id"] for f in WORLD_FACTS],
+        #: A `blocked_on` is a claim with a date on it — and the previous version of THIS field
+        #: proved it again: it called the mid-sweep result-set change "invisible" on the same day
+        #: `result_set_identity` closed exactly that (2026-08-26; kept as
+        #: linkedin.results.result_set_identity_guard). What remains open is the naming call.
+        "blocked_on": ("The PREFERENCES LANDING has no state of its own and classifies as plain "
+                       "SEARCH_RESULTS (world_facts linkedin.preferences_landing.exists, MEASURED "
+                       "2026-08-26). Naming it is the operator's call, queued in Learning → "
+                       "Naming (SESSION 15)."),
     }

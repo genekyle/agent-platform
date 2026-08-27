@@ -5,6 +5,7 @@ const TOOLS = [
   { id: "dataset-browser", title: "Dataset browser", detail: "Browse and curate captured artifacts.", icon: "database" },
   { id: "review-label", title: "Capture inspector", detail: "Inspect a screenshot, proposals, and candidates.", icon: "search" },
   { id: "page-states", title: "Page states", detail: "Manage the state taxonomy and scope.", icon: "listTree" },
+  { id: "world-facts", title: "World facts", detail: "Dated site claims, ranked by how far the world drove past them.", icon: "listFilter" },
   { id: "state-graph", title: "State graph", detail: "Explore intended and observed transitions.", icon: "network" },
   { id: "test", title: "Model test", detail: "Run the SELECT cascade against one capture.", icon: "flask" },
   { id: "eval", title: "Select metrics", detail: "Inspect cache, escalation, and cost behavior.", icon: "chart" },

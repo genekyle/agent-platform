@@ -237,23 +237,35 @@ def test_every_card_is_opened_and_the_pane_switch_is_the_proof():
     assert "switched" in t["click_evidence"]
 
 
-def test_the_traversal_separates_what_was_driven_live_from_what_was_not():
-    """PRINCIPLES §13: say which it is. The scroll, the reader and the click were driven live
-    2026-07-30 and say so with the numbers; the sweep and page 2 were driven live 2026-08-26 and
-    now say so too. A recipe that claimed both without dating them would be the same failure as
-    claiming neither — and the claim this test used to pin ("paging has not been PRESSED", "the
-    sweep stops at /set_distance") was still being asserted here long after it stopped being true,
-    which is how a stale blocked_on survives a green suite."""
+def test_the_traversals_claims_have_a_shape_instead_of_a_wording():
+    """PRINCIPLES §13/§14, re-pointed by SESSION 16. This test used to assert the PROSE of
+    perishable claims ("scrollTop 0 -> 700", "f_AL") — so green tests were keeping stale
+    sentences alive. It now asserts the SHAPE: the traversal cites world-facts; every cited fact
+    exists, is dated, classed, and carries a recheck; and the retractions kept both sides."""
+    import world_facts as wfm
+
     t = lr.results_traversal()
-    assert "scrollTop 0 -> 700" in t["verified_live"]
-    assert "25/25 cards" in t["verified_live"]
-    # the second drive, and it has to carry its own date and its own numbers
-    assert "2026-08-26" in t["verified_live_2"] and "Page 2" in t["verified_live_2"]
-    # and what is open is now about the SURFACE and the result set, not about paging
-    assert "result set" in t["still_unverified"].lower()
-    assert "f_AL" in t["still_unverified"]
+    assert "verified_live" not in t and "still_unverified" not in t, \
+        "prose claims returned to the traversal — cite a world-fact instead"
+    facts = wfm.collect()
+    for fid in t["facts"]:
+        assert fid in facts, f"the traversal cites {fid}, which is not registered"
+
+    # The virtualisation claim: downgraded, never deleted — both sides kept.
+    v = facts["linkedin.results.virtualised"]
+    assert v["evidence_class"] == "HYPOTHESIS"
+    assert any("downgraded" in h["note"] for h in v["history"])
+    assert v["recheck"], "a live claim without a recheck can only rot silently"
+
+    # The stale blocked_on that planned a session: RETRACTED with the story attached.
+    dead = facts["linkedin.sweep.blocked_on_set_distance"]
+    assert dead["evidence_class"] == "RETRACTED"
+    assert any("outlived its bug" in h["note"] for h in dead["history"])
+
+    # And what spec() still calls blocked is exactly the one operator-gated item, by citation.
+    assert "linkedin.preferences_landing.exists" in lr.spec()["blocked_on"]
     assert "set_distance" not in lr.spec()["blocked_on"]
-    assert "PREFERENCES_LANDING" in lr.spec()["blocked_on"]
+    assert set(lr.spec()["world_facts"]) == {f["id"] for f in lr.WORLD_FACTS}
 
 
 def test_the_card_is_addressed_by_componentkey_not_by_an_href_or_an_attribute():
