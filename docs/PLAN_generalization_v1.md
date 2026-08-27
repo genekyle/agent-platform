@@ -183,8 +183,16 @@ head is S15**, which also inherits the location-column lie S14's drive named. Th
 | 19 | `SESSION_19_one_resolver.md` — one identity per control | class 4 (four resolvers) | P3 |
 | 20 | `SESSION_20_act_carries_evidence.md` — ok means committed | class 2 (silent success) + the recognizer dispatch (class 7) | P2 |
 
-Defined here, briefed when reached (do not build ahead of the wheel): **S21** step-set recipe
-families (P5/§3.3); **S22** planner pre-flight — `blockers()` + document requirements into the
+| 21 | `SESSION_21_session_restore.md` — restore the session exactly | the stale-session incident, made an experiment | P2/P4 |
+
+**S21 was inserted 2026-08-27 (operator-directed) ahead of the two below**, on a finding: the
+signed-in Indeed and LinkedIn profiles live in `/tmp`, which a reboot clears, with no copy
+anywhere. It is a learning feature rather than an ops one — it gives `PLAN_staleness.md`'s RENEW
+verdict its first remedy, lights the permanently-inert `cookie_ttl_s` signal off the same CDP
+read, and turns "the session went stale" from an incident into a repeatable bench experiment.
+
+Defined here, briefed when reached (do not build ahead of the wheel): **S22** step-set recipe
+families (P5/§3.3); **S23** planner pre-flight — `blockers()` + document requirements into the
 pick/plan step so a drive knows *can this finish* before spending the approach (P4). Every
 session keeps the standing rule: **end on a live drive that exercises the change**, because a
 green suite has repeatedly certified wires that were not there.
