@@ -11501,3 +11501,90 @@ Now `""` means nobody looked (`filters: null`, `filters_recorded: false`) and `"
 carried none. Search 13 reads **not recorded**, which is the only honest thing it can say.
 
 *Suite: controlplane-api 1914 → 1924. Repair run live: 14 rows, 0 repairable remaining, 20 standing.*
+
+## 2026-08-26 (fourth) — SESSION 14: one fact one place, and a decorator that broke five endpoints
+
+**`search_queries` is derived now, not stored.** The column beside `SearchSighting` was the same
+fact twice — once as a claim any caller could append to, once with a search behind it — and the
+20-row unadjudicable class is what that costs. `observed_jobs.queries_for` reads it from the join
+table in ONE statement for a page of rows (pinned by a test that counts SELECTs, because a
+correctness fix that becomes an N+1 over a 100-row dashboard is a regression nobody attributes to
+it). The API keeps the key, so the cockpit needed no change. **A feed contributes no query by
+construction**, which turns the 14-row lie from *refused* into *unexpressible*. Column left in
+place, unread, until SESSION 15 — a drop the same day it stops being read has no evidence behind it.
+
+### The one that cost the session, and it was mine
+
+**`@journaled` IS A CONTRACT, NOT A LABEL, AND I LEARNED THAT FROM A LIVE SWEEP.** Five endpoints
+were decorated one line each. All five broke. The suite stayed **green** because it fakes the
+capture server, and the next live sweep reported **six failed detail reads** —
+`"endpoint declared no outcome; "` — on a route that had worked that morning. The decorator derives
+`ok` from the outcome the endpoint DECLARES (*"ok is derived, never asserted"*) and is loud about a
+missing one, because a missing outcome means an un-audited path. That contract is right. It is
+simply not satisfied by adding a line above a `def`.
+
+`/open_job_card` is now audited on every return path, and two of its outcomes are worth having:
+**a pane that never switched is `not_staged`** (the click did not take), **a pane that switched but
+read empty is `committed_unconfirmed`** (it moved; this layer cannot see the result). The other four
+were reverted and reclassified `UNAUDITED` — a fourth class that says out loud what they are, with
+their return-path counts (`set_distance` alone has eight). **A missing journal is a gap; a decorator
+over un-audited returns is a broken endpoint.**
+
+**And the test I wrote is necessary and NOT sufficient**, which is now written into the file it
+guards: it proves the decorator is present, not that the endpoint satisfies it. Only exercising each
+return path proves that. The presence test still earned its keep — 27 of 38 POST routes were
+unjournaled and nothing could say which of them mattered.
+
+**THE EXEMPTION LIST IS THE FINDING, TWICE OVER.** Four routes are actions the closed `Intent`
+vocabulary has no word for: `/navigate` (no NAVIGATE verb — §3 says reach states by clicking, yet
+the route exists and journals nothing), `/close_tab` (no verb covers tab lifecycle at all),
+`/autofill_form` (a BATCH of journalable intents reported as one opaque call), `/extract_jobs`
+(semantically an observation that dispatches twelve real wheels to do it). `contract.Intent` says a
+verb the system emits and the vocabulary cannot express is *"a hole in the corpus, not a purity
+win"*. That hole is now counted; filling it changes the action space L4 must learn, so it is the
+operator's call.
+
+### The drive, and what the search box taught
+
+Ran a real query live (`reporting analyst`), and the commit path is **four measured facts, none of
+which the recipe had**:
+
+* **The preferences-landing search box is a `combobox "I'm looking for..."` and element mode does
+  nothing to it.** Click + type by `backend_node_id` returned `ok` twice and left the box empty —
+  the 08-25 untrusted-click recognizer, on a new widget and a different engine. **Coordinate mode
+  filled it first try.**
+* **BUT ELEMENT MODE IS NOT UNIVERSALLY BROKEN, and the refinement matters:** the blended page's
+  `SEE_ALL` anchor was clicked by SELECTOR, element mode, and navigated fine. Anchors act on a plain
+  `click` event; widgets that gate on `isTrusted` or commit on `pointerdown` do not. The rule is not
+  "element mode fails" — it is *"element mode delivers a click event, and only a click event"*.
+* **`submit` discards the staged text.** Its `this.focus()` on a hit-tested node knocked the
+  typeahead out and the box reset to placeholder — value staged, focus moved, value gone.
+* **A typeahead-suggestion commit lands on the BLENDED page**, with `origin=TYPEAHEAD_HISTORY` — a
+  value the recipe had never seen (it knew `GLOBAL_SEARCH_HEADER`). The 08-14 `BLENDED_TO_RESULTS`
+  escape worked unchanged and landed on `/jobs/search-results/?keywords=reporting analyst`, this
+  time with **no `f_AL`** — a clean, unfiltered set.
+
+### What the sweep proved, including the thing that could have embarrassed the fix
+
+**The result-set guard stayed QUIET on a healthy two-page sweep** (`stopped_reason: max_pages`, 50
+found, 24 new). That was the falsification the brief demanded and the one that mattered: a guard
+that stops good runs is worse than the bug it prevents, and until today it had only ever been proven
+to fire *correctly on drift*. **Search 14 is the first row in this system whose provenance states
+the set it gathered** (`filters={"keywords": "reporting analyst"}`).
+
+**`details_failed: 6` with reasons, live** — this morning the identical failure read as
+`descriptions_captured: 0` and was indistinguishable from a cap. And the intent journal now carries
+all six, four as `error` (my broken decoration, recorded honestly) and then `not_staged` and `ok`
+after the audit. **The audit endpoint says `repairable: 0` and `unadjudicable: 20` — unchanged
+while 24 new rows entered.** The door holds.
+
+*Also fixed, a hazard in my own morning's work:* `ensure_active_search` backfilled filters onto any
+row that had none, which would stamp today's filters onto rows gathered before anyone looked —
+Search 13 is exactly that case. Backfill now refuses a row that has already gathered sightings.
+
+*Not driven, and named rather than skipped:* the LOCATION stage. The sweep's `location` fell back to
+the active target's `Nashua, NH` while the page carried no location filter at all — so Search 14's
+location column is a caller's default, not a page fact. **The same class of lie the query column
+just stopped telling**, one column over, and SESSION 15 should take it.
+
+*Suites: controlplane-api 1929, mcp 168.*
