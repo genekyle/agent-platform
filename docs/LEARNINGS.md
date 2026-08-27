@@ -12208,3 +12208,66 @@ computes exactly this and nothing calls it here.
 *Also standing:* the session-control view's `staleness` reads `cookie_ttl_s: unmeasured` — the
 signal landed on `live_actuator`'s Bundle, which this path does not go through. A second call site,
 now visible because the first one works.
+
+## 2026-08-27 (ninth) — the cockpit's numbers were true and answered the wrong questions
+
+Operator-directed: *"find a better way to get our UI to consistently be more accurate … less
+step-through-y … 'keep going until needed' … at least 75% confidence of what it's seeing and
+know that it needs help."* Three fixes shipped, one architecture answer, and the theme is a
+single sentence: **every wrong display was a true value read from the wrong authority.**
+
+**1. THE HEADER'S LOCATION WAS THE INTENT, NOT THE FACT.** `_view` served `ss.location` — the
+operator's declared target — as the operating context. Search 15 had honestly recorded
+`location=''` (S15's door working exactly as built) while the header said "Nashua, NH" over a
+Greater-Boston set: **the DB had the fact right and the cockpit rendered the other field of two
+that share a name.** §15 applies to VIEWS too: a view field serves its authority or says why it
+cannot. `location` now comes from the search ROW's page-backed fact — cached at the row's own
+write seam, orphaned on re-query, tri-state honest (`page` / `not_recorded` / `no_search_row`) —
+and the intent survives, labeled `location_declared`, to seed the form. The old assertion
+(`location == "Nashua, NH"` after initialize) was in the suite, pinning the lie; re-pointed.
+
+**2. "NOTHING NEEDS YOUR JUDGMENT" OVER A SESSION HOLDING 25 RESULTS FOR A PICK.** Every Overview
+counter was true — handoffs 0, parks 0 — and none counted the most common wait: a ladder holding
+still for the operator. `command_center.awaiting_of` now derives it from the persisted record
+(no CDP on the landing page): a queue step → `apply` (needs `answer` when its flag is in
+NEEDS_OPERATOR, else `run`); extracted `page_results` whose CURRENT page has no `select:` rung →
+`choose`. **Its first live read immediately surfaced a wait nobody was showing anywhere:
+session 32 has held a half-done Indeed apply (WooCommerce ops manager) silently.**
+
+*And the derivation was wrong twice before it was right, both times measured against the live
+record rather than noticed in review:*
+  * `max(units_reviewed)` missed the step-BACK case — page 3 decided, operator back on page 1
+    undecided, "3 is decided" vouching for the wrong page.
+  * Then the whole review-rung framing collapsed: **`/choose` marks the review rung only when a
+    page CLOSES** (its early-return keeps a page with queued work open and unmarked), so
+    `units_reviewed` means *closed*, never *waiting*. **The choose wait is an ABSENCE, not a
+    rung** — results on the record, no select rung for the current page. Session 34 was invisible
+    to both drafts and is counted by the third.
+
+**3. THE RUN LOOP COULD NOT SAY "I CAN'T SEE".** Its stops were all behavioral — gate, refusal,
+needs-operator, no-progress — so it noticed every act that failed and would still crank blind on
+a page perception could not name. The operator's 75% floor **already existed as a constant**
+(`UNCERTAINTY_CEILING = 0.25`, the same number as `DECISION_CONFIDENCE_THRESHOLD`, with the 0.10
+consequential rail beside it) and the ladder **already caches a belief per crank**
+(`_cache_belief` → `world["last_belief"]`) — the gate is a wire, not a policy: `STOP_UNSURE`
+runs `BeliefState.blocks()` before each crank. A belief for a page since left never fires
+(state is context-bound); an axis nobody assessed never fires (silence is not blindness). The
+same number renders as a **"seeing N%" chip** beside the staleness chip, from `_seeing()` off the
+same snapshot against the same imported constant — the gate and the glance cannot disagree.
+Live: session 34 reads **seeing 64%**, blocked on `novelty`, and the chip says the loop would
+hand back here — which is a true and useful thing for the page that just ate a stray filter
+click.
+
+### The architecture answer, recorded
+
+Less step-through-y? **Yes for the apply phase, and the machinery already existed**: `/run`
+("crank until something actually needs a human", built 2026-08-14 after fifteen yes-continue
+presses) adds no authority, cannot reach Submit by construction, and stops on facts. What it
+lacked was exactly one stop — the perceptual one — and that is what STOP_UNSURE adds. **The pick
+boundary stays operator-paced on purpose**: choosing a job is approval to enter its application
+(consent, not friction), and no confidence number buys it back. The shape going forward:
+**run is the default press; step is the inspection tool; the three chips (stale / seeing /
+awaiting) are how the operator knows which one the moment calls for.**
+
+*Suites: controlplane-api 2025. UI verified in the browser: hero says "1 session is waiting on
+you", header location gone honest, seeing chip live.*
