@@ -231,6 +231,9 @@ def get_job(job_key: str, db: Session = Depends(get_db)):
     out["sightings"] = [{
         "job_id": s.job_id, "platform": s.platform, "url": s.url,
         "seen_count": s.seen_count, "search_queries": _qmap.get(s.job_id, []),
+        # Query history known-incomplete (SESSION 15) — the derived list above is true but may
+        # be missing the search that actually surfaced this row; learners must exclude it.
+        "provenance_quarantined": bool(getattr(s, "provenance_quarantined", False)),
         "title": s.title, "company": s.company,
         "first_seen_at": s.first_seen_at.isoformat() if s.first_seen_at else None,
         "last_seen_at": s.last_seen_at.isoformat() if s.last_seen_at else None,
@@ -419,6 +422,19 @@ def provenance_repair(apply: bool = Query(False), db: Session = Depends(get_db))
     """
     import observed_jobs
     out = observed_jobs.repair_query_provenance(db, apply=apply)
+    if apply:
+        db.commit()
+    return out
+
+
+@router.post("/api/career_search/provenance/quarantine")
+def provenance_quarantine(apply: bool = Query(False), db: Session = Depends(get_db)):
+    """Flag the unadjudicable rows so they are counted once and never vote (SESSION 15).
+    DRY BY DEFAULT — pass `apply=true`. Data untouched; the flag marks query history as
+    known-incomplete and excludes the row from anything that learns a query→job association.
+    Run BEFORE the `search_queries` column drop: the claims this reads leave with the column."""
+    import observed_jobs
+    out = observed_jobs.quarantine_unadjudicable(db, apply=apply)
     if apply:
         db.commit()
     return out

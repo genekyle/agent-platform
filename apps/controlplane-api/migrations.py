@@ -95,11 +95,34 @@ def migrate_schema() -> None:
         # these different cards", which a page turn satisfies too — so rows were landing under a
         # search that could not describe them (2026-08-26).
         ("searches", "filters", "TEXT NOT NULL DEFAULT ''"),
+        # observed_jobs: the quarantine flag (v22, SESSION 15). Rows whose query history is
+        # known-incomplete — they carried claims the 2026-08-26 audit could not adjudicate — are
+        # flagged so they are excluded from anything that learns a query→job association, and so
+        # the count is visible instead of re-derived by every audit. Written by the one-time
+        # quarantine pass; the claims themselves left with the dropped column below.
+        ("observed_jobs", "provenance_quarantined", "BOOLEAN NOT NULL DEFAULT false"),
+    ]
+    # REMOVALS — columns whose fact moved to a single authoritative store (§16). Each entry names
+    # the migration that made the column unread and the pass that preserved what mattered first.
+    # Idempotent the same way: a second DROP just rolls back.
+    removals = [
+        # observed_jobs.search_queries (SESSION 14 stopped writing it 2026-08-26; SESSION 15 drops
+        # it 2026-08-27). The fact lives in SearchSighting and is DERIVED by `queries_for`; the
+        # 20 unadjudicable claims were preserved as `provenance_quarantined` flags by the live
+        # quarantine pass BEFORE this drop first ran. A DB that never ran the pass loses only a
+        # display column that had already stopped being written.
+        ("observed_jobs", "search_queries"),
     ]
     with engine.connect() as conn:
         for table, col, definition in additions:
             try:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {definition}"))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+        for table, col in removals:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {col}"))
                 conn.commit()
             except Exception:
                 conn.rollback()

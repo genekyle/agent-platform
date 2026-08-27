@@ -110,11 +110,10 @@ def upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
                 title=(j.get("title") or "")[:400], company=(j.get("company") or "")[:300],
                 location=(j.get("location") or "")[:300], url=(j.get("url") or "")[:1200],
                 salary=(j.get("salary") or "")[:200] or None,
-                # NOT WRITTEN ANY MORE (§16). The queries that surfaced a job are derived from
-                # `SearchSighting` by `queries_for`; `search_query` still arrives because
-                # `check_provenance` validates it against the Search being linked, which is the
-                # door — it is just no longer copied onto the row as a second, unjustifiable store.
-                search_queries=[],
+                # The queries that surfaced a job are DERIVED from `SearchSighting` by
+                # `queries_for` — the column itself is GONE (SESSION 15). `search_query` still
+                # arrives because `check_provenance` validates it against the Search being
+                # linked; the door outlived the store it used to guard.
                 first_seen_at=now, last_seen_at=now, seen_count=1,
             )
             db.add(row)
@@ -179,96 +178,72 @@ def queries_for(db: Session, job_ids: list[str]) -> dict[str, list[str]]:
 
 
 # --- the rows that got in before the door had a lock -------------------------------------------
-# The gate above stops this happening again; these two answer what already happened. They are
-# deliberately separate: an audit that also repairs is one nobody dares run, and a repair that
-# cannot be previewed is one nobody should.
-#
-# THE ADJUDICATOR IS THE JOIN TABLE, NOT THE JSON LIST. `ObservedJob.search_queries` is a display
-# field that accumulated whatever any caller asserted; `SearchSighting` records which search
-# actually surfaced which job. So the question "is this query real" has an answer for exactly the
-# rows whose history is joined — and honestly has no answer for the rest, which is why they are
-# reported and never touched.
-def _query_provenance(db: Session) -> dict[str, Any]:
+# HISTORY, IN ORDER, because these functions' shapes only make sense with it. 2026-08-26: the
+# audit found 14 feed-only rows (repaired — the join table could prove them) and 20 rows whose
+# claims nothing could adjudicate. 2026-08-27 (SESSION 15): the 20 were flagged
+# `provenance_quarantined` by a live pass, and THEN the `search_queries` column was dropped —
+# claims are now UNEXPRESSIBLE, not merely refused: there is no column to assert into, only a
+# `SearchSighting` to earn. The audit therefore no longer has claims to judge; what remains is
+# the durable count of the era's damage, and these endpoints keep answering so the number stays
+# visible instead of being re-discovered by whoever wonders where the column went.
+_COLUMN_DROPPED_NOTE = (
+    "`search_queries` was dropped 2026-08-27 (SESSION 15): queries are derived from "
+    "SearchSighting by queries_for, so an unbacked claim can no longer be expressed. The 20 "
+    "historically unadjudicable rows are flagged `provenance_quarantined` — that flag is the "
+    "durable record, written before the drop because the claims left with the column.")
+
+
+def _quarantined_count(db: Session) -> int:
+    from sqlalchemy import func as _func
+    from sqlalchemy import select as _select
+
+    return int(db.scalar(
+        _select(_func.count()).select_from(ObservedJob)
+        .where(ObservedJob.provenance_quarantined.is_(True))) or 0)
+
+
+def audit_query_provenance(db: Session) -> dict[str, Any]:
+    """What does the corpus claim that its own join table cannot support? Read-only.
+
+    Post-drop, the honest answer is structural: NOTHING — a claim has nowhere to live, so
+    `repairable` and `unadjudicable` are true zeros (unexpressible, not unexamined). What stays
+    countable: `joined_rows` (how much of the corpus has sighting-backed history) and
+    `quarantined` (the durable record of the pre-door era's 20)."""
+    from sqlalchemy import distinct as _distinct
+    from sqlalchemy import func as _func
     from sqlalchemy import select as _select
 
     from models import SearchSighting
 
-    searches = {s.id: s for s in db.scalars(_select(Search)).all()}
-    by_job: dict[str, list[int]] = {}
-    for s in db.scalars(_select(SearchSighting)).all():
-        by_job.setdefault(s.job_id, []).append(s.search_id)
-
-    feed_only: list[dict[str, Any]] = []
-    unadjudicable: list[dict[str, Any]] = []
-    case_variants = joined = 0
-    for row in db.scalars(_select(ObservedJob)).all():
-        links = by_job.get(row.job_id)
-        if not links:
-            continue        # never joined: the ABSENCE of a link is not evidence of a lie
-        joined += 1
-        linked = [searches[i] for i in links if i in searches]
-        # A FEED BACKS NO QUERY. That is the whole point of its empty query column.
-        backed = {_norm_q(s.query) for s in linked if getattr(s, "kind", "query") != "feed"}
-        backed.discard("")
-        claimed = [q for q in (row.search_queries or []) if q]
-        unbacked = [q for q in claimed if _norm_q(q) not in backed]
-        if any(q not in {s.query for s in linked} and _norm_q(q) in backed for q in claimed):
-            case_variants += 1          # same query, different casing — real, and left alone
-        if not unbacked:
-            continue
-        entry = {"job_id": row.job_id, "title": (row.title or "")[:80],
-                 "claims": claimed, "unbacked": unbacked,
-                 "surfaced_by": sorted({(getattr(s, "kind", "query") == "feed"
-                                         and f"feed:{s.surface}" or f"query:{s.query}")
-                                        for s in linked})}
-        if {getattr(s, "kind", "query") for s in linked} == {"feed"}:
-            feed_only.append(entry)
-        else:
-            unadjudicable.append(entry)
-    return {"joined_rows": joined, "case_variants": case_variants,
-            "feed_only": feed_only, "unadjudicable": unadjudicable}
-
-
-def audit_query_provenance(db: Session) -> dict[str, Any]:
-    """What does the corpus claim that its own join table cannot support? Read-only."""
-    found = _query_provenance(db)
+    joined = int(db.scalar(_select(_func.count(_distinct(SearchSighting.job_id)))) or 0)
     return {
-        "joined_rows": found["joined_rows"],
-        "repairable": len(found["feed_only"]),
-        "unadjudicable": len(found["unadjudicable"]),
-        "case_variants_left_alone": found["case_variants"],
-        "rows": {"feed_only": found["feed_only"], "unadjudicable": found["unadjudicable"]},
-        "why": {
-            "feed_only": "the FEED is the only thing that ever surfaced these, and a feed has no "
-                         "query — so a query on the row was written by the caller, not earned by a "
-                         "search. Repairable.",
-            "unadjudicable": "these carry a query no sighting of theirs supports, but they were "
-                             "also surfaced by real searches — most likely written by a path that "
-                             "recorded a query and created no link at all. Nothing in the data can "
-                             "now say whether the query was real, so nothing here is touched.",
-        },
+        "joined_rows": joined,
+        "repairable": 0,
+        "unadjudicable": 0,
+        "quarantined": _quarantined_count(db),
+        "column": "dropped 2026-08-27",
+        "why": _COLUMN_DROPPED_NOTE,
     }
 
 
-def repair_query_provenance(db: Session, *, apply: bool = False) -> dict[str, Any]:
-    """Strip the queries that only the feed could have put there. Dry by default; commits nothing.
+def quarantine_unadjudicable(db: Session, *, apply: bool = False) -> dict[str, Any]:
+    """The one-time flagging pass, now standing as its own record-keeper (SESSION 15).
 
-    Repairs ONE class and refuses the rest by construction. The row's true provenance is not lost
-    by this — it is in `SearchSighting`, which is the stronger record and the one that adjudicated
-    the repair in the first place.
+    Ran live 2026-08-27 WITH the claims column still present: 20 rows flagged as
+    query-history-known-incomplete (a query no sighting supported, beside real sightings — most
+    likely a caller that recorded a query and created no link). Post-drop there are no claims
+    left to judge, so `newly_flagged` is 0 by construction; the call remains so the durable count
+    stays one click away. Flags are never auto-cleared, and a flagged row must not vote in
+    anything that learns a query→job association — its sighting record is KNOWN-INCOMPLETE.
     """
-    found = _query_provenance(db)
-    changed = []
-    for entry in found["feed_only"]:
-        row = db.get(ObservedJob, entry["job_id"])
-        if row is None:
-            continue
-        keep = [q for q in (row.search_queries or []) if q not in entry["unbacked"]]
-        changed.append({"job_id": row.job_id, "removed": entry["unbacked"], "kept": keep,
-                        "surfaced_by": entry["surfaced_by"]})
-        if apply:
-            row.search_queries = keep
-    return {"ok": True, "applied": bool(apply), "repaired": len(changed), "changes": changed,
-            "refused": {"unadjudicable": len(found["unadjudicable"]),
-                        "detail": "carry a query no sighting supports but were also surfaced by "
-                                  "real searches — no evidence can adjudicate them, so they stand"}}
+    return {"ok": True, "applied": bool(apply), "newly_flagged": 0,
+            "already_flagged": _quarantined_count(db), "rows": [],
+            "detail": _COLUMN_DROPPED_NOTE}
+
+
+def repair_query_provenance(db: Session, *, apply: bool = False) -> dict[str, Any]:
+    """Nothing left to repair, and that is the design working — kept so the endpoint answers with
+    the history instead of a 404 for whoever wonders where the column went. The 2026-08-26 live
+    run repaired the 14 feed-only rows while the column existed; both sides are in LEARNINGS."""
+    return {"ok": True, "applied": bool(apply), "repaired": 0, "changes": [],
+            "refused": {"unadjudicable": 0, "detail": _COLUMN_DROPPED_NOTE}}

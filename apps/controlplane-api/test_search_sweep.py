@@ -178,7 +178,6 @@ class _DescRow:
         self.location = "Nashua, NH"
         self.seen_count = 1
         self.last_seen_at = None
-        self.search_queries = []
         self.description = ""
         self.salary = None
         self.apply_type = None

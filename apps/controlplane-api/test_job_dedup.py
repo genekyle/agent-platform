@@ -45,7 +45,7 @@ def _sighting(db, job_id, title, company, *, platform="indeed", url="", seen=T0,
     row = ObservedJob(job_id=job_id, platform=platform, external_id=job_id.split(":", 1)[-1],
                       title=title, company=company, url=url, location=location, salary=salary,
                       application_status=status,
-                      seen_count=1, search_queries=[], capture_filenames=[],
+                      seen_count=1, capture_filenames=[],
                       first_seen_at=seen, last_seen_at=seen)
     db.add(row)
     db.flush()

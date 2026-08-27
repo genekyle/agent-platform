@@ -444,7 +444,12 @@ class ObservedJob(Base):
     # seen | viewed | applied | skipped | rejected
     application_status: Mapped[str] = mapped_column(String(30), default="seen", index=True)
     seen_count: Mapped[int] = mapped_column(Integer, default=1)
-    search_queries: Mapped[list[str]] = mapped_column(JSON, default=list)   # which searches surfaced it
+    # `search_queries` LIVED HERE until 2026-08-27 (SESSION 15) — a JSON list any caller could
+    # assert into, beside `SearchSighting` which records the same fact with a search behind it.
+    # One fact, one place (§16): the queries that surfaced a job are DERIVED by
+    # `observed_jobs.queries_for`; the API payload key survives, the store does not. The 20 rows
+    # whose claims nothing could adjudicate are flagged `provenance_quarantined` below — written
+    # by the live pass BEFORE the column drop in migrations.py, because the claims left with it.
     capture_filenames: Mapped[list[str]] = mapped_column(JSON, default=list)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
@@ -462,6 +467,14 @@ class ObservedJob(Base):
     # a card is scraped, and resolution is a separate (cheap, later) step — never a scrape-time
     # blocker. See `job_dedup.py` and the `Job` docstring below.
     canonical_job_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # QUARANTINED (SESSION 15): this row once carried a query claim no sighting of its own could
+    # support (the 2026-08-26 audit's "unadjudicable" class — most likely written by a path that
+    # recorded a query and created no link). Its query history is therefore KNOWN-INCOMPLETE: the
+    # sighting-derived list is true but may be missing the search that actually surfaced it. Any
+    # consumer that LEARNS a query→job association must exclude flagged rows — they must not vote.
+    # Set once by the quarantine pass (2026-08-27, 20 rows in the live corpus), never auto-cleared;
+    # display reads (queries_for) stay truthful and unaffected.
+    provenance_quarantined: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
 class Search(Base):
@@ -489,6 +502,16 @@ class Search(Base):
     #: unit of work inside a living session that sightings and applications hang off. It needed a
     #: discriminator, not a twin table — a parallel FeedRun would have split provenance in half and
     #: given `SearchSighting`, `Application.search_id` and the cockpit's list two things to mean.
+    #:
+    #: THE MODELLING RULING FOR THE LINKEDIN PREFERENCES LANDING (SESSION 15, 2026-08-27):
+    #: 2026-08-26 measured a surface that is a FEED by provenance (nobody typed a query; it comes
+    #: from stored preferences) and a SEARCH by shape (visible page numbers, has_next, ?start=
+    #: paging). `kind` stays a TWO-VALUE provenance axis and does NOT grow a third value for it:
+    #: paginated-vs-appending is a fact about the TRAVERSAL (recorded per state in the recipe's
+    #: traversal spec), while `kind` answers only "did a person ask for this set?" — and there the
+    #: answer is plainly `feed`, with `surface` naming which one (e.g. "preferences_landing").
+    #: Collapsing the two axes into one enum is exactly how "paginated and unrequested are
+    #: independent axes" would get re-forgotten; keeping them in their own homes is the ruling.
     kind: Mapped[str] = mapped_column(String(20), default="query", index=True)
     #: For a feed, WHICH feed — engines have more than one suggestion surface, and "the front page"
     #: is not a query we can key on. Empty for a query-kind row, whose identity is the query itself.

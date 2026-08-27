@@ -1368,6 +1368,9 @@ def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None, queries=None) 
         # by the caller. A caller that has not looked passes nothing and gets [], which is a display
         # field reading empty; the column it replaced could read WRONG, which is worse.
         "seen_count": j.seen_count, "search_queries": list(queries or []),
+        # SESSION 15: flagged rows' query history is known-incomplete; they never vote in
+        # query→job learning, and the UI can badge them from this.
+        "provenance_quarantined": bool(getattr(j, "provenance_quarantined", False)),
         "apply_type": j.apply_type, "application_platform": j.application_platform,
         "first_seen_at": j.first_seen_at.isoformat() if j.first_seen_at else None,
         "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
@@ -2116,11 +2119,15 @@ async def search_sweep(body: SearchSweepRequest, db: Session = Depends(get_db)):
                                result_set={"agreed": baseline, "found": identity},
                                detail=drift["detail"])
         # The row is minted only once we know what set it names — a Search row that cannot say
-        # which filters produced it is the hole this whole guard exists to close.
+        # which filters produced it is the hole this whole guard exists to close. Its LOCATION is
+        # read off the same baseline, never from the caller's target: Search 14 recorded the
+        # target's "Nashua, NH" over a page that carried no location filter at all (SESSION 15 —
+        # the query column's lie, one column over). "" here means the set states no place.
         if sweep_search is None:
             sweep_search = searches_mod.ensure_active_search(
                 db, session_id=body.training_session_id, engine=platform,
-                query=query, location=location, radius_miles=min_miles, filters=baseline)
+                query=query, location=search_cadence.declared_location(baseline, platform),
+                radius_miles=min_miles, filters=baseline)
         new_c, _dup = upsert_observed_jobs(db, cards, platform, query,
                                            search=sweep_search, page=pages_swept + 1)
         db.commit()
