@@ -272,3 +272,63 @@ def test_a_row_with_no_sighting_links_is_never_called_a_liar(db):
     audit = observed_jobs.audit_query_provenance(db)
     assert audit["joined_rows"] == 0
     assert audit["repairable"] == 0 and audit["unadjudicable"] == 0
+
+
+# --- one fact, one place (§16) -----------------------------------------------------------------
+def test_the_queries_that_surfaced_a_job_are_derived_not_stored(db):
+    """The column is no longer written; `SearchSighting` is the only record, and `queries_for`
+    reads it back. There is nowhere left to ASSERT a query — only somewhere to record a search that
+    surfaced a job — which is what makes the 20-row class impossible rather than discouraged."""
+    import observed_jobs
+    from models import ObservedJob
+
+    s = searches_mod.ensure_active_search(db, session_id=1, engine="indeed",
+                                          query="reporting analyst")
+    upsert_observed_jobs(db, _cards("a1"), "indeed", "reporting analyst", search=s)
+    assert db.get(ObservedJob, "indeed:a1").search_queries == [], "the column was written"
+    assert observed_jobs.queries_for(db, ["indeed:a1"]) == {"indeed:a1": ["reporting analyst"]}
+
+
+def test_a_job_only_a_feed_surfaced_derives_NO_query(db):
+    """The exact 14-row lie, now impossible to express. A feed has no query; the derivation says so
+    by construction instead of by a caller remembering."""
+    import observed_jobs
+
+    feed = searches_mod.ensure_active_feed(db, session_id=1, engine="indeed")
+    upsert_observed_jobs(db, _cards("f1"), "indeed", None, search=feed)
+    assert observed_jobs.queries_for(db, ["indeed:f1"]) == {"indeed:f1": []}
+
+
+def test_two_searches_that_found_the_same_job_both_show_oldest_first(db):
+    import observed_jobs
+
+    a = searches_mod.ensure_active_search(db, session_id=1, engine="indeed", query="report analyst")
+    upsert_observed_jobs(db, _cards("j1"), "indeed", "report analyst", search=a)
+    b = searches_mod.ensure_active_search(db, session_id=1, engine="indeed", query="data analyst")
+    upsert_observed_jobs(db, _cards("j1"), "indeed", "data analyst", search=b)
+    assert observed_jobs.queries_for(db, ["indeed:j1"]) == {
+        "indeed:j1": ["report analyst", "data analyst"]}
+
+
+def test_deriving_a_whole_page_costs_ONE_statement(db):
+    """A display field must not become an N+1 over a 100-row dashboard — that is how a correctness
+    fix turns into a performance regression nobody attributes to it."""
+    import observed_jobs
+    from sqlalchemy import event
+
+    s = searches_mod.ensure_active_search(db, session_id=1, engine="indeed", query="analyst")
+    ids = [f"indeed:p{i}" for i in range(40)]
+    upsert_observed_jobs(db, _cards(*[f"p{i}" for i in range(40)]), "indeed", "analyst", search=s)
+    db.flush()
+
+    seen: list[str] = []
+    def _count(conn, cursor, statement, *a):        # noqa: ANN001
+        if statement.lstrip().upper().startswith("SELECT"):
+            seen.append(statement)
+    event.listen(db.get_bind(), "before_cursor_execute", _count)
+    try:
+        out = observed_jobs.queries_for(db, ids)
+    finally:
+        event.remove(db.get_bind(), "before_cursor_execute", _count)
+    assert len(out) == 40 and out["indeed:p7"] == ["analyst"]
+    assert len(seen) == 1, f"derivation ran {len(seen)} SELECTs for one page of rows"

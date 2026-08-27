@@ -3885,6 +3885,7 @@ async def _popup_select(cdp, cfg: dict) -> dict:
 
 
 @app.post("/set_distance")
+@journaled(Intent.CLICK)
 async def set_distance(body: SetDistanceRequest):
     """Set the search radius to the smallest offered option >= min_miles, BY OPERATING THE PILL —
     open it, select the option, confirm it staged, click Update, then confirm from the URL.
@@ -4251,6 +4252,7 @@ def pane_shows(pane: dict, external_id) -> bool:
 
 
 @app.post("/open_job_card")
+@journaled(Intent.CLICK)
 async def open_job_card(body: OpenJobCardRequest):
     """Click a result card by its id to open the IN-PAGE right-hand detail pane, then scrape its
     description/salary/apply_type from that pane. Uses a TRUSTED CDP mouse click (a synthetic
@@ -4467,6 +4469,7 @@ _NEXT_PAGE_JS_BY_PLATFORM = {"indeed": _NEXT_PAGE_JS, "linkedin": _LINKEDIN_NEXT
 
 
 @app.post("/next_page")
+@journaled(Intent.CLICK)
 async def next_page(body: NextPageRequest):
     """Page the results forward by CLICKING the pagination control (never a ?start= URL-jump):
     scroll to the bottom, then click the next page number (or the Next link). Returns whether a
@@ -5008,6 +5011,7 @@ class NativeDismissRequest(BaseModel):
 
 
 @app.post("/dismiss_native_dialog")
+@journaled(Intent.CLICK)
 async def dismiss_native_dialog(body: NativeDismissRequest):
     """Clear a browser-owned dialog via macOS Accessibility, and PROVE the tab came back.
 
@@ -5128,6 +5132,7 @@ class DismissDialogRequest(BaseModel):
 
 
 @app.post("/dismiss_dialog")
+@journaled(Intent.CLICK)
 async def dismiss_dialog(body: DismissDialogRequest):
     """Dismiss an OPEN JavaScript dialog, and verify the renderer answers afterwards.
 

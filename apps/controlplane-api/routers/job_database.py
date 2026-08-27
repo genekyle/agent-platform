@@ -225,9 +225,12 @@ def get_job(job_key: str, db: Session = Depends(get_db)):
 
     out = _job_dict(job, app=app, events=events, with_description=True)
     out["redirected_from"] = job_key if alive != job_key else None
+    # Derived, batched over this job's sightings (§16) — the column is no longer written.
+    import observed_jobs as _oj
+    _qmap = _oj.queries_for(db, [s.job_id for s in sightings])
     out["sightings"] = [{
         "job_id": s.job_id, "platform": s.platform, "url": s.url,
-        "seen_count": s.seen_count, "search_queries": s.search_queries or [],
+        "seen_count": s.seen_count, "search_queries": _qmap.get(s.job_id, []),
         "title": s.title, "company": s.company,
         "first_seen_at": s.first_seen_at.isoformat() if s.first_seen_at else None,
         "last_seen_at": s.last_seen_at.isoformat() if s.last_seen_at else None,

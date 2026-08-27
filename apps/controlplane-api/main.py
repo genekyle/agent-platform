@@ -1354,7 +1354,7 @@ def _shortlist_jobs(jobs: list[dict], query: str, applied_keys: Optional[set] = 
     return out
 
 
-def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None) -> dict[str, Any]:
+def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None, queries=None) -> dict[str, Any]:
     # already_applied = applied directly OR matches the (company,title) of any applied job
     # (cross-platform dedup — the user may have applied off-Indeed).
     already = j.application_status == "applied"
@@ -1364,7 +1364,10 @@ def _job_dict(j: ObservedJob, applied_keys: Optional[set] = None) -> dict[str, A
         "job_id": j.job_id, "platform": j.platform, "external_id": j.external_id,
         "title": j.title, "company": j.company, "location": j.location, "url": j.url,
         "application_status": j.application_status, "already_applied": already,
-        "seen_count": j.seen_count, "search_queries": j.search_queries or [],
+        # DERIVED, never the column (§16) — `queries` comes from observed_jobs.queries_for, batched
+        # by the caller. A caller that has not looked passes nothing and gets [], which is a display
+        # field reading empty; the column it replaced could read WRONG, which is worse.
+        "seen_count": j.seen_count, "search_queries": list(queries or []),
         "apply_type": j.apply_type, "application_platform": j.application_platform,
         "first_seen_at": j.first_seen_at.isoformat() if j.first_seen_at else None,
         "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
@@ -1829,7 +1832,9 @@ def jobs_dashboard(domain_id: str, platform: Optional[str] = None, db: Session =
     applied = [j for j in jobs if j.application_status == "applied"]
     # Cross-platform applied signatures (company+core-title of everything applied anywhere).
     applied_keys = {_applied_key(j.company, j.title) for j in applied}
-    searches = sorted({q for j in jobs for q in (j.search_queries or [])})
+    import observed_jobs as _oj
+    qmap = _oj.queries_for(db, [j.job_id for j in jobs])      # one statement for the whole page
+    searches = sorted({q for j in jobs for q in qmap.get(j.job_id, [])})
     already_applied = [j for j in jobs if _job_dict(j, applied_keys)["already_applied"]]
     with_desc = [j for j in jobs if (j.description or "").strip()]
 
@@ -1837,7 +1842,7 @@ def jobs_dashboard(domain_id: str, platform: Optional[str] = None, db: Session =
     # table that answers "did the multi-page sweep actually work for this query".
     by_query: dict[str, dict[str, int]] = {}
     for j in jobs:
-        for q in (j.search_queries or []):
+        for q in qmap.get(j.job_id, []):
             row = by_query.setdefault(q, {"found": 0, "with_description": 0, "applied": 0})
             row["found"] += 1
             if (j.description or "").strip():
@@ -1860,14 +1865,15 @@ def jobs_dashboard(domain_id: str, platform: Optional[str] = None, db: Session =
         },
         "searches": searches,
         "by_query": [{"query": q, **counts} for q, counts in sorted(by_query.items())],
-        "jobs_seen": [_job_dict(j, applied_keys) for j in jobs[:100]],
-        "jobs_applied": [_job_dict(j, applied_keys) for j in applied],
+        "jobs_seen": [_job_dict(j, applied_keys, qmap.get(j.job_id)) for j in jobs[:100]],
+        "jobs_applied": [_job_dict(j, applied_keys, qmap.get(j.job_id)) for j in applied],
         "descriptions": [
-            {**_job_dict(j, applied_keys), "salary": j.salary,
+            {**_job_dict(j, applied_keys, qmap.get(j.job_id)), "salary": j.salary,
              "desc_chars": len(j.description or ""), "description": (j.description or "")[:6000]}
             for j in with_desc[:60]
         ],
-        "most_seen": [_job_dict(j, applied_keys) for j in sorted(jobs, key=lambda x: x.seen_count or 1, reverse=True)[:10]],
+        "most_seen": [_job_dict(j, applied_keys, qmap.get(j.job_id))
+                      for j in sorted(jobs, key=lambda x: x.seen_count or 1, reverse=True)[:10]],
     }
 
 
@@ -2276,7 +2282,8 @@ def update_job(job_id: str, body: JobStatusUpdate, db: Session = Depends(get_db)
     if body.notes is not None:
         row.notes = body.notes
     db.commit()
-    return _job_dict(row)
+    import observed_jobs as _oj
+    return _job_dict(row, queries=_oj.queries_for(db, [row.job_id]).get(row.job_id))
 
 
 @router.post("/api/training/page-states")

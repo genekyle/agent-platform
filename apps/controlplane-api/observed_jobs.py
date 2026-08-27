@@ -110,7 +110,11 @@ def upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
                 title=(j.get("title") or "")[:400], company=(j.get("company") or "")[:300],
                 location=(j.get("location") or "")[:300], url=(j.get("url") or "")[:1200],
                 salary=(j.get("salary") or "")[:200] or None,
-                search_queries=[search_query] if search_query else [],
+                # NOT WRITTEN ANY MORE (§16). The queries that surfaced a job are derived from
+                # `SearchSighting` by `queries_for`; `search_query` still arrives because
+                # `check_provenance` validates it against the Search being linked, which is the
+                # door — it is just no longer copied onto the row as a second, unjustifiable store.
+                search_queries=[],
                 first_seen_at=now, last_seen_at=now, seen_count=1,
             )
             db.add(row)
@@ -118,8 +122,6 @@ def upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
         else:
             row.seen_count += 1
             row.last_seen_at = now
-            if search_query and search_query not in (row.search_queries or []):
-                row.search_queries = (row.search_queries or []) + [search_query]
             # backfill any fields that were blank before
             row.title = row.title or (j.get("title") or "")[:400]
             row.company = row.company or (j.get("company") or "")[:300]
@@ -128,13 +130,52 @@ def upsert_observed_jobs(db: Session, jobs: list[dict], platform: str,
 
     # Provenance: the search is the query, the session is only the browser (2026-08-10). When the
     # caller knows which Search this page belongs to, every sighting on it gets the association —
-    # the JSON `search_queries` list above stays for display, the join table answers questions.
+    # and since 2026-08-26 that association is the ONLY record of it (§16). This link is no longer
+    # a nicety beside the JSON list; it is where the fact lives.
     if search is not None and touched_ids:
         import searches as searches_mod
         searches_mod.link_sightings(db, search, touched_ids, page=page,
                                     results_on_page=len(touched_ids))
 
     return new_count, dup_count
+
+
+# --- the queries that surfaced a job, DERIVED (PRINCIPLES §16) ---------------------------------
+# `ObservedJob.search_queries` used to be a column: a JSON list any caller could append to, sitting
+# beside `SearchSighting`, which records the same fact with a search behind it. Two stores for one
+# fact, and when they disagreed only one could be checked — which is how 20 rows ended up carrying a
+# query nothing can support and nothing will ever be able to judge (2026-08-26).
+#
+# So the column is no longer written and this is the answer instead. It cannot be wrong in the way
+# the column was: there is nowhere to assert a query, only somewhere to record a search that
+# surfaced a job.
+#
+# A FEED CONTRIBUTES NO QUERY, by construction — that is what its empty `query` column means, and
+# excluding it here is the same rule the write door enforces. One statement for a whole page of
+# rows, because this is called from list endpoints and an N+1 over a 100-row dashboard is a real
+# cost for a display field.
+def queries_for(db: Session, job_ids: list[str]) -> dict[str, list[str]]:
+    """{job_id: [queries that surfaced it]}, oldest sighting first. Empty list for a job only a feed
+    ever surfaced — which is the honest answer, and the one the column used to get wrong."""
+    from sqlalchemy import select as _select
+
+    from models import SearchSighting
+
+    if not job_ids:
+        return {}
+    out: dict[str, list[str]] = {jid: [] for jid in job_ids}
+    rows = db.execute(
+        _select(SearchSighting.job_id, Search.query, Search.kind)
+        .join(Search, Search.id == SearchSighting.search_id)
+        .where(SearchSighting.job_id.in_(job_ids))
+        .order_by(SearchSighting.seen_at.asc())).all()
+    for job_id, query, kind in rows:
+        q = " ".join((query or "").split())
+        if not q or (kind or "query") == "feed":
+            continue
+        if q not in out[job_id]:
+            out[job_id].append(q)
+    return out
 
 
 # --- the rows that got in before the door had a lock -------------------------------------------
