@@ -12271,3 +12271,79 @@ awaiting) are how the operator knows which one the moment calls for.**
 
 *Suites: controlplane-api 2025. UI verified in the browser: hero says "1 session is waiting on
 you", header location gone honest, seeing chip live.*
+
+## 2026-08-27 (tenth) — the first real queue drive: one submitted, and four bugs only a drive could find
+
+Operator picked **11 jobs** in the cockpit and said keep moving. **Application 1 submitted and
+verified** (Arcadia Financial, BambooHR — screenshot-confirmed "Your application was submitted
+successfully", recorded `applied`). Job 2 parked at a consent wall, job 3 filled to its dropdowns.
+Every bug below was invisible to a green suite and cost nothing to find once a real page was in
+front of the loop.
+
+### 1. THE SUBMIT GATE JUDGED A SUBMISSION WITHOUT READING THE PAGE
+
+`verify()`'s strongest signal is `page_text` — *"the site says so in its own words"* — and the one
+gate that decides whether a real application counts as SENT passed **url + title and no text**.
+Every tab dict in `obs` carries only those two, so the strongest evidence was structurally
+unreachable and the check silently degraded to matching URLs. It refused a genuine submission:
+BambooHR renders the confirmation while keeping the **same url and the same title**.
+
+**Why it hid for months:** it worked on the platforms that made it easy. Paylocity's
+`Jobs/Success/4382310` changes the URL, so those passed; the ones that don't were overridden by
+hand and nobody asked why. *A check that degrades silently on the hard cases and passes on the easy
+ones reads as working.*
+
+### 2. A PARKED STEP'S TAB ANSWERED FOR THE CURRENT STEP — AND A FILL WENT TO IT
+
+Job 2 (iCIMS) parked with its tab open; job 3 (Greenhouse) became current; `apply_fill` for job 3
+**typed into job 2's form** — an email onto the wrong employer's page and an attempt at a legal
+consent checkbox nobody had approved. The consent did not land, and the only reason we know is that
+the fill's read-back said so: *"0 of 2 confirmed; 2 could not be read back."* **Honest reporting is
+what turned a silent wrong-form write into a caught one.**
+
+`_apply_tab` consults `tab_claims` carefully — **in the fallback, which is unreachable whenever a
+recorded id is live.** `apply_tab` is written while a step is worked and is not cleared when it
+parks, and a parked ATS tab still classifies `ROLE_APPLY`, so the hop-detection did not fire either.
+The claim is checked first now. *Filling the wrong application is the worst reachable outcome of a
+mis-resolved tab, and the guard for it existed and sat behind a shortcut.*
+
+### 3. THE UNSURE GATE DEADLOCKED, TWICE, IN TWO DIFFERENT SHAPES
+
+Built this session and wrong twice before a drive corrected it. **First:** the ack keyed to the
+belief's timestamp, and every crank caches a new belief — so `run()` degenerated to one crank per
+press, the fifteen-presses problem it was built to kill. Keyed to `(state, axis)` instead: what a
+press confirms is *this page-kind is fine, drive it*. **Second:** one marker was held, so returning
+to an already-confirmed state re-armed the gate — and a drive cycles search → apply → search once
+per job, so job 2 re-stopped on exactly the reading confirmed during job 1. The acks accumulate.
+*A confirmation does not expire because we walked somewhere else and came back.*
+
+### 4. TYPING AND SENDING ARE DIFFERENT PERMISSIONS
+
+Operator: *"make sure you filled out everything before I try to confirm the actual captcha."* A
+reCAPTCHA checkbox in a form's FOOTER gates the submit; the fields above it are ordinary fields.
+Refusing to fill on it made the operator race the token's ~2-minute expiry — and lose, twice: the
+live form came back reading *"Verification expired. Check the checkbox again."* `blocks_typing`
+splits a visible challenge interstitial (stops everything) from a checkbox-only block (stops only
+the send). Submit is untouched. **Fill first, tick last** is now both the rule and the code.
+
+### What the drive also surfaced, unfixed and named
+
+* **LinkedIn holds the pane after an external apply.** *"Did you finish applying?"* Yes/No sits
+  where the next job's Apply button would be, and the pane will not switch until it is answered;
+  answering yes then raises a modal (*"Your application was sent to X!"*, Not now / Show jobs) that
+  must also be cleared. Two undocumented states between every pair of jobs in a queue.
+* **`open_job_card`'s measure-and-click loses to the AX layer on a scrolled list.** It returned
+  `not_staged` three times on a card the AX role+name path opened first try. The bbox path clicks
+  coordinates; the AX path re-resolves and scrolls to its target.
+* **`expect_question` passes when it cannot read a question.** Asserting *"Did you finish
+  applying?"* returned `target_question: null` and the click proceeded — a check that could not be
+  performed should have a strict consequence, not a silent pass (the `unprobed()` rule, unapplied).
+  The first attempt clicked a *different* control named "Yes" — a feedback survey.
+* **`not_staged` with an EMPTY detail** renders upstream as "no pane", which reads as absence
+  rather than a click that did not take.
+* **Greenhouse react-selects resist `apply_prompt_select`** — the field resolves and then
+  `level 0 '<value>' not found (typed=False)`: the dropdown is never opened, so its options never
+  exist to match. Six required fields on job 3 are still open on exactly this.
+
+*Suites: controlplane-api 2037. Live: 1 submitted, 1 parked at a consent wall, 1 filled to its
+dropdowns. Answer store gained the LinkedIn URL and a standardised 75000 for unposted roles.*
