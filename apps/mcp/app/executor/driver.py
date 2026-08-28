@@ -30,7 +30,7 @@ function(names) {
   const txt = (n) => ((n && (n.innerText || n.textContent)) || '').replace(/\s+/g, ' ').trim();
   const files = this.files ? this.files.length : -1;
   let box = null;
-  for (let n = this.parentElement, d = 0; n && n !== document.body && d < 8; d++, n = n.parentElement) {
+  for (let n = this.parentElement, d = 0; n && n !== document.body && d < 12; d++, n = n.parentElement) {
     if (n.querySelectorAll('input[type=file]').length > 1) break;   // n already spans a neighbour
     box = n;
   }
@@ -315,6 +315,7 @@ class TrajectoryDriver(ABC):
                 # not — its truth is `rendered` alone (see the witness). Keep polling: the
                 # round-trip may still render it.
                 if w.get("at_node") and not w.get("ingesting"):
+                    logger.info("upload landed on a plain input (scope=%r)", w.get("scope"))
                     return "upload"
                 if w.get("error"):
                     return f"upload:rejected:{str(w.get('error'))[:60]}"
