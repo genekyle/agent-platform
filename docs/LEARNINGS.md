@@ -12347,3 +12347,63 @@ the send). Submit is untouched. **Fill first, tick last** is now both the rule a
 
 *Suites: controlplane-api 2037. Live: 1 submitted, 1 parked at a consent wall, 1 filled to its
 dropdowns. Answer store gained the LinkedIn URL and a standardised 75000 for unposted roles.*
+
+## 2026-08-27 (eleventh) — the interaction layer, mapped under load; the AX door reaches the widgets
+
+Operator asked the architecture question directly — *"what is the entire logic behind our
+interaction layer... would a per-ATS interaction profile be rash?"* — and the answer was earned
+live, on Greenhouse's six blocked selects, rather than from memory. **Five of six committed by the
+end; three protocol bugs and one addressing hole fixed on the way.**
+
+### The finding that frames everything: the profile system already exists, unreached
+
+`/select_option` IS the per-ATS interaction profile — the **dialect cycle** (`app/dialect.py`,
+built 2026-08-11 from the operator's own words): learned dialect per (platform, widget family) →
+classifier's verdict → remaining candidates, every attempt verifying at the widget's own truth,
+first verified win recorded so widget #2 never re-pays widget #1's diagnosis. **The apply ladder
+never calls it.** `apply_prompt_select` routes to `/select_prompt` (the Workday hierarchical
+driver), and `form_fill` defers every non-text widget into `deferred_to_widget` — **a list no
+consumer reads** (the census-cap-flags class again). So the six Greenhouse selects went down the
+Workday path, which cannot open them, while the endpoint built for exactly this sat unused.
+
+### What broke inside the protocols once they WERE reached, each one measured
+
+1. **The option commit was `el.click()`** — the finder JS clicked the option synthetically.
+   react-select commits on MOUSEDOWN; the protocol's own OPENER two steps earlier already used
+   trusted CDP events. Every dialect-cycle candidate failed at the same line. The finder now
+   returns the option's centre and the caller presses it with the trusted mouse. (Untrusted-click
+   class, sixth measured instance.)
+2. **`isSearchable=false` exists.** Greenhouse's Yes/No questions ignore keystrokes; the menu is
+   one CLICK away, and the protocol typed first and looked second — `n_options: 0`, NOT_OPENED,
+   on a widget whose answer was rendered. Now: open by click, LOOK, type only when nothing
+   rendered (the async typeahead). Looking first also dodges the prefix trap when the exact value
+   is already on screen.
+3. **The prefix trap refired exactly as documented:** typing "Concord" picked *"Concordia, Entre
+   Rios, Argentina"* — the same word the finder's docstring uses as its warning. Store city
+   values with state ("Concord, New Hampshire").
+4. **`select_option` spoke only CSS selectors** — the bespoke-DOM door. The census's `#country`
+   turned out to be the PHONE country-code select (Greenhouse's intl-phone widget labels its
+   dial-code dropdown "Country"), and the first trusted commit picked "United States +1" there —
+   caught by the value read-back alone. Added the AX door: `target_role`+`target_name` resolve
+   /execute-style, and `_selector_for_node` adapts the node into a unique selector (protocols are
+   selector-shaped; the derivation is the adapter, not a second addressing scheme). Five distinct
+   per-question ids resolved and drove first try. *(Plus one self-inflicted: the CDP result was
+   unwrapped twice and every derivation read None — `_CDPSession.send` returns the result object.)*
+
+### What the door proved, and what it still misses
+
+By-name addressing committed and VERIFIED: authorized=Yes, visa=No, worked-for=No,
+location="Concord, New Hampshire, United States" (the verify's read-point missed that one — it
+reported not_staged while the screenshot shows it committed; chip-vs-label is also why the
+dial-code verify reads '+1' as "wrong option"). Still open on job 3: the privacy-acknowledgement
+select (all three protocols report not_opened — menu likely portals off-screen at the form's
+foot), and the resume upload (`input[type=file]` matched TWO nodes both answering "Attach" —
+refused honestly; `within: "Resume/CV"` scoping found no input inside that section, so the input
+lives outside its label's container). Both are one-click for the operator; both are named here so
+the next session fixes the reader, not the symptom.
+
+*Suites: mcp 179, api unchanged. The architecture verdict and the revamp shape are in the session
+log — short form: the profile idea is RIGHT and already half-built; key it by widget ENGINE with
+the ATS as a learned prior (dialects), route the LADDER through `/select_option`'s cycle, and wire
+the evidence each act already produces into the belief's element axis. The primitives are sound;
+the dispatch is what needs the revamp.*
