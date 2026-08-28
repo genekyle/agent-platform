@@ -121,6 +121,9 @@ Each pillar: what exists (measured), the gap, and the enforcement point that clo
 - **Enforcement:** **one resolver** — AX role + accessible name → `backend_node_id` is the only
   door; every other path is an explicit, listed exemption with a reason (SESSION_19). Trusted
   pointer gestures become the default for commit-bearing clicks.
+  **→ `PLAN_interaction_dispatch_v1.md` (adopted 2026-08-27, operator-directed) is this pillar's
+  build plan:** route the ladder through `/select_option`'s dialect cycle, selectors become the
+  derived adapter of the AX door, and act evidence lands on the belief's element axis.
 
 ### P4 — PLAN (the planner): what comes next, what will this demand, when to ask
 
