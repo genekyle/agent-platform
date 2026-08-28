@@ -194,18 +194,34 @@ async def react_select_pick(cdp, *, selector: str, value: str,
         if typ != "mouseMoved":
             ev.update({"button": "left", "clickCount": 1})
         await cdp.send("Input.dispatchMouseEvent", ev)
-    await asyncio.sleep(0.15)
-    await _eval(cdp, _CLEAR_ACTIVE_JS)
-    await _type_trusted(cdp, value)
-    await asyncio.sleep(settle_seconds)   # the debounced fetch
+    await asyncio.sleep(0.35)
 
-    # aria-controls is ABSENT until it expands, so resolve the popup AFTER typing — never
-    # before. Reading it early is how "already open" got decided off another widget's strays.
+    # LOOK BEFORE TYPING. A react-select can be isSearchable=false — Greenhouse renders its
+    # Yes/No questions that way (measured 2026-08-27: typing "Yes" produced n_options: 0 and
+    # NOT_OPENED on a widget whose menu was one click away) — and a non-searchable select opens
+    # on the mousedown above and ignores keystrokes. So: open by click, look for the value among
+    # what rendered, and only TYPE when nothing rendered (the async typeahead — Location — whose
+    # options do not exist until keystrokes fetch them). Typing into a select that already shows
+    # its options adds nothing on the non-searchable kind and risks the prefix trap on the
+    # searchable kind; looking first is both cheaper and safer.
     ref = await _eval(cdp, f"(() => {{ const e = document.querySelector({json.dumps(selector)});"
                            " return e && e.getAttribute('aria-controls'); }})()")
-    steps.append({"step": "open", "popup_ref": ref, "scoped": bool(ref)})
-
     hit = await _eval(cdp, _find_option_js(value, ref)) or {}
+    steps.append({"step": "open", "popup_ref": ref, "scoped": bool(ref),
+                  "via": "click", "n_options": hit.get("count")})
+
+    if not hit.get("found"):
+        await _eval(cdp, _CLEAR_ACTIVE_JS)
+        await _type_trusted(cdp, value)
+        await asyncio.sleep(settle_seconds)   # the debounced fetch
+
+        # aria-controls is ABSENT until it expands, so resolve the popup AFTER typing — never
+        # before. Reading it early is how "already open" got decided off another widget's strays.
+        ref = await _eval(cdp, f"(() => {{ const e = document.querySelector({json.dumps(selector)});"
+                               " return e && e.getAttribute('aria-controls'); }})()")
+        hit = await _eval(cdp, _find_option_js(value, ref)) or {}
+        steps.append({"step": "open", "popup_ref": ref, "scoped": bool(ref), "via": "typed"})
+
     steps.append({"step": "select", "found": bool(hit.get("found")),
                   "n_options": hit.get("count"), "picked": hit.get("text")})
     if hit.get("found"):

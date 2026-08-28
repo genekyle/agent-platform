@@ -634,3 +634,30 @@ def test_select_option_by_name_reports_an_unresolvable_target(monkeypatch):
         target_name="Country", value="United States")))
     assert out["ok"] is False and out["outcome"] == "not_found"
     assert out["addressed_by"] == "role_name"
+
+
+def test_a_non_searchable_select_commits_from_the_click_opened_menu(corpus, monkeypatch):
+    """Greenhouse renders its Yes/No questions isSearchable=false: the menu opens on the trusted
+    mousedown and keystrokes are ignored — typing 'Yes' produced 0 options and NOT_OPENED on a
+    widget whose answer was one click away (live 2026-08-27). The protocol now looks first and
+    only types when nothing rendered."""
+    typed = []
+
+    def responder(expr):
+        if "options_enumerable_by" in expr:
+            return {"found": True, "widget_type": "react_select"}
+        if "el.focus()" in expr:
+            return {"ok": True, "x": 10, "y": 10, "expanded": "false"}
+        if "role=option" in expr:
+            return {"found": True, "text": "Yes", "count": 2, "x": 40, "y": 120}
+        if "closest('[class*=select__control]" in expr:
+            return {"text": "Yes", "read_at": "[class*=singleValue]"}
+        return None
+
+    wire_cdp(monkeypatch, responder)
+    out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
+        selector="#q1", value="Yes", widget_type="react_select")))
+    assert out["ok"] is True
+    opens = [s for s in out["steps"] if s.get("step") == "open"]
+    assert opens and opens[0].get("via") == "click", "found on the click-opened menu, no typing"
+    assert not any(s.get("via") == "typed" for s in opens)
