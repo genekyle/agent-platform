@@ -6558,7 +6558,14 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         if cards_id:
             refs.append(cards_id)
         apply_id = (_apply_tab(bb, obs) or {}).get("tab_id")
-        if apply_id and apply_id != cards_id and _owner(apply_id) in ("", step.job_id):
+        # STRICT ownership: only a tab the claims record says is THIS job's joins the probe set.
+        # "Unclaimed counts as mine" pulled a parked application's tab straight back in the
+        # moment it turned out claims are sparsely written on live blackboards (fourth refusal,
+        # same hour) — _apply_tab's fallback hands back SOME ats tab for a step that has opened
+        # nothing, and an unclaimed one cannot be told apart there. The cards tab covers the
+        # un-opened step; a rung that later acts on a challenged apply tab still meets the
+        # per-act guards (fill's blocks_typing, and the submit gate is the operator's press).
+        if apply_id and apply_id != cards_id and _owner(apply_id) == step.job_id:
             refs.append(apply_id)
         scoped_clear = bool(refs)
         for tid in refs:
