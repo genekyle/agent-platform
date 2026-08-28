@@ -7303,7 +7303,12 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # the form, read back, one irreversible press from sent. So when the census says complete
         # and the page's own submit control is the only move, the ladder serves the GATE — same
         # operator-only rung, same confirm affordance, nothing new invented.
-        if rung.id == f"{step.platform}_application_form":
+        # Keyed on the canonical KIND, not the literal name — the mapper's `greenhouse_apply_form`
+        # walked straight past a check spelled `greenhouse_application_form`, so the promotion
+        # never fired and the generic advance hunted a Continue that a single-page form does not
+        # have (live 2026-08-28, the same split-name disease at one more read-point).
+        import apply_recipe as _ark
+        if _ark.kind_of_state(step.platform, rung.id) == al.APPLICATION_FORM:
             _pending = await _unanswered_required(browser_url,
                                                   (await _observe_tab_now()) or tab_id)
             # DEFINITELY NOTHING PENDING — not "nothing pending as far as we could tell". This is
