@@ -1062,6 +1062,25 @@ def _view(session: TrainingSession, bb: Any, ledger: cps.Ledger, obs: dict[str, 
     # The window's verdict leads; an explicit one only wins when a caller took a better look.
     observer = observer if observer is not None else obs.get("observer")
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    # AN ARMED HOLD SURVIVES THE POLL. The gate's hold rides `last_step` — which only a POST
+    # response carries; the panel polls GET, whose `last` is None, so the armed "Send it" confirm
+    # lived for under a poll cycle and vanished before a human could press it. Measured from the
+    # operator's own seat 2026-08-28: press → hold armed → poll → button gone, which reads as
+    # "the submit button does nothing". Same durability rule the account handoff earned
+    # ("`last_step` alone is transient"): the hold persists in world when armed, is served to
+    # every poll while the CURRENT step still stands at the gate, and is dropped lazily the
+    # moment the job or the rung moves on — a stale confirm must never outlive its gate.
+    if last is None:
+        _hold = (bb.world or {}).get("submit_hold")
+        if _hold:
+            _cur = queue.current()
+            if (_cur is not None and _cur.job_id == _hold.get("job_id")
+                    and (nr := _cur.walk_to_next_rung()[0]) is not None
+                    and nr.id == aps.SUBMIT_RUNG.id):
+                last = _hold.get("last_step")
+            else:
+                bb.world = dict(bb.world or {})
+                bb.world.pop("submit_hold", None)
     # The rungs are worded for the engine actually being driven. They used to read "Signed in to
     # Indeed" on every ladder, which a LinkedIn session renders as an instruction to go and sign in
     # to the wrong site — found the first time a LinkedIn session was started, 2026-07-27.
@@ -6676,6 +6695,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                                            search_id=(bb.world or {}).get("search_id"))
                 cleanup = await _apply_cleanup(bb, obs, browser_url, step)
                 bb.world.pop("apply_tab", None)
+                bb.world.pop("submit_hold", None)
                 _persist(bb, ledger)
                 obs2 = await _observe(browser_url, bb, session_id=session.id)
                 tidied = sum(1 for c in cleanup["closed"] if c["ok"])
@@ -7275,6 +7295,15 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                     why=f"Presses Submit on {step.title or step.job_id}'s open form. "
                         f"Irreversible: the application goes to the employer.",
                     consequential=True)))
+            # THE ARMED HOLD MUST OUTLIVE THE POLL — the panel refreshes constantly and GET's
+            # `last_step` is None, so without this the confirm press vanished within a poll
+            # cycle (operator's seat, 2026-08-28). `_view` serves it back while THIS job still
+            # stands at the gate and drops it the moment anything moves.
+            bb.world = dict(bb.world or {})
+            bb.world["submit_hold"] = {
+                "job_id": step.job_id,
+                "last_step": {"ok": False, "action": "apply_step", "detail": detail,
+                              "refusal": _rung_extra.get("refusal")}}
         else:
             _ok, detail = await _work_submit_rung(step, bb, obs, browser_url, style,
                                                   initiator=body.initiator, acted=_acted)
@@ -7290,6 +7319,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                     search_id=(bb.world or {}).get("search_id"))
                 _rung_extra["cleanup"] = await _apply_cleanup(bb, obs, browser_url, step)
                 bb.world.pop("apply_tab", None)
+                bb.world.pop("submit_hold", None)
                 tidied = sum(1 for c in _rung_extra["cleanup"]["closed"] if c["ok"])
                 if tidied:
                     detail += f" Closed {tidied} finished tab(s); back on the search."

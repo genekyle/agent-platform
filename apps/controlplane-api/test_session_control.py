@@ -7741,3 +7741,41 @@ def test_the_post_act_look_cannot_demote_the_armed_gate_either():
     assert seen["observed"] is False, "sparse AX names on a greenhouse URL is a URL default"
     assert _adopt_screen_verdict(step, seen) is False
     assert step.landing_state == "greenhouse_review"
+
+
+def test_the_armed_hold_survives_the_poll(monkeypatch):
+    """Measured from the operator's own seat (2026-08-28): press → hold armed → the panel's poll
+    replaced last_step with GET's None → the "Send it" confirm vanished within a poll cycle,
+    which reads as "the submit button does nothing". The hold now persists in world and every
+    poll serves it back while the current step still stands at the gate."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_at_the_gate())
+    try:
+        client.post("/api/session_control/1/apply_step", json={"initiator": "operator"})
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    exit_ = ((r.get("last_step") or {}).get("refusal") or {}).get("exit") or {}
+    assert exit_.get("body") == {"confirm_submit": True}
+    assert exit_.get("consequential") is True
+
+
+def test_a_stale_hold_never_outlives_its_gate(monkeypatch):
+    """The other half: a confirm that survives the gate it armed against is a send waiting to
+    mis-fire. The moment the current job or rung moves on, the poll drops the hold."""
+    bb = _at_the_gate()
+    bb.world["submit_hold"] = {
+        "job_id": "linkedin:SOMEBODY_ELSE",
+        "last_step": {"ok": False, "action": "apply_step", "detail": "stale",
+                      "refusal": {"exit": {"body": {"confirm_submit": True}}}}}
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=bb)
+    try:
+        r = client.get("/api/session_control/1").json()
+    finally:
+        _teardown()
+    assert r.get("last_step") is None
