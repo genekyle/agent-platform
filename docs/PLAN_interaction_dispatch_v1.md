@@ -86,6 +86,64 @@ renders where no protocol looks; the two-"Attach" upload ambiguity (scope `withi
 LABELLED section even when the input portals outside it); `/challenge_visibility` reporting a
 solved checkbox as blocking (the BambooHR submit gate read stale state until a human re-ticked).
 
+### W5 — the ladder consults what reconcile already knows (PARKED 2026-08-28)
+
+**Parked deliberately: two live drives were running and the `--reload` server would have swapped
+this under one of them. Apply on the next quiet main.**
+
+The rule *"we are on the ATS, so Apply was clicked"* exists — `session_control.py`, in
+`reconcile_step` — and it is only reachable from `/reconcile_step`. The ladder that PROPOSES the
+next rung never asks it. Measured on `linkedin:4424504424` (Cadence, Revenue Intelligence Analyst),
+session 34:
+
+* `03:12:11 → 03:13:28` — **eight** `enter_apply` attempts in 77 seconds, alternating
+  `ok  clicked 'Apply'; stayed in this tab` (initiator=operator) with
+  `mismatch  no tab opened and none navigated — the click left the window unchanged`
+  (initiator=step_runner). The click LANDED; it just had nothing left to do.
+* `03:21:45` — the Cadence Workday tab opened (`cadence.wd1.myworkdayjobs.com/.../R54947`).
+* `14:58` — **11.5 hours later** the step still reads `next_rung=enter_apply`.
+
+The same rule fired correctly for `linkedin:4451096086` at `03:47:11`
+(`reconciled — an application tab is open on greenhouse`) — same session, 35 minutes later — and
+carried that step through classify → account → orient → the submit gate **in 38 seconds**. The
+logic works. Nothing calls it from the path that needed it.
+
+**The wire:** before proposing a PREFIX rung, the ladder asks reconcile's question — *does the live
+window already prove this rung?* An ATS tab claimed by THIS job settles `enter_apply` instead of
+re-proposing it. Reconcile's guards travel with the rule and are not relaxed: never fabricate,
+record UNKNOWN where it cannot honestly confirm, evidence points at the live URL. This is the
+eighth measured instance of the class this plan already documents twice (`tab_claims` reachable
+only from an unreachable fallback; `/select_option` never called by the ladder;
+`deferred_to_widget` read by no consumer) — **the dominant defect here is unreached logic, not
+missing logic**, and it deserves naming as such rather than an eighth one-off fix.
+
+### W6 — head-of-line: record-repair blocked behind a human press (PARKED 2026-08-28)
+
+`Queue.current()` is *"the first that has not reached a terminal flag"* (`apply_steps.py:595`) and
+`reconcile_step` operates on `current()` alone. Measured the same day: Bottomline
+(`linkedin:4451096086`) held at the submit gate from `14:08:42` awaiting the operator's press —
+correctly, that gate is working as designed — and Cadence, behind it in the queue, became
+**unreachable by any endpoint**. `apply_reopen` restores only PARKED steps, at their original
+position; there is no door to a non-current OPEN step.
+
+So a job awaiting a human press blocks not just the work behind it but the RECORD-REPAIR of
+everything behind it. The serial queue is right (two half-finished applications in one window is
+the duplicate-application fault `current()` exists to prevent); what is wrong is that repairing a
+step's memory was folded into working it.
+
+**The wire:** reconcile becomes addressable by `job_id` for any OPEN step in the queue, while
+`current()` and the strict one-at-a-time WORK rule stay exactly as they are. Repairing a record is
+not working a step.
+
+### W7 — the grind guard (PARKED 2026-08-28)
+
+The operator's rule — *two failed tries on one control → screenshot; three → tell the operator,
+do not grind* — lives in feedback and not in code. The evidence above is eight identical
+`(rung, evidence)` pairs in 77 seconds, and the drive's whole day was **9 acting rows across 2
+distinct attempts**. After N identical mismatches with the same evidence string on the same rung,
+the ladder stops proposing it and surfaces the stall. Cheap, and it converts a silent 11-hour
+stall into a question.
+
 ## 3. Falsifiers (§13, stated before the work)
 
 * If after W1 a select-family field on a NEW platform still needs a bespoke endpoint to commit,
@@ -96,6 +154,13 @@ solved checkbox as blocking (the BambooHR submit gate read stale state until a h
 * If after W3 the unsure gate stops a drive on element uncertainty and the operator's look shows
   the page was actually drivable, the derivation over-weights a signal — fix the weights with the
   journaled components, never by widening the ceiling.
+* If W5's ladder-side check ever settles a rung the live window does not actually prove, the check
+  has drifted from reconcile's guards — the two must ask the SAME question against the SAME
+  evidence, or the second one is a guess wearing a rule's name.
+* If W6's by-job reconcile results in two steps being WORKED at once, the split failed: repairing a
+  record must never make a second step current. Revert rather than add a lock.
+* If W7's guard fires on a rung that was making real progress under an unchanged evidence string,
+  the identity key is too coarse — key on `(rung, evidence, before-state)`, never on rung alone.
 
 ## 4. What NOT to do
 
