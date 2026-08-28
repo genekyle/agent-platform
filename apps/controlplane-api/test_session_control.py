@@ -7638,3 +7638,32 @@ def test_the_gate_still_refuses_the_teacher_outright(monkeypatch):
         _teardown()
     assert "operator" in r["last_step"]["detail"]
     assert not (r["last_step"].get("refusal") or {}).get("exit")
+
+
+def test_a_promoted_review_claims_the_form_and_an_observed_one_claims_review():
+    """On a single-page apply the gate state is written over the very screen the observer keeps
+    calling an application form — the promotion is the ladder's position, not a claim the pixels
+    changed. Translated as "review" it manufactured drift on every look, and the arbitration
+    handed the wheel to a plan that wanted to re-fill a finished form (live 2026-08-28,
+    Bottomline standing correctly at its own gate)."""
+    import apply_landing as al
+    from routers.session_control import _recorded_screen_kind
+
+    promoted = aps.ApplyStep(job_id="linkedin:1", platform="greenhouse",
+                             landing_state="greenhouse_review", review_is_the_form=True)
+    assert _recorded_screen_kind(promoted) == al.APPLICATION_FORM
+    observed = aps.ApplyStep(job_id="linkedin:2", platform="greenhouse",
+                             landing_state="greenhouse_review")
+    assert _recorded_screen_kind(observed) == al.REVIEW
+
+
+def test_the_promotion_bit_survives_the_blackboard_round_trip():
+    """The flag rides the step through as_dict/from_dict — a promotion that evaporates on the
+    next poll would re-manufacture the same drift one observation later. Absent in an old
+    blackboard, it reads False: an un-promoted review keeps its own kind."""
+    s = aps.ApplyStep(job_id="linkedin:1", platform="greenhouse",
+                      landing_state="greenhouse_review", review_is_the_form=True)
+    again = aps.ApplyStep.from_dict(s.as_dict())
+    assert again.review_is_the_form is True
+    old = aps.ApplyStep.from_dict({"job_id": "linkedin:2"})
+    assert old.review_is_the_form is False

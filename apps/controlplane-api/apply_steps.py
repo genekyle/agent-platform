@@ -346,6 +346,15 @@ class ApplyStep:
     #: it is; this says what was on the screen. Kept on the step so a re-orientation is recorded
     #: rather than re-derived, and so the corpus gets a state name per landing.
     landing_state: Optional[str] = None
+    #: Set when `<platform>_review` was PROMOTED from a complete single-page form (census clear,
+    #: submit the only control) rather than observed on a distinct review page. The ladder reads
+    #: the same gate either way; what differs is what the record claims the SCREEN looks like —
+    #: a promoted review still LOOKS like the application form, and an observer answering
+    #: "application form" agrees with it rather than contradicting it. Without this bit the
+    #: orienter raised drift ("the world moved and the record did not") on every look at a
+    #: single-page apply standing correctly at its own gate (live 2026-08-28, Bottomline —
+    #: the mismatch handed the wheel to a plan that wanted to re-fill a finished form).
+    review_is_the_form: bool = False
     terminal: Optional[str] = None      # one of TERMINAL_FLAGS once done
     terminal_detail: str = ""
     #: The ATS page this step was standing on when it reached its terminal flag. Recorded because
@@ -536,7 +545,8 @@ class ApplyStep:
     def as_dict(self) -> dict[str, Any]:
         return {"job_id": self.job_id, "title": self.title, "company": self.company,
                 "status": self.status, "platform": self.platform,
-                "landing_state": self.landing_state, "terminal": self.terminal,
+                "landing_state": self.landing_state,
+                "review_is_the_form": self.review_is_the_form, "terminal": self.terminal,
                 "terminal_detail": self.terminal_detail, "done": self.done,
                 "archived_minis": self.archived_minis,
                 "needs_operator": self.needs_operator(),
@@ -553,6 +563,7 @@ class ApplyStep:
         step = cls(job_id=d["job_id"], title=d.get("title", ""), company=d.get("company", ""),
                    status=d.get("status", STATUS_QUEUED), platform=d.get("platform"),
                    landing_state=d.get("landing_state"),
+                   review_is_the_form=bool(d.get("review_is_the_form")),
                    terminal=d.get("terminal"), terminal_detail=d.get("terminal_detail", ""))
         step.minis = [MiniStep(**m) for m in d.get("minis", [])]
         step.archived_minis = list(d.get("archived_minis") or [])

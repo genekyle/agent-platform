@@ -1842,6 +1842,25 @@ def _learned_witnesses(bb: Any, url: str, belief: Optional[dict[str, Any]],
     return witnesses
 
 
+def _recorded_screen_kind(step: Any) -> str:
+    """What the record claims the SCREEN looks like — the contradictable half of the record.
+
+    Usually just `kind_of_state`. The one divergence: a PROMOTED review. On a single-page apply
+    the gate state `<platform>_review` is written over the very screen the observer keeps
+    (correctly) calling an application form — the promotion is the ladder's position, not a
+    claim the pixels changed. Translating it as "review" manufactured drift against the record's
+    own meaning, and the arbitration handed the wheel to a plan that wanted to re-fill a
+    finished form (live 2026-08-28, Bottomline standing correctly at its gate). An OBSERVED
+    review — `review_is_the_form` unset — keeps its own kind, and real navigation away from the
+    form still contradicts either way.
+    """
+    from apply_recipe import kind_of_state
+    kind = kind_of_state(step.platform, step.landing_state)
+    if kind == al.REVIEW and getattr(step, "review_is_the_form", False):
+        return al.APPLICATION_FORM
+    return kind
+
+
 async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
                       belief: Optional[dict[str, Any]] = None) -> Optional[dict]:
     """One observation of the live APPLY tab, fused into a verdict — or None when no apply is open.
@@ -1858,7 +1877,6 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
     exactly as before — deterministic witnesses only.
     """
     import orientation
-    from apply_recipe import kind_of_state as _ar_kind_of_state
     from ats_registry import ats_for_company
 
     queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
@@ -1901,7 +1919,7 @@ async def _orient_now(bb: Any, obs: dict[str, Any], browser_url: str,
         # different vocabularies — the spine walks `workday_my_information`, the observer answers
         # in generic kinds — so the translation happens here and `orientation` stays pure. "" when
         # the state cannot be placed, which reads as NO CLAIM rather than as agreement.
-        recorded_kind=_ar_kind_of_state(step.platform, step.landing_state),
+        recorded_kind=_recorded_screen_kind(step),
         # THE SPINE-PRECISE READING, when the page actually stated its own step. Gated on
         # `observed` so a URL-only default cannot promote itself into the verdict — that guess
         # wears an ordinary state's name and is exactly what stalled the ladder on 08-16.
@@ -7303,6 +7321,9 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                     # Submit, and what the gate's consequential styling keys off. One state
                     # change, every surface follows.
                     step.landing_state = f"{step.platform}_review"
+                    # PROMOTED, NOT OBSERVED — the screen is still the form, and the record must
+                    # say so or the orienter reads its own promotion as drift on every look.
+                    step.review_is_the_form = True
                     step.record("orient", aps.OK,
                                 "the form is complete and the page's only remaining control "
                                 "sends it — a single-page apply's form IS its review screen",
