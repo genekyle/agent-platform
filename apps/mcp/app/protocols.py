@@ -137,8 +137,17 @@ def _find_option_js(value: str, scope_ref: Optional[str]) -> str:
         "   let el = opts.find(o => txt(o) === want) || opts.find(o => txt(o).startsWith(want));"
         "   if (!el) return {found: false, count: opts.length, sample: opts.slice(0, 12).map(txt)};"
         "   el.scrollIntoView({block: 'center'});"
-        "   el.click();"
-        "   return {found: true, text: txt(el), count: opts.length};"
+        #  FIND, DON'T CLICK. This used to end in `el.click()` — a synthetic click, the one
+        #  mechanism the repo has now measured five times as non-committing on gated widgets.
+        #  react-select commits on MOUSEDOWN: the synthetic click staged nothing and singleValue
+        #  stayed empty, so every candidate in the dialect cycle failed at this same line while
+        #  the protocol's own OPENER two steps earlier was already doing it right (trusted CDP
+        #  events). Measured live 2026-08-27 on Greenhouse's Country — six required selects, all
+        #  blocked here. The finder now returns the option's centre and the CALLER commits with
+        #  the same trusted mouse it opened with. One commit mechanism, the trusted one (S19).
+        "   const r = el.getBoundingClientRect();"
+        "   return {found: true, text: txt(el), count: opts.length,"
+        "           x: r.x + r.width / 2, y: r.y + r.height / 2};"
         "})()"
     )
 
@@ -199,6 +208,21 @@ async def react_select_pick(cdp, *, selector: str, value: str,
     hit = await _eval(cdp, _find_option_js(value, ref)) or {}
     steps.append({"step": "select", "found": bool(hit.get("found")),
                   "n_options": hit.get("count"), "picked": hit.get("text")})
+    if hit.get("found"):
+        # THE COMMIT-BEARING CLICK IS A TRUSTED POINTER GESTURE — same mechanism as the opener
+        # above, for the same reason: react-select listens on mousedown and ignores synthetic
+        # clicks. The finder measured the option's centre; press it like a hand would. A found
+        # option WITHOUT coordinates is a contract violation (an old page-side result), reported
+        # rather than raised — a protocol step that raises degrades to a generic 'error'.
+        if hit.get("x") is None or hit.get("y") is None:
+            return (Outcome.NOT_STAGED, steps,
+                    f"option {hit.get('text')!r} found but the finder returned no coordinates "
+                    f"to press — stale finder result; not committing blind")
+        for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+            ev = {"type": typ, "x": hit["x"], "y": hit["y"]}
+            if typ != "mouseMoved":
+                ev.update({"button": "left", "clickCount": 1})
+            await cdp.send("Input.dispatchMouseEvent", ev)
     if not hit.get("found"):
         if not hit.get("count"):
             # Nothing rendered at all: the widget never opened. Distinct from "opened, but

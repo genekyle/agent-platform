@@ -126,7 +126,7 @@ def test_select_option_classifies_when_the_caller_doesnt_say(corpus, monkeypatch
         describe={"found": True, "widget_type": "react_select",
                   "commit": {"kind": "on_select", "label": None}},
         focus={"ok": True, "x": 10, "y": 20, "expanded": "false"},
-        option={"found": True, "text": "United States", "count": 3},
+        option={"found": True, "text": "United States", "count": 3, "x": 40, "y": 120},
         single_value="United States"))
     out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
         selector="#country", value="United States", ats="greenhouse", field="phone_country")))
@@ -142,7 +142,7 @@ def test_react_select_verifies_at_singlevalue_not_at_dot_value(corpus, monkeypat
     """
     wire_cdp(monkeypatch, route(
         focus={"ok": True, "x": 10, "y": 20, "expanded": "false"},
-        option={"found": True, "text": "United States", "count": 3},
+        option={"found": True, "text": "United States", "count": 3, "x": 40, "y": 120},
         single_value=""))          # the pick did NOT take
     out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
         selector="#country", value="United States", widget_type="react_select")))
@@ -183,7 +183,7 @@ def test_react_select_catches_the_wrong_option_taking(corpus, monkeypatch):
     """
     wire_cdp(monkeypatch, route(
         focus={"ok": True, "x": 1, "y": 1, "expanded": "false"},
-        option={"found": True, "text": "Concordia", "count": 5},
+        option={"found": True, "text": "Concordia", "count": 5, "x": 40, "y": 120},
         single_value="Concordia, Entre Rios, Argentina"))
     out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
         selector="#loc", value="Concord, New Hampshire", widget_type="react_select")))
@@ -355,7 +355,7 @@ def test_set_date_translates_a_month_number_to_the_name_the_widget_wants(corpus,
         describe={"found": True, "widget_type": "month_year",
                   "companion_selector": "#start-date-year-0"},
         focus={"ok": True, "x": 1, "y": 1, "expanded": "false"},
-        option={"found": True, "text": "August", "count": 12},
+        option={"found": True, "text": "August", "count": 12, "x": 40, "y": 120},
         single_value="August", year="2015")
 
     def responder(expr):
@@ -379,7 +379,7 @@ def test_set_date_reports_a_half_set_date_rather_than_claiming_success(corpus, m
     wire_cdp(monkeypatch, route(
         describe={"found": True, "widget_type": "month_year", "companion_selector": None},
         focus={"ok": True, "x": 1, "y": 1, "expanded": "false"},
-        option={"found": True, "text": "August", "count": 12},
+        option={"found": True, "text": "August", "count": 12, "x": 40, "y": 120},
         single_value="August"))
     out = asyncio.run(ms.set_date(ms.SetDateRequest(selector="#m", month=8, year=2015)))
     assert out["ok"] is False and out["outcome"] == "not_found"
