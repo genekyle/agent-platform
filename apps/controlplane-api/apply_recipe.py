@@ -1194,7 +1194,8 @@ def _generic_kind(platform: Optional[str], state: Optional[str]) -> str:
     if not state.startswith(prefix):
         return ""
     kind = state[len(prefix):]
-    return kind if kind in GENERIC_ATS_ORDER else ""
+    return _KIND_ALIASES.get(kind, kind) if _KIND_ALIASES.get(kind, kind) in GENERIC_ATS_ORDER \
+        else ""
 
 
 def _generic_entry(kind: str) -> dict[str, Any]:
@@ -1205,6 +1206,15 @@ def _generic_entry(kind: str) -> dict[str, Any]:
 #: ONCE, here, rather than by adding the alias to each table — the table that gets forgotten is
 #: always the third one, and the symptom is a submitted application that does not read as done.
 _PLATFORM_ALIASES: dict[str, str] = {"indeed": "indeed_quick_apply"}
+
+#: And one SCREEN, several names — same disease one axis over, same single resolution point.
+#: The Greenhouse mapper's URL default says `greenhouse_apply_form` (the scripted recipe's and
+#: the perception corpus's name, too entrenched to rename) while the generic spine's slot is
+#: `application_form` — so the orient's write of the mapper's name un-recognised the very screen
+#: the spine had been walking, `tail_rung_for` returned None, and the ladder went blind at the
+#: gate ("Read this page" over a complete form, measured live 2026-08-28 minutes after the gate
+#: was first made pressable). Aliased here, where the spine parses kinds, never per-table.
+_KIND_ALIASES: dict[str, str] = {"apply_form": "application_form"}
 
 
 def _canon(platform: Optional[str]) -> str:
@@ -1251,7 +1261,10 @@ def flow_progress(state: Optional[str], *, platform: str = "workday") -> dict[st
         kind = _generic_kind(platform, state)
         if kind:
             g_order = [f"{platform}_{k}" for k in GENERIC_ATS_ORDER]
-            i = g_order.index(state)
+            # Index by the CANONICAL kind, not the raw state — `_generic_kind` already resolved
+            # the alias (`greenhouse_apply_form` counts at the `application_form` slot), and
+            # indexing the raw name here would un-recognise exactly what it just recognised.
+            i = g_order.index(f"{platform}_{kind}")
             gate_i = GENERIC_ATS_ORDER.index("review")
             return {"state": state, "position": i, "total": len(g_order), "platform": platform,
                     "steps_to_submit": max(0, gate_i - i), "recognised": True,

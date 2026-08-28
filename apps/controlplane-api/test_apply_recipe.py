@@ -550,3 +550,16 @@ def test_real_challenge_language_still_names_captcha():
         "https://job-boards.greenhouse.io/x/jobs/1",
         "Verify you are human — select all images with a bicycle")
     assert state == "captcha"
+
+
+def test_the_mappers_form_name_counts_along_the_generic_spine():
+    """One screen, two names: the mapper's URL default says `greenhouse_apply_form` (the scripted
+    recipe's and the perception corpus's name) while the spine's slot is `application_form`. The
+    orient's write of the mapper's name un-recognised the screen the spine had been walking, the
+    tail returned None, and the ladder went blind at the gate — "Read this page" over a complete
+    form, minutes after the gate was first made pressable (live 2026-08-28)."""
+    import apply_recipe as ar
+
+    p = ar.flow_progress("greenhouse_apply_form", platform="greenhouse")
+    assert p.get("recognised") is True
+    assert ar.kind_of_state("greenhouse", "greenhouse_apply_form") == "application_form"
