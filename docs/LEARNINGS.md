@@ -12482,3 +12482,19 @@ the way was a read-point lying, each fixed where it read:
 in that order. Suites: controlplane-api 385+44+..., mcp 181. Two API servers serve one store
 (:8081 --reload = the cockpit's, :8093 = manual restarts) — restart or reload BOTH after a merge,
 or a stale server re-manufactures the bug just fixed.*
+
+### Addendum, same day — the operator pressed Submit and nothing was sent; why
+
+The armed gate went dead BETWEEN the arm and the press: an orient wrote the mapper's URL-default
+name (`greenhouse_apply_form`) over the promoted `greenhouse_review`, the generic spine only knew
+`greenhouse_application_form`, `tail_rung_for` returned None — and apply_step with
+confirm_submit=true never reached the gate branch. Two names for one screen, the third table
+forgotten again. Fixed at the parse point (`_KIND_ALIASES`, the `_PLATFORM_ALIASES` pattern one
+axis over) plus the promotion check re-keyed on canonical kind. **Named, not yet built, the two
+real preventions:** (1) a NAMED_BY_URL_DEFAULT guess must never move the ladder's position —
+orient's write should be gated on how the state was named; (2) an ARMED gate should be pinned —
+the refusal exit should carry the rung/state it armed against and the press should land there or
+refuse loudly saying what moved, instead of silently doing nothing. Operator's diagnosis to test
+against next time: teacher side-channels are a real hazard class (the stale second server WAS
+one), but this failure ran entirely through journaled endpoints — the ungrounded thing was a
+guess allowed to overwrite a measurement, inside the system.
