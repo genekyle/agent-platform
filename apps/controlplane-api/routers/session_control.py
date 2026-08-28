@@ -6542,15 +6542,31 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         # ONE tab the next rung will act on, and refusing only when the challenge is THERE.
         # Conservative on every uncertain path: no probe target, or a probe that fails or says
         # blocking, keeps the refusal. Never auto-solved either way.
-        work_tab = _apply_tab(bb, obs) or {}
-        work_ref = {"tab_id": work_tab.get("tab_id")} if work_tab.get("tab_id") else (
-            {"tab_id": (_cards_tab(bb, obs) or {}).get("tab_id")}
-            if (_cards_tab(bb, obs) or {}).get("tab_id") else None)
-        scoped_clear = False
-        if work_ref:
+        # THE WORK SET: the cards tab (where an un-opened step's next rung acts), plus the apply
+        # tab only when it is genuinely THIS step's — `_apply_tab`'s fallback otherwise hands
+        # back some other application's parked tab, and probing THAT is how this scope-fix
+        # refused three more times on the hCaptcha badge of a tab nobody was driving toward
+        # (live 2026-08-27, same hour as the fix it was fixing).
+        claims = (bb.world or {}).get("tab_claims") or {}
+
+        def _owner(tid):
+            c = claims.get(tid)
+            return (c.get("job_id") if isinstance(c, dict) else c) or ""
+
+        refs = []
+        cards_id = (_cards_tab(bb, obs) or {}).get("tab_id")
+        if cards_id:
+            refs.append(cards_id)
+        apply_id = (_apply_tab(bb, obs) or {}).get("tab_id")
+        if apply_id and apply_id != cards_id and _owner(apply_id) in ("", step.job_id):
+            refs.append(apply_id)
+        scoped_clear = bool(refs)
+        for tid in refs:
             vis = await _capture_post("/challenge_visibility",
-                                      {"browser_url": browser_url, **work_ref}, timeout=8.0)
-            scoped_clear = bool(vis and vis.get("ok") and not vis.get("blocking"))
+                                      {"browser_url": browser_url, "tab_id": tid}, timeout=8.0)
+            if not (vis and vis.get("ok") and not vis.get("blocking")):
+                scoped_clear = False
+                break
         if not scoped_clear:
             step.record("challenge", aps.BLOCKED, f"active {block.get('provider')}",
                         initiator=body.initiator)
