@@ -7585,3 +7585,56 @@ def test_an_unprobeable_challenge_keeps_the_conservative_stop(monkeypatch):
     finally:
         _teardown()
     assert "challenge is up" in str((r.get("last_step") or {}).get("detail"))
+
+
+# --------------------------------------------------------------------------------------------
+# The Submit gate's hold carries its own second press (operator, 2026-08-28)
+# --------------------------------------------------------------------------------------------
+
+def _at_the_gate():
+    bb = _with_queue(("linkedin:4451096086", "Financial Systems Analyst", "Bottomline"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    s = q.steps[0]
+    s.platform = "greenhouse"
+    s.landing_state = "greenhouse_review"
+    for r in aps.PREFIX:
+        s.record(r.id, aps.OK, "walked")
+    bb.world["apply_queue"] = q.as_dict()
+    return bb
+
+
+def test_the_gates_hold_carries_the_confirm_press(monkeypatch):
+    """"There is no submit button within the cockpit." The gate's design is two deliberate
+    calls, and the cockpit renders a refusal's exit — but the hold was prose only, so the
+    operator's press landed on "step again with confirm_submit=true" and no button anywhere
+    posted it. The hold now declares its exit: the confirmation itself, styled consequential."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_at_the_gate())
+    try:
+        r = client.post("/api/session_control/1/apply_step",
+                        json={"initiator": "operator"}).json()
+    finally:
+        _teardown()
+    exit_ = (r["last_step"].get("refusal") or {}).get("exit") or {}
+    assert exit_.get("body") == {"confirm_submit": True}
+    assert exit_.get("endpoint") == "/apply_step"
+    assert exit_.get("consequential") is True
+    assert "Nothing was sent" in r["last_step"]["detail"]
+
+
+def test_the_gate_still_refuses_the_teacher_outright(monkeypatch):
+    """The exit belongs to the OPERATOR's hold only — a non-operator initiator is refused
+    without a pressable way through, because no button may hand the teacher the send."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL),
+              "/auth_state": {"ok": True, "logged_in": True}},
+             blackboard=_at_the_gate())
+    try:
+        r = client.post("/api/session_control/1/apply_step",
+                        json={"initiator": "teacher", "confirm_submit": True}).json()
+    finally:
+        _teardown()
+    assert "operator" in r["last_step"]["detail"]
+    assert not (r["last_step"].get("refusal") or {}).get("exit")

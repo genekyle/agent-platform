@@ -525,3 +525,28 @@ def test_a_field_validation_error_is_not_a_platform_error():
         "https://solutionhealth.wd1.myworkdayjobs.com/x",
         "My Information Errors Found Error - The field State is required and must have a value.")
     assert state != "workday_error_retry"
+
+
+def test_a_recaptcha_badge_does_not_name_the_screen_captcha():
+    """The corner badge says "protected by reCAPTCHA" on virtually every Greenhouse form — the
+    invisible scorer, challenging nobody. The bare marker "recaptcha" classified the whole
+    SCREEN as captcha, which has no rung, so the resolver demoted the Submit gate to "Read this
+    page" on a form that was complete and one press from sent (live 2026-08-28, Bottomline)."""
+    import apply_recipe as ar
+
+    state, _ = ar.map_greenhouse_state_verbose(
+        "https://job-boards.greenhouse.io/bottomlinetechnologies/jobs/8605886002",
+        "Apply for this job First Name Last Name Submit application "
+        "protected by reCAPTCHA Privacy - Terms")
+    assert state == "greenhouse_apply_form"
+
+
+def test_real_challenge_language_still_names_captcha():
+    """The other half stays: a page actually challenging the human says so in challenge words,
+    and those must keep escalating — classify -> escalate, never auto-solve."""
+    import apply_recipe as ar
+
+    state, _ = ar.map_greenhouse_state_verbose(
+        "https://job-boards.greenhouse.io/x/jobs/1",
+        "Verify you are human — select all images with a bicycle")
+    assert state == "captcha"

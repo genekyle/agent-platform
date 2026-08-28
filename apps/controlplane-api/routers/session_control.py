@@ -7240,9 +7240,23 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             step.record("submit", aps.HUMAN_REQUIRED,
                         "held at the gate — awaiting the operator's explicit confirmation",
                         initiator=body.initiator)
-            detail = (f"At the Submit gate for {step.title or step.job_id}. Nothing was sent. "
-                      f"This is the irreversible step, so it needs an explicit confirmation rather "
-                      f"than a defaulted one — step again with confirm_submit=true to send it.")
+            # THE HOLD CARRIES ITS OWN SECOND PRESS. The gate's design is two deliberate calls,
+            # and the cockpit renders a refusal's exit — but this hold was prose only, so the
+            # operator's press landed on "step again with confirm_submit=true" and no button
+            # anywhere posted it (operator, 2026-08-28: "there is no submit button within the
+            # cockpit"). The exit is the confirmation, styled consequential; nothing else on the
+            # surface may send.
+            detail = _refuse(_rung_extra, refusal.Refusal(
+                what=f"At the Submit gate for {step.title or step.job_id}. Nothing was sent — "
+                     f"this is the irreversible step, so it takes a second, explicit press.",
+                why="an application sent by muscle memory cannot be taken back; the gate holds "
+                    "once so the send is a choice, not a default",
+                exit=refusal.Exit(
+                    label="Send it — submit this application",
+                    endpoint="/apply_step", body={"confirm_submit": True},
+                    why=f"Presses Submit on {step.title or step.job_id}'s open form. "
+                        f"Irreversible: the application goes to the employer.",
+                    consequential=True)))
         else:
             _ok, detail = await _work_submit_rung(step, bb, obs, browser_url, style,
                                                   initiator=body.initiator, acted=_acted)

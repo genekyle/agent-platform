@@ -1600,7 +1600,13 @@ def kind_of_state(platform: Optional[str], state: Optional[str]) -> str:
     return _generic_kind(platform, state)
 
 # Anti-bot / challenge markers — classify -> escalate, NEVER auto-solve (same rule everywhere).
-_CHALLENGE_MARKERS = ("verify you are human", "i'm not a robot", "recaptcha",
+# CHALLENGE LANGUAGE ONLY, never the vendor's name: the bare marker "recaptcha" matched the
+# corner badge's "protected by reCAPTCHA" — furniture on virtually every Greenhouse/BambooHR
+# form (the invisible scorer) — and named the whole SCREEN "captcha", which has no rung, so the
+# resolver demoted the Submit gate to "Read this page" on a form that was complete and one press
+# from sent (measured live 2026-08-28, Bottomline). A page whose captcha is actually challenging
+# says so in these words; the badge only ever says whose badge it is.
+_CHALLENGE_MARKERS = ("verify you are human", "i'm not a robot",
                       "complete the captcha", "select all images")
 
 # Terminal states per ATS — the recipe's own "arrived" set. Used as a done fallback when no
