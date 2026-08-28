@@ -12532,3 +12532,31 @@ never walked once. Driven from their seat, the bug reproduced in one press:
 *Tabs: ONE (the LinkedIn spine) — the operator's no-tab-queueing policy is now the working state.
 Next: Revenue Intelligence Analyst (Cadence) re-enters Workday from the pane as the only
 application tab. Suites: controlplane-api 372+ across touched modules, all green.*
+
+## 2026-08-28 (third entry) — Cadence driven to one field from the gate; the false-confirm class named
+
+Operator's brief: get through applications, collect the biggest issues. **Cadence/Workday:
+entered by the pane's own Apply first try, account auto-created, My Information filled (census
+caught Phone Device Type the fill had missed; the cycle committed 'Mobile' first try), resume
+uploaded — except it WASN'T:** the drive stalled on the one control that lied three ways.
+
+* **THE FALSE-CONFIRM CLASS, now measured at three act boundaries in one day:** the fill's
+  "1 of 1 confirmed" over an empty dropzone (twice); the upload witness counting files-on-the-
+  raw-input as landed; the submit verify reading a thank-you page as the form. One shape: the
+  verifier reads a truth-point that is not the widget's own. Every false ok converts a one-step
+  fix into a multi-crank investigation later — this is the #1 stop-and-go generator.
+* **Workday's dropzone input is DETACHED from the zone's subtree** (measured: with zone words
+  plainly on the page, no ancestor walk from the resolved input finds them — 12 hops, own walk).
+  So the plain-input verdict keeps winning and the new chooser-interception path (BUILT:
+  Page.setInterceptFileChooserDialog + trusted click on "Select files" + fileChooserOpened →
+  setFileInputFiles; _CDPSession now stashes and awaits events) stays unreached. Next session:
+  one DOM probe of the zone/input relationship, then key `ingesting` off the ZONE resolved from
+  the label, not the input's ancestry. Until then the operator dropping the file by hand
+  unblocks Cadence in seconds; everything else on the screen is filled.
+* Humanized scroll keeps needing the RIGHT scroller under the cursor (Greenhouse margin vs
+  column; Workday inner container) — a scroll-target resolver ("the page's main scroller") would
+  end this class. /run's first call after a fill returned an empty last_step once — unverified,
+  watch for it.
+
+*Queue: 2 submitted, Cadence at My Experience (resume-only), iCIMS parked (operator's), 7 queued.
+Suites: mcp 181, api 372+ green. Tabs: LinkedIn spine + the active Workday tab only.*
