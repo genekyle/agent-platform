@@ -12407,3 +12407,36 @@ log — short form: the profile idea is RIGHT and already half-built; key it by 
 the ATS as a learned prior (dialects), route the LADDER through `/select_option`'s cycle, and wire
 the evidence each act already produces into the belief's element axis. The primitives are sound;
 the dispatch is what needs the revamp.*
+
+## 2026-08-27 (twelfth) — W1 live; and one parked checkbox stalled the whole queue
+
+**W1 shipped and drove**: `apply_fill` sends select-family rows through `/select_option` (the
+deferred list has its consumer), `apply_prompt_select` sends flat values through the cycle and
+keeps `/select_prompt_path` for Workday drills only. Live on Greenhouse: 5 of 6 selects committed
+by accessible name; resume landed on `#resume` after `/probe` disambiguated two inputs both
+answering "Attach" (the id was there all along — the census's file row just doesn't carry it).
+
+**THE CHALLENGE GUARD BLOCKED THE BROWSER, NOT THE PAGE — three fixes to scope it, each measured:**
+job 3 parked on Greenhouse with its reCAPTCHA checkbox pending, and jobs 4–11 could not open a
+pane on the SEARCH tab: `_detect_block` reads frames across every tab (right for detection), and
+the apply-step guard refused on any hit. Scoping attempt #1 probed `_apply_tab`'s pick — whose
+fallback handed back a DIFFERENT parked tab (iCIMS's hCaptcha badge). Attempt #2 added claims-
+gated inclusion with "unclaimed counts as mine" — and live blackboards turn out to write claims
+sparsely, so the parked Greenhouse tab walked right back in. The rule that held: **probe the
+cards tab always, and an apply tab only when the claims record says it is THIS job's** —
+strict ownership, conservative on every uncertain path, nothing auto-solved. A human leaves the
+box unticked and keeps working other tabs; now the machine does too. *(Two adjacent debts named:
+`world["apply_tab"]` is not cleared when a step parks, and tab claims are written on too few
+paths — both fed this bug and both outlive the scoping fix.)*
+
+**THE ENTER RUNG'S CLICK KEEPS NOT TAKING, AND THE DIRECT AX CLICK KEEPS WORKING.** Twice today:
+Bottomline's pane rendered `Apply on company website` as a LINK (the rung wants a button —
+"cannot see an Apply button" over a visible control), and Cadence's pane took the rung's click
+with "reported ok, but no tab opened and none navigated" (S20's evidence check refusing honestly,
+three runs in a row) — while `/execute click role=button name=Apply` opened Workday first try.
+The enter rung's addressing is the next W2 site: it should speak role+name with a role-agnostic
+fallback (link OR button), and carry the same open-evidence it already demands.
+
+*Queue at close of the stretch: 1 submitted (BambooHR, verified), job 2 parked (consent wall),
+job 3 parked COMPLETE except the privacy dropdown + captcha + Submit (operator's three clicks),
+job 4 landed on Workday. Suites: controlplane-api 2043, mcp 179.*
