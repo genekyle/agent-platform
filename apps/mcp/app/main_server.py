@@ -184,6 +184,62 @@ class ExecuteRequest(BaseModel):
     expect_question: Optional[str] = None
 
 
+async def _selector_for_node(target: dict, backend_node_id: int) -> Optional[str]:
+    """A CSS selector that uniquely addresses this resolved node, or None.
+
+    The adapter between the two addressing doors: `_resolve_ax_node` speaks role+accessible-name
+    and returns a backend_node_id; the widget PROTOCOLS are selector-shaped throughout (their JS
+    re-queries the node several times across a stage-commit-confirm sequence, so a one-shot node
+    object is not enough). Prefer the node's own id when it is UNIQUE — Greenhouse renders
+    duplicate ids (`#country` is both the Country question and the phone country-code widget,
+    measured 2026-08-27), which is exactly the ambiguity that mis-addressed the census — else an
+    nth-of-type path anchored at the nearest uniquely-id'd ancestor.
+    """
+    import websockets
+    from app.observer.ax_proposer import _CDPSession
+
+    js = r"""
+function() {
+  const esc = s => ('CSS' in window && CSS.escape) ? CSS.escape(s) : s.replace(/"/g, '\"');
+  const uniq = sel => { try { return document.querySelectorAll(sel).length === 1; }
+                        catch (e) { return false; } };
+  let el = this;
+  if (el.id) { const s = '[id="' + esc(el.id) + '"]'; if (uniq(s)) return s; }
+  const parts = [];
+  while (el && el.nodeType === 1 && el.tagName !== 'BODY') {
+    let idx = 1, sib = el;
+    while ((sib = sib.previousElementSibling)) if (sib.tagName === el.tagName) idx++;
+    parts.unshift(el.tagName.toLowerCase() + ':nth-of-type(' + idx + ')');
+    const parent = el.parentElement;
+    if (parent && parent.id) {
+      const anchorSel = '[id="' + esc(parent.id) + '"]';
+      if (uniq(anchorSel)) { parts.unshift(anchorSel); break; }
+    }
+    el = parent;
+  }
+  const sel = parts.join(' > ');
+  return uniq(sel) ? sel : null;
+}
+"""
+    try:
+        async with websockets.connect(target["webSocketDebuggerUrl"],
+                                      max_size=16 * 1024 * 1024) as ws:
+            cdp = _CDPSession(ws)
+            await cdp.send("DOM.enable", {})
+            resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": backend_node_id})
+            obj = (resolved.get("result") or resolved).get("object") or {}
+            oid = obj.get("objectId")
+            if not oid:
+                return None
+            out = await cdp.send("Runtime.callFunctionOn",
+                                 {"objectId": oid, "functionDeclaration": js,
+                                  "returnByValue": True})
+            val = ((out.get("result") or out).get("result") or {}).get("value")
+            return val or None
+    except Exception:  # noqa: BLE001 — the caller reports "could not derive", never a stack
+        return None
+
+
 async def _resolve_ax_node(browser_url: str, tab_id: Optional[str], tab_url: Optional[str],
                            role: Optional[str], name: str) -> Optional[int]:
     """FRESH backend_node_id for a target described by role + accessible-name, scanned at act time.
@@ -3163,7 +3219,16 @@ class SelectOptionRequest(BaseModel):
     browser_url: str = "http://127.0.0.1:9222"
     tab_id: Optional[str] = None
     tab_url: Optional[str] = None
-    selector: str
+    #: Address ONE of two ways. `selector` is the bespoke-DOM door, and it mis-addresses exactly
+    #: the way S19 predicts: the census derived `#country` for Greenhouse's Country* question and
+    #: that id belongs to the PHONE country-code widget — the trusted commit then picked
+    #: "United States +1" and only the value read-back caught it (live 2026-08-27).
+    #: `target_name` (+ optional `target_role`) is the AX door /execute already uses — role +
+    #: accessible name, resolved fresh at act time — and the accessible names of these fields are
+    #: exactly the question text the caller already holds.
+    selector: Optional[str] = None
+    target_role: Optional[str] = None
+    target_name: Optional[str] = None
     value: str
     widget_type: Optional[str] = None
     commit: Optional[str] = None          # footer button label; None = applies on select
@@ -3215,8 +3280,32 @@ async def select_option(body: SelectOptionRequest):
     from app.observer.ax_proposer import _CDPSession, _discover_target
     from app.protocols import react_select_pick, text_menu_pick
 
-    common = {"addressed_by": "selector", "target": body.selector}
+    if not body.selector and not body.target_name:
+        return {"ok": False, "outcome": Outcome.NOT_FOUND, "addressed_by": "none",
+                "detail": "select_option needs a selector or a target_name — nothing to address"}
     target = await _discover_target(body.browser_url, tab_id=body.tab_id, tab_url=body.tab_url)
+    if not body.selector:
+        # THE AX DOOR: resolve role+name to a node the way /execute does, then hand the protocol
+        # a selector DERIVED FROM THAT NODE — the protocols are selector-shaped throughout, so
+        # the derivation is the adapter, not a second addressing scheme.
+        bnid = await _resolve_ax_node(body.browser_url, body.tab_id, body.tab_url,
+                                      body.target_role, body.target_name)
+        if bnid is None:
+            return {"ok": False, "outcome": Outcome.NOT_FOUND, "addressed_by": "role_name",
+                    "target": f"{body.target_role or '*'}:{body.target_name}",
+                    "detail": f"target not found by name: {body.target_name!r} "
+                              f"(role={body.target_role})"}
+        derived = await _selector_for_node(target, bnid)
+        if not derived:
+            return {"ok": False, "outcome": Outcome.NOT_FOUND, "addressed_by": "role_name",
+                    "target": f"{body.target_role or '*'}:{body.target_name}",
+                    "detail": f"resolved {body.target_name!r} -> node {bnid} but could not "
+                              f"derive a unique selector for it"}
+        body.selector = derived
+        common = {"addressed_by": "role_name", "target": body.target_name,
+                  "resolved_selector": derived}
+    else:
+        common = {"addressed_by": "selector", "target": body.selector}
 
     # month_year rides the react_select protocol; normalise hints into protocol names.
     def _proto_of(wt: Optional[str]) -> Optional[str]:

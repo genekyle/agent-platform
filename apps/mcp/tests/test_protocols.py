@@ -568,3 +568,69 @@ def test_the_check_group_resolver_prefers_a_real_name_over_the_default_value():
     assert "'on' ? '' :" in CHECK_GROUP_JS.replace('"', "'")
     # Scoped to the box's own document, so it still resolves inside an iframe.
     assert "c.ownerDocument" in CHECK_GROUP_JS
+
+
+# --------------------------------------------------------------------------------------------
+# The AX door on select_option (live 2026-08-27: #country was the phone widget)
+# --------------------------------------------------------------------------------------------
+
+def test_select_option_refuses_an_unaddressed_call():
+    import asyncio
+
+    from app import main_server as ms
+
+    out = asyncio.run(ms.select_option(ms.SelectOptionRequest(value="United States")))
+    assert out["ok"] is False and out["outcome"] == "not_found"
+    assert "selector or a target_name" in out["detail"]
+
+
+def test_select_option_by_name_threads_the_derived_selector(corpus, monkeypatch):
+    """The census derived `#country` for the Country* question; that id belongs to the phone
+    country-code widget, and the trusted commit picked 'United States +1' there — caught only by
+    the value read-back. Addressing by accessible NAME resolves the node /execute-style and hands
+    the protocol a selector derived from THAT node. Wired through the same route() fakes as every
+    other select_option test — the whole react_select protocol runs, against the derived selector.
+    """
+    wire_cdp(monkeypatch, route(
+        focus={"ok": True, "x": 10, "y": 10, "expanded": "false"},
+        option={"found": True, "text": "United States", "count": 3, "x": 40, "y": 120},
+        single_value="United States"))
+
+    async def fake_resolve(browser_url, tab_id, tab_url, role, name):
+        assert (role, name) == ("combobox", "Country")
+        return 7
+
+    derived = '[id="main"] > div:nth-of-type(2) input:nth-of-type(1)'
+
+    async def fake_selector(target, bnid):
+        assert bnid == 7
+        return derived
+
+    monkeypatch.setattr(ms, "_resolve_ax_node", fake_resolve)
+    monkeypatch.setattr(ms, "_selector_for_node", fake_selector)
+
+    out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
+        target_role="combobox", target_name="Country", value="United States",
+        widget_type="react_select")))
+    assert out["ok"] is True
+    assert out["addressed_by"] == "role_name" and out["resolved_selector"] == derived
+
+
+def test_select_option_by_name_reports_an_unresolvable_target(monkeypatch):
+    import asyncio
+
+    from app import main_server as ms
+
+    async def fake_discover(browser_url, tab_id=None, tab_url=None):
+        return {"webSocketDebuggerUrl": "ws://fake"}
+
+    async def fake_resolve(*a):
+        return None
+
+    import app.observer.ax_proposer as axp
+    monkeypatch.setattr(axp, "_discover_target", fake_discover)
+    monkeypatch.setattr(ms, "_resolve_ax_node", fake_resolve)
+    out = asyncio.run(ms.select_option(ms.SelectOptionRequest(
+        target_name="Country", value="United States")))
+    assert out["ok"] is False and out["outcome"] == "not_found"
+    assert out["addressed_by"] == "role_name"
