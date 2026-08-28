@@ -236,6 +236,19 @@ def test_the_captcha_rail_sees_a_challenge_nested_in_a_frame():
     assert "depth" in js
 
 
+def test_the_captcha_rail_does_not_mistake_a_badge_for_a_checkbox():
+    """The invisible reCAPTCHA's corner badge is served from the SAME anchor URL as the v2
+    checkbox; the only tell is `size=invisible` in its src. Counting the badge as an unsolved
+    checkbox reported blocking:true over a form nobody was challenging — and the apply ladder
+    refused every crank on it (measured live 2026-08-28, Greenhouse/Bottomline: the queue's
+    closest-to-done application stalled on a false positive of its own safety rail)."""
+    js = ms._CHALLENGE_VISIBILITY_JS
+    assert "size=invisible" in js, "anchors must exclude the passive scorer's badge"
+    # The image-challenge rail stays whole — an invisible flow that DOES challenge raises a
+    # bframe, and that half must not be filtered.
+    assert "bframe" in js
+
+
 # --- ambiguity: several controls, or one control drawn several times? --------------------------
 #
 # The refusal these exercise was written on 2026-08-13, when "Country" named both the country field

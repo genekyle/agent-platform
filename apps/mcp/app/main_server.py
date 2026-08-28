@@ -4813,7 +4813,15 @@ _CHALLENGE_VISIBILITY_JS = r"""
   collect(document, 0);
   const match = (re) => ifr.filter(f => re.test(f.src || ''));
   const bframes  = match(/recaptcha\/(enterprise|api2)\/bframe/);   // the image-challenge popup
-  const anchors  = match(/recaptcha\/(enterprise|api2)\/anchor/);   // the "I'm not a robot" checkbox
+  // A BADGE IS NOT A CHECKBOX. The invisible reCAPTCHA's corner badge is served from the SAME
+  // anchor URL as the v2 checkbox — the only tell is `size=invisible` in its src. The badge is a
+  // passive scorer: nobody is being challenged, its token stays empty until submit, and counting
+  // it as an unsolved checkbox stalls the whole ladder on a page a human would keep working.
+  // Measured live 2026-08-28 (Greenhouse/Bottomline): checkbox_visible:true, blocking:true over a
+  // form whose only reCAPTCHA was the badge. If the invisible flow does decide to challenge, its
+  // bframe becomes visible and challenge_visible catches it — that rail is untouched.
+  const anchors  = match(/recaptcha\/(enterprise|api2)\/anchor/)    // the "I'm not a robot" checkbox
+    .filter(f => !/[?&]size=invisible/.test(f.src || ''));
   const hcap     = match(/hcaptcha\.com\/(captcha|challenge)/);
   const visBframes = bframes.filter(shown), visAnchors = anchors.filter(shown), visHcap = hcap.filter(shown);
   const challenge_visible = visBframes.length > 0 || visHcap.length > 0;   // image challenge up
