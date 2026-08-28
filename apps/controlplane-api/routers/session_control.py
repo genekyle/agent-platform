@@ -6533,11 +6533,32 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     obs = await _observe(browser_url, bb, session_id=session.id)
     block = obs.get("block")
     if block and block.get("strength") == "active":
-        step.record("challenge", aps.BLOCKED, f"active {block.get('provider')}",
-                    initiator=body.initiator)
-        return await _save_queue_and_view(session, bb, ledger, queue, obs,
-                                    ok=False, detail="A challenge is up — clear it yourself. "
-                                                     "We never auto-solve.")
+        # A CHALLENGE BLOCKS THE PAGE IT IS ON, NOT THE BROWSER. `_detect_block` reads frames
+        # across every tab, which is right for detection — but refusing here on any hit meant
+        # one PARKED application's unticked checkbox stalled the whole queue: job 3 parked on
+        # Greenhouse with its reCAPTCHA pending, and jobs 4–11 could not so much as open a pane
+        # on the SEARCH tab (live 2026-08-27, three identical stops). A human leaves that box
+        # unticked and keeps working other tabs; the machine does the same — by re-probing the
+        # ONE tab the next rung will act on, and refusing only when the challenge is THERE.
+        # Conservative on every uncertain path: no probe target, or a probe that fails or says
+        # blocking, keeps the refusal. Never auto-solved either way.
+        work_tab = _apply_tab(bb, obs) or {}
+        work_ref = {"tab_id": work_tab.get("tab_id")} if work_tab.get("tab_id") else (
+            {"tab_id": (_cards_tab(bb, obs) or {}).get("tab_id")}
+            if (_cards_tab(bb, obs) or {}).get("tab_id") else None)
+        scoped_clear = False
+        if work_ref:
+            vis = await _capture_post("/challenge_visibility",
+                                      {"browser_url": browser_url, **work_ref}, timeout=8.0)
+            scoped_clear = bool(vis and vis.get("ok") and not vis.get("blocking"))
+        if not scoped_clear:
+            step.record("challenge", aps.BLOCKED, f"active {block.get('provider')}",
+                        initiator=body.initiator)
+            return await _save_queue_and_view(session, bb, ledger, queue, obs,
+                                        ok=False, detail="A challenge is up — clear it yourself. "
+                                                         "We never auto-solve.")
+        bb.log("challenge", f"{block.get('provider')} pending on another tab; this rung's tab "
+                            f"is clear — driving it, never the challenged one")
 
     # WALK PAST THE RUNGS THE DISCOVERY RULED OUT, recording each as it goes. `classify` is the
     # discovery point — "the rungs after this one do not exist until this is answered" — and until

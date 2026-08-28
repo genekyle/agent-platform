@@ -7403,3 +7403,66 @@ def test_prompt_select_flat_value_goes_through_the_cycle(monkeypatch):
         _teardown()
     assert calls["cycle"] == [("Phone Device Type", "Mobile")] and not calls["workday"]
     assert r["last_step"]["picked"] == "Mobile"
+
+
+# --------------------------------------------------------------------------------------------
+# A challenge blocks the page it is on, not the browser (live 2026-08-27)
+# --------------------------------------------------------------------------------------------
+
+def _block_frames():
+    return [{"type": "iframe",
+             "url": "https://www.google.com/recaptcha/api2/bframe?k=x"}]
+
+
+def test_a_parked_tabs_challenge_does_not_stall_the_queue(monkeypatch):
+    """Job 3 parked on Greenhouse with its reCAPTCHA pending; jobs 4-11 could not open a pane on
+    the SEARCH tab — three identical stops on a challenge nobody was driving toward. The guard
+    re-probes the ONE tab the next rung acts on and refuses only when the challenge is there."""
+    probed = []
+
+    def _vis(payload):
+        probed.append(payload.get("tab_id"))
+        return {"ok": True, "blocking": False}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/ax_scan": _MYINFO_SCAN,
+                         "/challenge_visibility": _vis,
+                         "/execute": lambda p: {"outcome": "ok"}},
+                        blackboard=_wd_step(), frames=_block_frames())
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    assert probed, "the guard asked the WORKING tab before refusing"
+    ls = r.get("last_step") or {}
+    assert "challenge is up" not in str(ls.get("detail")), \
+        "a clear working tab drives; the parked tab's checkbox stays for the human"
+
+
+def test_a_challenge_on_the_working_tab_still_refuses(monkeypatch):
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/challenge_visibility": {"ok": True, "blocking": True}},
+             blackboard=_wd_step(), frames=_block_frames())
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    assert "challenge is up" in str((r.get("last_step") or {}).get("detail"))
+
+
+def test_an_unprobeable_challenge_keeps_the_conservative_stop(monkeypatch):
+    """A probe that fails is not evidence the tab is clear — the strict-consequence rule."""
+    _install(monkeypatch,
+             {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+              "/auth_state": {"ok": True, "logged_in": True},
+              "/challenge_visibility": {"ok": False, "detail": "no target"}},
+             blackboard=_wd_step(), frames=_block_frames())
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    assert "challenge is up" in str((r.get("last_step") or {}).get("detail"))
