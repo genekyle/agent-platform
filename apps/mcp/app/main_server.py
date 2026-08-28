@@ -226,15 +226,16 @@ function() {
                                       max_size=16 * 1024 * 1024) as ws:
             cdp = _CDPSession(ws)
             await cdp.send("DOM.enable", {})
+            # _CDPSession.send returns the CDP RESULT object, not the {id, result} envelope —
+            # every _eval in protocols.py reads it the same way. One unwrap, not two.
             resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": backend_node_id})
-            obj = (resolved.get("result") or resolved).get("object") or {}
-            oid = obj.get("objectId")
+            oid = ((resolved or {}).get("object") or {}).get("objectId")
             if not oid:
                 return None
             out = await cdp.send("Runtime.callFunctionOn",
                                  {"objectId": oid, "functionDeclaration": js,
                                   "returnByValue": True})
-            val = ((out.get("result") or out).get("result") or {}).get("value")
+            val = ((out or {}).get("result") or {}).get("value")
             return val or None
     except Exception:  # noqa: BLE001 — the caller reports "could not derive", never a stack
         return None
