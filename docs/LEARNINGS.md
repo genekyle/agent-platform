@@ -12498,3 +12498,37 @@ refuse loudly saying what moved, instead of silently doing nothing. Operator's d
 against next time: teacher side-channels are a real hazard class (the stale second server WAS
 one), but this failure ran entirely through journaled endpoints — the ungrounded thing was a
 guess allowed to overwrite a measurement, inside the system.
+
+## 2026-08-28 (second entry) — sit in the seat: the poll was eating the armed confirm; Bottomline SENT
+
+**Submission #2 (Financial Systems Analyst at Bottomline, verified by the confirmation page and
+recorded with the tab auto-closed).** The operator's debugging prescription broke the case open,
+and it belongs in the toolbox verbatim: *"imagine you are the user in the cockpit and try the
+submit button and try to understand why it's not working."* Every prior "the gate is live" was
+proven with curl — the API's path — while the operator's path (browser → panel → poll cycle) was
+never walked once. Driven from their seat, the bug reproduced in one press:
+
+* **The poll was eating the armed confirm.** The press worked; the backend armed the hold and
+  returned the "Send it" exit — in `last_step`, which only the POST response carries. The panel
+  polls GET constantly, GET's `last_step` is None, so the confirm button lived for under a poll
+  cycle. That reads exactly as "the submit button does nothing". Fix: the hold persists in
+  `world["submit_hold"]` (the account-handoff durability rule — "last_step alone is transient"),
+  every poll serves it back while the current step still stands at the gate, dropped lazily the
+  moment the job or rung moves. A stale confirm never outlives its gate.
+* **Cockpit topology, corrected on measurement:** the UI's env says `VITE_API_BASE_URL=
+  http://localhost:8081` — NOT :8093 as remembered. The teacher's parallel :8093 server is
+  retired; one store, one server, the one the cockpit uses (its --reload tracks main).
+* **Two more third-table gaps, same `_KIND_ALIASES` cure:** the tenant-reworded thank-you page
+  ("we appreciate the time you took to apply" — none of the three stock phrasings) read as the
+  FORM by URL default, so the gate honestly refused to record a submission whose screenshot was
+  in hand; and `apply_submitted` parsed as a kind the generic spine never heard, so `done` never
+  fired and a confirmed submission cranked back into "census + fill + Continue". Markers added;
+  `apply_submitted → confirmation` aliased.
+* **Crank shape worth knowing:** on a done state the fresh-look flips the landing but the crank
+  keeps the rung it already had (a done state returns no rung to swap to), so the crank that
+  ARRIVES reports one odd "cannot see the control" before the next crank confirms. Harmless once
+  the after-look guard holds the flipped state; confusing if you read only one crank's detail.
+
+*Tabs: ONE (the LinkedIn spine) — the operator's no-tab-queueing policy is now the working state.
+Next: Revenue Intelligence Analyst (Cadence) re-enters Workday from the pane as the only
+application tab. Suites: controlplane-api 372+ across touched modules, all green.*
