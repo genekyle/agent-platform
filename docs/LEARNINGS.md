@@ -12639,3 +12639,48 @@ re-find path — the recorded title is the seed for a search, not the ad URL.*
 *Nothing was written to session 34 while its drive was live. W5/W6/W7 specified and PARKED in
 `PLAN_interaction_dispatch_v1.md` rather than applied: the `--reload` server would have swapped
 them under an active drive.*
+
+### The live drive that answered it (session 32, Indeed → Vertex Workday)
+
+Ran the second lane end-to-end to settle W5 by experiment rather than inference. **Prediction stated
+first:** `enter_apply` will CONFIRM on a fresh job, because the eight-times grind was a rung
+re-fired on a world already past it. **Falsifier:** a `no tab opened` mismatch on a fresh job would
+mean the click mechanism is broken and W5 is wrong.
+
+**Confirmed, first try:** `clicked 'Apply on company site (opens in a new tab)'; opened a new tab ->
+vrtx.wd501.myworkdayjobs.com`, verdict `confirmed`, expectation `new_tab_or_nav` — the SAME rung and
+the SAME expectation kind that scored 20% on the day. *The rung is fine; the ladder just never asks
+whether it is already satisfied.* W5 stands as specified.
+
+Four more of yesterday's fixes seen working, and three new debts measured:
+
+* **The passive badge did not block.** `recaptcha · strength: passive · "present but not blocking
+  (solved) — advisory"`, and the ladder drove straight through. The badge-vs-screen fix holds.
+* **Consulted knowledge predicted the wall.** classify reported *"expect an account wall — it will
+  stop for the operator"* and *"another job (indeed:a64cbbeb2637fd17) holds a tab here"* — the
+  claim_tab work surfacing an overlap unprompted. Both came true.
+* **The census refused honestly at the wall**: *"3 required field(s) unanswered — Email Address*,
+  Password*, Verify New Password*… Types nothing until you press Fill."* Stopped `human_required`.
+* **WORKDAY URL SLUGS ARE STALE, AND RECONCILE JUDGES IDENTITY FROM THEM.** The req URL reads
+  `Senior-Analyst--Market-Access-Platforms_REQ-29607`; the page's rendered title is **"Business
+  Systems Analyst, Market Access Platforms"** — the pick, exactly. Workday generates the slug at
+  req creation and never rewrites it when the title changes. `reconcile_step` asks
+  `_title_matches(step.title, _last_path_words(ats_url))` — **the URL's path words** — so a correct
+  landing reads as a near-miss and records UNKNOWN. This is the `verify()` page_text lesson
+  (08-27) in a second place: *the strongest signal is what the site says in its own words*, and
+  identity is still being judged off an address. It is why session 34 logged `verify_identity
+  unknown — the ATS destination ('bottomlinetechnologies') does not obviously match`. **Tenth
+  instance of the class.** Fix at the read-point: compare against the rendered title, fall back to
+  path words.
+* **NOVELTY IS 100% PER TENANT, AND THE UNSURE GATE STOPS ONCE PER SCREEN.** `vrtx` read as
+  `novelty 1.0` on every screen, so the gate stopped at `workday_job_posting` and again at
+  `workday_apply_method` — correct behaviour (it will not drive blind), but a 9-screen Workday
+  flow on an unseen tenant costs nine confirmations. The first guess was also wrong
+  (`search_results` on a job posting) while the RECIPE had it right, so the ladder was right and
+  perception was not. *The witnesses key on tenant; the recipe keys on platform. Whatever the fix,
+  novelty that resets per tenant makes every new employer a cold start.*
+
+*Nothing written to session 34 throughout. Session 32's home-feed picks were parked with a recorded
+reason before the new search; the search is `business analyst · Manchester NH · 50mi`, 22 results,
+two operator picks queued. Vertex is at its account wall (`workday_create_account`, has_creds
+false) — the operator's leg. Kelmar is queued behind it.*
