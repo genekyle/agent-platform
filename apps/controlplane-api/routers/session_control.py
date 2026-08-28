@@ -5714,8 +5714,9 @@ async def orient_step(session_id: int, body: OrientStepBody,
     # frozen at whatever `classify` said when the apply was entered — session #25 sat on
     # `indeed_unknown` from 2026-08-04 while the live page was the resume-selection screen, so a
     # read model asking "which rung is due" got the answer for a page we left long ago. The orient
-    # already knew; nothing wrote it down.
-    step.landing_state = state
+    # already knew; nothing wrote it down. (A verdict, not a guess: `_adopt_screen_verdict`
+    # refuses a URL default trying to displace a state the flow can place.)
+    _adopt_screen_verdict(step, seen)
 
     # Record only on a CHANGE — the last orient of the same state is not news.
     prior = next((m for m in reversed(step.minis) if m.rung == "orient"), None)
@@ -6639,8 +6640,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             fresh = _name_the_screen(step, read["url"], read["text"])
             f_state = fresh.get("state") or ""
             if f_state and not f_state.endswith(("unknown", "unreadable")) \
-                    and f_state != step.landing_state:
-                step.landing_state = f_state
+                    and _adopt_screen_verdict(step, fresh):
                 re_rung, _re_ruled = step.walk_to_next_rung()
                 if re_rung is not None:
                     rung = re_rung
@@ -6649,7 +6649,7 @@ async def apply_step(session_id: int, body: ApplyStepBody,
         if read is not None:
             was = step.landing_state or "nothing"
             tail_view = _name_the_screen(step, read["url"], read["text"])
-            step.landing_state = tail_view["state"]
+            _adopt_screen_verdict(step, tail_view)
             if tail_view["reclassified"]:
                 step.platform = tail_view["platform"]
             # ARRIVING AT THE PLATFORM'S TERMINAL STATE *IS* THE CONFIRMATION, and it is the only
@@ -7845,17 +7845,47 @@ def _name_the_screen(step: Any, url: str, text: str) -> dict[str, Any]:
     if reclassified:
         platform = live.platform
     if platform == "workday":
-        state = ar.map_workday_state(url, text)
+        state, _named_by = ar.map_workday_state_verbose(url, text)
+        observed = _named_by in (ar.NAMED_BY_PAGE, ar.NAMED_BY_MARKER)
     else:
-        state = ar.describe_for_ats(platform, url, text).get("state", "unknown")
+        desc = ar.describe_for_ats(platform, url, text)
+        state = desc.get("state", "unknown")
+        # The describe dicts that can tell a SEEN name from a URL default say so; the generic
+        # path names states from page content only, so absence of the key reads as observed.
+        observed = bool(desc.get("observed", True))
     progress = ar.flow_progress(state, platform=platform)
     if not progress.get("recognised"):
         # The flow does not place it, but the describer may still have named it. Those are two
         # different questions — "is this a screen we know" vs "is it on the spine we can count
         # along" — and collapsing them would report a recognised page as new territory.
         progress = {**progress, "recognised": state not in ("unknown", "", None)}
-    return {"platform": platform, "state": state, "progress": progress,
+    return {"platform": platform, "state": state, "progress": progress, "observed": observed,
             "reclassified": reclassified, "live_platform": live.platform}
+
+
+def _adopt_screen_verdict(step: Any, seen: dict[str, Any]) -> bool:
+    """Write a LOOK's verdict onto the ladder's position — unless it is a guess trying to move a
+    measurement. Returns whether the position changed.
+
+    A URL default may FILL A BLANK (its legitimate role: better than nothing on a page that says
+    nothing) and may re-affirm what is already recorded — but it may never DISPLACE a state the
+    flow can place. Measured live 2026-08-28: a background look wrote the Greenhouse mapper's
+    URL-default name over the promoted `greenhouse_review` while the Submit gate stood ARMED,
+    the spine lost its place, and the operator's confirm press silently did nothing. The
+    describers have said "a URL default is a guess wearing a state's name" since they were
+    written; this is the consumer finally asking. Post-ACT writes (the submit rung's landing
+    reads) are not looks and keep their own rules.
+    """
+    import apply_recipe as ar
+    state = seen.get("state") or ""
+    if not state or state == step.landing_state:
+        return False
+    prior = step.landing_state or ""
+    if not seen.get("observed", True) and prior and ar.flow_progress(
+            prior, platform=seen.get("platform") or step.platform or "").get("recognised"):
+        return False
+    step.landing_state = state
+    return True
 
 
 def _ax_identities(scan: dict[str, Any]) -> list[str]:

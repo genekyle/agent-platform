@@ -7667,3 +7667,58 @@ def test_the_promotion_bit_survives_the_blackboard_round_trip():
     assert again.review_is_the_form is True
     old = aps.ApplyStep.from_dict({"job_id": "linkedin:2"})
     assert old.review_is_the_form is False
+
+
+# --------------------------------------------------------------------------------------------
+# A guess may fill a blank, never move a measurement (operator, 2026-08-28)
+# --------------------------------------------------------------------------------------------
+
+def _seen(state, observed, platform="greenhouse"):
+    return {"state": state, "observed": observed, "platform": platform}
+
+
+def test_a_url_default_guess_cannot_displace_a_placed_state():
+    """The armed-gate killer: a background look wrote the mapper's URL-default name over the
+    promoted greenhouse_review while the Submit gate stood armed — the spine lost its place and
+    the operator's confirm press silently did nothing."""
+    from routers.session_control import _adopt_screen_verdict
+
+    step = aps.ApplyStep(job_id="x", platform="greenhouse", landing_state="greenhouse_review")
+    assert _adopt_screen_verdict(step, _seen("greenhouse_apply_form", observed=False)) is False
+    assert step.landing_state == "greenhouse_review"
+
+
+def test_a_url_default_still_fills_a_blank():
+    """Its legitimate role: better than nothing on a page that says nothing."""
+    from routers.session_control import _adopt_screen_verdict
+
+    step = aps.ApplyStep(job_id="x", platform="greenhouse", landing_state=None)
+    assert _adopt_screen_verdict(step, _seen("greenhouse_apply_form", observed=False)) is True
+    assert step.landing_state == "greenhouse_apply_form"
+
+
+def test_an_observed_name_still_moves_a_placed_state():
+    """The guard is about evidence rank, not stickiness — a marker-named screen (the page SAID
+    so) moves the position exactly as before."""
+    from routers.session_control import _adopt_screen_verdict
+
+    step = aps.ApplyStep(job_id="x", platform="greenhouse", landing_state="greenhouse_review")
+    assert _adopt_screen_verdict(step, _seen("greenhouse_apply_submitted", observed=True)) is True
+    assert step.landing_state == "greenhouse_apply_submitted"
+
+
+def test_name_the_screen_says_when_it_only_guessed():
+    """The describers have carried `observed` since they were written; the orienter now hands it
+    to its callers instead of dropping it."""
+    from types import SimpleNamespace
+    from routers.session_control import _name_the_screen
+
+    step = SimpleNamespace(platform="greenhouse", landing_state="greenhouse_review")
+    seen = _name_the_screen(
+        step, "https://job-boards.greenhouse.io/bottomlinetechnologies/jobs/8605886002",
+        "Apply for this job First Name Last Name Submit application")
+    assert seen["observed"] is False
+    marked = _name_the_screen(
+        step, "https://job-boards.greenhouse.io/bottomlinetechnologies/jobs/8605886002",
+        "Thank you for applying — your application has been submitted.")
+    assert marked["state"] == "greenhouse_apply_submitted" and marked["observed"] is True
