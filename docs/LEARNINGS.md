@@ -12440,3 +12440,45 @@ fallback (link OR button), and carry the same open-evidence it already demands.
 *Queue at close of the stretch: 1 submitted (BambooHR, verified), job 2 parked (consent wall),
 job 3 parked COMPLETE except the privacy dropdown + captcha + Submit (operator's three clicks),
 job 4 landed on Workday. Suites: controlplane-api 2043, mcp 179.*
+
+## 2026-08-28 — the queue cleared one-by-one; the gate finally reachable from the seat
+
+Operator's directive reframed the day: *"finish one before moving on — that's a general rule;
+aborting is always my call; clear one-by-one making sure our system understands what's going on."*
+Bottomline (closest to done) was driven from parked to ONE press from sent — and every stall on
+the way was a read-point lying, each fixed where it read:
+
+* **`claim_tab` built (the sparse-claims debt paid).** Three application tabs, ONE claim — claims
+  accrued only via the drift census, and `_apply_tab`'s unclaimed fallback is tab-list ORDER,
+  which resolved Bottomline's fill onto Cadence's Workday tab. Ownership is now writable
+  retroactively (guards: live tab, known job, never silent reassignment) and the window strip
+  CLAIMS, not just shows (operator: *"maybe the cockpit should have a tab manager functionality
+  as well not just show what it has"*).
+* **The privacy select was never a popup mystery.** The parked note guessed "menu portals
+  off-screen"; measured, the menu rendered fine. The real misses: the accessible name spells
+  "acknowledg**e**ment." (British + period) where we typed American, and the matcher is
+  exact-then-prefix CASE-SENSITIVE by design — `no_option`'s `sample` field named the single
+  option (`Acknowledge/Confirm`) and the retry committed first try. Vocabulary, not mechanism.
+* **A badge is not a checkbox** (challenge_visibility): the invisible reCAPTCHA badge is served
+  from the SAME anchor URL as the v2 checkbox — only `size=invisible` tells them apart — so the
+  rail read blocking:true over a form challenging nobody and refused every crank. Excluded;
+  the bframe rail untouched.
+* **A badge is not a screen either** (`_CHALLENGE_MARKERS`): the bare marker "recaptcha" matched
+  the badge's "protected by reCAPTCHA" footer and named the whole SCREEN captcha — no rung, so
+  the resolver demoted the Submit gate to "Read this page". Challenge LANGUAGE only.
+* **`verify_identity` reads the job's own claimed tab first.** A reopened step re-walks its
+  prefix while the engine pane shows the NEXT job; the claimed tab's title proves identity
+  directly. The shortcut never vouches — an unmatched tab falls through to the pane check.
+* **A promoted review claims the form** (`review_is_the_form` on the step): the single-page
+  promotion writes `<platform>_review` over pixels that ARE the form, and the orienter read its
+  own promotion as drift every look — arbitration then demoted "Submit this application" behind
+  "Plan the fill" on a finished form.
+* **The gate's hold now carries its own second press.** Operator: *"there is no submit button
+  within the cockpit."* The refusal-exit machinery existed; the hold was prose only. It now
+  declares `Exit(apply_step, {confirm_submit:true}, consequential)` — operator's hold only; the
+  teacher's refusal stays exitless.
+
+*Queue: Bottomline at the gate (operator's press), iCIMS consent wall and Cadence/Workday next,
+in that order. Suites: controlplane-api 385+44+..., mcp 181. Two API servers serve one store
+(:8081 --reload = the cockpit's, :8093 = manual restarts) — restart or reload BOTH after a merge,
+or a stale server re-manufactures the bug just fixed.*
