@@ -12560,3 +12560,82 @@ uploaded — except it WASN'T:** the drive stalled on the one control that lied 
 
 *Queue: 2 submitted, Cadence at My Experience (resume-only), iCIMS parked (operator's), 7 queued.
 Suites: mcp 181, api 372+ green. Tabs: LinkedIn spine + the active Workday tab only.*
+## 2026-08-28 (fourth entry) — measuring whether the fixes helped, from a second seat
+
+Operator's question, asked while the LinkedIn drive was still running: *"I wanted to prove that the
+changes we made yesterday are improving our system... I haven't personally seen much of an
+improvement but we have run into so many new ATS and genuinely novel encounters."* Answered
+read-only against the transition corpus and the live cockpit, from a parallel worktree that wrote
+nothing into session 34.
+
+### THE OBVIOUS METRIC IS CONFOUNDED — the exam changed, not just the score
+
+Raw confirm-rate reads 81% (08-21) → 35% (08-27) → 11% (08-28) and means almost nothing, because
+the EXPECTATION MIX moved underneath it: before was 52% `content_changed` (any DOM churn confirms
+it), after was 34% `new_tab_or_nav` (a real tab must open). Per-kind, like for like:
+`content_changed` 67%→67%, `url_param` 78%→44%, `new_tab_or_nav` **94%→20%**. And that last drop is
+ONE rung retried eight times, not eight failures — the whole of 08-28 was **9 acting rows across 2
+distinct attempts**. *A rate whose denominator is a changing difficulty mix cannot answer "are we
+better"; per-expectation-kind can, and so can counting DISTINCT attempts instead of rows.*
+
+### THREE FIXES PROVED THEMSELVES ON THE DAY'S OWN TIMELINE
+
+Not argued — read off the minis, with the commit landing between the two readings:
+
+* **Challenge scoping** (`411ba40`/`c0be950`/`e250297`, landed 03:08–03:11 UTC). Job
+  `linkedin:4424504424` logged **seven** `challenge blocked — active hcaptcha` between 03:05 and
+  03:10, blocked by a DIFFERENT job's parked hCaptcha. `open_pane ok` at **03:11:41**, and zero
+  challenge blocks on that job since. The queue unblocked within a minute of the commit.
+* **`verify_identity` reads the claimed tab first** (`4c55dd8`). Same job, three minutes apart:
+  `03:44:24 failed — expected 'Financial Systems Analyst' but the pane shows 'Revenue Intelligence
+  Analyst'`, then `03:47:01 ok — this job's claimed application tab is open`. It then cascaded —
+  reconcile settled `enter_apply` at 03:47:11 and the ladder ran classify → account → orient → the
+  submit gate **in 38 seconds**.
+* **The gate's hold carries its own press** (`757e93a`): `14:08:42 submit human_required — held at
+  the gate — awaiting the operator's explicit confirmation`, initiator=operator.
+
+**Why it does not FEEL like improvement:** each fix moves the stuck point forward exactly one rung,
+and the next novel thing stalls immediately behind it. The gain is real and is measured in rungs
+cleared, not applications sent. The operator's read was right; so was the system.
+
+### THE DOMINANT DEFECT CLASS IS UNREACHED LOGIC, NOT MISSING LOGIC — now nine instances
+
+Yesterday's log already held seven (`tab_claims` consulted only in an unreachable fallback;
+`/select_option` never called by the ladder; `deferred_to_widget` read by no consumer; three census
+cap-flags dropped twice; refusal-exit machinery that existed as prose; the vault that already
+existed). Two more measured today:
+
+8. **The ladder never asks what reconcile already knows.** `linkedin:4424504424` ground **eight**
+   `enter_apply` attempts in 77 seconds — `ok  clicked 'Apply'; stayed in this tab` alternating with
+   `mismatch  no tab opened and none navigated` — its Workday tab opened at 03:21:45, and **11.5
+   hours later** the step still read `next_rung=enter_apply`. The rule that settles it (*"we are on
+   the ATS, so Apply was clicked"*) is reachable only from `/reconcile_step`, and it settled the
+   SIBLING job correctly 35 minutes later in the same session. Parked as **W5** with falsifiers.
+9. **`orient_now` returns cached belief without saying it did not look.** Called on session 32 it
+   answered in 0.23s with `seeing` unchanged (ts 08-26, confidence 0.1664) and `observer: null` —
+   it is documented to re-read *the application tab*, and there was none. The very next real drive
+   moved the same reading to **0.5782 at a fresh timestamp**, proving the page was readable all
+   along. This is the `unprobed()` rule — *a check that could not be performed needs a strict
+   consequence, not a silent pass* — named as an open debt on 08-27 and still unapplied.
+
+### RECORD-REPAIR IS BLOCKED BEHIND A HUMAN PRESS (W6)
+
+`reconcile_step` operates on `queue.current()` alone, and `current()` is *"the first that has not
+reached a terminal flag"*. So Bottomline sitting correctly at the submit gate from 14:08 made the
+Cadence job behind it **unreachable by any endpoint** — `apply_reopen` restores only PARKED steps,
+at their original position. The serial WORK rule is right; folding record-repair into it is not.
+
+### A QUEUE OUTLIVES THE FEED ITS PICKS POINT INTO
+
+Second lane, session 32 (Indeed, idle 42h): `open_pane` returned **`failed — card
+e0e213aed9429a80 not found`** — correct and honest, a refusal to click a neighbouring card, which
+is the wrong-job fault this rung exists to prevent. The cause is structural: the fifteen recorded
+picks are HOME-FEED cards carrying `pagead/clk` tracking URLs (sponsored placements), and
+`feed_opened`'s own warning already says re-opening reshuffles and drops walked batches. So the
+queue holds work that can no longer be STARTED by the human path, and the only routes back are a
+fresh search (spends a query) or a viewjob URL jump (§3 forbids it). *Picks need a durable
+re-find path — the recorded title is the seed for a search, not the ad URL.*
+
+*Nothing was written to session 34 while its drive was live. W5/W6/W7 specified and PARKED in
+`PLAN_interaction_dispatch_v1.md` rather than applied: the `--reload` server would have swapped
+them under an active drive.*
