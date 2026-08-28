@@ -1214,7 +1214,15 @@ _PLATFORM_ALIASES: dict[str, str] = {"indeed": "indeed_quick_apply"}
 #: the spine had been walking, `tail_rung_for` returned None, and the ladder went blind at the
 #: gate ("Read this page" over a complete form, measured live 2026-08-28 minutes after the gate
 #: was first made pressable). Aliased here, where the spine parses kinds, never per-table.
-_KIND_ALIASES: dict[str, str] = {"apply_form": "application_form"}
+_KIND_ALIASES: dict[str, str] = {
+    "apply_form": "application_form",
+    # The mapper's terminal name (`greenhouse_apply_submitted`, `_TERMINAL_STATES`' own word)
+    # parses as a kind the spine never heard, so the generic path's `done` never fired: a
+    # submission CONFIRMED by the page's own thank-you text cranked back into "census + fill +
+    # Continue" on the confirmation screen (live 2026-08-28, minutes after the marker landed).
+    # Two authorities for "done" is the same third-table disease; resolved in the same table.
+    "apply_submitted": "confirmation",
+}
 
 
 def _canon(platform: Optional[str]) -> str:

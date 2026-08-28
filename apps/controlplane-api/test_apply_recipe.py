@@ -577,3 +577,14 @@ def test_a_tenant_reworded_thank_you_still_reads_as_submitted():
         "Thank you for your interest in Bottomline. We appreciate the time you took to apply "
         "with us and we look forward to reviewing your application. Track your application")
     assert state == "greenhouse_apply_submitted"
+
+
+def test_the_mappers_terminal_name_counts_as_done_on_the_generic_spine():
+    """`greenhouse_apply_submitted` parsed as a kind the spine never heard, so the generic
+    path's `done` never fired — a submission CONFIRMED by the page's own thank-you text cranked
+    back into "census + fill + Continue" on the confirmation screen (live 2026-08-28)."""
+    import apply_recipe as ar
+
+    p = ar.flow_progress("greenhouse_apply_submitted", platform="greenhouse")
+    assert p.get("recognised") is True
+    assert p.get("done") is True
