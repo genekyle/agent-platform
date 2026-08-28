@@ -7722,3 +7722,22 @@ def test_name_the_screen_says_when_it_only_guessed():
         step, "https://job-boards.greenhouse.io/bottomlinetechnologies/jobs/8605886002",
         "Thank you for applying — your application has been submitted.")
     assert marked["state"] == "greenhouse_apply_submitted" and marked["observed"] is True
+
+
+def test_the_post_act_look_cannot_demote_the_armed_gate_either():
+    """The same rule at the last ungated door: the after-look runs after EVERY crank — held
+    no-ops included — and reads only sparse AX names, so its verdicts are routinely URL
+    defaults. One of them displaced the promoted greenhouse_review minutes after the orient-side
+    guard shipped: the operator pressed the armed gate and the ladder was back on the form
+    before the confirm could land (2026-08-28)."""
+    from types import SimpleNamespace
+    from routers.session_control import _adopt_screen_verdict, _seen_from_observation
+
+    step = aps.ApplyStep(job_id="x", platform="greenhouse", landing_state="greenhouse_review")
+    after = SimpleNamespace(
+        ok=True, url="https://job-boards.greenhouse.io/bottomlinetechnologies/jobs/8605886002",
+        candidates=[{"name": "First Name"}, {"name": "Submit application"}])
+    seen = _seen_from_observation(step, after)
+    assert seen["observed"] is False, "sparse AX names on a greenhouse URL is a URL default"
+    assert _adopt_screen_verdict(step, seen) is False
+    assert step.landing_state == "greenhouse_review"

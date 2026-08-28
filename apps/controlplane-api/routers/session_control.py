@@ -7389,15 +7389,23 @@ async def apply_step(session_id: int, body: ApplyStepBody,
     # poll cycle after the act: "at most 5 screens from Submit" beside a detail line saying we had
     # just left that screen. Measured live 2026-08-06 on the first advance.
     if _after is not None and getattr(_after, "ok", False):
-        _moved_to = _state_from_observation(step, _after)
+        _seen_after = _seen_from_observation(step, _after)
+        _moved_to = _seen_after.get("state") or ""
         # A NON-ANSWER MUST NOT OVERWRITE AN ANSWER, whatever prefix it wears. The generic
         # describer renders its non-answers platform-prefixed (`cornerstone_unknown`), so the
         # bare-string check walked right past them — and the after-look, reading only the sparse
         # AX names, demoted a landing the classify rung had just named from the page's full text
         # (measured live 2026-08-11: `cornerstone_job_posting` → `cornerstone_unknown` one act
         # later). The look that read less does not get to overrule the look that read more.
+        #
+        # AND A GUESS MUST NOT OVERWRITE A MEASUREMENT — the same rule this comment already
+        # states, one evidence rank up. This write ran after EVERY crank, held no-ops included,
+        # and its URL-default verdict displaced the promoted greenhouse_review minutes after the
+        # orient-side guard shipped: the operator pressed the armed gate at 15:42 and the ladder
+        # was back on the form before the confirm could land (2026-08-28, the same afternoon).
+        # `_adopt_screen_verdict` is the one door every passive look now goes through.
         if _moved_to and not _moved_to.endswith(("unknown", "unreadable")):
-            step.landing_state = _moved_to
+            _adopt_screen_verdict(step, _seen_after)
 
     # SHADOW: what the controller WOULD have decided on the page we decided on. Taken from
     # `_before` — the look the decision was actually made against — because scoring the local
@@ -8454,16 +8462,24 @@ def _shadow_the_crank(rung: Any, step: Any, before: Any, acted: dict[str, Any],
         pass
 
 
-def _state_from_observation(step: Any, o: Any) -> str:
-    """Name the screen an observation was taken on, from the observation alone.
+def _seen_from_observation(step: Any, o: Any) -> dict[str, Any]:
+    """Name the screen an observation was taken on, from the observation alone — WITH the
+    evidence rank (`observed`), so a caller writing the ladder can rank it like any other look.
 
     Free — no extra scan. `Observation` already carries the url and the AX control names, which is
-    exactly what `describe_for_ats` reads.
+    exactly what `describe_for_ats` reads. Note this look reads LESS than the orient's (sparse AX
+    names, not the page text), which is precisely why its verdicts are so often URL defaults.
     """
     import apply_recipe as ar
     names = " ".join(str(c.get("name") or "") for c in (getattr(o, "candidates", None) or []))
-    return ar.describe_for_ats(step.platform, getattr(o, "url", "") or "",
-                               names).get("state", "unknown")
+    desc = ar.describe_for_ats(step.platform, getattr(o, "url", "") or "", names)
+    return {"state": desc.get("state", "unknown"), "platform": step.platform,
+            "observed": bool(desc.get("observed", True))}
+
+
+def _state_from_observation(step: Any, o: Any) -> str:
+    """The state alone — for read-only comparisons (the orienter's scorer)."""
+    return _seen_from_observation(step, o)["state"]
 
 
 def _score_the_orienter(step: Any, rung: Any, before: Any, after: Any, *,
