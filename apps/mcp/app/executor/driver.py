@@ -44,7 +44,15 @@ function(names) {
   // raw input that the widget ignores read as success while the page plainly shows an empty
   // dropzone (measured live 2026-08-28, Workday/Cadence: "1 of 1 confirmed" over a dropzone
   // that never took the file). A plain input keeps at_node semantics — it IS the widget.
-  const ingesting = /\b(drop files|drag and drop|select files)\b/i.test(scope);
+  //
+  // Detected on its OWN walk, without the second-input break: Workday's zone holds more than
+  // one input internally, so the rendered-scope walk stops below the zone's text and `scope`
+  // never carries the words (the second live miss, same day). Zone words near ANY ancestor of
+  // THIS input mean it belongs to a zone; the rendered judgement above keeps its tight scope.
+  let ingesting = false;
+  for (let n = this.parentElement, d = 0; n && n !== document.body && d < 12; d++, n = n.parentElement) {
+    if (/\b(drop files|drag and drop|select files)\b/i.test(txt(n))) { ingesting = true; break; }
+  }
   return {files, at_node: files > 0, rendered, ingesting, error: err ? err[0] : '',
           scope: scope.slice(0, 120)};
 }
