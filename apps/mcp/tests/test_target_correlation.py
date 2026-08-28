@@ -382,3 +382,17 @@ def test_two_anchors_of_the_same_name_are_still_ambiguous(monkeypatch):
     monkeypatch.setattr(ms, "_by_dom_tag", both_anchors)
 
     assert asyncio.run(ms._resolve_ax_node("http://x", None, None, "link", "Apply now")) is None
+
+
+def test_the_upload_witness_tells_a_dropzone_from_a_plain_input():
+    """Files sitting on a raw input a dropzone ignores read as success while the page shows an
+    empty zone ("1 of 1 confirmed" over nothing, Workday/Cadence 2026-08-28). The witness now
+    names an ingesting zone by the page's own words, and the driver only trusts `rendered`
+    there — with the chooser-interception path as the zone's own door."""
+    from app.executor import driver as dr
+
+    assert "ingesting" in dr._UPLOAD_WITNESS_JS
+    assert "drop files" in dr._UPLOAD_WITNESS_JS.lower()
+    src = open(dr.__file__).read()
+    assert "setInterceptFileChooserDialog" in src, "the chooser path is the dropzone's own flow"
+    assert "fileChooserOpened" in src

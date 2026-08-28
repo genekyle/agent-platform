@@ -114,14 +114,26 @@ class _CDPSession:
     def __init__(self, ws: Any) -> None:
         self._ws = ws
         self._next_id = 0
+        #: Events seen while draining for a response — kept, not dropped, so a caller can wait
+        #: for one that FIRED DURING its own act. The chooser case that forced this: a trusted
+        #: click on a dropzone's "Select files" fires `Page.fileChooserOpened` while the drain
+        #: loop is still waiting on the mouseReleased ack, and a wrapper that discards events
+        #: there can never see the chooser it just opened. Bounded so an eventful page cannot
+        #: grow the buffer without limit.
+        self.events: list[dict[str, Any]] = []
+
+    def _stash_event(self, msg: dict[str, Any]) -> None:
+        if msg.get("method"):
+            self.events.append(msg)
+            if len(self.events) > 200:
+                del self.events[:100]
 
     async def send(self, method: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         self._next_id += 1
         msg_id = self._next_id
         await self._ws.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
-        # Drain until we see our id. We don't subscribe to events, but Chrome may
-        # still emit some on the default session; ignore anything without our id.
-        # Bounded by a deadline so a dropped/late response ESCALATES instead of hanging forever.
+        # Drain until we see our id. Events are STASHED (see `events`), responses to other ids
+        # ignored. Bounded by a deadline so a dropped/late response ESCALATES instead of hanging.
         deadline = asyncio.get_event_loop().time() + _CDP_RECV_TIMEOUT
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
@@ -134,10 +146,31 @@ class _CDPSession:
                 raise CDPError(method, {"message": f"no matching CDP response within {_CDP_RECV_TIMEOUT:.0f}s"})
             msg = json.loads(raw)
             if msg.get("id") != msg_id:
+                self._stash_event(msg)
                 continue
             if "error" in msg:
                 raise CDPError(method, msg["error"])
             return msg.get("result", {})
+
+    async def await_event(self, name: str, timeout: float = 6.0) -> Optional[dict[str, Any]]:
+        """The params of the first `name` event — from the stash if it already fired mid-drain,
+        else read off the socket. None on timeout: a chooser that never opened is an answer."""
+        for i, msg in enumerate(self.events):
+            if msg.get("method") == name:
+                return self.events.pop(i).get("params") or {}
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return None
+            try:
+                raw = await asyncio.wait_for(self._ws.recv(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return None
+            msg = json.loads(raw)
+            if msg.get("method") == name:
+                return msg.get("params") or {}
+            self._stash_event(msg)
 
 
 class CDPError(RuntimeError):

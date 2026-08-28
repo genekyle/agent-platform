@@ -39,7 +39,13 @@ function(names) {
   const scope = box ? txt(box) : '';
   const rendered = !!scope && (names || []).some(n => n && scope.includes(n));
   const err = /\b(too large|exceeds|not supported|invalid file|unsupported file|failed to upload)\b/i.exec(scope);
-  return {files, at_node: files > 0, rendered, error: err ? err[0] : '',
+  // AN INGESTING DROPZONE SAYS SO IN ITS OWN WORDS ("Drop files here", "Select files"). Its
+  // truth is `rendered` — the widget showing the file — never `at_node`: files sitting on the
+  // raw input that the widget ignores read as success while the page plainly shows an empty
+  // dropzone (measured live 2026-08-28, Workday/Cadence: "1 of 1 confirmed" over a dropzone
+  // that never took the file). A plain input keeps at_node semantics — it IS the widget.
+  const ingesting = /\b(drop files|drag and drop|select files)\b/i.test(scope);
+  return {files, at_node: files > 0, rendered, ingesting, error: err ? err[0] : '',
           scope: scope.slice(0, 120)};
 }
 """
@@ -296,19 +302,79 @@ class TrajectoryDriver(ABC):
             names = [f.rsplit("/", 1)[-1] for f in files]
             # An ingesting uploader has to round-trip to its own server; a plain one is instant.
             # Poll rather than sleep-once so the fast path stays fast.
+            w: dict[str, Any] = {}
             for attempt in range(10):
                 got = await cdp.send("Runtime.callFunctionOn", {
                     "objectId": found_id or object_id, "returnByValue": True,
                     "functionDeclaration": _UPLOAD_WITNESS_JS,
                     "arguments": [{"value": names}]})
                 w = (got.get("result") or {}).get("value") or {}
-                if w.get("at_node"):
-                    return "upload"                                  # plain input kept the file
                 if w.get("rendered"):
                     return "upload"                                  # the widget shows it
+                # A PLAIN input keeping the file is landed; a DROPZONE ignoring the raw input is
+                # not — its truth is `rendered` alone (see the witness). Keep polling: the
+                # round-trip may still render it.
+                if w.get("at_node") and not w.get("ingesting"):
+                    return "upload"
                 if w.get("error"):
                     return f"upload:rejected:{str(w.get('error'))[:60]}"
                 await asyncio.sleep(0.8)
+
+            # THE DROPZONE'S OWN DOOR. `setFileInputFiles` on the raw input feeds a widget that
+            # never looks at it — Workday's dropzone ingests through its OWN chooser flow. So
+            # drive that flow, trusted end to end: intercept the file chooser, press the zone's
+            # own button ("Select files"), and hand the chooser the file when it opens. The
+            # native dialog never appears (interception swallows it); the witness re-judges at
+            # the widget's truth. Measured live 2026-08-28 (Workday/Cadence): the raw-input set
+            # reported ok over an empty dropzone; this path is what the page actually offers.
+            btn = await cdp.send("Runtime.callFunctionOn", {
+                "objectId": found_id or object_id, "returnByValue": True,
+                "functionDeclaration":
+                    "function(){"
+                    " var el=this,hops=0,btn=null;"
+                    " while(el&&hops++<6&&!btn){"
+                    "  btn=[...(el.querySelectorAll?el.querySelectorAll('button,[role=button]'):[])]"
+                    "   .find(b=>/select files|attach|upload/i.test((b.innerText||b.textContent||'')));"
+                    "  el=el.parentElement; }"
+                    " if(!btn) return null;"
+                    " btn.scrollIntoView({block:'center'});"
+                    " var r=btn.getBoundingClientRect();"
+                    " return {x:r.x+r.width/2, y:r.y+r.height/2}; }"})
+            centre = (btn.get("result") or {}).get("value")
+            # Only a result that actually measured a point is a button — anything else (a stub,
+            # a null, a stray witness payload) means the zone offered no chooser to press.
+            if (isinstance(centre, dict)
+                    and isinstance(centre.get("x"), (int, float))
+                    and isinstance(centre.get("y"), (int, float))):
+                await cdp.send("Page.setInterceptFileChooserDialog", {"enabled": True})
+                try:
+                    for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+                        ev = {"type": typ, "x": centre["x"], "y": centre["y"]}
+                        if typ != "mouseMoved":
+                            ev.update({"button": "left", "clickCount": 1})
+                        await self._dispatch_mouse(cdp, ev)
+                    chooser = await cdp.await_event("Page.fileChooserOpened", timeout=6.0)
+                    if chooser and chooser.get("backendNodeId"):
+                        await cdp.send("DOM.setFileInputFiles",
+                                       {"backendNodeId": chooser["backendNodeId"],
+                                        "files": files})
+                finally:
+                    # The chooser must not stay intercepted for whoever drives this tab next.
+                    try:
+                        await cdp.send("Page.setInterceptFileChooserDialog", {"enabled": False})
+                    except Exception:  # noqa: BLE001
+                        pass
+                for attempt in range(10):
+                    got = await cdp.send("Runtime.callFunctionOn", {
+                        "objectId": found_id or object_id, "returnByValue": True,
+                        "functionDeclaration": _UPLOAD_WITNESS_JS,
+                        "arguments": [{"value": names}]})
+                    w = (got.get("result") or {}).get("value") or {}
+                    if w.get("rendered"):
+                        return "upload:chooser"
+                    if w.get("error"):
+                        return f"upload:rejected:{str(w.get('error'))[:60]}"
+                    await asyncio.sleep(0.8)
             return f"upload:not_staged:files={w.get('files')} rendered=no"
 
         # Scroll into view + measure the node's own centre (CSS px). A fresh per-node measurement is
