@@ -7306,6 +7306,75 @@ def test_an_unclaimed_recorded_tab_is_still_honoured():
 
 
 # --------------------------------------------------------------------------------------------
+# claim_tab — ownership written retroactively (the census writes claims on too few paths)
+# --------------------------------------------------------------------------------------------
+
+def _bb_claimable(job_id="linkedin:JOB3", title="Financial Systems Analyst"):
+    bb = store.new_blackboard(1, query="reporting analyst")
+    q = aps.Queue(page=1)
+    q.enqueue([{"job_id": job_id, "title": title}])
+    bb.world = {"apply_queue": q.as_dict(),
+                "tab_claims": {"ICIMS": {"job_id": "linkedin:JOB2"}}}
+    return bb
+
+
+def test_claim_tab_records_ownership_for_a_live_tab(monkeypatch):
+    """Session 34, live: three application tabs open, ONE claim — the unclaimed pair fell to
+    tab-list order, which pointed the current job's fill at the OTHER application's form."""
+    _install(monkeypatch, {"/list_tabs": _tabs_two_applies()}, blackboard=_bb_claimable())
+    try:
+        r = client.post("/api/session_control/1/claim_tab",
+                        json={"tab_id": "GH", "job_id": "linkedin:JOB3",
+                              "initiator": "teacher", "reason": "the census never saw it appear"})
+    finally:
+        _teardown()
+    assert r.status_code == 200
+    body = r.json()
+    assert "owns tab" in body["last_step"]["detail"]
+    # The claim is readable back on the view's own tab rows — cockpit reach, not just storage.
+    gh = next(t for t in body["tabs"] if t["tab_id"] == "GH")
+    assert (gh["claimed_by"] or {}).get("job_id") == "linkedin:JOB3"
+
+
+def test_claim_tab_refuses_to_reassign_anothers_tab(monkeypatch):
+    """Silent ownership transfer is the wrong-form fill waiting to happen — a claim by a
+    DIFFERENT job is a refusal, not an overwrite."""
+    _install(monkeypatch, {"/list_tabs": _tabs_two_applies()}, blackboard=_bb_claimable())
+    try:
+        r = client.post("/api/session_control/1/claim_tab",
+                        json={"tab_id": "ICIMS", "job_id": "linkedin:JOB3",
+                              "initiator": "teacher"})
+    finally:
+        _teardown()
+    assert r.status_code == 409
+    assert "already claimed" in r.json()["detail"]
+
+
+def test_claim_tab_refuses_a_vanished_tab(monkeypatch):
+    """The census prunes claims on vanished tabs; minting one is bookkeeping debt."""
+    _install(monkeypatch, {"/list_tabs": _tabs_two_applies()}, blackboard=_bb_claimable())
+    try:
+        r = client.post("/api/session_control/1/claim_tab",
+                        json={"tab_id": "GONE", "job_id": "linkedin:JOB3",
+                              "initiator": "teacher"})
+    finally:
+        _teardown()
+    assert r.status_code == 404
+
+
+def test_claim_tab_refuses_a_job_nobody_holds(monkeypatch):
+    """A claim for a job outside the queue and the parked survivors records nothing."""
+    _install(monkeypatch, {"/list_tabs": _tabs_two_applies()}, blackboard=_bb_claimable())
+    try:
+        r = client.post("/api/session_control/1/claim_tab",
+                        json={"tab_id": "GH", "job_id": "linkedin:NOBODY",
+                              "initiator": "teacher"})
+    finally:
+        _teardown()
+    assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------------------------
 # W1 of PLAN_interaction_dispatch_v1: the ladder routes through the dialect cycle
 # --------------------------------------------------------------------------------------------
 

@@ -9357,6 +9357,75 @@ async def close_tab(session_id: int, body: CloseTabBody,
                                     if claim else "")})
 
 
+class ClaimTabBody(BaseModel):
+    tab_id: str
+    job_id: str
+    initiator: str = "operator"
+    reason: str = ""
+
+
+@router.post("/api/session_control/{session_id}/claim_tab")
+async def claim_tab(session_id: int, body: ClaimTabBody,
+                    db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Record that a live tab belongs to ONE application — ownership written retroactively.
+
+    Claims normally accrue only when a step's own drift census watches its tab appear, which is
+    exactly why they are sparse: a tab opened by a teach-driven click, or by an enter rung whose
+    step parked before the next crank, carries no claim. Measured 2026-08-28 (session 34): three
+    application tabs open, ONE claim — and for the unclaimed pair `_apply_tab`'s fallback is
+    tab-list ORDER, which would have put Bottomline's privacy-acknowledgement fill on Cadence's
+    Workday form. The resolver's rule ("a tab claimed by another job is never this step's") is
+    only as good as the record it reads; this verb completes that record from what the window
+    plainly shows, on the cockpit's reach (§: if the teacher can edit the JSON, the operator can
+    click it).
+
+    Guards: the tab must be LIVE (the census prunes claims on vanished tabs — minting one is
+    bookkeeping debt); the job must exist in this session's queue or its parked survivors; and a
+    claim by a DIFFERENT job refuses rather than reassigns — silent ownership transfer is the
+    wrong-form fill waiting to happen. Re-claiming for the same job is idempotent.
+    """
+    _check_initiator(body.initiator)
+    session, bb, ledger = _load(session_id, db)
+    browser_url = _session_browser_url(session)
+    obs = await _observe(browser_url, bb, session_id=session.id)
+
+    live = {t.get("tab_id"): t.get("url", "") for t in (obs.get("tabs") or [])}
+    if body.tab_id not in live:
+        raise HTTPException(status_code=404,
+                            detail="That tab is no longer open — a claim on a vanished tab "
+                                   "records nothing.")
+    queue = aps.Queue.from_dict((bb.world or {}).get("apply_queue"))
+    step = next((s for s in queue.steps if s.job_id == body.job_id), None)
+    if step is not None:
+        title = step.title or ""
+    else:
+        held = next((p for p in (bb.world or {}).get("parked_apps") or []
+                     if p.get("job_id") == body.job_id), None)
+        if held is None:
+            raise HTTPException(status_code=404,
+                                detail=f"{body.job_id} is not in this session's queue or its "
+                                       f"parked work — nothing to claim the tab for.")
+        title = held.get("title") or ""
+    claims = dict((bb.world or {}).get("tab_claims") or {})
+    prior = claims.get(body.tab_id)
+    prior_job = (prior.get("job_id") if isinstance(prior, dict) else prior) or ""
+    if prior_job and prior_job != body.job_id:
+        raise HTTPException(status_code=409,
+                            detail=f"That tab is already claimed by {prior_job} — refusing to "
+                                   f"reassign ownership silently. Close the tab or reopen that "
+                                   f"application if the record is wrong.")
+    claims[body.tab_id] = {"job_id": body.job_id, "url": live[body.tab_id], "title": title}
+    bb.world = dict(bb.world or {})
+    bb.world["tab_claims"] = claims
+    bb.log("claim_tab", f"{body.job_id} claimed tab {body.tab_id[:8]} ({live[body.tab_id][:80]})"
+                        + (f" — {body.reason}" if body.reason else ""))
+    _persist(bb, ledger)
+    return _view(session, bb, ledger, obs, page=_current_page(obs, bb),
+                 last={"ok": True, "action": "claim_tab",
+                       "detail": f"{title or body.job_id} now owns tab {body.tab_id[:8]} "
+                                 f"({live[body.tab_id][:60]})"})
+
+
 class CloseOutBody(BaseModel):
     initiator: str = "operator"
     #: Required when closing would discard real half-finished work (in-flight or parked
