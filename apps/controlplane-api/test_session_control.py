@@ -7297,6 +7297,90 @@ def test_an_ack_survives_walking_away_and_coming_back():
 
 
 # --------------------------------------------------------------------------------------------
+# An abstaining witness does not stop a recipe-led crank (live 2026-08-28, Vertex Workday)
+# --------------------------------------------------------------------------------------------
+
+#: The belief the DOM witness actually cached on `vrtx.wd501.myworkdayjobs.com` — a Workday tenant
+#: it had never seen. The recipe named the screen correctly at the same moment.
+_VERTEX_BELIEF = {"state": "search_results",          # WRONG; the page was workday_job_posting
+                  "facets": {"platform": "workday", "variant": "tenant:vrtx"},
+                  "uncertainty": {"state": 0.9892, "novelty": 1.0},
+                  "assessed": ["state", "novelty"]}
+
+
+def _vertex_world():
+    return {"last_belief": {"url": "https://vrtx.wd501.myworkdayjobs.com/j",
+                            "belief": dict(_VERTEX_BELIEF)}}
+
+
+def test_an_abstaining_witness_does_not_stop_a_recipe_led_crank():
+    """THE STOP-AND-GO THE OPERATOR NAMED. Live 2026-08-28: the recipe held `workday_job_posting`
+    and its action ("click Apply") while the witness read `search_results` at 1% confidence and
+    novelty 1.0 — and the loop stopped, then stopped again one screen later. A nine-screen Workday
+    flow on an unseen tenant cost a confirmation per screen, and every new employer restarted the
+    count. `_resolve_next_action` already says an unsure observer with no mismatch cannot overrule
+    the recipe; this makes the perceptual stop agree with it."""
+    from routers.session_control import _too_unsure_to_continue
+
+    world = _vertex_world()
+    # Before: the witness alone decided, and it stopped.
+    assert _too_unsure_to_continue(world, "https://vrtx.wd501.myworkdayjobs.com/j") is not None
+
+    # After: the arbitration says the recipe leads and the observer merely abstained.
+    assert _too_unsure_to_continue(
+        world, "https://vrtx.wd501.myworkdayjobs.com/j",
+        next_action={"source": "rung", "id": "workday_job_posting"},
+        observer={"kind": "workday_job_posting", "confidence": "low", "mismatch": None}) is None
+
+
+def test_a_contradicted_rung_still_stops_even_though_the_rung_still_leads():
+    """`source == "rung"` has two meanings: the observer agreed/abstained, OR it disagreed and had
+    no move of its own to offer. Same source, opposite meaning — a contradiction is not an
+    abstention, and only the second may drive."""
+    from routers.session_control import _too_unsure_to_continue
+
+    assert _too_unsure_to_continue(
+        _vertex_world(), "https://vrtx.wd501.myworkdayjobs.com/j",
+        next_action={"source": "rung", "id": "workday_job_posting"},
+        observer={"kind": "workday_review", "mismatch": {"detail": "this is the review screen"}},
+    ) is not None
+
+
+def test_a_page_nothing_could_be_read_on_still_stops():
+    """Silence is not agreement. UNKNOWN/UNREADABLE already routes the arbitration to `orient`;
+    the stop refuses independently so a later change there cannot widen what drives blind."""
+    from routers.session_control import _too_unsure_to_continue
+    import apply_landing as al
+
+    for kind in (al.UNKNOWN, al.UNREADABLE):
+        assert _too_unsure_to_continue(
+            _vertex_world(), "https://vrtx.wd501.myworkdayjobs.com/j",
+            next_action={"source": "rung", "id": "workday_job_posting"},
+            observer={"kind": kind, "mismatch": None}) is not None, kind
+
+
+def test_an_observer_led_or_orient_led_action_still_stops():
+    """When perception is what CHOSE the act, its own uncertainty is exactly the thing to gate on
+    — that is the failure mode the second witness was bought to prevent."""
+    from routers.session_control import _too_unsure_to_continue
+
+    for src in ("observer", "orient"):
+        assert _too_unsure_to_continue(
+            _vertex_world(), "https://vrtx.wd501.myworkdayjobs.com/j",
+            next_action={"source": src, "id": "x"},
+            observer={"kind": "workday_job_posting", "mismatch": None}) is not None, src
+
+
+def test_callers_that_pass_neither_argument_keep_the_old_behaviour():
+    """The suppression is opt-in at the call site: every existing caller — the tests above, and
+    any surface that has not been taught to weigh the arbitration — stops exactly as before."""
+    from routers.session_control import _too_unsure_to_continue
+
+    assert _too_unsure_to_continue(
+        _vertex_world(), "https://vrtx.wd501.myworkdayjobs.com/j") is not None
+
+
+# --------------------------------------------------------------------------------------------
 # A parked step's tab is not the current step's tab (live 2026-08-27)
 # --------------------------------------------------------------------------------------------
 

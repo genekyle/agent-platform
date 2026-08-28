@@ -224,6 +224,7 @@
   "POST /api/session_control/{session_id}/apply_step",
   "POST /api/session_control/{session_id}/apply_teach",
   "POST /api/session_control/{session_id}/choose",
+  "POST /api/session_control/{session_id}/claim_tab",
   "POST /api/session_control/{session_id}/clean_start",
   "POST /api/session_control/{session_id}/close_out",
   "POST /api/session_control/{session_id}/close_tab",

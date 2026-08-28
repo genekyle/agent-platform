@@ -988,7 +988,48 @@ def _seeing(snapshot: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     }
 
 
-def _too_unsure_to_continue(world: dict[str, Any], current_url: str) -> Optional[dict[str, Any]]:
+def _recipe_leads_uncontested(next_action: Optional[dict[str, Any]],
+                              observer: Optional[dict[str, Any]]) -> bool:
+    """Is the next act chosen by the RECIPE, with nothing observed against it?
+
+    THE TWO COMPONENTS HELD OPPOSITE POLICIES ON THE SAME SIGNAL. `_resolve_next_action` says it
+    in as many words — *"LOW CONFIDENCE IS AN ABSTENTION, NOT AN OBJECTION. An unsure observer
+    that raised no mismatch has nothing to overrule the recipe with"* — and then the perceptual
+    stop halted the loop on exactly that unsureness. Measured live 2026-08-28 on Vertex's Workday
+    tenant: the recipe named the screen `workday_job_posting` and held its action ("click Apply"),
+    while the witness read `search_results` at 1% confidence and `novelty 1.0`, and the loop
+    stopped. It stopped again one screen later. A nine-screen flow on an unseen tenant costs nine
+    confirmations, and every new employer is a fresh cold start — the stop-and-go the operator
+    named as the thing ruining the flow.
+
+    The stop's own purpose survives intact, because the arbitration already covers every case it
+    was built for: an observer that CONTRADICTS the rung wins the wheel (`source == "observer"`),
+    and one that read nothing it recognised makes orienting primary (`source == "orient"`). What
+    is left over — a witness that cannot vouch and cannot object — is an abstention, and the
+    safety of driving through it does not rest on the witness at all: the action comes from the
+    recipe's structural reading (host + content + the page's own apply control), every act is
+    verified against its expectation afterwards, and the irreversible rung is checked before this
+    one and never reachable from here.
+
+    Fails CLOSED on every uncertain path: an unnamed source, a live mismatch, or a page nothing
+    could be read on all return False even though the arbitration would already have routed them
+    elsewhere. Duplicated deliberately — this is the safety-critical direction, and a later change
+    to the arbitration should not silently widen what drives blind.
+    """
+    if (next_action or {}).get("source") != "rung":
+        return False
+    # A CONTRADICTION IS NOT AN ABSTENTION. The arbitration hands the rung back with a warning when
+    # the observer disagrees but offers no move of its own — same `source`, opposite meaning.
+    if (observer or {}).get("mismatch"):
+        return False
+    if (observer or {}).get("kind") in (al.UNKNOWN, al.UNREADABLE):
+        return False
+    return True
+
+
+def _too_unsure_to_continue(world: dict[str, Any], current_url: str, *,
+                            next_action: Optional[dict[str, Any]] = None,
+                            observer: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
     """The perceptual stop the run loop was missing — belief.blocks() applied to the NEXT crank.
 
     The loop's stops were all behavioral (gate, refusal, no-progress): it noticed when an act
@@ -1016,6 +1057,13 @@ def _too_unsure_to_continue(world: dict[str, Any], current_url: str) -> Optional
     bs = BeliefState.from_dict(belief_d)
     axis = bs.blocks()
     if axis is None:
+        return None
+    # AN ABSTAINING WITNESS DOES NOT STOP A RECIPE-LED CRANK (see `_recipe_leads_uncontested`).
+    # Checked AFTER `blocks()` so the belief is still read and still journaled: the reading is not
+    # suppressed, only its authority to halt a step it has no objection to. Callers that pass
+    # neither argument keep the old behaviour exactly.
+    if (next_action is not None or observer is not None) \
+            and _recipe_leads_uncontested(next_action, observer):
         return None
     # THE STOP SUMMONS EYES, AND THE NEXT PRESS IS THE EYES. Without this, an unsure belief
     # deadlocks the loop: stop -> the operator presses Run -> the SAME cached belief -> the same
@@ -8663,8 +8711,10 @@ async def run(session_id: int, body: RunBody,
         # refuses. The operator's gate is the one rung this never touches, on every platform, always.
         obs_now = await _observe(_session_browser_url(session), bb,
                                  session_id=session.id)
-        nxt = _resolve_next_action(step, await _orient_now(bb, obs_now,
-                                                           _session_browser_url(session)))
+        # BOUND, NOT INLINED — the perceptual stop below needs the same observation the
+        # arbitration just weighed, or it re-judges the page from a different reading.
+        observer_now = await _orient_now(bb, obs_now, _session_browser_url(session))
+        nxt = _resolve_next_action(step, observer_now)
         if (nxt or {}).get("consequential"):
             stop = STOP_GATE
             stop_detail = (f"{step.title or step.job_id} is at the gate: "
@@ -8681,7 +8731,8 @@ async def run(session_id: int, body: RunBody,
         # `blocks()` and same ceilings as the controller's authority(); a belief for a page we
         # have since left never fires (it describes the previous page — see the helper).
         apply_url = (_apply_tab(bb, obs_now) or {}).get("url") or ""
-        unsure = _too_unsure_to_continue(bb.world or {}, apply_url)
+        unsure = _too_unsure_to_continue(bb.world or {}, apply_url,
+                                         next_action=nxt, observer=observer_now)
         if unsure:
             stop = STOP_UNSURE
             conf = 1.0 - unsure["uncertainty"]
