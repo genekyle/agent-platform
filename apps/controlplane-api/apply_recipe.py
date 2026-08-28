@@ -1545,6 +1545,13 @@ _GREENHOUSE_STATE_MARKERS: list[tuple[str, str]] = [
     ("thank you for applying", "greenhouse_apply_submitted"),
     ("application submitted", "greenhouse_apply_submitted"),
     ("your application has been submitted", "greenhouse_apply_submitted"),
+    # Tenants rewrite the thank-you page. Bottomline's says "Thank you for your interest in
+    # <company>. We appreciate the time you took to apply with us and we look forward to
+    # reviewing your application" — none of the three phrasings above, so a VERIFIED submission
+    # (screenshot in hand) read as greenhouse_apply_form by URL default and the gate reported
+    # "NOT recorded as submitted" over the confirmation page itself (live 2026-08-28).
+    ("we appreciate the time you took to apply", "greenhouse_apply_submitted"),
+    ("look forward to reviewing your application", "greenhouse_apply_submitted"),
 ]
 
 # The credential boundary as STATE: at any of these the agent stops — it never types a password or

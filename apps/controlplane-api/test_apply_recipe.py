@@ -563,3 +563,17 @@ def test_the_mappers_form_name_counts_along_the_generic_spine():
     p = ar.flow_progress("greenhouse_apply_form", platform="greenhouse")
     assert p.get("recognised") is True
     assert ar.kind_of_state("greenhouse", "greenhouse_apply_form") == "application_form"
+
+
+def test_a_tenant_reworded_thank_you_still_reads_as_submitted():
+    """Bottomline's confirmation says "we appreciate the time you took to apply with us and we
+    look forward to reviewing your application" — none of the stock phrasings — so a VERIFIED
+    submission read as the form by URL default and the gate reported "NOT recorded as submitted"
+    over the confirmation page itself (live 2026-08-28)."""
+    import apply_recipe as ar
+
+    state, _ = ar.map_greenhouse_state_verbose(
+        "https://job-boards.greenhouse.io/bottomlinetechnologies/jobs/8605886002",
+        "Thank you for your interest in Bottomline. We appreciate the time you took to apply "
+        "with us and we look forward to reviewing your application. Track your application")
+    assert state == "greenhouse_apply_submitted"
