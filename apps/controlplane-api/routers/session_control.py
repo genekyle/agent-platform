@@ -5080,12 +5080,26 @@ async def apply_prompt_select(session_id: int, body: ApplyPromptBody,
     for path in paths:
         leaf = path[-1]
         tried.append(leaf)
-        # /select_prompt_path drills category -> leaf in one open session and VERIFIES the commit —
-        # OK only when the field actually took it, COMMITTED_UNCONFIRMED when the click landed but
-        # we could not confirm (never a false OK, the lesson from /select_prompt on this field).
-        res = await _capture_post("/select_prompt_path", {
-            "browser_url": browser_url, "tab_id": tab_id,
-            "field_name": body.field_name, "path": path})
+        if len(path) == 1:
+            # ONE ENTRY, ENGINE DECIDED BY THE CYCLE (PLAN_interaction_dispatch_v1 W1). A flat
+            # value goes to /select_option — classify, then the platform's learned dialect, each
+            # attempt verifying at the widget's own truth — addressed by the AX door: the field
+            # NAME is the question text, which is exactly the accessible name. This rung used to
+            # send every platform down /select_prompt, the WORKDAY driver, which is how six
+            # Greenhouse react-selects sat blocked while the endpoint built for them went uncalled
+            # (live 2026-08-27). Workday's own prompts still land right: /select_option's internal
+            # dispatch hands prompt_hierarchical back to /select_prompt.
+            res = await _capture_post("/select_option", {
+                "browser_url": browser_url, "tab_id": tab_id,
+                "target_role": "combobox", "target_name": body.field_name, "value": leaf})
+        else:
+            # Multi-level paths (Workday's category -> leaf drills) are /select_prompt_path's
+            # specialty and stay on it: it drills in one open session and VERIFIES the commit —
+            # OK only when the field actually took it, COMMITTED_UNCONFIRMED when the click
+            # landed but we could not confirm (never a false OK).
+            res = await _capture_post("/select_prompt_path", {
+                "browser_url": browser_url, "tab_id": tab_id,
+                "field_name": body.field_name, "path": path})
         outcome = res.get("outcome")
         last_detail = res.get("detail", "")
         if outcome == "ok":
@@ -5489,6 +5503,9 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
 
     style = xs.pick_style()
     filled, failed = [], []
+    #: The widget pass's per-field outcomes, for the record — a select that self-verified at its
+    #: own singleValue is a different fact from a typed field awaiting the bunch read-back.
+    selected, select_failed = [], []
 
     async def _fill_bunch() -> dict[str, Any]:
         for r in rows:
@@ -5506,7 +5523,29 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
             (filled if res.get("outcome") in ("ok", "committed_unconfirmed")
              else failed).append(r["field"])
             await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
-        return {"ok": not failed, "filled": len(filled), "failed": len(failed)}
+
+        # THE DEFERRED LIST GETS ITS CONSUMER (PLAN_interaction_dispatch_v1 W1). form_fill has
+        # always deferred non-text widgets "to their own widget protocol" — and reported them in
+        # `deferred_to_widget`, which nothing read: six required Greenhouse selects sat planned,
+        # valued, and untouched while the fill claimed its work was done (live 2026-08-27).
+        # Each select-family row now drives through /select_option — the dialect cycle, addressed
+        # by the AX door (the field name IS the accessible name) — which verifies at the widget's
+        # own value read, so these need no share of the text bunch's read-back probe.
+        for r in rows:
+            if not r["fillable"] or r["widget"] == "text" or not r.get("value"):
+                continue
+            res = await _capture_post("/select_option", {
+                "browser_url": browser_url, "tab_id": tab_id,
+                "target_role": "combobox", "target_name": r["field"], "value": r["value"]})
+            if res.get("outcome") == "ok":
+                selected.append(r["field"])
+            else:
+                select_failed.append(
+                    f"{r['field']} ({res.get('outcome')}: {str(res.get('detail'))[:60]})")
+            await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
+        return {"ok": not failed and not select_failed,
+                "filled": len(filled), "failed": len(failed),
+                "selected": len(selected), "select_failed": len(select_failed)}
 
     # THE STEPRUNNER WRAPS THE BUNCH. One step = one bunch, not one keystroke — the rung the
     # ladder reasons about is "fill this form step". Typed VALUES live in AX value space, which
@@ -5543,11 +5582,15 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
             logging.getLogger("session_control").warning("fill read-back failed: %s", exc)
             readback = None
 
-    landed_ok = readback["ok"] if readback else not failed
+    landed_ok = (readback["ok"] if readback else not failed) and not select_failed
     step.record("form_fill", aps.OK if landed_ok and not failed else aps.FAILED,
                 f"bunch-filled {len(filled)} field(s)"
                 + (f"; {form_fill.readback_detail(readback)}" if readback else "")
+                + (f"; {len(selected)} select(s) committed via their widget protocol"
+                   if selected else "")
                 + (f"; {len(failed)} failed: {', '.join(failed)}" if failed else "")
+                + (f"; {len(select_failed)} select(s) failed: {'; '.join(select_failed)}"
+                   if select_failed else "")
                 + (f"; need operator for: {', '.join(summary['missing'])}"
                    if summary["missing"] else ""),
                 initiator=body.initiator)
@@ -5570,8 +5613,12 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
                        "detail": f"Filled {len(filled)} field(s) at {style.name} pace."
                                  + (f" {form_fill.readback_detail(readback)}" if readback else
                                     " Read-back unavailable — values not confirmed on the page.")
+                                 + (f" {len(selected)} select(s) committed via their own widget "
+                                    f"protocol: {', '.join(selected)}." if selected else "")
                                  + (f" {len(failed)} would not take: {', '.join(failed)}."
                                     if failed else "")
+                                 + (f" {len(select_failed)} select(s) did not commit: "
+                                    f"{'; '.join(select_failed)}." if select_failed else "")
                                  + (f" Still need you for: {', '.join(summary['missing'])}."
                                     if summary["missing"] else "")
                                  + (f" {caveat}" if caveat else "")})

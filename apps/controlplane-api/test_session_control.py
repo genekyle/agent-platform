@@ -3761,12 +3761,19 @@ def test_prompt_select_source_picks_indeed_when_offered(monkeypatch):
 def test_prompt_select_falls_back_to_other_when_source_not_offered(monkeypatch):
     """The operator's rule: Indeed isn't always an option; Other is acceptable. It tries Indeed,
     SimplyHired, then Other — and records that it fell back."""
-    def _select(payload):
-        return {"outcome": "ok"} if payload["path"][-1] == "Other" else {"outcome": "no_option"}
+    def _select_path(payload):
+        return {"outcome": "no_option"}          # the drilled source paths are not offered
+
+    def _select_option(payload):
+        # "Other" is a FLAT path, so the fallback now commits through the dialect cycle
+        # (PLAN_interaction_dispatch_v1 W1) — one entry, engine decided by classification.
+        assert (payload["target_name"], payload["value"]) == ("How Did You Hear About Us?", "Other")
+        return {"outcome": "ok"}
 
     _, saved = _install(monkeypatch,
                         {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
-                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt_path": _select},
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/select_prompt_path": _select_path, "/select_option": _select_option},
                         blackboard=_wd_step())
     try:
         r = client.post("/api/session_control/1/apply_prompt_select",
@@ -3801,13 +3808,15 @@ def test_prompt_select_stops_on_a_real_error_not_no_option(monkeypatch):
 
 
 def test_prompt_select_explicit_value_for_a_dropdown(monkeypatch):
-    """The same mechanism drives an ordinary dropdown: State = New Hampshire, one explicit value."""
+    """An ordinary dropdown: State = New Hampshire, one explicit value — a flat path, so it
+    routes through the dialect cycle rather than the Workday driver (W1)."""
     def _select(payload):
-        return {"outcome": "ok"} if payload["path"] == ["New Hampshire"] else {"outcome": "no_option"}
+        return ({"outcome": "ok"} if payload["value"] == "New Hampshire"
+                else {"outcome": "no_option"})
 
     _, saved = _install(monkeypatch,
                         {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
-                         "/auth_state": {"ok": True, "logged_in": True}, "/select_prompt_path": _select},
+                         "/auth_state": {"ok": True, "logged_in": True}, "/select_option": _select},
                         blackboard=_wd_step())
     try:
         r = client.post("/api/session_control/1/apply_prompt_select",
@@ -7294,3 +7303,103 @@ def test_an_unclaimed_recorded_tab_is_still_honoured():
     bb = _bb_two_applies()
     bb.world["tab_claims"] = {}
     assert _apply_tab(bb, _tabs_two_applies())["tab_id"] == "ICIMS"
+
+
+# --------------------------------------------------------------------------------------------
+# W1 of PLAN_interaction_dispatch_v1: the ladder routes through the dialect cycle
+# --------------------------------------------------------------------------------------------
+
+def _country_answer_row():
+    from types import SimpleNamespace
+    return SimpleNamespace(answer_key="country", display_name="Country",
+                           value="United States", input_hint="text",
+                           question_patterns=["country"], options=[], status="active")
+
+
+_SELECT_SCAN = {"ok": True, "page_text": "", "candidates": [
+    {"role": "textbox", "name": "First Name"},
+    {"role": "textbox", "name": "Last Name"},
+    # The select family: role combobox -> plan widget "select" -> the text pass has always
+    # skipped it, and until W1 nothing else picked it up.
+    {"role": "combobox", "name": "Country"},
+    {"role": "button", "name": "Save and Continue"},
+]}
+
+
+def test_apply_fill_drives_deferred_selects_through_select_option(monkeypatch):
+    """form_fill has always deferred non-text widgets "to their own widget protocol" — into a
+    list nothing read: six required Greenhouse selects sat planned, valued and untouched while
+    the fill claimed its work was done (live 2026-08-27). The deferred list has its consumer."""
+    typed, selected = [], []
+
+    def _execute(payload):
+        if payload.get("action_id") == "type":
+            typed.append(payload["target_name"])
+        return {"outcome": "ok"}
+
+    def _select(payload):
+        selected.append((payload["target_name"], payload["value"]))
+        return {"outcome": "ok", "value_read": payload["value"]}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/ax_scan": _SELECT_SCAN, "/execute": _execute,
+                         "/select_option": _select},
+                        blackboard=_wd_step(), answers=[_country_answer_row()])
+    try:
+        r = client.post("/api/session_control/1/apply_fill", json={"execute": True}).json()
+    finally:
+        _teardown()
+    assert typed == ["First Name", "Last Name"]
+    assert selected == [("Country", "United States")], \
+        "the deferred select commits through the cycle, addressed by its accessible name"
+    assert "committed via their own widget protocol" in r["last_step"]["detail"]
+
+
+def test_apply_fill_reports_a_select_that_would_not_commit(monkeypatch):
+    def _select(payload):
+        return {"outcome": "not_opened", "detail": "popup rendered nothing"}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/ax_scan": _SELECT_SCAN,
+                         "/execute": lambda p: {"outcome": "ok"},
+                         "/select_option": _select},
+                        blackboard=_wd_step(), answers=[_country_answer_row()])
+    try:
+        r = client.post("/api/session_control/1/apply_fill", json={"execute": True}).json()
+    finally:
+        _teardown()
+    assert "did not commit" in r["last_step"]["detail"]
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.FAILED, "a failed select fails the fill honestly"
+
+
+def test_prompt_select_flat_value_goes_through_the_cycle(monkeypatch):
+    """A flat dropdown value routes to /select_option — classify + the platform's learned
+    dialect — instead of the Workday driver. Multi-level source paths keep /select_prompt_path
+    (the drill is its specialty)."""
+    calls = {"cycle": [], "workday": []}
+
+    def _select_option(payload):
+        calls["cycle"].append((payload["target_name"], payload["value"]))
+        return {"outcome": "ok"}
+
+    def _select_path(payload):
+        calls["workday"].append(payload["path"])
+        return {"outcome": "ok"}
+
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, "https://mfs.wd1.myworkdayjobs.com/job/x"),
+                         "/auth_state": {"ok": True, "logged_in": True},
+                         "/select_option": _select_option, "/select_prompt_path": _select_path},
+                        blackboard=_wd_step())
+    try:
+        r = client.post("/api/session_control/1/apply_prompt_select",
+                        json={"field_name": "Phone Device Type", "value": "Mobile"}).json()
+    finally:
+        _teardown()
+    assert calls["cycle"] == [("Phone Device Type", "Mobile")] and not calls["workday"]
+    assert r["last_step"]["picked"] == "Mobile"
