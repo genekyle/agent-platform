@@ -6880,7 +6880,30 @@ async def apply_step(session_id: int, body: ApplyStepBody,
 
     elif rung.id == "verify_identity":
         seen = ((bb.world or {}).get("open_pane") or {}).get("title", "")
-        if not step.title:
+        # THE JOB'S OWN CLAIMED APPLICATION TAB OUTRANKS THE ENGINE PANE. A reopened step
+        # re-walks its prefix while the filled form stands open in a tab the claims record says
+        # is THIS job's — and the engine pane meanwhile shows whatever job the queue moved on
+        # to. Verifying against that pane refused a step whose identity the window proves
+        # directly (live 2026-08-28: Bottomline's form open and complete, the LinkedIn pane on
+        # Cadence, and this rung said STOP). The pane check stays for the un-entered path; a
+        # claimed tab whose title does NOT match still refuses — the shortcut never vouches.
+        _claims = (bb.world or {}).get("tab_claims") or {}
+
+        def _claim_job(tid: str) -> str:
+            _c = _claims.get(tid)
+            return (_c.get("job_id") if isinstance(_c, dict) else _c) or ""
+
+        own_tab = next((t for t in (obs.get("tabs") or [])
+                        if _claim_job(t.get("tab_id", "")) == step.job_id), None)
+        if own_tab is not None and step.title and _title_matches(
+                step.title, own_tab.get("title", "")):
+            step.record("verify_identity", aps.OK,
+                        f"this job's claimed application tab is open and its title "
+                        f"{own_tab.get('title', '')[:60]!r} matches the pick",
+                        initiator=body.initiator)
+            detail = (f"Confirmed from the application tab itself: {step.title!r} "
+                      f"({own_tab.get('title', '')[:80]!r}).")
+        elif not step.title:
             step.record("verify_identity", aps.UNKNOWN,
                         f"no expected title recorded for {step.job_id}; pane shows {seen!r}",
                         initiator=body.initiator)

@@ -1864,6 +1864,56 @@ def test_verify_identity_refuses_when_the_pane_is_a_different_job(monkeypatch):
     assert "/execute" not in harness.paths()            # nothing was clicked
 
 
+def test_verify_identity_reads_the_jobs_own_claimed_tab_first(monkeypatch):
+    """A reopened step re-walks its prefix while the filled form stands open in a tab the claims
+    record says is THIS job's — and the engine pane meanwhile shows the job the queue moved on
+    to. Verifying against that pane refused an identity the window proves directly (live
+    2026-08-28: Bottomline's form open and complete, the LinkedIn pane on Cadence, STOP)."""
+    bb = _with_queue(("linkedin:4451096086", "Financial Systems Analyst", "Bottomline"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("open_pane", aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["open_pane"] = {"title": "Revenue Intelligence Analyst"}   # the queue moved on
+    bb.world["tab_claims"] = {"t1": {"job_id": "linkedin:4451096086"}}
+    tabs = _tabs(SEARCH_URL, "https://job-boards.greenhouse.io/bottomline/jobs/1")
+    tabs["tabs"][1]["title"] = "Job Application for Financial Systems Analyst at Bottomline"
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": tabs,
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.OK
+    assert "application tab" in r["last_step"]["detail"]
+
+
+def test_verify_identity_still_refuses_when_the_claimed_tab_is_another_jobs(monkeypatch):
+    """The shortcut never vouches: a claimed tab whose title does not match falls through to the
+    pane check, and a mismatched pane still refuses."""
+    bb = _with_queue(("linkedin:4451096086", "Financial Systems Analyst", "Bottomline"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("open_pane", aps.OK)
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["open_pane"] = {"title": "Senior Warehouse Associate"}
+    bb.world["tab_claims"] = {"t1": {"job_id": "linkedin:4451096086"}}
+    tabs = _tabs(SEARCH_URL, "https://cadence.wd1.myworkdayjobs.com/x/job/1")
+    tabs["tabs"][1]["title"] = "Revenue Intelligence Analyst"           # not this job's form
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": tabs,
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        r = client.post("/api/session_control/1/apply_step", json={}).json()
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert step.minis[-1].outcome == aps.FAILED
+    assert "STOP" in r["last_step"]["detail"]
+
+
 def test_verify_identity_passes_on_a_loose_title_match(monkeypatch):
     """Card and pane titles differ in punctuation and suffixes but never in the actual role."""
     bb = _with_queue(("indeed:a1", "Sales Revenue Analyst - Boston", "Datadog"))
