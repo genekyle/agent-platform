@@ -12684,3 +12684,75 @@ Four more of yesterday's fixes seen working, and three new debts measured:
 reason before the new search; the search is `business analyst · Manchester NH · 50mi`, 22 results,
 two operator picks queued. Vertex is at its account wall (`workday_create_account`, has_creds
 false) — the operator's leg. Kelmar is queued behind it.*
+
+## 2026-08-28 (fifth entry) — the stop-and-go, diagnosed and fixed: four rules that existed on the wrong path
+
+Operator named the problem exactly: *"that feeling of being able to not have to stop so much —
+this stop-and-go traffic has been ruining our progress."* Four fixes, all measured, all shipped
+green. Every one of them is the same shape this week keeps producing: **the rule existed, on a path
+that never asked it.**
+
+### THE DIAGNOSIS WAS NOT "NOVELTY DETECTION" — IT WAS TWO POLICIES ON ONE SIGNAL
+
+`_resolve_next_action` says it outright: *"LOW CONFIDENCE IS AN ABSTENTION, NOT AN OBJECTION. An
+unsure observer that raised no mismatch has nothing to overrule the recipe with."* And then the
+perceptual stop halted the loop on exactly that unsureness. Measured on Vertex's Workday tenant:
+the recipe held `workday_job_posting` and its action while the DOM witness read `search_results`
+at 1% confidence and `novelty 1.0` — and `run()` stopped. Then stopped again one screen later.
+
+**A near-miss worth recording:** the first plan was to suppress the NOVELTY axis. It would not have
+worked — the same belief carried `state: 0.9892` against a 0.25 ceiling, so `blocks()` would simply
+have fallen through to a state block. Reading the axis values before writing the code is what
+caught it; the fix had to address the perceptual stop as a whole.
+
+The rule now: **the stop fires only when we would be ACTING ON THE GUESS.** It still fires when the
+observer contradicts the rung, when the page could not be read, and when perception CHOSE the act.
+Safety never rested on the witness anyway — the act comes from the recipe's structural reading,
+every act is verified against its expectation afterwards, and the gate is checked earlier and
+unreachable from that path.
+
+**Measured, one press, before and after:**
+
+| | before | after |
+|---|---|---|
+| cranks per press | **1** | **6** |
+| stopped at | `workday_job_posting`, `workday_apply_method` — both recipe-KNOWN | Taleo's register screen — genuinely unrecognised |
+| who led | witness (recipe had it right) | `source: orient`, observer `kind: unknown` |
+
+One press took a job from a search card onto a new ATS: open_pane → verify_identity → enter_apply →
+classify → Apply Now, including one honest retry (`taleo_job_posting` reported *"nothing observably
+changed"*, was pressed again, landed). **Stops now track real blindness, not unfamiliarity.**
+
+### THE OTHER THREE
+
+* **The grind guard.** The operator's rule — *two tries, screenshot; three, tell me* — lived in
+  feedback and not in code. `run()` has had a no-progress guard since it was built; the grind that
+  cost a drive arrived through SINGLE presses, which never consulted it. Counts a repeated
+  `(outcome, detail)` inside a six-mini window, tallied over FAILURES alone — the alternating
+  ok/mismatch pattern ties three-all and a global max hands back the `ok` half, which reads as
+  "not grinding". Threshold three, not one, because a retry that WORKS is ordinary and this
+  session produced one. The stop summons a human and the next press is that human, or it deadlocks.
+* **Identity is what the page says, not what its address spells.** A Workday slug is generated at
+  requisition creation and never rewritten: `.../Senior-Analyst--Market-Access-Platforms_REQ-29607`
+  served a page titled **"Business Systems Analyst, Market Access Platforms"** — the pick exactly.
+  Greenhouse is worse; its path carries only the tenant, which is why session 34 logged
+  `verify_identity unknown` over a correct landing whose tab read *"Job Application for Financial
+  Systems Analyst…"*. Additive only: a title that disagrees falls through to the old check, so this
+  can turn UNKNOWN into OK and never the reverse. Taleo titles its wizard tab "Register" — the
+  SCREEN, not the job — which is exactly what the fallback is for, and is pinned as a test.
+* **W5, with strict ownership.** `enter_apply` now settles from this job's own claimed tab instead
+  of clicking a control with nothing to do. `_apply_tab` lets an UNCLAIMED tab pass, which is right
+  for resolving where to type and wrong for asserting a rung is DONE — a fresh job could settle
+  against the previous application's tab and skip its own Apply. No unclaimed fallback, and only
+  once identity is settled.
+
+### WHAT THE FLOW CEILING IS NOW: CREDENTIALS, NOT PERCEPTION
+
+Both applications this session ended at the same wall. Vertex wanted Email/Password/Verify;
+Kelmar's Taleo wants Email/Password/Re-type as **step 1 of 6**. With the perceptual stops gone,
+nothing else stopped either drive before the account gate. *Further perception work will not buy
+more applications — the accounts/vault leg will.* Named here so the next session does not go
+looking for the flow problem in the witness again.
+
+*Suite 2081. Two applications parked at account walls with their prefixes fully settled and
+recorded, resumable. Session 34 untouched throughout.*
