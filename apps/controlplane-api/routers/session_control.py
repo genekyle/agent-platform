@@ -6184,17 +6184,41 @@ async def reconcile_step(session_id: int, body: ReconcileStepBody,
     # Check the ATS destination against the pick; a drift (the Indeed title vs the req title) is
     # exactly the kind of near-miss this rung exists to catch, so surface it rather than assume.
     if "verify_identity" not in done:
-        if step.title and _title_matches(step.title, _last_path_words(ats_url)):
+        # THE PAGE'S OWN TITLE OUTRANKS ITS ADDRESS, and this asked only the address. A Workday
+        # URL slug is generated when the requisition is created and never rewritten when the title
+        # changes: measured live 2026-08-28, `.../job/Boston-MA/Senior-Analyst--Market-Access-
+        # Platforms_REQ-29607` served a page whose heading and tab title both read "Business
+        # Systems Analyst, Market Access Platforms" — the pick, exactly. Greenhouse is worse: its
+        # path carries only the tenant (`bottomlinetechnologies`), so the check had nothing of the
+        # job to match and recorded UNKNOWN over a correct landing, which is what session 34 logged.
+        # The tab title for that same page was "Job Application for Financial Systems Analyst…".
+        #
+        # This is the `verify()` page_text lesson (2026-08-27) one axis over: the strongest signal
+        # is what the site says in its own words, and identity was being judged off an address.
+        #
+        # ADDITIVE, DELIBERATELY. A title that does not match falls through to the path-words check
+        # exactly as before, so this can only turn an UNKNOWN into an OK when the page itself
+        # agrees — never the reverse. It has to stay that way: this is the near-miss guard, and an
+        # application to the wrong job cannot be taken back. (Not every ATS cooperates — Taleo's
+        # wizard titles its tab "Register", naming the SCREEN and not the job. That is precisely
+        # the case the fallback is for.)
+        _ats_title = next((t.get("title", "") for t in (obs.get("tabs") or [])
+                           if t.get("url") == ats_url), "")
+        _by_title = bool(step.title and _title_matches(step.title, _ats_title))
+        if step.title and (_by_title or _title_matches(step.title, _last_path_words(ats_url))):
             step.record("verify_identity", aps.OK,
-                        f"reconciled — the ATS req path matches {step.title!r}",
+                        (f"reconciled — the application tab's title {_ats_title[:60]!r} matches "
+                         f"{step.title!r}" if _by_title else
+                         f"reconciled — the ATS req path matches {step.title!r}"),
                         initiator=body.initiator)
             added.append("verify_identity")
         else:
             step.record("verify_identity", aps.UNKNOWN,
-                        f"the ATS destination ({_last_path_words(ats_url) or ats_url[:60]!r}) does "
-                        f"not obviously match the pick {step.title!r}. Confirm it is the same job "
-                        f"before continuing — titles can differ between Indeed and the employer, "
-                        f"but a wrong one cannot be un-applied.",
+                        f"neither the ATS destination "
+                        f"({_last_path_words(ats_url) or ats_url[:60]!r}) nor the page's title "
+                        f"({_ats_title[:60]!r}) obviously matches the pick {step.title!r}. Confirm "
+                        f"it is the same job before continuing — titles can differ between the "
+                        f"aggregator and the employer, but a wrong one cannot be un-applied.",
                         initiator=body.initiator)
 
     # enter_apply: we are on the ATS, so Apply was clicked. Only record it once identity is settled.

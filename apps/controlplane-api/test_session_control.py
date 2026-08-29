@@ -2573,6 +2573,61 @@ def test_reconcile_step_records_what_the_open_ats_tab_proves(monkeypatch):
     assert saved["bb"].world["apply_tab"]["url"].startswith("https://mfs.wd1")
 
 
+def _titled_tabs(*pairs):
+    """Tabs that carry a title, which is what the live browser actually reports."""
+    return {"ok": True, "tabs": [{"tab_id": f"t{i}", "url": u, "title": ti}
+                                 for i, (u, ti) in enumerate(pairs)]}
+
+
+#: Greenhouse's path carries only the TENANT, so the pick's words appear nowhere in the address.
+_GH_URL = "https://job-boards.greenhouse.io/bottomlinetechnologies/jobs/8605886002"
+
+
+def test_reconcile_reads_identity_off_the_page_title_when_the_url_cannot_say(monkeypatch):
+    """Live 2026-08-28, session 34: `verify_identity unknown — the ATS destination
+    ('bottomlinetechnologies') does not obviously match the pick 'Financial Systems Analyst'`, over
+    a landing that was correct. `_last_path_words` had only the tenant to offer, while the tab's own
+    title read "Job Application for Financial Systems Analyst…". Identity was being judged off an
+    address — the `verify()` page_text lesson one axis over."""
+    bb = _with_queue(("indeed:a1", "Financial Systems Analyst", "Bottomline"))
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _titled_tabs(
+            (SEARCH_URL, "jobs"),
+            (_GH_URL, "Job Application for Financial Systems Analyst at Bottomline")),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    outcomes = {m.rung: m.outcome for m in step.minis}
+    assert outcomes["verify_identity"] == aps.OK
+    assert "title" in dict((m.rung, m.detail) for m in step.minis)["verify_identity"]
+    assert outcomes["enter_apply"] == aps.OK, "and the rung gated on it follows"
+
+
+def test_a_title_that_does_not_match_still_refuses(monkeypatch):
+    """The near-miss guard is the whole point. A wrong job cannot be un-applied, so the title is an
+    extra way to say YES and never a way to soften a no — Taleo titles its wizard tab "Register",
+    naming the screen and not the job, and that must fall through rather than vouch."""
+    bb = _with_queue(("indeed:a1", "Financial Systems Analyst", "Bottomline"))
+    _, saved = _install(
+        monkeypatch,
+        {"/list_tabs": _titled_tabs((SEARCH_URL, "jobs"), (_GH_URL, "Register")),
+         "/auth_state": {"ok": True, "logged_in": True}},
+        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/reconcile_step", json={})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    outcomes = {m.rung: m.outcome for m in step.minis}
+    assert outcomes["verify_identity"] == aps.UNKNOWN
+    assert "enter_apply" not in outcomes, "the rung gated on identity must not follow"
+
+
 def test_reconcile_reclassifies_when_the_window_names_another_platform(monkeypatch):
     """A settled classify means "we named it once", not "the world cannot disagree".
 
