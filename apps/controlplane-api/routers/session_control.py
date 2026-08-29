@@ -6819,6 +6819,41 @@ async def apply_step(session_id: int, body: ApplyStepBody,
             detail=(f"The {rung.id} rung has now recorded the same result {_grind_n} times: "
                     f"{_grind_detail}. Stopping rather than pressing it again."))
 
+    # THE LADDER ASKS WHAT RECONCILE ALREADY KNOWS (W5). "We are on the ATS, so Apply was clicked"
+    # is reconcile_step's rule, and it was reachable only from that endpoint — so a step whose
+    # application tab was ALREADY open re-proposed `enter_apply`, clicked a control that had
+    # nothing left to do, and could never satisfy `new_tab_or_nav`. Measured live 2026-08-28 on
+    # `linkedin:4424504424`: eight attempts, then eleven and a half hours parked on a rung the
+    # window had already answered, while the same rule settled the sibling job correctly 35
+    # minutes later. The grind guard above stops the repetition; this stops the first wasted click.
+    #
+    # STRICT OWNERSHIP, NO UNCLAIMED FALLBACK. `_apply_tab` lets an UNCLAIMED tab pass its check,
+    # which is right for resolving where to type and wrong for asserting that a rung is DONE: a
+    # fresh job could otherwise settle `enter_apply` against a previous application's tab and skip
+    # its own Apply entirely. Only a tab the claims record names as THIS job's counts, and only
+    # once identity is settled — reconcile's own ordering, kept rather than re-derived.
+    if rung.id == "enter_apply" and "verify_identity" in step.settled_rungs():
+        from controller import window as _window_mod
+        _claims_now = (bb.world or {}).get("tab_claims") or {}
+
+        def _claimed_job(tid: str) -> str:
+            _c = _claims_now.get(tid)
+            return (_c.get("job_id") if isinstance(_c, dict) else _c) or ""
+
+        _mine = next((tb for tb in (obs.get("tabs") or [])
+                      if _claimed_job(tb.get("tab_id", "")) == step.job_id
+                      and _window_mod.classify_tab(tb.get("url", "")) == _window_mod.ROLE_APPLY),
+                     None)
+        if _mine is not None:
+            step.record("enter_apply", aps.OK,
+                        f"already entered — this job's claimed application tab is open at "
+                        f"{_mine.get('url', '')[:90]}; the window proves Apply was clicked",
+                        initiator=body.initiator)
+            return await _save_queue_and_view(
+                session, bb, ledger, queue, obs, ok=True,
+                detail=(f"{step.title or step.job_id} is already inside its application — "
+                        f"recorded from the open tab instead of clicking Apply again."))
+
     tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
     _note_tab_drift(bb, obs, step)      # recorded on the view; never acts on its own
 

@@ -2573,6 +2573,86 @@ def test_reconcile_step_records_what_the_open_ats_tab_proves(monkeypatch):
     assert saved["bb"].world["apply_tab"]["url"].startswith("https://mfs.wd1")
 
 
+# --------------------------------------------------------------------------------------------
+# W5 — the ladder asks what reconcile already knows (live 2026-08-28)
+# --------------------------------------------------------------------------------------------
+
+_WD_URL = "https://cadence.wd1.myworkdayjobs.com/en-US/External_Careers/job/Burlington-MA/Rev_R54947"
+
+
+def _claimed(bb, tab_id, job_id):
+    bb.world["tab_claims"] = {tab_id: {"job_id": job_id}}
+    return bb
+
+
+def test_enter_apply_settles_from_this_jobs_own_open_tab_instead_of_clicking(monkeypatch):
+    """Live 2026-08-28, `linkedin:4424504424`: the Workday tab had been open for hours and the
+    ladder kept proposing `enter_apply`, clicking a control with nothing left to do — an
+    expectation of `new_tab_or_nav` that no click could satisfy. Eight attempts, then eleven hours
+    parked. The rule that settles it lived in reconcile_step and nothing on this path asked it."""
+    bb = _with_queue(("indeed:a1", "Revenue Intelligence Analyst", "Cadence"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("open_pane", aps.OK, "pane switched")
+    q.steps[0].record("verify_identity", aps.OK, "pane title matches the pick")
+    bb.world["apply_queue"] = q.as_dict()
+    _claimed(bb, "t1", "indeed:a1")
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, _WD_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_step", json={"initiator": "operator"})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    ea = [m for m in step.minis if m.rung == "enter_apply"]
+    assert ea and ea[-1].outcome == aps.OK
+    assert "already entered" in ea[-1].detail
+
+
+def test_an_unclaimed_tab_never_settles_enter_apply(monkeypatch):
+    """`_apply_tab` lets an UNCLAIMED tab pass — right for resolving where to type, wrong for
+    asserting a rung is DONE. A fresh job could otherwise settle `enter_apply` against the previous
+    application's tab and skip its own Apply entirely, which is the wrong-job class this system
+    keeps paying for. Strict ownership: no claim, no settle."""
+    bb = _with_queue(("indeed:a1", "Revenue Intelligence Analyst", "Cadence"))
+    q = aps.Queue.from_dict(bb.world["apply_queue"])
+    q.steps[0].record("open_pane", aps.OK, "pane switched")
+    q.steps[0].record("verify_identity", aps.OK, "pane title matches the pick")
+    bb.world["apply_queue"] = q.as_dict()
+    bb.world["tab_claims"] = {"t1": {"job_id": "indeed:SOMEONE_ELSE"}}
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, _WD_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_step", json={"initiator": "operator"})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    settled = [m for m in step.minis if m.rung == "enter_apply" and m.outcome == aps.OK
+               and "already entered" in m.detail]
+    assert not settled, "another job's tab must never settle this job's enter_apply"
+
+
+def test_identity_must_be_settled_before_the_window_can_settle_enter_apply(monkeypatch):
+    """Reconcile's own ordering, kept rather than re-derived: being on an ATS proves Apply was
+    clicked only once we know it is the RIGHT ATS page."""
+    bb = _with_queue(("indeed:a1", "Revenue Intelligence Analyst", "Cadence"))
+    _claimed(bb, "t1", "indeed:a1")          # claimed, but verify_identity never settled
+    _, saved = _install(monkeypatch,
+                        {"/list_tabs": _tabs(SEARCH_URL, _WD_URL),
+                         "/auth_state": {"ok": True, "logged_in": True}},
+                        blackboard=bb)
+    try:
+        client.post("/api/session_control/1/apply_step", json={"initiator": "operator"})
+    finally:
+        _teardown()
+    step = aps.Queue.from_dict(saved["bb"].world["apply_queue"]).steps[0]
+    assert not [m for m in step.minis
+                if m.rung == "enter_apply" and "already entered" in m.detail]
+
+
 def _titled_tabs(*pairs):
     """Tabs that carry a title, which is what the live browser actually reports."""
     return {"ok": True, "tabs": [{"tab_id": f"t{i}", "url": u, "title": ti}
