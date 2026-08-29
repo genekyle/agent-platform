@@ -549,7 +549,48 @@ class TrajectoryDriver(ABC):
         x, y = target_css_point(request.target_bbox, request.device_scale_factor)
         if not x and not y:  # no anchor bbox → scroll over mid-viewport
             x, y = 400.0, 400.0
+
+        async def _positions() -> list[float]:
+            got = await cdp.send("Runtime.evaluate", {
+                "returnByValue": True,
+                "expression": "[document.scrollingElement ? document.scrollingElement.scrollTop"
+                              " : 0, ...[...document.querySelectorAll('*')].filter(e =>"
+                              " e.scrollHeight - e.clientHeight > 200 &&"
+                              " getComputedStyle(e).overflowY !== 'visible')"
+                              ".slice(0, 8).map(e => e.scrollTop)]"})
+            return list((got.get("result") or {}).get("value") or [])
+
+        before = await _positions()
         await self.scroll_at(cdp, x, y, total)
+        # MOVED IS THE VERDICT, NOT THE DISPATCH. A wheel over a column that cannot scroll does
+        # nothing while every ok in the chain says success — the docstring above has warned
+        # callers since it was written, and callers kept guessing anyway (Greenhouse's notice
+        # column, Workday's inner container — both measured eating wheels on 2026-08-28). So the
+        # driver now measures: no scroller moved → ONE re-aim at the page's largest scroller's
+        # own centre, and a scroll that still moved nothing says so in its mode instead of ok.
+        after = await _positions()
+        if before and after and before == after:
+            aim = await cdp.send("Runtime.evaluate", {
+                "returnByValue": True,
+                "expression": "(() => { const cands = [document.scrollingElement,"
+                              " ...document.querySelectorAll('*')].filter(e => e &&"
+                              " e.scrollHeight - e.clientHeight > 200 &&"
+                              " getComputedStyle(e).overflowY !== 'visible');"
+                              " if (!cands.length) return null;"
+                              " const e = cands.sort((a, b) => (b.scrollHeight - b.clientHeight)"
+                              " - (a.scrollHeight - a.clientHeight))[0];"
+                              " const r = (e === document.scrollingElement ? document.body : e)"
+                              ".getBoundingClientRect();"
+                              " return {x: r.x + r.width / 2, y: Math.max(80, Math.min("
+                              "r.y + r.height / 2, (window.innerHeight || 800) - 80))}; })()"})
+            centre = (aim.get("result") or {}).get("value")
+            if isinstance(centre, dict) and isinstance(centre.get("x"), (int, float)):
+                await self.scroll_at(cdp, float(centre["x"]), float(centre["y"]), total)
+                after = await _positions()
+            if before == after:
+                return "scroll:moved=0 — no scroller under the cursor took the wheel, and the " \
+                       "re-aim at the page's main scroller moved nothing either"
+            return "scroll:reaimed"
         return "scroll"
 
     #: Where a custom combobox's options are searched. `this.ownerDocument` — NOT the top
