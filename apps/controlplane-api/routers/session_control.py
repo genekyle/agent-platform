@@ -6774,6 +6774,27 @@ async def apply_step(session_id: int, body: ApplyStepBody,
                    f"has no rung for it — genuinely new territory. Read the page, drive it by "
                    f"hand, and flag the result so the next application knows this screen.")
 
+    # THE GRIND GUARD (operator's rule, 2026-08-28): *two failed tries on one control, screenshot;
+    # three, tell me — do not grind.* `run()` has had a no-progress guard since it was built, and
+    # the grind that cost a whole drive arrived through SINGLE presses, which never consulted it.
+    # Measured: eight `enter_apply` attempts in 77 seconds on a job whose ATS tab had been open for
+    # hours — the rung was already satisfied, so its expectation was unsatisfiable and every retry
+    # was identical. Refuses BEFORE acting rather than after, so the ninth press does not spend
+    # another act on the same wall, and names the repeated evidence so the operator sees what the
+    # page kept saying. Retrying is still ordinary: the threshold is three, and a rung that failed
+    # once and then succeeded (Taleo's `taleo_job_posting`, this session) never reaches it.
+    _grind_n, _grind_detail = step.grinding_on(rung.id)
+    if _grind_n:
+        step.record(rung.id, aps.HUMAN_REQUIRED,
+                    f"stopped after {_grind_n} identical results — the page kept answering "
+                    f"{_grind_detail!r}. Repeating this will not change it: look at the screen, or "
+                    f"reconcile the record against it if the world has already moved past this "
+                    f"rung.", initiator=body.initiator)
+        return await _save_queue_and_view(
+            session, bb, ledger, queue, obs, ok=False,
+            detail=(f"The {rung.id} rung has now recorded the same result {_grind_n} times: "
+                    f"{_grind_detail}. Stopping rather than pressing it again."))
+
     tab_id = ((obs.get("tabs") or [{}])[0]).get("tab_id", "")
     _note_tab_drift(bb, obs, step)      # recorded on the view; never acts on its own
 

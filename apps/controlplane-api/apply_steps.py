@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 # --- mini-step outcome flags -------------------------------------------------------------------
 OK = "ok"                        # did what it set out to do
@@ -369,6 +369,61 @@ class ApplyStep:
     #: ladder, and the run that parked it is kept here rather than deleted — the first attempt is
     #: what makes the second one legible as a correction.
     archived_minis: list[dict[str, Any]] = field(default_factory=list)
+
+    #: How many times one rung may record the SAME result before the ladder stops offering it.
+    #: Three, from the operator's own rule — *two failed tries on one control, screenshot; three,
+    #: tell me* — and deliberately not one: a control that needs a second press is ordinary, and a
+    #: guard that fired on the first repeat would stop the retries that currently succeed (Taleo's
+    #: `taleo_job_posting` reported "nothing observably changed", was pressed again, and landed).
+    GRIND_THRESHOLD: ClassVar[int] = 3
+    #: How far back to look. A rung that alternates ok/mismatch writes TWO minis per attempt, so a
+    #: window of six holds three full attempts of the pattern that actually ground.
+    GRIND_WINDOW: ClassVar[int] = 6
+
+    def grinding_on(self, rung_id: str) -> tuple[int, str]:
+        """Has `rung_id` been recording the same result over and over? (count, that detail).
+
+        MEASURED, NOT IMAGINED. Live 2026-08-28, `linkedin:4424504424`: eight `enter_apply`
+        attempts in 77 seconds, alternating `ok  clicked 'Apply'; stayed in this tab` with
+        `mismatch  no tab opened and none navigated`, on a job whose ATS tab had been open for
+        hours. The world could not move because the rung was already satisfied, so the expectation
+        was unsatisfiable by construction and every retry was identical.
+
+        `run()` has had a no-progress guard since it was built — but the grind arrived through
+        SINGLE presses, which never consult it. Same shape as everything else this week: the rule
+        existed on one path and the path that needed it never asked.
+
+        Counts a repeated `(outcome, detail)` pair within the last `GRIND_WINDOW` minis for this
+        rung rather than a strictly consecutive run, because the alternating pattern above never
+        repeats consecutively. Returns (0, "") when nothing is grinding.
+        """
+        recent = [m for m in self.minis if m.rung == rung_id][-self.GRIND_WINDOW:]
+        if not recent:
+            return 0, ""
+        # THE STOP SUMMONS A HUMAN, AND THE NEXT PRESS IS THAT HUMAN — the same escape the unsure
+        # gate needed and for the same reason. Without it the guard deadlocks: recording its own
+        # refusal leaves the three failures inside the window, so every later press re-fires it and
+        # the operator can never retry, not even after reconciling the record or fixing the page.
+        # A `human_required` sitting latest on this rung means somebody has already been told.
+        if recent[-1].outcome == HUMAN_REQUIRED:
+            return 0, ""
+        # A rung that keeps SUCCEEDING identically is not grinding — `open_pane` on the same card
+        # twice is idempotent, not stuck. Only a result the world REFUSED counts, and the tally is
+        # taken over those alone: the alternating pattern writes an `ok` for every `mismatch`, so a
+        # global max ties at three-all and can hand back the `ok` half, which then reads as "not
+        # grinding". Counting the failures directly is the whole point of the guard.
+        counts: dict[tuple[str, str], int] = {}
+        for m in recent:
+            if m.outcome in (OK, SKIPPED):
+                continue
+            key = (m.outcome, (m.detail or "").strip())
+            counts[key] = counts.get(key, 0) + 1
+        if not counts:
+            return 0, ""
+        (_outcome, detail), n = max(counts.items(), key=lambda kv: kv[1])
+        if n < self.GRIND_THRESHOLD:
+            return 0, ""
+        return n, detail
 
     @property
     def done(self) -> bool:

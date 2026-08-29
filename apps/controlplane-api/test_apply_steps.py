@@ -683,3 +683,69 @@ def test_an_active_block_carries_its_probe_so_the_distinction_is_readable():
     out = er.downgrade_block_if_hidden({"provider": "recaptcha", "strength": "active"}, vis)
     assert out["strength"] == "active" and out["visibility"] == vis
     assert er.blocks_typing(out) is False
+
+
+# --------------------------------------------------------------------------------------------
+# The grind guard (operator's rule, live 2026-08-28)
+# --------------------------------------------------------------------------------------------
+
+def _ground(step, times=4):
+    """The exact pattern `linkedin:4424504424` wrote: eight minis in 77 seconds, alternating a
+    claim that the click landed with the world reporting that nothing moved."""
+    for _ in range(times):
+        step.record("enter_apply", aps.OK, "clicked 'Apply'; stayed in this tab")
+        step.record("enter_apply", aps.MISMATCH,
+                    "world disagrees: no tab opened and none navigated")
+    return step
+
+
+def test_a_rung_that_records_the_same_failure_three_times_is_grinding():
+    """Live 2026-08-28: the rung was already satisfied — the ATS tab had been open for hours — so
+    `new_tab_or_nav` was unsatisfiable by construction and every retry was identical. The tally is
+    taken over FAILURES alone: the alternating pattern writes an ok for every mismatch, and a
+    global max ties three-all and can hand back the ok half, which reads as 'not grinding'."""
+    n, detail = _ground(aps.ApplyStep(job_id="j", title="t")).grinding_on("enter_apply")
+    assert n == 3
+    assert detail == "world disagrees: no tab opened and none navigated"
+
+
+def test_repeating_a_SUCCESS_is_not_grinding():
+    """`open_pane` on the same card twice is idempotent, not stuck."""
+    s = aps.ApplyStep(job_id="j", title="t")
+    for _ in range(4):
+        s.record("open_pane", aps.OK, "pane switched to 'Analyst'")
+    assert s.grinding_on("open_pane") == (0, "")
+
+
+def test_two_tries_is_not_yet_grinding_and_a_retry_that_WORKS_never_trips_it():
+    """The threshold is three, not one, and the reason is measured: Taleo's `taleo_job_posting`
+    reported 'nothing observably changed', was pressed again, and landed. A guard that fired on the
+    first repeat would have stopped the retry that currently succeeds."""
+    s = aps.ApplyStep(job_id="j", title="t")
+    s.record("x", aps.MISMATCH, "nope")
+    s.record("x", aps.MISMATCH, "nope")
+    assert s.grinding_on("x") == (0, "")
+
+    t2 = aps.ApplyStep(job_id="j2", title="t")
+    t2.record("taleo_job_posting", aps.MISMATCH, "nothing observably changed")
+    t2.record("taleo_job_posting", aps.OK, "Clicked 'Apply Now'")
+    assert t2.grinding_on("taleo_job_posting") == (0, "")
+
+
+def test_the_stop_summons_a_human_and_the_next_press_is_that_human():
+    """Without the escape the guard deadlocks: recording its own refusal leaves the three failures
+    inside the window, so every later press re-fires and the operator can never retry — not even
+    after reconciling the record. It re-arms if the grind resumes."""
+    s = _ground(aps.ApplyStep(job_id="j", title="t"))
+    assert s.grinding_on("enter_apply")[0] == 3
+
+    s.record("enter_apply", aps.HUMAN_REQUIRED, "stopped after 3 identical results")
+    assert s.grinding_on("enter_apply") == (0, ""), "the press after the stop belongs to the human"
+
+    s.record("enter_apply", aps.MISMATCH, "world disagrees: no tab opened and none navigated")
+    assert s.grinding_on("enter_apply")[0] == 3, "and it re-arms if the grind resumes"
+
+
+def test_a_different_rung_is_not_tarred_by_its_neighbour():
+    s = _ground(aps.ApplyStep(job_id="j", title="t"))
+    assert s.grinding_on("classify") == (0, "")
