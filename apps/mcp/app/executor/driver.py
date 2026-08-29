@@ -317,6 +317,7 @@ class TrajectoryDriver(ABC):
             # An ingesting uploader has to round-trip to its own server; a plain one is instant.
             # Poll rather than sleep-once so the fast path stays fast.
             w: dict[str, Any] = {}
+            rendered_streak = 0
             for attempt in range(10):
                 got = await cdp.send("Runtime.callFunctionOn", {
                     "objectId": found_id or object_id, "returnByValue": True,
@@ -327,8 +328,15 @@ class TrajectoryDriver(ABC):
                 if w.get("connected") is False:
                     return "upload:not_staged:detached-node — the resolved input is no longer in " \
                            "the document; a fresh resolve is needed"
-                if w.get("rendered"):
-                    return "upload"                                  # the widget shows it
+                # CONFIRMED AT REST, NEVER MID-FLIGHT. Workday renders the filename WHILE
+                # ingesting, then fails the round-trip and re-empties the zone — a single
+                # glimpse of the name counted as landed over an upload the page went on to
+                # reject (measured 2026-08-28, Cadence: rendered:true at act time, zero
+                # occurrences three seconds later). A confirm read mid-transition is a guess
+                # wearing evidence's clothes; `rendered` must hold on two consecutive reads.
+                rendered_streak = rendered_streak + 1 if w.get("rendered") else 0
+                if rendered_streak >= 2:
+                    return "upload"                                  # the widget shows it, still
                 # A PLAIN input keeping the file is landed; a DROPZONE ignoring the raw input is
                 # not — its truth is `rendered` alone (see the witness). Keep polling: the
                 # round-trip may still render it.
