@@ -323,6 +323,7 @@ class TrajectoryDriver(ABC):
                     "functionDeclaration": _UPLOAD_WITNESS_JS,
                     "arguments": [{"value": names}]})
                 w = (got.get("result") or {}).get("value") or {}
+                self._last_upload_witness = w
                 if w.get("connected") is False:
                     return "upload:not_staged:detached-node — the resolved input is no longer in " \
                            "the document; a fresh resolve is needed"
@@ -388,6 +389,7 @@ class TrajectoryDriver(ABC):
                         "functionDeclaration": _UPLOAD_WITNESS_JS,
                         "arguments": [{"value": names}]})
                     w = (got.get("result") or {}).get("value") or {}
+                    self._last_upload_witness = w
                     if w.get("rendered"):
                         return "upload:chooser"
                     if w.get("error"):
@@ -643,9 +645,12 @@ class DirectDriver(TrajectoryDriver):
         # means only "the mechanism completed" — but "notfound" now reaches the caller instead of
         # dying in a local variable.
         dropped = getattr(self, "_dropped_acks", 0)
+        witness = getattr(self, "_last_upload_witness", None)
         return ExecResult(ok=True, driver=self.name, action_id=request.action_id,
                           css_point=(x, y), path_points=0,
-                          extra={"mode": mode, **({"dropped_acks": dropped} if dropped else {})},
+                          extra={"mode": mode,
+                                 **({"upload_witness": witness} if witness else {}),
+                                 **({"dropped_acks": dropped} if dropped else {})},
                           detail=(mode if mode.startswith("element:select:") else ""))
 
 
