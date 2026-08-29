@@ -373,6 +373,9 @@ class TrajectoryDriver(ABC):
             if (isinstance(centre, dict)
                     and isinstance(centre.get("x"), (int, float))
                     and isinstance(centre.get("y"), (int, float))):
+                # The chooser EVENT only fires with the Page domain enabled — interception
+                # without it times out silently (found 2026-08-28, first live chooser run).
+                await cdp.send("Page.enable")
                 await cdp.send("Page.setInterceptFileChooserDialog", {"enabled": True})
                 try:
                     for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
