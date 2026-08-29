@@ -867,6 +867,10 @@ async def execute_action(body: ExecuteRequest):
         # The driver's own account of HOW it acted (element vs coordinate, upload verdicts).
         # Surfaced because a failure reason that dies in a local variable cannot be journaled.
         "mode": _mode or None,
+        # The upload witness's own view (files/rendered/ingesting/connected/scope) — the caller
+        # judging a stall needs what the confirm SAW, not just its verdict (2026-08-28).
+        **({"upload_witness": (result.extra or {}).get("upload_witness")}
+           if (result.extra or {}).get("upload_witness") else {}),
         "addressed_by": addressed_by, "target": _tgt or None,
         # WHICH QUESTION THIS ACT ANSWERED, as the page names it — reported whether or not the
         # caller asserted an expectation, because a correlation nobody recorded is a correlation
