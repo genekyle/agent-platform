@@ -12756,3 +12756,38 @@ looking for the flow problem in the witness again.
 
 *Suite 2081. Two applications parked at account walls with their prefixes fully settled and
 recorded, resumable. Session 34 untouched throughout.*
+
+## 2026-08-28 (fourth entry) — how do you confirm what you've never seen? The upload saga, answered in layers
+
+Operator's question, worked live on ONE control (Workday/Cadence's resume dropzone) until it gave
+up all three of its lies. Every layer wore the previous layer's evidence:
+
+1. **Wrong truth-point:** `at_node` (files on the raw input) counted as landed on a widget that
+   never reads that input. The witness now names an ingesting dropzone by the page's own words
+   and only `rendered` counts there. *(The census had the same gap from the other side.)*
+2. **Mid-flight glimpse:** Workday renders the filename WHILE ingesting, then fails the round-trip
+   and re-empties — one glimpse of the name confirmed an upload the page went on to reject.
+   **Confirmed at rest, never mid-flight**: `rendered` must hold across consecutive reads.
+3. **Dead auth under a live-looking page:** the 24h-old tab had silently signed out; the form
+   rendered and client-side acts "succeeded" while every upload POST died server-side with a
+   reasonless field alert. The REFRESH (rule: refresh-first-on-stale) exposed "Step 1 of 7 —
+   Create Account/Sign In". Freshness precedes verification; no confirm survives a dead session.
+
+**Built on the way:** the chooser-interception upload path (Page.enable +
+setInterceptFileChooserDialog + trusted press on the zone's own "Select files" +
+fileChooserOpened → setFileInputFiles — the native dialog never opens; `_CDPSession` now stashes
+and awaits events); the witness rides `/execute`'s response (`upload_witness`) so a stall shows
+what the confirm SAW; and the scroll verdict — **moved is the verdict, not the dispatch**: the
+wheel measures the page's scrollers, re-aims once at the largest one, and reports moved=0
+honestly (the Greenhouse-notice and Workday-inner-container wheel-eaters, ended).
+
+**The doctrine, for anything never seen before:** confirm at the widget's own truth-point; at
+rest, not mid-transition; with the read-point and evidence rank named; against the page's own
+subsequent behavior (census stops asking, alert fires, screen advances) rather than the act's
+mechanics; and only on a session whose freshness was itself verified. The diagnostic ladder that
+cracked it — witness → journal duration → probe the same node over CDP — is reusable verbatim.
+
+*Cadence: parked at the sign-in wall the refresh exposed (two no-op clicks on the Sign In toggle
+= the stall rule; the account + staged credentials exist — operator's one minute, then fill +
+chooser-upload on fresh auth). Note: a concurrent session is also committing to main; rebase
+before merge is now the working norm. Suites: mcp 181 green throughout.*
