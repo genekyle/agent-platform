@@ -53,8 +53,14 @@ function(names) {
   for (let n = this.parentElement, d = 0; n && n !== document.body && d < 12; d++, n = n.parentElement) {
     if (/\b(drop files|drag and drop|select files)\b/i.test(txt(n))) { ingesting = true; break; }
   }
-  return {files, at_node: files > 0, rendered, ingesting, error: err ? err[0] : '',
-          scope: scope.slice(0, 120)};
+  // A DETACHED NODE IS A STALE ADDRESS, NOT A WIDGET. Workday re-renders its zone and the old
+  // input keeps accepting files off-DOM: files stick, both walks see nothing (parentElement is
+  // null), and the page never changes — the exact symptom set measured three times on Cadence
+  // before anyone asked `isConnected` (2026-08-28). Answered here so the driver can refuse the
+  // act as mis-addressed instead of reporting a landed upload nobody will ever see.
+  const connected = this.isConnected !== false;
+  return {files, at_node: files > 0, rendered, ingesting, connected,
+          error: err ? err[0] : '', scope: scope.slice(0, 120)};
 }
 """
 
@@ -317,6 +323,9 @@ class TrajectoryDriver(ABC):
                     "functionDeclaration": _UPLOAD_WITNESS_JS,
                     "arguments": [{"value": names}]})
                 w = (got.get("result") or {}).get("value") or {}
+                if w.get("connected") is False:
+                    return "upload:not_staged:detached-node — the resolved input is no longer in " \
+                           "the document; a fresh resolve is needed"
                 if w.get("rendered"):
                     return "upload"                                  # the widget shows it
                 # A PLAIN input keeping the file is landed; a DROPZONE ignoring the raw input is
