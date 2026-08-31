@@ -135,24 +135,28 @@ models widgets.
 
 ## §9 — The student is the central cog; the teacher bootstraps it; Haiku is a backstop, not a student
 
-> **Amended 2026-07-22 (operator-directed) — the student is a PERCEPTION-and-policy-on-rails cog,
-> not an eventual reasoner and not an eventual teacher.** The sentences below that promise the
-> student "becomes its own teacher" and that Claude is "scaffolding, never the destination" are
-> **retired**, by measurement rather than by taste. On this machine a local model that *reasons* is
-> not on the table (Gemma 4 E2B: 7.2 GB resident, 50 s to emit one word, swapfile to 14.3 GB;
-> llama3.2:1b: fits, 0/4, invents application answers — LEARNINGS 2026-07-20 (5)). And it turned out
-> not to be needed for the part that matters: **getting unstuck is already deterministic** — rung-0
-> supervision names the failure from the 10-class taxonomy at $0 and `RecoveryPlay` prescribes the
-> play, with no model in the loop at all.
+> **Restored 2026-08-31 (operator-directed) — the original destination is back in force: the
+> student becomes its own teacher, and Claude is scaffolding, never the destination.** The
+> 2026-07-22 amendment (kept below for the record) retired those sentences after measuring two
+> small **general models freestyle-reasoning** on this machine. Those measurements stand; the
+> **ceiling inferred from them does not** — they tested a task nobody is proposing anymore. The
+> in-house brain is built as retrieval over our own journaled precedents first (no generative
+> model in the loop; measured 2026-08-31: 97% intent agreement at 37% coverage on transition
+> decisions, cross-session), then a constrained-decode model over the closed intent vocabulary,
+> then our own trained heads (`PLAN_inhouse_reasoner_v1.md`). "Claude reasons permanently" is
+> retired as doctrine: Claude is the bootstrap teacher **with a stated replacement criterion**
+> (that plan §2 M1), and no new human gate may be added on Claude's judgment. The human-gate
+> bullet below is amended the same day: the human owns **stop-states** (captcha / 2FA /
+> checkpoint — never automated, by hard line); Submit and the rest are **graduation-gated per
+> scenario**, owned end-to-end by the in-house rung once it clears the two-bar gate.
 >
-> So the roles re-anchor: **Claude is the novel reasoner, permanently and by design** — the teacher
-> rung is not scaffolding awaiting removal, it is a load-bearing part of the finished machine. The
-> student's job is to **perceive accurately, act on rails, verify honestly, and know precisely when
-> it does not know** — witnesses, prototypes, the intent policy, the deterministic plays. Everything
-> below still holds about *ordering* and about Haiku never occupying the student's seat; what
-> changes is the student's ceiling and, with it, what "does this grow the student?" means: it means
-> *does this sharpen perception or widen the rails*, not *does this teach it to think*.
-> Build plan: `PLAN_perception_v1.md`.
+> *(Historical, 2026-07-22, superseded:* the student is a PERCEPTION-and-policy-on-rails cog, not
+> an eventual reasoner; on this machine a local model that reasons is not on the table (Gemma 4
+> E2B: 7.2 GB resident, 50 s/word, swap to 14.3 GB; llama3.2:1b: 0/4, invents answers —
+> LEARNINGS 2026-07-20 (5)); Claude is the novel reasoner permanently and by design. The
+> hardware facts remain true — 8 GB M3, measured again 2026-08-31 — which is why the in-house
+> path is precedents + small heads on-device and our LoRA weights on rented compute, not a
+> resident 7B.)*
 
 The decision cascade has FOUR sources, and they are **not** interchangeable "models." Naming the
 middle rung "Model (Haiku)" (as `PLAN_controller_v1` §2 and `PLAN_reasoner_v2` §5 originally did) was
@@ -175,7 +179,11 @@ point of the machine.
   student. During teaching it **shadows** — a free "does the cheap model already agree with the
   teacher?" baseline — it does not act as the brain, and it never occupies the student's seat as a
   training target.
-- **The human owns the irreversible** — Submit, credentials, stop-states. Never closes.
+- **The human owns the stop-states** — captcha / 2FA / checkpoint / identity walls. That never
+  closes (hard line: nobody builds bot-detection bypass). Submit and credential fills from the
+  operator's own vault are **graduation-gated, not human-owned**: a scenario that clears the
+  two-bar gate is the in-house rung's end to end, no standing press (amended 2026-08-31,
+  operator-directed; `PLAN_inhouse_reasoner_v1.md` §5).
 
 **Ordering (cheapest-confident-first):** program/cache ($0) → **student** (leads) → **Haiku backstop**
 (catches what the student ducks) → **teacher** (catches what Haiku ducks, and teaches) → human. A

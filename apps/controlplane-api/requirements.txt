@@ -29,3 +29,7 @@ pyobjc-framework-Vision>=10.0 ; sys_platform == "darwin"
 # Secrets vault: AES-256-GCM encryption at rest for UI-entered credentials
 # (envelope encryption with a pluggable key provider; local keyfile now, cloud KMS later).
 cryptography>=42
+
+# The Precedent Engine (PLAN_inhouse_reasoner_v1 §3): on-device vectors + the store.
+sqlite-vec>=0.1.9
+pyobjc-framework-NaturalLanguage>=10.0 ; sys_platform == "darwin"

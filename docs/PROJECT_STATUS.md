@@ -1,7 +1,22 @@
 # Project Status — Supervised Browser Agent
 
-_Last updated: 2026-08-26 — **the ten-session retrospective and the generalization refocus
-(operator-directed): the build priority is now `PLAN_generalization_v1.md`** — the reliable core
+_Last updated: 2026-08-31 — **THE IN-HOUSE REROUTE (operator-directed): the build priority is now
+`PLAN_inhouse_reasoner_v1.md`** — decisions move to an in-house brain (precedent retrieval →
+in-house teacher → own trained heads); human presses become graduation-gated per scenario instead
+of standing (stop-states — captcha/2FA/checkpoint — stay human forever, hard line); the data
+layer is vector-first as of today (`vectors.db`: 2,091 precedents embedded on-device, $0); and
+PRINCIPLES §9 is **restored** to its original destination — the student becomes its own teacher,
+Claude is scaffolding with a stated replacement criterion, never the destination. First measured
+numbers (leave-one-SESSION-out): transition-level intent agreement **0.814/183** (majority
+baseline 0.23), **0.97 accuracy at 37% coverage** with a 0.9-confidence floor — a deployable
+abstaining rung on day one; decision-level 0.503/773 vs 0.472 majority — fine-grained
+generalization needs the collection contract (geometry, censused controls in the snapshot) before
+it needs a bigger model. Headline metric changed: **% of decisions made in-house** (today ~4.5%)
+and **# scenarios graduated** (today 0). `PLAN_generalization_v1.md` sections below remain as
+instruments; briefs pause as priority._
+
+_Previous (2026-08-26): **the ten-session retrospective and the generalization refocus
+(operator-directed): the build priority was `PLAN_generalization_v1.md`** — the reliable core
 (planner · observer · validator · interaction-profile selection · bucketed execution) and
 generalization by page-KIND, consulted knowledge, and step-SET recipes. **The full flywheel is
 demoted from goal to instrument** (train-on-label, the shadow, and the enforced two-bar gate all

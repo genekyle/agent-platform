@@ -12791,3 +12791,78 @@ cracked it — witness → journal duration → probe the same node over CDP —
 = the stall rule; the account + staged credentials exist — operator's one minute, then fill +
 chooser-upload on fresh auth). Note: a concurrent session is also committing to main; rebase
 before merge is now the working norm. Suites: mcp 181 green throughout.*
+
+## 2026-08-31 — THE IN-HOUSE REROUTE: the operator ejects, §9 is restored, and the corpus answers in vectors
+
+Operator's directive, the parts that bind: *"I want the decisions to come from a larger model…
+develop one in-house. Claude has become the teacher, creator, UI-direction, action-handling, etc.
+These are closed loops and shouldn't require any human handling or submit gates — ever. That was
+never the point… developing the vectors and the embeddings myself until we produce a teacher
+in-house… change our data to now be vector databases and we start today. Everything else is now
+secondary."* Recorded in full in `PLAN_inhouse_reasoner_v1.md` §0, now the build priority.
+
+### THE PIVOT IS A RESTORATION, NOT AN INVENTION
+
+Original §9 already said the destination: *"the student becomes its own teacher; the teacher is
+scaffolding for the student, never the destination."* The 2026-07-22 amendment retired those
+sentences and wrote "Claude reasons permanently" after measuring two small GENERAL models
+freestyle-reasoning on this machine (Gemma-2B swap-thrash; llama3.2:1b inventing answers). The
+measurements stand — re-verified today: **8 GB RAM, M3, 26 GB free disk** — but the ceiling
+inferred from them was scoped to a task nobody is proposing now. Retrieval over our own journaled
+precedents needs no generative model at all, and the later model rungs use constrained decoding
+over the closed intent vocabulary with precedents in context. §9 rewritten (restoration + the
+historical block kept); the human-gate bullet amended: **the human owns stop-states forever
+(captcha/2FA/checkpoint — hard line, nobody builds bot-detection bypass); Submit and vault-fills
+are graduation-gated per scenario, not human-owned.**
+
+### BUILT AND MEASURED TODAY (all on-device, $0/query, no downloads beyond two small wheels)
+
+`apps/controlplane-api/precedent/` — embedder (late fusion: NLEmbedding-512 text + Apple Vision
+FeaturePrint-768 reusing perception's cache + 128 signed-hash facets), sqlite-vec store
+(`vectors.db` beside the corpus), idempotent backfill, leave-one-SESSION-out evaluation. 7 pinned
+tests (label non-leakage among them). Backfill: **2,091 precedents in 88 s** (773 decisions +
+659×2 transition halves; 1,264 with vision; **0 broken screenshot refs**).
+
+The numbers, split-by-session first (random split shown only as the leakage check it is):
+
+* **Transition-level intents: 0.814/183 agreement** (majority baseline 0.230); with a
+  0.9-confidence floor the engine answers **36.6% of decisions at 0.970 accuracy** — an
+  abstaining rung deployable into the cascade's student seat on day one. Ablation: facets 0.809,
+  text 0.525, vision 0.504 — the rung/state/route structure carries the signal.
+* **Decision-level (which control, novel page): 0.503/773 vs 0.472 majority** — barely above
+  baseline, and the random split reads 0.683: the leakage gap P2 predicted is real, and honest
+  cross-session generalization is weak HERE. Diagnosis (P1's own clause: below range → suspect
+  the recipe first): `bundle_snapshot` never serialized `ax_identities` (the censused controls,
+  prompt-invisible by design), so the decisions' text block is thin; and only **58/773 decisions
+  carry an image** (the 08-09 capture rider reaches `record_for`, but most decide() paths pass no
+  capture). The write-time rider therefore embeds from the **Bundle**, not the snapshot.
+* **`cornerstone:cornerstone_application_form` scored 0.000/39** — the scenario lives entirely in
+  one session, so leave-one-session-out removes every neighbor. Not an eval artifact: the true
+  cost of single-drive scenarios. Cross-tenant/kind features or more drives are the only cures
+  (the old plan's §3.1, now serving the new plan).
+* **P5 — the operator's "we have enough for educated guesses": CONFIRMED at transition level,
+  measured, not argued.**
+
+### TWO CAPTURE BUGS THE PIVOT'S RECON SURFACED
+
+(1) `acquisition.accessibility_snapshot` inside observer-trace artifacts has been failing for
+weeks (`MCP error -32602: Tool get_accessibility_tree not found`) while `actionable_elements`
+silently carried the real data — the dead field either gets fixed or retired, loudly. (2) Element
+GEOMETRY exists in every artifact (`actionable_elements[].rect`, `ranked_candidates[].grounding
+.bbox`, plus `viewport_state` for px mapping) and is stripped at exactly `Observation.as_row`
+(`step_runner.py:110`) — the 08-09 "element-level faucet deferred" was a one-line strip away from
+never having been a gap. Un-deferred in the plan's §4 contract.
+
+### OPERATIONAL NOTES
+
+Stock `postgres:16` has no pgvector; the endgame store is the same schema in `agentos` after the
+`pgvector/pgvector:pg16` image swap (volume-backed — a deliberate operator-approved restart, like
+the 08-27 migration). The stale `:8093` memory died officially (cockpit talks to `:8081`
+--reload). Docs re-pointed: CLAUDE.md, PROJECT_STATUS, PRINCIPLES §9. The scorecard's headline
+changes with the doctrine: **% decisions in-house** (today ~4.5%: recipe 2.8 + model 1.7, teacher
+95.5) and **# scenarios graduated** (0). The two-bar gate flips from "armed, not fed" to **the
+eject button we feed deliberately**.
+
+*Suites: 7 new precedent tests green; nothing existing touched. Next: the write-time vector
+rider at `record_for`/`record_transition` (embed from Bundle/Observation), the geometry lift at
+`as_row`, then the precedent rung wired shadow-first into the student seat.*
