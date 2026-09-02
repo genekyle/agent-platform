@@ -12866,3 +12866,35 @@ eject button we feed deliberately**.
 *Suites: 7 new precedent tests green; nothing existing touched. Next: the write-time vector
 rider at `record_for`/`record_transition` (embed from Bundle/Observation), the geometry lift at
 `as_row`, then the precedent rung wired shadow-first into the student seat.*
+
+## 2026-09-02 — the plan locked: economics, the reasoner's contract, and the run math to autonomy
+
+Two discussion sessions (09-01/02) ended with the operator approving the shape; it is now BINDING
+as `PLAN_inhouse_reasoner_v1` **§10** (economics + reasoner contract) and **§11** (the work plan).
+The load-bearing pieces, so no session re-derives them:
+
+* **The metric got honest.** "70–75% accuracy on a full run by itself" is defined as
+  `full_run_autonomy` — share of attempted applications reaching verified Submit with ZERO human
+  decisions (stop-states excluded) — NOT per-step accuracy (75%/step over 40 steps completes
+  ~0% of runs; the cascade composition is the design: practiced rungs ≥0.97/step, reasoner slice
+  ~0.75 raw → ~0.85–0.92 with verify-and-retry, abstention turns misses into one park).
+* **One 7B VLM, three heads** (decide / answer / diagnose), constrained decoding (intent from the
+  closed vocabulary, ref must exist in the census), weighting LEARNED from the journal's WHY
+  strings, confidence temperature-scaled on session splits, ≥95% selective-precision floor.
+* **Run math to M1.a:** 35–45 new enriched applications ≈ 8–12 apply runs (Indeed 5–7 across ≥5
+  ATS families × ≥2 sessions each — the cornerstone-0.000 lesson; LinkedIn 4–5 incl. Easy Apply
+  + the home-feed apply logic, which does not exist yet and is operator-named). Labels: the
+  33-row mismatch head + 150–250 witness_split by scenario frequency; **zero bboxes**.
+* **Budget locked:** $40–75 cumulative to the seat swap; ~$10–30/mo steady state; no standing
+  GPU; driving/capture never leaves the residential IP. Money is not the constraint — cadence is.
+* **Gmail/Google is a wiring job, not a build**: inbox matcher, fetch_login_code, verify_email,
+  gmail_senders all exist; promote to first-class domain = scheduled sweeps + account-rung
+  code-fetch + confirmation mail as reasoner context. Actions stay out of scope (reader only).
+* **Pick policy stays consent** until the operator flips it: batch pre-approval now,
+  criteria-based auto-pick is a graduation item — recorded so autonomy work does not silently
+  cross an approval boundary.
+
+*Checkpoints C1 (~4 runs: curve read at ~1k pairs; falsifier — riders must move decision-LOSO
+≥10pts over 0.503 or the recipe is re-examined before more volume), C2 (8–12 runs: fine-tune,
+beat Haiku 0.595 or lane dies), C3 (weeks 5–8: seat swap, autonomy 0.70–0.75 on gated families).
+Next build session: W1 riders (Bundle vectors, geometry lift, ax_identities, AX-snapshot bug).*

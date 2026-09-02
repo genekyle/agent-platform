@@ -246,3 +246,116 @@ holding seats M0/M1 can take, and writing "permanently" next to its own name in 
 - [x] Write-time vector rider spec'd at seams (`decision_journal.py:110` `record_for` off the
       Bundle; `step_runner.py:545` `record_transition` off the Observation). Landing next
       session with tests; the backfill CLI covers the gap until then (idempotent, re-run cheap).
+
+## §10 — The locked economics and the reasoner's contract (operator-approved 2026-09-02)
+
+The 2026-09-01/02 discussion is binding. Shape: **one 7B-class VLM, three task-tagged heads**
+(`decide` — bundle → next action; `answer` — screener question → answer under the operator's
+policy; `diagnose` — expectation-vs-observed → `mismatch_kind` + recovery proposal), served
+behind the existing model-seat HTTP contract so **serverless GPU, rented box, and the local ≤2B
+fallback are interchangeable backends**. It is called selectively (novel screens, screeners,
+mismatches, plan bridges — ~5–15 calls/application), never per-step.
+
+**Input contract** = the serialized Bundle we already journal: task frame · state + witness
+beliefs + novelty · the census (controls, roles/names, required flags, geometry) · k=5–8
+retrieved precedents with verdicts/corrections · operator policy block · recent
+(intent, target, outcome) history · screenshot attached only when novelty is high or diagnosing.
+**Output contract**: `{intent, ref, params, why, confidence, escalate}` — constrained decoding:
+intent from the closed vocabulary, `ref` must exist in the census (grammar-masked or validated +
+one retry). It cannot invent a control. **Weighting is learned, not hand-tuned**: fine-tune
+supervision is the journal's (bundle → decision + WHY) pairs, whose Open Brain rationales encode
+the evidence hierarchy (page's own words > census structure > precedent > prior belief);
+confidence is temperature-scaled on a held-out SESSION split; the acting floor targets ≥95%
+selective precision (→99% on graduated scenarios); below floor → escalate with a stated reason.
+
+**Training flow (cloud, out-of-box, zero infra of ours):** dataset build script (journal +
+transitions + labels + screener pairs → chat JSONL; dedupe by fingerprint+intent; split BY
+SESSION always) → corpus delta to object storage → hourly GPU → QLoRA on Qwen2.5-VL-7B-Instruct
+class base (license re-verified at vendor pick; r=16–32, 4-bit, seq 4–8k, ~3 epochs,
+Unsloth/Axolotl) → held-out eval (agreement, selective-precision curve, per-scenario table) →
+LoRA adapter (~200–600 MB) versioned behind the seat → GPU dies. ~20–25M training tokens/run;
+**2–4 h ≈ $1–3/run; $5–15 per cycle** (3–5 experiment runs); weekly cycles while data grows,
+monthly at steady state.
+
+**Budget, locked:** week 1 <$10 (backup + pipeline dry-run on the thin 773 — approved);
+weeks 2–4 ≈ $10–20; weeks 5–8 ≈ $15–30; **$40–75 cumulative to the seat swap**. Steady state
+**~$10–30/month all-in** (serverless serving $2–10 at 100–300 calls/wk, storage <$1, monthly
+refit $5–15, Haiku residual $0–5). No standing GPU (would be $60–180/mo — not at our volume).
+Live driving/capture stays on the local residential IP permanently (bot-safety). The binding
+constraint is enriched data volume = drive cadence, not money; dates scale with driving, dollars
+barely move.
+
+## §11 — The work plan to autonomy: Indeed + LinkedIn (adopted 2026-09-02)
+
+**The target metric, defined so we stick to it:** `full_run_autonomy` = share of attempted
+applications reaching **verified Submit** (or an honest terminal park at a stop-state) with
+**zero human decisions**; tracked beside `touches_per_run`. Operator target: **0.70–0.75 on
+graduated families**. Per-step composition that makes it arithmetically honest: practiced rungs
+(recipes + precedent engine) ≥0.97 verified-per-step over ~30 steps; reasoner slice ~0.75 raw →
+~0.85–0.92 effective with verify-and-retry; abstention converts most misses into ONE park, not a
+failed run. Per-step 75% alone would complete ~0% of 40-step runs — the cascade is the design.
+
+### The run math (standard units, measured yields)
+
+| unit | yield (measured/est.) |
+|---|---|
+| 1 application (external ATS) | ~40–60 enriched decisions · ~10–20 screener Q→A · 1–3 novel screens |
+| 1 application (Easy Apply / quick apply) | ~15–25 decisions · ~5–10 screener Q→A |
+| 1 apply run (2–3 h) | 3–5 applications |
+| 1 sweep run | pick queue + search-state rows (cheap, but not reasoner food) |
+
+**To M1.a (first real fine-tune, ~2,000 enriched pairs + ≥300 screener pairs):**
+**35–45 new applications ≈ 8–12 apply runs.** Split: **Indeed 5–7 runs** (20–28 apps, breadth:
+≥5 ATS families × **≥2 separate sessions each** — the cornerstone-0.000 lesson; families:
+quick-apply, Workday, Greenhouse, iCIMS/Taleo, Cornerstone) · **LinkedIn 4–5 runs** (12–18
+apps: Easy Apply depth + external redirects; home-feed apply once its logic lands). At 3–4
+runs/week → 3–4 weeks; calendar scales linearly with actual cadence.
+
+**To M1.b (seat swap):** +6–8 further runs (cumulative ~60–75 applications) to fill the
+≥100-decision consistency window and per-scenario gate windows (≥25 exact rows ≈ 2–3
+applications per family). First graduation candidates, in order: `indeed_quick_apply`,
+`greenhouse_apply_form`, `workday` core states, `linkedin_easy_apply`.
+
+**Labeling quota (small — minutes/day via the queue screen, NOT a project):** the 33-row
+mismatch head now; then **150–250 witness_split labels prioritized by scenario frequency**
+(push the top-10 states' witness accuracy); **zero bbox labels** (geometry rides free from
+artifacts; grounding stays AX-first + SoM fallback). Reasoner pairs need no human labeling —
+the teacher's journaled drives ARE the labels (DAgger as always).
+
+### The gap list — what must exist for "runs it by itself" (each with its week)
+
+1. **W1 — write-time riders** (Bundle-sourced vectors; geometry lift at `Observation.as_row`;
+   `ax_identities` + screenshot on every decision) — riders BEFORE volume, else drives bank thin
+   rows. Plus the AX-snapshot artifact bug (fix or retire loudly).
+2. **W1–2 — precedent rung shadow-wired** → acting behind the gate; scorecard gains
+   `% decisions in-house`, `full_run_autonomy`, `touches_per_run`.
+3. **W1–2 — screener Q→A faucet**: every question → chosen answer → correction journals as a
+   training row (attacks the worst measured cells: 0.325/0.133).
+4. **W2–3 — LinkedIn gaps**: Easy Apply recipe completed; **home-feed/recommended-jobs apply
+   logic built** (feed → job → pick queue → apply; currently lacks logic — operator-named).
+5. **W2–3 — kind-first state classification** (witnesses borrowing cross-ATS names — the
+   43× `workday_apply_method`-on-Greenhouse bug; state identity must survive novel tenants).
+6. **W2–4 — account-wall autonomy**: vault-driven create/sign-in fills (system fills from
+   staged creds — no human, no Claude touching secrets); `verify_email` leg live-proven on a
+   real wall (Workday addressing is HYPOTHESIS until then). This is the measured flow ceiling.
+7. **W3–4 — Google/Gmail as a first-class domain — mostly BUILT, needs wiring**: inbox matcher
+   (merged), `fetch_login_code` errand, `verify_email`, `gmail_senders` all exist. Promote:
+   scheduled inbox sweeps at close_out; code-fetch invoked by the account rung mid-run;
+   verification/confirmation mail surfaced as reasoner context (a precedent row, not a new
+   organ). Reader ≠ actions: Gmail write-actions stay out of scope.
+8. **W4+ — the full-run harness**: /run with the reasoner in the seat, abstentions park
+   honestly, autonomy measured per run. **Pick policy** (per-prospect approval is current
+   doctrine): batch pre-approval of a queue now; criteria-based auto-pick is a graduation item
+   that ONLY the operator can flip.
+9. **Cadence — outcome sweeps** ride close_out (16/79 flows closed is the debt); outcomes are
+   the eventual reward signal.
+
+### Checkpoints (measure, don't argue — §13)
+
+- **C1** after ~4 runs (~15 apps): learning-curve read at ~1k pairs; model v0 dry-run already
+  walked the pipe. Falsifier: if enriched-decision LOSO hasn't moved ≥10pts over the 0.503
+  baseline with riders on, the feature recipe is re-examined before more volume.
+- **C2** after 8–12 runs: M1.a fine-tune; expect reasoner-slice ≥0.70 on practiced
+  distribution (beats Haiku's 0.595 or lane dies per P4); shadow only.
+- **C3** weeks 5–8: seat swap on gated families; **full_run_autonomy 0.70–0.75 there**,
+  ≤1 touch/run elsewhere; Claude → auditor.
