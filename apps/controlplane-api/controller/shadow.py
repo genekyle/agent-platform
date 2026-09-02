@@ -17,9 +17,29 @@ from interaction.decision import Bundle, Decision
 from interaction.decision_journal import log_decision, record_for
 
 
+def _free_default_model() -> Optional[DecisionReasoner]:
+    """The precedent rung as the shadow's default seat-holder (PLAN_inhouse_reasoner_v1 §11
+    item 2). $0 by construction — retrieval over vectors.db, no API call — so it does NOT
+    violate this module's spend rule the way Haiku would; it is the free rung the rule was
+    protecting. `settings.precedent_shadow` turns it off; any failure means None, honestly."""
+    try:
+        from settings import settings
+
+        if not settings.precedent_shadow:
+            return None
+        from precedent.engine import reasoner
+
+        return reasoner()
+    except Exception:  # noqa: BLE001 — a dead seat shadows as an empty seat, never an error
+        return None
+
+
 def shadow_decision(bundle: Bundle, *, programs: Optional[ProgramLookup] = None,
                     model: Optional[DecisionReasoner] = None) -> Decision:
-    """What the controller WOULD decide here — computed, never acted."""
+    """What the controller WOULD decide here — computed, never acted. With no model passed,
+    the FREE precedent rung fills the seat (the paid Haiku rung still requires opting in)."""
+    if model is None:
+        model = _free_default_model()
     return decide(bundle, programs=programs or programs_mod.ProgramStore(), model=model)
 
 

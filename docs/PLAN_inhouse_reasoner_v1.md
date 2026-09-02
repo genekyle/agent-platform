@@ -339,8 +339,22 @@ the teacher's journaled drives ARE the labels (DAgger as always).
    raw_text) now counts as a failed candidate and falls through, so `accessibility_snapshot`
    is honest `unavailable` instead of a recorded error-string "success". Tests: +15 api
    (`test_w1_riders.py`), +3 mcp (`test_capture_error_content.py`).
-2. **W1–2 — precedent rung shadow-wired** → acting behind the gate; scorecard gains
-   `% decisions in-house`, `full_run_autonomy`, `touches_per_run`.
+2. **W1–2 — precedent rung shadow-wired — LANDED 2026-09-02.** `precedent/engine.py` fills
+   the student seat as a `DecisionReasoner`: k-NN vote over decisions + transition-before
+   halves (k=15), query embedded through the SAME composer the corpus banks with
+   (`compose_decision_text`), confidence = vote share × nearest-distance damp (floors
+   provisional, calibration owed), abstains on <3 neighbors or nearest >0.85. The shadow seat
+   consults it by DEFAULT (`shadow_decision` — $0, so the no-spend rule holds;
+   `settings.precedent_shadow` off-switch), so every crank now journals a
+   `proposed_rung="precedent"` pair — the gate's food. Acting exists behind
+   `settings.precedent_acting` (default OFF): the `/api/controller/decide` cascade composes
+   precedent ABOVE the Haiku backstop, `precedent` joined `PROPOSE_RUNGS` on its first day
+   (reviewed, never rung-0-trusted), and `decide()`'s low-confidence wrapper now keeps the
+   proposer's rung name instead of laundering every seat-holder into "model". Scorecard +
+   cockpit: `in_house` block (`% decisions in-house` 7d, precedent shadow
+   agreement/coverage, `full_run_autonomy` + `touches_per_run` v1 with its definition in the
+   payload, scenarios graduated) on `/api/learning/scorecard` and a card on Learning →
+   Scorecard. Tests: +7 (`test_precedent_engine.py`).
 3. **W1–2 — screener Q→A faucet**: every question → chosen answer → correction journals as a
    training row (attacks the worst measured cells: 0.325/0.133).
 4. **W2–3 — LinkedIn gaps**: Easy Apply recipe completed; **home-feed/recommended-jobs apply

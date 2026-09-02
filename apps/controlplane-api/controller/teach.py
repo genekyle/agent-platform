@@ -26,7 +26,10 @@ from interaction.decision import Bundle, Decision
 #: `student` is here from its first day (2026-07-20). An untrained local policy is the LEAST
 #: trusted thing in the system, not the most — leaving it out would have let a 2B model act
 #: unreviewed on a real job application, which is the exact inversion of PRINCIPLES §9.
-PROPOSE_RUNGS = frozenset({"student", "model", "teacher"})
+#: `precedent` joins on ITS first day (2026-09-02) for the same reason: retrieval over our own
+#: journal is still a guess about THIS page, and it graduates per scenario through the two-bar
+#: gate, never by sitting outside review.
+PROPOSE_RUNGS = frozenset({"student", "model", "teacher", "precedent"})
 
 
 class ReviewAction(str, Enum):

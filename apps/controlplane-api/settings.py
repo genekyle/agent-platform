@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     # the precedent engine as it happens. Same doctrine as train_on_label — the crank is the
     # write. OFF leaves the idempotent backfill CLI as the only path into the store.
     precedent_write_vectors: bool = True
+    # The precedent rung in the SHADOW seat (§11 item 2): every shadow comparison consults the
+    # $0 retrieval reasoner, so each crank journals what the in-house seat would have decided —
+    # the per-scenario agreement data the two-bar gate promotes on. Free by construction.
+    precedent_shadow: bool = True
+    # The precedent rung ACTING (default OFF — shadow-first doctrine). When on, the seat's
+    # proposals enter the live cascade at the student slot; `precedent` is in PROPOSE_RUNGS,
+    # so they are reviewed before acting, and authority()'s gates still bind. Flip only when
+    # the shadow numbers say a scenario earned it.
+    precedent_acting: bool = False
     # Test-account credentials for capturing logged-in states, read from the
     # GITIGNORED .env only. NEVER hardcode a real value here and NEVER log these —
     # see _login_secrets(). Use a throwaway/test account, not a primary one.

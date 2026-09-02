@@ -362,8 +362,10 @@ def decide(bundle: Bundle, *, programs: ProgramLookup,
         if proposed.confidence < DECISION_CONFIDENCE_THRESHOLD:
             # Keep the proposal visible AND acting-shaped, but escalate — ask, don't guess. The
             # model's own guess beats a shape-based one, so it is what the teacher gets to score.
+            # The rung stays the PROPOSER'S (precedent/student/model): the journal must say who
+            # guessed, not launder every seat-holder into "model" (2026-09-02).
             return Decision(intent=proposed.intent, params=proposed.params,
-                            confidence=proposed.confidence, rung="model",
+                            confidence=proposed.confidence, rung=proposed.rung or "model",
                             rationale=f"{proposed.rationale} (confidence "
                                       f"{proposed.confidence:.2f} < "
                                       f"{DECISION_CONFIDENCE_THRESHOLD} — ask, don't guess)",

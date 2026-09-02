@@ -74,6 +74,7 @@ export function SessionScorecardSection() {
   const witnesses = data?.witnesses;
   const apps = data?.applications;
   const outcomes = data?.outcomes;
+  const inHouse = data?.in_house;
 
   return (
     <div className="section-stack">
@@ -107,6 +108,37 @@ export function SessionScorecardSection() {
               sub={q?.by_reason ? Object.entries(q.by_reason).map(([k, v]) => `${v} ${k}`).join(" · ") : null} />
           </div>
         ) : null}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>The in-house seat</h2>
+            <p>
+              The reroute&apos;s headline (PLAN_inhouse_reasoner_v1 §5): the share of decisions
+              made in-house, how the precedent rung is scoring in shadow, and how many runs
+              finished with zero human touches. Trailing 7 days.
+            </p>
+          </div>
+        </div>
+        {inHouse ? (
+          <div className="coverage-totals" style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+            <Stat label="Decisions in-house" value={pct(inHouse.decisions?.share)}
+              sub={`${inHouse.decisions?.n ?? 0} acted decisions`}
+              good={(inHouse.decisions?.share ?? 0) > 0.5} />
+            <Stat label="Precedent shadow agreement" value={pct(inHouse.precedent_shadow?.agreement)}
+              sub={`coverage ${pct(inHouse.precedent_shadow?.coverage)} of ${inHouse.precedent_shadow?.shadow_pairs ?? 0} pairs`}
+              good={(inHouse.precedent_shadow?.agreement ?? 0) >= 0.9} />
+            <Stat label="Full-run autonomy" value={pct(inHouse.autonomy?.full_run_autonomy)}
+              sub={`${inHouse.autonomy?.zero_touch ?? 0}/${inHouse.autonomy?.runs_measured ?? 0} zero-touch · avg ${inHouse.autonomy?.avg_touches_per_run ?? "—"} touches`}
+              good={(inHouse.autonomy?.full_run_autonomy ?? 0) >= 0.7} />
+            <Stat label="Scenarios graduated" value={inHouse.graduated_scenarios ?? 0}
+              accent={(inHouse.graduated_scenarios ?? 0) === 0}
+              sub="two-bar gate, per ats:state" />
+          </div>
+        ) : (
+          <span className="chrome-label muted">no in-house numbers yet — the seat is new</span>
+        )}
       </section>
 
       <section className="panel">

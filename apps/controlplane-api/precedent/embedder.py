@@ -156,6 +156,39 @@ class FusionEmbedder:
 
 
 # -- doc composers ------------------------------------------------------------
+def compose_decision_text(*, goal_text: str, state: Optional[str], url: str,
+                          ax_identities: Any, unanswered: Any, expected_next: Any) -> str:
+    """The ONE composer for a decision-shaped situation's text block. Used by the corpus side
+    (`doc_from_decision`, off a journal row) AND the live side (`precedent.engine`, off a
+    Bundle) — a query embedded through any other phrasing would sit in a different region of
+    the space than the precedents it is supposed to find."""
+    if isinstance(unanswered, list):
+        unanswered_txt = "; ".join(_clean(str(u)) for u in unanswered[:12])
+    else:
+        unanswered_txt = _clean(str(unanswered)) if unanswered else ""
+    # The censused controls, when carried (decision rows since 2026-09-02 do; older rows
+    # honestly lack them). Mirrors the transitions' "controls:" block — the measured reason
+    # that corpus retrieves so much better (0.814 vs 0.503 LOSO).
+    identities = list(ax_identities or [])
+    controls_txt = "; ".join(
+        _clean(str(i).replace("|", " ")) for i in identities[:_MAX_CANDIDATE_NAMES]
+    )
+    expected = list(expected_next) if isinstance(expected_next, (list, tuple)) \
+        else ([expected_next] if expected_next else [])
+    return " | ".join(
+        part
+        for part in (
+            _clean(goal_text or ""),
+            f"state {state}" if state else "",
+            f"route {route_template(url or '')}",
+            f"controls: {controls_txt}" if controls_txt else "",
+            f"unanswered: {unanswered_txt}" if unanswered_txt else "",
+            f"expecting {expected}" if expected else "",
+        )
+        if part
+    )
+
+
 def doc_from_decision(row: dict) -> Optional[PrecedentDoc]:
     """DecisionRecord journal row -> doc. Features come from the bundle snapshot (what was
     seen); the label is the decided intent (+ best-effort ref from params)."""
@@ -163,29 +196,13 @@ def doc_from_decision(row: dict) -> Optional[PrecedentDoc]:
     if not intent:
         return None
     snap = row.get("bundle_snapshot") or {}
-    unanswered = snap.get("unanswered") or []
-    if isinstance(unanswered, list):
-        unanswered_txt = "; ".join(_clean(str(u)) for u in unanswered[:12])
-    else:
-        unanswered_txt = _clean(str(unanswered))
-    # The censused controls, when the snapshot carries them (rows since 2026-09-02 do; older
-    # rows honestly lack them). Mirrors the transitions' "controls:" block — the measured
-    # reason that corpus retrieves so much better (0.814 vs 0.503 LOSO).
-    identities = snap.get("ax_identities") or []
-    controls_txt = "; ".join(
-        _clean(str(i).replace("|", " ")) for i in identities[:_MAX_CANDIDATE_NAMES]
-    )
-    text = " | ".join(
-        part
-        for part in (
-            _clean(snap.get("goal_text") or ""),
-            f"state {snap.get('state')}" if snap.get("state") else "",
-            f"route {route_template(snap.get('url') or row.get('url') or '')}",
-            f"controls: {controls_txt}" if controls_txt else "",
-            f"unanswered: {unanswered_txt}" if unanswered_txt else "",
-            f"expecting {snap.get('expected_next')}" if snap.get("expected_next") else "",
-        )
-        if part
+    text = compose_decision_text(
+        goal_text=snap.get("goal_text") or "",
+        state=snap.get("state"),
+        url=snap.get("url") or row.get("url") or "",
+        ax_identities=snap.get("ax_identities"),
+        unanswered=snap.get("unanswered") or [],
+        expected_next=snap.get("expected_next"),
     )
     params = row.get("params") or {}
     ref = ""

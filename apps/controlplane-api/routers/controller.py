@@ -88,9 +88,23 @@ def decide_model(body: DecideModelBody) -> dict[str, Any]:
 def decide_cascade(body: DecideModelBody) -> dict[str, Any]:
     """The FULL cascade for a posted bundle — rung 0 (programs) then, only if asked, the model.
     Deterministic and free by default (model=None): a 'what would the controller do here?' probe
-    the cockpit uses without spending. Set `budget_limit` present to allow the Haiku rung."""
+    the cockpit uses without spending. Set `budget_limit` present to allow the Haiku rung.
+    With `settings.precedent_acting` on, the $0 precedent rung takes the student slot ABOVE the
+    backstop (§9's ordering): it answers first, and Haiku catches only what it ducks."""
     bundle = _bundle_from_dict(body.bundle)
-    reasoner = HaikuReasoner(budget_limit=body.budget_limit) if body.budget_limit is not None else None
+    backstop = HaikuReasoner(budget_limit=body.budget_limit) if body.budget_limit is not None else None
+    reasoner = backstop
+    if settings.precedent_acting:
+        try:
+            from precedent.engine import propose as _precedent
+
+            def reasoner(b, _backstop=backstop):  # noqa: ANN001 — DecisionReasoner shape
+                proposed = _precedent(b)
+                if proposed is not None:
+                    return proposed
+                return _backstop(b) if _backstop is not None else None
+        except Exception:  # noqa: BLE001 — a dead seat leaves the cascade as it was
+            reasoner = backstop
     decision = decide(bundle, programs=programs_mod.ProgramStore(), model=reasoner)
     return {"decision": {
         "intent": decision.intent, "params": decision.params, "confidence": decision.confidence,

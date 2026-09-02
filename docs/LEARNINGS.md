@@ -12933,3 +12933,39 @@ shape the retrospectives keep counting — **the data existed and one projection
 edits in a worktree are invisible until merge; test with `PYTHONPATH=<worktree>/packages/
 interaction` (module `__file__` proved it). Suites: mcp 184 green; api full run below. Next:
 wire the precedent rung shadow-first (§11 item 2), then drive — every row now banks fat.*
+
+## 2026-09-02 (third entry) — the seat is occupied: the precedent rung shadows every crank
+
+§11 item 2, landed. The discovery that shaped it: **the seat already existed.** `decide()`'s
+model seam (`DecisionReasoner`, rung 1) is the student slot §9 reserved, `local_reasoner.py` is
+its LLM sibling still honestly empty on this hardware, and `shadow_decision` has taken a `model`
+argument since shadow was built — nobody free had ever filled it. Now `precedent/engine.py`
+does: k-NN vote over decisions + transition-before halves, the query embedded through the SAME
+`compose_decision_text` the corpus banks with (a query phrased differently would live in a
+different region of the space than the precedents it must find — the composer is shared code,
+not convention), confidence = vote share × nearest-distance damp, abstain on <3 neighbors or
+nearest >0.85 (floors provisional, calibration owed).
+
+* **Shadow by default, $0 by construction.** `shadow_decision`'s no-spend rule was protecting
+  against Haiku; retrieval IS the free rung it was reserving the seat for. Every crank now
+  journals `proposed_rung="precedent"` beside the teacher — the per-scenario data the two-bar
+  gate promotes on. `settings.precedent_shadow` is the off-switch.
+* **Acting exists and is OFF** (`settings.precedent_acting`): the cascade composes precedent
+  ABOVE the Haiku backstop (§9's ordering, finally literal), `precedent` joined `PROPOSE_RUNGS`
+  on its first day (an untrusted seat proposes, never rung-0-trusts — the `student` precedent),
+  and flipping the flag is a config change, not a build.
+* **One laundering fixed in `decide()`:** the low-confidence escalate wrapper stamped every
+  proposal `rung="model"`; it now keeps the proposer's own rung, so the journal says WHO
+  guessed. Haiku unchanged (it already stamps "model").
+* **The scorecard reads the seat back** (`in_house` on `/api/learning/scorecard`, card on
+  Learning → Scorecard): `% decisions in-house` (trailing 7d, acted rows only — shadow rows are
+  measurements), precedent shadow agreement + coverage (abstentions counted honestly against
+  coverage, never against agreement), `full_run_autonomy` v1 + `touches_per_run` (runs = jobs
+  with a confirmed submit row or a ledger applied_at in-window; touches = operator-initiated
+  rows INCLUDING the submit press — that press is what graduation removes; unlinked operator
+  rows stay visible), and scenarios graduated. The definition rides in the payload, the
+  cockpit-reach-parity rule's cheapest form.
+
+*Suites: mcp untouched; api full run green (see commit). Tests +7. The next drive is the first
+whose every crank scores the in-house seat — the gate clock the phase-wire restarted now has a
+contender feeding it. Next: §11 item 3 (the screener Q→A faucet), then DRIVE.*
