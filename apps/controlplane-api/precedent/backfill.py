@@ -62,6 +62,14 @@ def run(data_root: Path, db_path: Path, limit: int | None = None) -> dict:
             doc = doc_from_decision(row)
             if doc:
                 docs.append(doc)
+    qa = data_root / "qa" / "qa_journal.jsonl"
+    if qa.exists():
+        from .embedder import doc_from_qa
+
+        for row in _iter_jsonl(qa):
+            doc = doc_from_qa(row)
+            if doc:
+                docs.append(doc)
     if limit:
         docs = docs[:limit]
 

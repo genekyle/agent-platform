@@ -111,6 +111,21 @@ def on_transition_row(row: dict) -> None:
         pass
 
 
+def on_qa_row(row: dict) -> None:
+    """QA-journal hook (§11 item 3): one answered question -> one vector. The row arrives
+    already redaction-gated by `qa_journal.record_qa`, so nothing sensitive reaches the store."""
+    if not _enabled():
+        return
+    try:
+        from .embedder import doc_from_qa
+
+        doc = doc_from_qa(row)
+        if doc is not None:
+            _bank(doc)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def install() -> bool:
     """Register the decision sink. Idempotent; returns whether the rider is live."""
     global _installed

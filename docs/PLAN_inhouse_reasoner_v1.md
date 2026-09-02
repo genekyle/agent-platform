@@ -355,8 +355,22 @@ the teacher's journaled drives ARE the labels (DAgger as always).
    agreement/coverage, `full_run_autonomy` + `touches_per_run` v1 with its definition in the
    payload, scenarios graduated) on `/api/learning/scorecard` and a card on Learning →
    Scorecard. Tests: +7 (`test_precedent_engine.py`).
-3. **W1–2 — screener Q→A faucet**: every question → chosen answer → correction journals as a
-   training row (attacks the worst measured cells: 0.325/0.133).
+3. **W1–2 — screener Q→A faucet — LANDED 2026-09-02.** Two moves in one: (a)
+   `resolve_answer` — the semantic cascade, built with its polarity guard and model seam and
+   found with ZERO live callers (unreached-logic instance #11) — got its first caller: the
+   bulk fill's select loop hands a `no_option` refusal's offered options (parsed from the
+   refusal's `sample:` prose; the structured lift onto /select_option's response is the named
+   follow-up, the `upload_witness` doctrine) to the cascade and runs ONE translated retry —
+   the 08-28 "acknowledgement." class, mechanized. (b) `qa_journal.py`: every select-family
+   question journals (question text, offered options, canonical, the cascade's Resolution,
+   act outcome, correction slot — both sides kept), sensitivity settled AT THE WRITE via
+   `redact(field=...)` (a masked value banks its question, never the secret), and each row
+   vector-banks as kind="qa" (rider + backfill sweep) so retrieval answers repeat questions
+   before any model exists. Corrections: `correct_qa()` keeps original beside override.
+   Deliberate scope: select-family only (the semantic layer's home); free-text screeners and
+   the single-press prompt_select seam join next; a cockpit QA review screen rides the
+   Learning workspace later. Tests: +6 (`test_qa_faucet.py`); `resolve_answer`'s own 21
+   untouched and green with the wiring.
 4. **W2–3 — LinkedIn gaps**: Easy Apply recipe completed; **home-feed/recommended-jobs apply
    logic built** (feed → job → pick queue → apply; currently lacks logic — operator-named).
 5. **W2–3 — kind-first state classification** (witnesses borrowing cross-ATS names — the

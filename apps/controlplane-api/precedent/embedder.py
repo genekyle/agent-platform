@@ -236,6 +236,51 @@ def doc_from_decision(row: dict) -> Optional[PrecedentDoc]:
     )
 
 
+def doc_from_qa(row: dict) -> Optional[PrecedentDoc]:
+    """QA-journal row -> doc (§11 item 3). The text is the QUESTION as posed — question text,
+    the widget's offered options, and where it was asked — and the label is the resolved
+    value (already redaction-gated at the journal write, so a sensitive row banks its question
+    with a masked ref and never the secret). Questions repeat across employers; this is what
+    lets retrieval answer a repeat before any model is trained."""
+    field = _clean(str(row.get("field") or ""))
+    if not field:
+        return None
+    options = [str(o) for o in (row.get("options") or []) if o]
+    res = row.get("resolution") or {}
+    correction = row.get("teacher_correction") or {}
+    text = " | ".join(
+        part
+        for part in (
+            f"question: {_clean(str(row.get('question_text') or field))}",
+            f"options: {'; '.join(options[:16])}" if options else "",
+            f"state {row.get('state')}" if row.get("state") else "",
+            f"ats {row.get('ats')}" if row.get("ats") else "",
+        )
+        if part
+    )
+    return PrecedentDoc(
+        kind="qa",
+        source_key=f"qa:{row.get('ts')}:{field[:40]}",
+        text=text,
+        facets={k: str(v) for k, v in {
+            "platform": row.get("ats") or "",
+            "ats": row.get("ats") or "",
+            "state": row.get("state") or "",
+            "field": field,
+        }.items() if v},
+        intent="resolve_answer",
+        ref=_clean(str((correction.get("value") if correction else None)
+                       or res.get("value") or "")),
+        verdict=_clean(str(row.get("outcome") or "")),
+        teacher_label=_clean(str(correction.get("value") or "")) if correction else "",
+        session=str(row.get("session_id") or ""),
+        ts=str(row.get("ts") or ""),
+        platform=str(row.get("ats") or ""),
+        ats=str(row.get("ats") or ""),
+        state=str(row.get("state") or ""),
+    )
+
+
 def _observation_text(obs: dict, extra: str = "") -> str:
     cands = obs.get("candidates") or []
     names = []

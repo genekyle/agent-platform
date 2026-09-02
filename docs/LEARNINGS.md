@@ -12969,3 +12969,31 @@ nearest >0.85 (floors provisional, calibration owed).
 *Suites: mcp untouched; api full run green (see commit). Tests +7. The next drive is the first
 whose every crank scores the in-house seat — the gate clock the phase-wire restarted now has a
 contender feeding it. Next: §11 item 3 (the screener Q→A faucet), then DRIVE.*
+
+## 2026-09-02 (fourth entry) — the semantic layer's first caller, and the QA faucet opens
+
+§11 item 3. The recon found the shape this week keeps finding: **`resolve_answer` — the
+canonical-answer→widget-vocabulary cascade, complete with the polarity guard (the sharpest
+model-over-regex case in the system) and the local model's input contract (`SemanticQuestion`,
+"a prompt surface today and a training feature set tomorrow") — had ZERO live callers.**
+Unreached-logic instance #11. The 08-28 privacy-select stall ("acknowledgement." vs
+'Acknowledge/Confirm', solved by the teacher reading `no_option`'s sample by hand) was exactly
+the vocabulary miss its normalised rung exists to catch.
+
+* **Wired at the volume seam:** the bulk fill's select loop now, on `no_option`, parses the
+  refusal's offered options out of its `sample:` prose (the structured lift onto
+  /select_option's response is the named follow-up — the `upload_witness` doctrine applies) and
+  runs the cascade + ONE translated retry. Polarity-risky questions skip the free rungs by
+  design and come back `needs_human` — ask, don't guess, mechanized.
+* **The faucet:** `qa_journal.py` — every select-family question journals with its options,
+  canonical, Resolution, act outcome, and a §10 correction slot. **Sensitivity is settled at
+  the write** (`redact(field=...)`): a password wall's question banks, the secret never does —
+  pinned by test. Rows vector-bank as kind="qa" at write time and via the backfill sweep, so
+  the precedent store can answer a REPEAT question before any answer head is trained.
+* Scope held deliberately: select-family only; free-text screeners, the prompt_select
+  single-press seam, and a cockpit QA review screen are named follow-ups, not silent gaps.
+
+*The worst measured cells (apply_questions 0.325/0.133) now have their corpus faucet, their
+retrieval path, and their live translator. Suites: 27 green on the faucet + resolve_answer;
+full api run below. Next: §11 item 4 (LinkedIn Easy Apply + home-feed logic) or DRIVE — the
+operator's call; every fill from here banks questions.*

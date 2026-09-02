@@ -49,6 +49,8 @@ from urllib.parse import urlparse
 import apply_landing as al
 import apply_steps as aps
 import google_recipe
+import qa_journal
+import resolve_answer
 import orientation_context as _oc
 import job_dedup
 import session_windows
@@ -5476,6 +5478,29 @@ def _sections_detail(status: dict[str, Any]) -> str:
     return bits + "."
 
 
+def _options_from_detail(detail: Any) -> tuple[str, ...]:
+    """The widget's OFFERED options, recovered from a `no_option` refusal's detail text.
+
+    The protocols embed their probe's `sample` (the visible option texts) into the refusal
+    prose — `"... sample: ['Acknowledge/Confirm', ...]"` — and nothing structured carries it
+    to this side yet (the lift onto /select_option's response is the named follow-up, same
+    doctrine as the 08-28 `upload_witness` lift). Until then: parse the list literal, and an
+    unparseable detail is an EMPTY answer, never a guess."""
+    import ast
+    import re as _re
+
+    m = _re.search(r"sample: (\[[^\]]*\])", str(detail or ""))
+    if not m:
+        return ()
+    try:
+        parsed = ast.literal_eval(m.group(1))
+    except (ValueError, SyntaxError):
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(str(o).strip() for o in parsed if str(o).strip())
+
+
 class ApplyFillBody(BaseModel):
     initiator: str = "operator"
     execute: bool = False          # False = plan only (see the bunch); True = fill the fillable ones
@@ -5616,17 +5641,51 @@ async def apply_fill(session_id: int, body: ApplyFillBody,
         # Each select-family row now drives through /select_option — the dialect cycle, addressed
         # by the AX door (the field name IS the accessible name) — which verifies at the widget's
         # own value read, so these need no share of the text bunch's read-back probe.
+        #
+        # THE SEMANTIC LAYER GETS ITS FIRST CALLER (2026-09-02, §11 item 3). `resolve_answer`
+        # existed fully built with zero callers — unreached-logic instance #11 — while the
+        # 08-28 privacy-select stall ("acknowledgement." vs "Acknowledgment") was exactly the
+        # vocabulary miss its normalised rung answers. Now: a `no_option` refusal hands the
+        # widget's own offered options (parsed from the refusal's sample — a structured lift on
+        # /select_option is the follow-up) to the cascade, ONE translated retry runs, and every
+        # question journals to the QA corpus either way — the answer head's training faucet.
         for r in rows:
             if not r["fillable"] or r["widget"] == "text" or not r.get("value"):
                 continue
             res = await _capture_post("/select_option", {
                 "browser_url": browser_url, "tab_id": tab_id,
                 "target_role": "combobox", "target_name": r["field"], "value": r["value"]})
+            resolution = {"value": r["value"], "method": "verbatim", "confidence": 1.0,
+                          "rationale": "stored answer offered as-is", "needs_human": False}
+            offered: tuple[str, ...] = ()
+            if res.get("outcome") == "no_option":
+                offered = _options_from_detail(res.get("detail"))
+                if offered:
+                    verdict = resolve_answer.resolve_answer(
+                        question_text=r["field"], options=offered,
+                        canonical_answer=str(r["value"]),
+                        ats=step.platform or None, field=r["field"])
+                    resolution = {"value": verdict.value, "method": verdict.method,
+                                  "confidence": verdict.confidence,
+                                  "rationale": verdict.rationale,
+                                  "needs_human": verdict.needs_human}
+                    if verdict.ok and verdict.value != r["value"]:
+                        res = await _capture_post("/select_option", {
+                            "browser_url": browser_url, "tab_id": tab_id,
+                            "target_role": "combobox", "target_name": r["field"],
+                            "value": verdict.value})
             if res.get("outcome") == "ok":
                 selected.append(r["field"])
             else:
                 select_failed.append(
                     f"{r['field']} ({res.get('outcome')}: {str(res.get('detail'))[:60]})")
+            qa_journal.record_qa(
+                session_id=session.id, job_id=step.job_id or "", ats=step.platform or "",
+                state=getattr(step, "state", "") or "", field=r["field"],
+                question_text=r["field"], options=offered or tuple(r.get("options") or ()),
+                canonical=str(r["value"]), resolution=resolution,
+                outcome=str(res.get("outcome") or ""), detail=str(res.get("detail") or ""),
+                initiator=body.initiator)
             await asyncio.sleep(xs.pause_for(style, xs.BETWEEN))
         return {"ok": not failed and not select_failed,
                 "filled": len(filled), "failed": len(failed),
