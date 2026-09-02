@@ -44,6 +44,18 @@ from interaction.decision import (
 _lock = threading.Lock()
 _JOURNAL_NAME = "decision_journal.jsonl"
 
+#: Post-append observers (the write-time vector rider, PLAN_inhouse_reasoner_v1 §4). This
+#: package cannot import the apps that consume the journal, so consumers register here at
+#: startup instead. A sink sees the REDACTED record, only after its row landed, and a sink
+#: that raises is swallowed — same discipline as the journal itself: never into the hot path.
+_sinks: list = []
+
+
+def register_decision_sink(sink) -> None:
+    """Register `sink(record: DecisionRecord)`, called after each successful append."""
+    if sink not in _sinks:
+        _sinks.append(sink)
+
 
 def _default_artifacts_dir() -> Path:
     """The corpus dir both apps share — same resolution as `journal._default_artifacts_dir`,
@@ -231,6 +243,11 @@ def log_decision(record: DecisionRecord) -> Optional[DecisionRecord]:
         with _lock:
             with _path().open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+        for sink in tuple(_sinks):
+            try:
+                sink(record)
+            except Exception:  # noqa: BLE001 — a sink is an aid, never a dependency
+                pass
         return record
     except Exception:  # noqa: BLE001 — a journal write must never break a live drive
         return None

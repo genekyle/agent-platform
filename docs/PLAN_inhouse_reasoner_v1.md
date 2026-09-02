@@ -324,9 +324,21 @@ the teacher's journaled drives ARE the labels (DAgger as always).
 
 ### The gap list — what must exist for "runs it by itself" (each with its week)
 
-1. **W1 — write-time riders** (Bundle-sourced vectors; geometry lift at `Observation.as_row`;
-   `ax_identities` + screenshot on every decision) — riders BEFORE volume, else drives bank thin
-   rows. Plus the AX-snapshot artifact bug (fix or retire loudly).
+1. **W1 — write-time riders — LANDED 2026-09-02.** (a) Geometry: `/ax_scan`'s bbox now
+   survives `observe()` and rides `as_row` as a `geometry` list aligned with `candidates`
+   (2-tuple readers untouched; absent on box-less looks, honest like historical rows).
+   (b) `replay_snapshot` carries `ax_identities` (≤60, role|name only) — the measured cure for
+   the 0.503-vs-0.814 corpus gap — and the embedder reads them as a `controls:` block.
+   (c) The crank's shadow rows (the volume path behind 58/773) thread their Observation's
+   artifact + screenshot into `build_bundle(capture=…)`. (d) Vectors bank at both choke
+   points: a decision-journal **sink** (`register_decision_sink`, installed at API startup,
+   loud if it cannot install) and `record_transition` → `precedent.rider.on_transition_row` —
+   both best-effort, both idempotent against the backfill CLI on `source_key`;
+   `settings.precedent_write_vectors` is the off switch. (e) The AX-snapshot poison fixed at
+   the read-point: an MCP error traveling as content (`isError` result / `"MCP error …"`
+   raw_text) now counts as a failed candidate and falls through, so `accessibility_snapshot`
+   is honest `unavailable` instead of a recorded error-string "success". Tests: +15 api
+   (`test_w1_riders.py`), +3 mcp (`test_capture_error_content.py`).
 2. **W1–2 — precedent rung shadow-wired** → acting behind the gate; scorecard gains
    `% decisions in-house`, `full_run_autonomy`, `touches_per_run`.
 3. **W1–2 — screener Q→A faucet**: every question → chosen answer → correction journals as a

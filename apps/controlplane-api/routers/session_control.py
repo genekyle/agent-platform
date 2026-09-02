@@ -8606,6 +8606,16 @@ def _shadow_the_crank(rung: Any, step: Any, before: Any, acted: dict[str, Any],
         # frequency. 106 of 119 shadow disagreements were that one axis.
         names = " ".join(str(c.get("name") or "")
                          for c in (getattr(before, "candidates", None) or []))
+        # THE THIRD MISSING FACET (2026-09-02, after page_text and phase): what the decision was
+        # LOOKING AT. The observation this crank already took carries its artifact + screenshot,
+        # and without threading them here only 58 of 773 journaled decisions had eyes — the
+        # capture rider reached `record_for` but this, the volume path, never passed one.
+        shot = getattr(before, "screenshot", None)
+        art = getattr(before, "artifact", None)
+        capture = None
+        if art or shot:
+            capture = {"artifact": art, "screenshot": shot,
+                       "screenshot_filename": Path(str(shot)).name if shot else None}
         bundle = build_bundle(
             task="apply", url=getattr(before, "url", "") or "",
             page_text=names,
@@ -8614,6 +8624,7 @@ def _shadow_the_crank(rung: Any, step: Any, before: Any, acted: dict[str, Any],
             ax_candidates=list(getattr(before, "candidates", None) or []),
             belief=getattr(before, "belief", None),
             window=getattr(before, "window", None),
+            capture=capture,
             phase=rung.id)
         shadow_step(teacher, bundle, session_id=str(session_id), outcome=outcome)
     except Exception:  # noqa: BLE001 — measuring ourselves must never break the drive

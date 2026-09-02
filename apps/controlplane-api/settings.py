@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # labeling along the way" is a property of the label write, not of remembering a button.
     # OFF only for A/B comparisons or when a batch of labels is being written in one sitting.
     train_on_label: bool = True
+    # Write-time vector banking (2026-09-02, PLAN_inhouse_reasoner_v1 §4): every journaled
+    # decision and transition embeds into vectors.db at its choke point, so each drive feeds
+    # the precedent engine as it happens. Same doctrine as train_on_label — the crank is the
+    # write. OFF leaves the idempotent backfill CLI as the only path into the store.
+    precedent_write_vectors: bool = True
     # Test-account credentials for capturing logged-in states, read from the
     # GITIGNORED .env only. NEVER hardcode a real value here and NEVER log these —
     # see _login_secrets(). Use a throwaway/test account, not a primary one.

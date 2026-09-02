@@ -617,6 +617,12 @@ def replay_snapshot(bundle: Bundle) -> dict:
         # the verify_identity rung claims is a DIFFERENT decision point from the same page with
         # no ladder driving, and a replay that dropped it would re-run the phase-free version.
         "phase": bundle.phase,
+        # The censused controls travel too (added 2026-09-02, PLAN_inhouse_reasoner_v1 §4).
+        # Measured cost of their absence: the decision corpus scored 0.503 LOSO against a 0.472
+        # majority baseline while the transition corpus — whose rows DO carry candidates —
+        # scored 0.814. `role|name` identities only (no selectors, no values), capped so one
+        # dense page cannot bloat every row it appears on.
+        "ax_identities": list(bundle.ax_identities)[:60],
     }
 
 

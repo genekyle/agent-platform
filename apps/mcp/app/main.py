@@ -475,12 +475,36 @@ async def _capture_js_state(session: ClientSession, capture_status: dict[str, An
         return {}
 
 
+def _content_error(payload: Any) -> Optional[str]:
+    """An MCP failure that traveled as CONTENT instead of an exception, or None.
+
+    `call_tool` on an unknown tool does not raise — the server answers a result with
+    `isError=true` whose content is the error text, and `normalize_capture_tool_payload`
+    faithfully wraps it as `[{"raw_text": "MCP error -32602: Tool ... not found"}]`. For weeks
+    every artifact's `accessibility_snapshot` recorded exactly that string as a SUCCESSFUL
+    snapshot, and the candidate fallthrough below never ran (found 2026-08-31, fixed
+    2026-09-02). The read-point must treat an error-shaped answer as the failure it is.
+    """
+    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
+        txt = str(payload[0].get("raw_text") or payload[0].get("text") or "")
+        if txt.startswith("MCP error"):
+            return txt
+    return None
+
+
 async def _capture_generic(session: ClientSession, capture_key: str, capture_status: dict[str, Any]) -> Any:
     errors: list[str] = []
     for candidate in TOOL_CANDIDATES[capture_key]:
         try:
             result = await session.call_tool(candidate["name"], candidate["params"])
+            if getattr(result, "isError", False):
+                errors.append(f"{candidate['name']}: tool answered isError")
+                continue
             payload = normalize_capture_tool_payload(result)
+            err = _content_error(payload)
+            if err is not None:
+                errors.append(f"{candidate['name']}: {err}")
+                continue
             capture_status[capture_key] = build_capture_status(
                 status="success",
                 tool=candidate["name"],

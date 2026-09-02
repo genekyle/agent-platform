@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -535,6 +536,19 @@ def on_startup():
         backfill_label_sources(db)
         seed_application_answers(db)
         _mark_zombie_eval_runs(db)
+    # The write-time vector rider (PLAN_inhouse_reasoner_v1 §4): register the decision-journal
+    # sink so every journaled decision banks its vector. Loud on failure — a silently-dead
+    # rider is the built-but-never-wired disease this project keeps paying for — but never
+    # fatal: the API must come up even if the vector store cannot.
+    try:
+        from precedent.rider import install as _install_precedent_rider
+        if not _install_precedent_rider():
+            logging.getLogger("uvicorn.error").warning(
+                "precedent rider NOT installed (disabled or store unavailable) — "
+                "decisions will not bank vectors; the backfill CLI is the only path in")
+    except Exception:
+        logging.getLogger("uvicorn.error").warning(
+            "precedent rider failed to install", exc_info=True)
 
 
 @router.get("/health")

@@ -168,12 +168,20 @@ def doc_from_decision(row: dict) -> Optional[PrecedentDoc]:
         unanswered_txt = "; ".join(_clean(str(u)) for u in unanswered[:12])
     else:
         unanswered_txt = _clean(str(unanswered))
+    # The censused controls, when the snapshot carries them (rows since 2026-09-02 do; older
+    # rows honestly lack them). Mirrors the transitions' "controls:" block — the measured
+    # reason that corpus retrieves so much better (0.814 vs 0.503 LOSO).
+    identities = snap.get("ax_identities") or []
+    controls_txt = "; ".join(
+        _clean(str(i).replace("|", " ")) for i in identities[:_MAX_CANDIDATE_NAMES]
+    )
     text = " | ".join(
         part
         for part in (
             _clean(snap.get("goal_text") or ""),
             f"state {snap.get('state')}" if snap.get("state") else "",
             f"route {route_template(snap.get('url') or row.get('url') or '')}",
+            f"controls: {controls_txt}" if controls_txt else "",
             f"unanswered: {unanswered_txt}" if unanswered_txt else "",
             f"expecting {snap.get('expected_next')}" if snap.get("expected_next") else "",
         )

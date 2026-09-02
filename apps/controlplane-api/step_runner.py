@@ -76,6 +76,17 @@ def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _bbox_ints(bbox: Any) -> Optional[list[int]]:
+    """A candidate's bbox as `[x, y, width, height]` ints, or None. Ints because sub-pixel
+    precision is noise for training and floats double the row bytes."""
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        return [int(bbox["x"]), int(bbox["y"]), int(bbox["width"]), int(bbox["height"])]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 # --------------------------------------------------------------------------------------------
 # Observation — layer 1, the cheap look
 # --------------------------------------------------------------------------------------------
@@ -105,11 +116,21 @@ class Observation:
     window: Optional[dict[str, Any]] = None
 
     def as_row(self) -> dict[str, Any]:
-        return {"ts": self.ts, "ok": self.ok, "url": self.url, "title": self.title,
-                "tabs": self.tabs, "ax_count": self.ax_count,
-                "candidates": [(c.get("role"), c.get("name")) for c in self.candidates],
-                "belief": self.belief, "artifact": self.artifact,
-                "screenshot": self.screenshot, "window": self.window}
+        row = {"ts": self.ts, "ok": self.ok, "url": self.url, "title": self.title,
+               "tabs": self.tabs, "ax_count": self.ax_count,
+               "candidates": [(c.get("role"), c.get("name")) for c in self.candidates],
+               "belief": self.belief, "artifact": self.artifact,
+               "screenshot": self.screenshot, "window": self.window}
+        # GEOMETRY, un-deferred (2026-09-02, PLAN_inhouse_reasoner_v1 §4): `/ax_scan` has
+        # always returned each candidate's bbox and this projection stripped it — the
+        # element-level faucet was one dropped key, not a missing capture stage. A parallel
+        # list (same order as `candidates`, ints, None where the scan had none) so every
+        # existing reader of the 2-tuples is untouched; absent entirely on a look whose scan
+        # carried no boxes, which is honest — historical rows never recorded any.
+        geometry = [_bbox_ints(c.get("bbox")) for c in self.candidates]
+        if any(g is not None for g in geometry):
+            row["geometry"] = geometry
+        return row
 
 
 def window_census(tabs: list[dict[str, str]], *, active_tab_id: str = "") -> Optional[dict]:
@@ -189,7 +210,8 @@ async def observe(capture_post: Callable[..., Awaitable[dict]], *, browser_url: 
                     for t in (tabs_res.get("tabs") or [])]
         scan = await capture_post("/ax_scan", {"browser_url": browser_url, "tab_id": tab_id,
                                                "tab_url": tab_url}, timeout=25.0)
-        obs.candidates = [{"role": c.get("role"), "name": c.get("name")}
+        # bbox rides along (2026-09-02): the scan always had it; this projection was the strip.
+        obs.candidates = [{"role": c.get("role"), "name": c.get("name"), "bbox": c.get("bbox")}
                           for c in (scan.get("candidates") or []) if c.get("name")]
         obs.ax_count = int(scan.get("count") or len(obs.candidates))
         obs.url = str(scan.get("target_url") or "")
@@ -567,9 +589,17 @@ def record_transition(*, session_id: Any, rung_id: str, action: dict[str, Any],
         with _write_lock:
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, default=str) + "\n")
-        return path
     except Exception:  # noqa: BLE001 — the corpus must never sink the drive it observes
         return None
+    # The write-time vector rider (PLAN_inhouse_reasoner_v1 §4): the bank IS the crank. After
+    # the row landed — never instead of it — both halves embed into vectors.db. Best-effort
+    # like everything else on this path; the backfill CLI sweeps anything missed.
+    try:
+        from precedent.rider import on_transition_row
+        on_transition_row(row)
+    except Exception:  # noqa: BLE001 — an aid, never a dependency
+        pass
+    return path
 
 
 def read_transitions(session_id: Any, *, limit: int = 200) -> list[dict[str, Any]]:

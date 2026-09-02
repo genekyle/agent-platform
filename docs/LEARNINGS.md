@@ -12898,3 +12898,38 @@ The load-bearing pieces, so no session re-derives them:
 ≥10pts over 0.503 or the recipe is re-examined before more volume), C2 (8–12 runs: fine-tune,
 beat Haiku 0.595 or lane dies), C3 (weeks 5–8: seat swap, autonomy 0.70–0.75 on gated families).
 Next build session: W1 riders (Bundle vectors, geometry lift, ax_identities, AX-snapshot bug).*
+
+## 2026-09-02 (second entry) — W1 riders landed: the bank is the crank, and two strips undone
+
+The plan's §11 item 1, built with a pinned test per seam. Three of the four fixes are the same
+shape the retrospectives keep counting — **the data existed and one projection dropped it**:
+
+* **Geometry was one dropped key, not a missing capture stage.** `/ax_scan` has returned `bbox`
+  per candidate all along; `observe()` stripped it at ingestion and `Observation.as_row` never
+  saw it. Now candidates keep their box and the row carries `geometry` (ints, aligned with the
+  2-tuple `candidates` list so every existing reader is untouched; absent when the scan had no
+  boxes — historical honesty).
+* **The snapshot never carried the censused controls.** `replay_snapshot` gains `ax_identities`
+  (≤60, `role|name`, no selectors/values) and `doc_from_decision` renders them as the same
+  `controls:` block the transition halves embed — the measured cause of decisions retrieving at
+  0.503 while transitions hit 0.814.
+* **The 58/773 image gap was the crank's shadow path.** `_shadow_the_crank` — the volume
+  journaler — already held an Observation with artifact + screenshot and passed neither; it now
+  threads `capture=` into `build_bundle`, the third missing facet after page_text and phase.
+* **Vectors bank at write time.** `decision_journal` grew a sink registry (`register_decision_
+  sink`; sinks see the REDACTED record, only after the row lands, and can never raise into the
+  hot path); the API startup installs `precedent.rider` there LOUDLY (a silently-dead rider is
+  the built-never-wired disease); `record_transition` calls the rider directly. Idempotent
+  against the backfill CLI on `source_key`; `settings.precedent_write_vectors` is the switch;
+  `PRECEDENT_DATA_ROOT` env overrides the store root (worktree/test truth).
+* **The AX-snapshot poison, diagnosed exactly:** `call_tool` on an unknown tool does not raise —
+  the MCP server answers `isError=true` content, `normalize_capture_tool_payload` wraps it as
+  `[{"raw_text": "MCP error -32602: …"}]`, and `_capture_generic` recorded that as a SUCCESSFUL
+  snapshot, so its four-candidate fallthrough never ran. Fixed at the read-point (isError check
+  + a narrow content sniff); the field now goes honest-`unavailable` and `actionable_elements`
+  remains the real element source. *The unprobed() rule, found in a fourth place.*
+
+*Worktree note, again: the venv's `interaction` is an editable install of MAIN's copy — package
+edits in a worktree are invisible until merge; test with `PYTHONPATH=<worktree>/packages/
+interaction` (module `__file__` proved it). Suites: mcp 184 green; api full run below. Next:
+wire the precedent rung shadow-first (§11 item 2), then drive — every row now banks fat.*
