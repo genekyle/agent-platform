@@ -13027,3 +13027,18 @@ to, because the machine fills from its own vault server-side.**
 
 *Suites: qa_faucet 8 green (2 new pure-helper tests); full api run below. The live proof — a
 fresh Indeed session authenticated by the leg — follows the merge, same session.*
+
+### Addendum, same day — the auth leg's live proof, and the rider's first real bank
+
+Fresh Indeed session (35) run end to end through the system: session 32 (protected,
+human-owned — the flag refused politely until the operator's fresh-session directive carried
+force) stopped through its own lifecycle; 35 started on the released profile; `ensure_auth`
+opened the front door on the empty window (`tried: ["opened_home"]`), probed, and the
+persistent profile's own jar answered — **authenticated, zero human presses, auth TTL 8,573 h
+(~357 days)**. The deeper rungs (snapshot restore, vault login) stayed holstered: cheapest-first
+resolving at rung one is the design working, not the test dodging. The row journaled
+(`ensure_auth | confirmed`, capture=None — §4's credential posture held), and **the W1
+write-time rider banked its first live vectors** (store 2,091 → 2,093). One process note, kept
+because the log keeps both sides: the item-6 commit merged on a chained grep that matched
+"passed" while the suite read 2 failed — the follow-up commit corrects the record and pins the
+two tests; the rule is green-then-merge, not match-then-merge.
