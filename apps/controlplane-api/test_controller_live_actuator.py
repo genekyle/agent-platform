@@ -90,7 +90,10 @@ def test_observe_logged_out_escalates_to_human():
     fake = FakeTransport(url=_INDEED, logged_in=False)
     bundle = _actuator(fake).observe()
     assert bundle.human_required is True
-    assert "logged in" in bundle.branch_note or "authenticate" in bundle.branch_note
+    # The note's wording changed 2026-09-02 with the doctrine: signed-out routes to the
+    # SYSTEM's auth leg (ensure_auth), not to the operator's hands — the escalation itself
+    # (human_required until the async leg is threaded into this sync observe) is the pin.
+    assert "signed out" in bundle.branch_note and "ensure_auth" in bundle.branch_note
 
 
 # --- observe: perception (added 2026-07-20 — PLAN_supervisor §0a) -----------------------
