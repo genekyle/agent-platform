@@ -375,9 +375,21 @@ the teacher's journaled drives ARE the labels (DAgger as always).
    logic built** (feed → job → pick queue → apply; currently lacks logic — operator-named).
 5. **W2–3 — kind-first state classification** (witnesses borrowing cross-ATS names — the
    43× `workday_apply_method`-on-Greenhouse bug; state identity must survive novel tenants).
-6. **W2–4 — account-wall autonomy**: vault-driven create/sign-in fills (system fills from
-   staged creds — no human, no Claude touching secrets); `verify_email` leg live-proven on a
-   real wall (Workday addressing is HYPOTHESIS until then). This is the measured flow ceiling.
+6. **W2–4 — account-wall autonomy — FIRST CUT LANDED 2026-09-02 (the session auth leg).**
+   `POST /api/session_control/{id}/ensure_auth`: probe → S21 snapshot restore (+ reload via
+   /navigate-to-self) → vault credentials through the password-manager-style login driver
+   (`run_login`, system-triggered now — the panel's button was the only trigger before) →
+   challenge classify. Statuses: authenticated (via already|snapshot|vault_login) / challenge
+   (the ONE human touchpoint) / needs_login_flow (every rung it tried, named). collect=False
+   throughout; secrets resolve server-side and never return, log, or capture; every leg
+   journals a transition row. Two stale-caution leftovers retired: `live_actuator`'s "the
+   agent never types a password" note now points at the leg (threading the async leg into its
+   sync observe is a named follow-up), and the doctrine of record is 07-24's: **credentials
+   are the system's; the challenge class is the only permanent human touchpoint.** Still owed
+   under this item: the ATS wall legs riding the apply ladder (`_CREDENTIAL_STATES`
+   human_required narrows to challenge-only once the account rung drives sign-in/create
+   through this same machinery), `verify_email` live-proven on a real wall, and the full SSO
+   auto-drive for a cold profile (snapshot restore makes it rarely needed).
 7. **W3–4 — Google/Gmail as a first-class domain — mostly BUILT, needs wiring**: inbox matcher
    (merged), `fetch_login_code` errand, `verify_email`, `gmail_senders` all exist. Promote:
    scheduled inbox sweeps at close_out; code-fetch invoked by the account rung mid-run;

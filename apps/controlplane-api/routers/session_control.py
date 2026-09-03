@@ -10376,3 +10376,182 @@ async def choose(session_id: int, body: ChooseBody,
     obs_after = await _observe(browser_url, bb, session_id=session.id)
     return _view(session, bb, ledger, obs_after, page=advanced.get("page", page),
                  awaiting=advanced.get("awaiting"), last=advanced)
+
+
+# ------------------------------------------------------------------------------------------------
+# The auth leg — credentials handled by the SYSTEM (PLAN_inhouse_reasoner_v1 §11 item 6, first cut)
+# ------------------------------------------------------------------------------------------------
+
+#: Where a session's platform lives when its window is empty — the entry point a human would
+#: type. HOME pages only: §3's no-URL-jumping rule binds everything deeper than the front door.
+_PLATFORM_HOME = {"indeed": "https://www.indeed.com/", "linkedin": "https://www.linkedin.com/"}
+
+
+def _port_of(browser_url: str) -> Optional[int]:
+    try:
+        return int(urlparse(browser_url).port or 0) or None
+    except (ValueError, TypeError):
+        return None
+
+
+def _newest_snapshot_id(profile: str) -> Optional[str]:
+    """The freshest identity snapshot for this profile, or None. Newest-first by taken_at —
+    the S21 store already orders and prunes; this just picks the head honestly."""
+    try:
+        import session_snapshot as snap
+
+        metas = sorted(snap.list_snapshots(profile), key=lambda m: m.taken_at, reverse=True)
+        return metas[0].id if metas else None
+    except Exception:  # noqa: BLE001 — no store is an empty answer, never an error
+        return None
+
+
+class EnsureAuthBody(BaseModel):
+    initiator: str = "system"
+
+
+@router.post("/api/session_control/{session_id}/ensure_auth")
+async def ensure_auth(session_id: int, body: EnsureAuthBody,
+                      db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Make this session AUTHENTICATED without a human, or say exactly why not.
+
+    The operator's boundary (2026-09-02, restating 2026-07-24): credentials are the SYSTEM's to
+    handle — the only permanent human touchpoint is the challenge class (captcha/2FA/checkpoint).
+    This leg composes the organs that already exist, cheapest-first, each rung verified:
+
+      1. PROBE   /auth_state on the platform's own tab (opened at the HOME page if the window
+                 is empty — the front door, never a deep URL).
+      2. RESTORE the newest S21 identity snapshot (cookies back into the running jar), reload
+                 the platform tab via /navigate-to-self, re-probe.
+      3. VAULT   the account's stored credentials through the password-manager-style login
+                 driver (`login_reasoner.run_login`) — system-triggered now, not just the
+                 panel's button. Values resolve server-side and are never returned, logged,
+                 or captured (collect=False throughout this leg).
+      4. HONEST HANDOFF — a visible challenge escalates (the one human touchpoint); anything
+                 else returns `needs_login_flow` with every rung it tried, so the gap is a
+                 named build item rather than a silent stall.
+
+    Every attempt journals a transition row (state identity only — §4's credential posture)."""
+    session = db.get(TrainingSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    browser_url = _session_browser_url(session)
+    profile = (session.persistent_profile or "").strip()
+    home = _PLATFORM_HOME.get(profile)
+    tried: list[str] = []
+
+    async def _probe() -> dict[str, Any]:
+        tabs_res = await _capture_post("/list_tabs", {"browser_url": browser_url}, timeout=8.0)
+        tabs = tabs_res.get("tabs") or []
+        site = next((t for t in tabs if profile and profile in (t.get("url") or "")), None)
+        if site is None and home:
+            # An empty window is the degenerate case of "go here" — /navigate opens the front
+            # door the way a human types it. Only ever the HOME page.
+            nav = await _capture_post("/navigate", {
+                "browser_url": browser_url, "url": home, "settle_seconds": 2.5}, timeout=30.0)
+            site = {"tab_id": nav.get("tab_id") or "", "url": nav.get("url") or home}
+            tried.append("opened_home")
+        auth = await _capture_post("/auth_state", {
+            "browser_url": browser_url,
+            **({"tab_id": site.get("tab_id")} if site and site.get("tab_id") else
+               {"tab_url": profile})}, timeout=12.0)
+        auth["_tab"] = site or {}
+        return auth
+
+    import step_runner as sr
+    before = await sr.observe(_capture_post, browser_url=browser_url, collect=False,
+                              session_id=session.id)
+
+    status, via, detail = "needs_login_flow", None, ""
+    auth = await _probe()
+    ttl_h = None
+    if auth.get("ok") and auth.get("logged_in"):
+        status, via = "authenticated", "already"
+    else:
+        tried.append("probe")
+        # --- rung 2: the snapshot store -----------------------------------------------------
+        port = _port_of(browser_url)
+        snap_id = _newest_snapshot_id(profile) if port else None
+        if snap_id:
+            tried.append(f"restore:{snap_id}")
+            import session_snapshot as snap
+
+            restored = await snap.restore_warm(port=port, snapshot_id=snap_id)
+            if restored.get("ok"):
+                tab = auth.get("_tab") or {}
+                if tab.get("url"):
+                    await _capture_post("/navigate", {
+                        "browser_url": browser_url, "tab_id": tab.get("tab_id"),
+                        "url": tab["url"], "settle_seconds": 2.5}, timeout=30.0)
+                auth = await _probe()
+                if auth.get("ok") and auth.get("logged_in"):
+                    status, via = "authenticated", "snapshot"
+            else:
+                detail = f"restore failed: {restored.get('detail')}"
+        # --- rung 3: vault credentials through the login driver -----------------------------
+        if status != "authenticated" and session.account_id:
+            try:
+                import accounts as accounts_mod
+                import login_reasoner
+
+                creds = accounts_mod.resolve_creds(session.account_id)
+            except Exception:  # noqa: BLE001
+                creds = None
+            if creds:
+                tried.append("vault_login")
+                import httpx as _httpx
+
+                username, password = creds
+                tab = auth.get("_tab") or {}
+                try:
+                    async with _httpx.AsyncClient(timeout=120.0) as client:
+                        result = await login_reasoner.run_login(
+                            client=client, capture_url=settings.capture_server_url,
+                            browser_url=browser_url, tab_id=tab.get("tab_id") or "",
+                            username=username, password=password, reasoner=None)
+                    if getattr(result, "ok", False):
+                        auth = await _probe()
+                        if auth.get("ok") and auth.get("logged_in"):
+                            status, via = "authenticated", "vault_login"
+                    else:
+                        detail = f"login driver: {getattr(result, 'detail', '')}"[:160]
+                except Exception as exc:  # noqa: BLE001
+                    detail = f"login driver unreachable: {type(exc).__name__}"
+            else:
+                tried.append("vault_login:no_creds")
+        # --- the one human touchpoint -------------------------------------------------------
+        if status != "authenticated":
+            try:
+                chal = await _capture_post("/challenge_visibility", {
+                    "browser_url": browser_url}, timeout=10.0)
+                if chal.get("blocking"):
+                    status = "challenge"
+                    detail = f"{chal.get('kind') or 'challenge'} visible — the operator's leg"
+            except Exception:  # noqa: BLE001
+                pass
+
+    try:
+        from session_snapshot import auth_ttl_s
+
+        ttl, _found = auth_ttl_s(auth.get("cookies") or [], auth.get("platform"))
+        ttl_h = None if ttl is None else round(ttl / 3600, 1)
+    except Exception:  # noqa: BLE001
+        ttl_h = None
+
+    after = await sr.observe(_capture_post, browser_url=browser_url, collect=False,
+                             session_id=session.id)
+    sr.record_transition(
+        session_id=session.id, rung_id="ensure_auth",
+        action={"action": "ensure_auth", "initiator": body.initiator, "tried": tried,
+                "profile": profile},
+        expect=sr.Expectation(kind="unmodeled"),
+        before=before, after=after, changes=sr.diff(before, after),
+        verdict=sr.CONFIRMED if status == "authenticated" else sr.UNOBSERVED,
+        evidence=f"auth leg -> {status}" + (f" via {via}" if via else ""),
+        claimed=f"ensure_auth tried {tried or ['probe']}")
+
+    return {"ok": status == "authenticated", "status": status, "via": via,
+            "tried": tried, "platform": auth.get("platform") or profile,
+            "logged_in": bool(auth.get("logged_in")), "auth_ttl_h": ttl_h,
+            "url": (auth.get("_tab") or {}).get("url") or auth.get("url"),
+            "detail": detail}

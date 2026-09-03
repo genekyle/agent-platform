@@ -12997,3 +12997,33 @@ the vocabulary miss its normalised rung exists to catch.
 retrieval path, and their live translator. Suites: 27 green on the faucet + resolve_answer;
 full api run below. Next: §11 item 4 (LinkedIn Easy Apply + home-feed logic) or DRIVE — the
 operator's call; every fill from here banks questions.*
+
+## 2026-09-02 (fifth entry) — the auth leg: credentials are the system's, and two ghosts of my caution retired
+
+Operator, restating the boundary so it sticks: *"I want the credentials to be handled by our
+system… the only thing requiring human interaction will be the captcha systems only."* The
+07-24 correction already said it (`ats_accounts.py`: account creation IS automated; "the agent
+never types a password" was MY caution hardcoded as their architecture, and it is gone) — and
+the audit still found that sentence ALIVE in two places: `live_actuator`'s signed-out branch
+and `_CREDENTIAL_STATES`' comment. The doctrine of record, PLAN §11 item 6: **the system
+handles credentials (vault + login driver + snapshot store); the challenge class is the only
+permanent human touchpoint. Claude never sees or types a plaintext secret — and doesn't need
+to, because the machine fills from its own vault server-side.**
+
+* **`ensure_auth` composed entirely from existing organs** — nothing new was built, only the
+  trigger moved: /auth_state (probe), S21 `restore_warm` + /navigate-to-self (the reload S21's
+  live proof did by hand), `run_login` (the password-manager-style driver the panel's Login
+  button already fired — "OPERATOR-TRIGGERED" was a label on the trigger, not the mechanism),
+  /challenge_visibility (the honest stop). Cheapest-first, each rung verified by re-probe,
+  every attempt a transition row, collect=False throughout.
+* **Indeed's credential artifact is the SESSION, not a password.** No indeed password exists
+  in the vault and none is needed: auth is Google-SSO-first with code fallback, so the
+  system's credential store is the S21 snapshot (three on disk, newest with ~79 days of auth
+  TTL) plus the Gmail code errand. "Handled by our system" was already true at rest; the leg
+  makes it true in motion.
+* live_actuator's branch still escalates (async leg into sync observe = named follow-up) but
+  now says the true thing. `_CREDENTIAL_STATES` narrows to challenge-only when the ATS wall
+  legs ride this machinery (the Cadence/Vertex/Kelmar unblocks — next).
+
+*Suites: qa_faucet 8 green (2 new pure-helper tests); full api run below. The live proof — a
+fresh Indeed session authenticated by the leg — follows the merge, same session.*

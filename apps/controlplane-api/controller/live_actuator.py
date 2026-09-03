@@ -360,9 +360,17 @@ class LiveActuator:
                            branch_note=f"cannot observe the tab — {blind}")
 
         if not auth.get("logged_in", False):
+            # The old note here ("the agent never types a password / creates an account") stated
+            # a doctrine the operator retired on 2026-07-24 and again on 2026-09-02: credentials
+            # are the SYSTEM's to handle — the vault + login driver + snapshot store, with the
+            # challenge class as the only human touchpoint. The session path already has the leg
+            # (`/api/session_control/{id}/ensure_auth`); threading an async call into this sync
+            # observe is the named follow-up, so this branch still ESCALATES — but it now says
+            # the true thing: run the auth leg, don't hand-type.
             return replace(bundle, human_required=True,
-                           branch_note="not logged in — operator must re-authenticate (the agent "
-                                       "never types a password / creates an account)")
+                           branch_note="signed out — run the session's ensure_auth leg "
+                                       "(snapshot restore / vault login; challenge is the only "
+                                       "human touchpoint)")
         return bundle
 
     @staticmethod

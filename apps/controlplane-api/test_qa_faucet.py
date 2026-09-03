@@ -78,3 +78,28 @@ def test_options_parse_from_refusal_prose():
     assert _options_from_detail("no option(s) [\"Acknowledge\"]") == ()   # missing != offered
     assert _options_from_detail(None) == ()
     assert _options_from_detail("sample: [not python") == ()
+
+
+# --- the auth leg's pure parts (§11 item 6 first cut rides this session) -----
+def test_port_of_parses_browser_url():
+    from routers.session_control import _port_of
+
+    assert _port_of("http://127.0.0.1:9322") == 9322
+    assert _port_of("not a url") is None
+    assert _port_of("") is None
+
+
+def test_newest_snapshot_picks_head_by_taken_at(monkeypatch):
+    import routers.session_control as sc
+
+    class _M:
+        def __init__(self, id, taken_at):
+            self.id, self.taken_at, self.profile = id, taken_at, "indeed"
+
+    import session_snapshot as snap
+
+    monkeypatch.setattr(snap, "list_snapshots",
+                        lambda profile: [_M("old", 1.0), _M("new", 9.0)])
+    assert sc._newest_snapshot_id("indeed") == "new"
+    monkeypatch.setattr(snap, "list_snapshots", lambda profile: [])
+    assert sc._newest_snapshot_id("indeed") is None
